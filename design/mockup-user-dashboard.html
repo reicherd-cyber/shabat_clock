@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>שעון שבת — דשבורד</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@500;700&family=Heebo:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  /* ── Claude design tokens ─────────────────────────────── */
+  :root {
+    --bg:        #F0EEE6;   /* warm cream — never pure white   */
+    --surface:   #FFFFFF;
+    --surface-2: #FAF9F5;
+    --ink:       #29261B;   /* warm near-black                 */
+    --muted:     #87867F;
+    --accent:    #D97757;   /* terracotta — the Claude accent  */
+    --accent-dk: #C4633F;
+    --line:      #E5E1D8;   /* hairline borders                */
+    --on:        #6A8A5E;   /* olive green — success/online    */
+    --on-bg:     #EDF2EA;
+    --off:       #BF4D43;   /* brick — error/offline           */
+    --off-bg:    #F7ECEA;
+    --r: 14px;
+    --shadow: 0 1px 3px rgba(41,38,27,.06), 0 4px 16px rgba(41,38,27,.05);
+    --serif: 'Frank Ruhl Libre', Georgia, serif;
+    --sans:  'Heebo', system-ui, sans-serif;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    min-height: 100vh; padding-bottom: 84px;
+  }
+
+  /* ── Top bar ──────────────────────────────────────────── */
+  .topbar {
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 14px 24px; border-bottom: 1px solid var(--line);
+    background: var(--bg); position: sticky; top:0; z-index:10;
+  }
+  .brand { font-family: var(--serif); font-weight:700; font-size:21px; display:flex; align-items:center; gap:9px; }
+  .brand .mark {
+    width:30px; height:30px; border-radius:9px; background:var(--accent);
+    color:#fff; display:grid; place-items:center; font-size:16px;
+  }
+  .userchip { display:flex; align-items:center; gap:10px; font-weight:500; color:var(--muted); }
+  .avatar { width:32px; height:32px; border-radius:50%; background:var(--surface-2);
+    border:1px solid var(--line); display:grid; place-items:center; font-weight:700; color:var(--accent-dk); }
+
+  /* ── Layout ───────────────────────────────────────────── */
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 24px; }
+  .hero h1 { font-family: var(--serif); font-weight:700; font-size:34px; letter-spacing:-.3px; }
+  .hero p  { color: var(--muted); margin-top:4px; }
+  .hero { margin-bottom: 28px; }
+
+  .section-head { display:flex; align-items:baseline; justify-content:space-between; margin: 34px 0 14px; }
+  .section-head h2 { font-family: var(--serif); font-weight:700; font-size:22px; }
+
+  /* ── Buttons ──────────────────────────────────────────── */
+  .btn {
+    font-family:var(--sans); font-weight:500; font-size:14px; cursor:pointer;
+    border-radius: 10px; padding: 8px 16px; border:1px solid var(--line);
+    background: var(--surface); color: var(--ink); transition: all .15s;
+  }
+  .btn:hover { border-color:#CFC9BB; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color:#fff; }
+  .btn.primary:hover { background: var(--accent-dk); }
+
+  /* ── Device cards ─────────────────────────────────────── */
+  .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(340px,1fr)); gap:18px; }
+  .card {
+    background: var(--surface); border:1px solid var(--line);
+    border-radius: var(--r); box-shadow: var(--shadow); overflow:hidden;
+  }
+  .card-head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 16px 20px; border-bottom:1px solid var(--line); background: var(--surface-2);
+  }
+  .card-head .name { font-family: var(--serif); font-weight:700; font-size:17px; }
+  .badge { display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:500;
+    padding: 3px 10px; border-radius: 99px; }
+  .badge .dot { width:7px; height:7px; border-radius:50%; }
+  .badge.online  { background:var(--on-bg);  color:var(--on);  }
+  .badge.online .dot { background:var(--on); box-shadow:0 0 0 3px rgba(106,138,94,.18); }
+  .badge.offline { background:var(--off-bg); color:var(--off); }
+  .badge.offline .dot { background:var(--off); }
+
+  .relay { display:flex; align-items:center; gap:14px; padding: 14px 20px; }
+  .relay + .relay { border-top: 1px dashed var(--line); }
+  .relay .code {
+    font-variant-numeric: tabular-nums; font-weight:700; font-size:12.5px;
+    background: var(--surface-2); border:1px solid var(--line); color:var(--muted);
+    border-radius: 7px; padding: 2px 8px;
+  }
+  .relay .rname { flex:1; font-weight:500; }
+  .relay .state { font-size:12.5px; font-weight:500; color:var(--muted); min-width:44px; text-align:left; }
+  .relay.is-on .state { color: var(--on); }
+
+  /* toggle */
+  .toggle { position:relative; width:46px; height:26px; flex-shrink:0; cursor:pointer; }
+  .toggle input { opacity:0; width:0; height:0; }
+  .toggle .track { position:absolute; inset:0; border-radius:99px; background:#DDD8CC; transition:.2s; }
+  .toggle .track::after {
+    content:""; position:absolute; top:3px; right:3px; width:20px; height:20px;
+    border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.25); transition:.2s;
+  }
+  .toggle input:checked + .track { background: var(--accent); }
+  .toggle input:checked + .track::after { transform: translateX(-20px); }
+  .toggle input:disabled + .track { opacity:.45; cursor:not-allowed; }
+
+  .card.offline-card .relay { opacity:.55; }
+  .offline-note { padding: 12px 20px; font-size:13px; color:var(--off);
+    background: var(--off-bg); border-top:1px solid var(--line); }
+
+  /* ── Schedules ────────────────────────────────────────── */
+  .sched {
+    background: var(--surface); border:1px solid var(--line); border-radius: var(--r);
+    box-shadow: var(--shadow); overflow:hidden;
+  }
+  .srow { display:flex; align-items:center; gap:16px; padding: 15px 20px; }
+  .srow + .srow { border-top:1px solid var(--line); }
+  .srow .which { min-width:120px; font-weight:700; }
+  .srow .which small { display:block; font-weight:400; color:var(--muted); font-size:12.5px; }
+  .pair { flex:1; display:flex; align-items:center; gap:10px; font-variant-numeric:tabular-nums; }
+  .pill { border-radius:9px; padding:5px 12px; font-size:13.5px; font-weight:500; border:1px solid var(--line); background:var(--surface-2); }
+  .pill.on-p  { border-color: rgba(106,138,94,.4); color: var(--on);  background: var(--on-bg); }
+  .pill.off-p { border-color: rgba(191,77,67,.35); color: var(--off); background: var(--off-bg); }
+  .arrow { color: var(--muted); }
+  .sync { font-size:12.5px; color: var(--on); font-weight:500; white-space:nowrap; }
+  .sync.err { color: var(--off); }
+
+  /* ── History ──────────────────────────────────────────── */
+  .hist { background:var(--surface); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); }
+  .hrow { display:flex; align-items:center; gap:12px; padding:13px 20px; font-size:14px; }
+  .hrow + .hrow { border-top:1px solid var(--line); }
+  .hrow .ico { width:30px; height:30px; border-radius:9px; display:grid; place-items:center; font-size:14px; flex-shrink:0; }
+  .hrow .ico.ok  { background:var(--on-bg); }
+  .hrow .ico.tel { background:#EFEAF7; }
+  .hrow time { margin-inline-start:auto; color:var(--muted); font-size:12.5px; white-space:nowrap; }
+
+  /* ── Mobile tab bar ───────────────────────────────────── */
+  .tabbar {
+    position:fixed; bottom:0; right:0; left:0; z-index:20;
+    display:flex; background:var(--surface); border-top:1px solid var(--line);
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  }
+  .tab { flex:1; text-align:center; font-size:12px; color:var(--muted); text-decoration:none; padding:6px 0; border-radius:10px; }
+  .tab .g { display:block; font-size:19px; margin-bottom:2px; }
+  .tab.active { color: var(--accent-dk); background: #F6EBE5; font-weight:700; }
+
+  @media (min-width: 720px) { .tabbar { display:none; } body { padding-bottom:40px; } }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="mark">✦</span> שעון שבת</div>
+  <div class="userchip"><span>דוד ר.</span><span class="avatar">ד</span></div>
+</header>
+
+<main class="wrap">
+
+  <div class="hero">
+    <h1>שלום, דוד</h1>
+    <p>מכשיר אחד מחובר · 3 תזמונים פעילים · העדכון האחרון לפני 2 דקות</p>
+  </div>
+
+  <!-- ── Devices ── -->
+  <div class="grid">
+
+    <div class="card">
+      <div class="card-head">
+        <span class="name">🏠 בית</span>
+        <span class="badge online"><span class="dot"></span>מחובר</span>
+      </div>
+      <div class="relay is-on">
+        <span class="code">01</span><span class="rname">מטבח</span>
+        <span class="state">דולק</span>
+        <label class="toggle"><input type="checkbox" checked onchange="flip(this)"><span class="track"></span></label>
+      </div>
+      <div class="relay">
+        <span class="code">02</span><span class="rname">סלון</span>
+        <span class="state">כבוי</span>
+        <label class="toggle"><input type="checkbox" onchange="flip(this)"><span class="track"></span></label>
+      </div>
+      <div class="relay">
+        <span class="code">03</span><span class="rname">דוד שמש</span>
+        <span class="state">כבוי</span>
+        <label class="toggle"><input type="checkbox" onchange="flip(this)"><span class="track"></span></label>
+      </div>
+    </div>
+
+    <div class="card offline-card">
+      <div class="card-head">
+        <span class="name">🏢 חנות</span>
+        <span class="badge offline"><span class="dot"></span>מנותק</span>
+      </div>
+      <div class="relay">
+        <span class="code">04</span><span class="rname">תאורה ראשית</span>
+        <span class="state">לא ידוע</span>
+        <label class="toggle"><input type="checkbox" disabled><span class="track"></span></label>
+      </div>
+      <div class="offline-note">⚠ המכשיר לא דיווח מזה 3 שעות — התזמונים ממשיכים לפעול מקומית.</div>
+    </div>
+
+  </div>
+
+  <!-- ── Schedules ── -->
+  <div class="section-head">
+    <h2>תזמונים</h2>
+    <button class="btn primary">+ תזמון חדש</button>
+  </div>
+  <div class="sched">
+    <div class="srow">
+      <div class="which">מטבח<small>🏠 בית · 01</small></div>
+      <div class="pair">
+        <span class="pill on-p">שישי 18:00 · הדלקה</span>
+        <span class="arrow">←</span>
+        <span class="pill off-p">שבת 20:30 · כיבוי</span>
+      </div>
+      <span class="sync">✓ מסונכרן</span>
+      <label class="toggle"><input type="checkbox" checked><span class="track"></span></label>
+    </div>
+    <div class="srow">
+      <div class="which">סלון<small>🏠 בית · 02</small></div>
+      <div class="pair">
+        <span class="pill on-p">שישי 17:45 · הדלקה</span>
+        <span class="arrow">←</span>
+        <span class="pill off-p">שבת 23:00 · כיבוי</span>
+      </div>
+      <span class="sync">✓ מסונכרן</span>
+      <label class="toggle"><input type="checkbox" checked><span class="track"></span></label>
+    </div>
+    <div class="srow">
+      <div class="which">דוד שמש<small>🏠 בית · 03</small></div>
+      <div class="pair">
+        <span class="pill on-p">כל יום 05:30 · הדלקה</span>
+        <span class="arrow">←</span>
+        <span class="pill off-p">כל יום 07:00 · כיבוי</span>
+      </div>
+      <span class="sync err">⟳ ממתין לסנכרון</span>
+      <label class="toggle"><input type="checkbox" checked><span class="track"></span></label>
+    </div>
+  </div>
+
+  <!-- ── History ── -->
+  <div class="section-head"><h2>פעילות אחרונה</h2><button class="btn">הכל ←</button></div>
+  <div class="hist">
+    <div class="hrow"><span class="ico ok">💡</span><span><b>מטבח</b> הודלק לפי תזמון (בוצע במכשיר)</span><time>שישי 18:00</time></div>
+    <div class="hrow"><span class="ico tel">📞</span><span>שיחה מ־050-1234567 — <b>סלון</b> כובה דרך הטלפון</span><time>אתמול 21:14</time></div>
+    <div class="hrow"><span class="ico ok">✓</span><span>תזמון חדש נשמר דרך הטלפון — <b>דוד שמש</b></span><time>אתמול 21:12</time></div>
+  </div>
+
+</main>
+
+<nav class="tabbar">
+  <a class="tab active"><span class="g">▦</span>דשבורד</a>
+  <a class="tab"><span class="g">🕐</span>תזמונים</a>
+  <a class="tab"><span class="g">≡</span>היסטוריה</a>
+  <a class="tab"><span class="g">⚙</span>הגדרות</a>
+</nav>
+
+<script>
+  function flip(cb) {
+    const row = cb.closest('.relay');
+    row.classList.toggle('is-on', cb.checked);
+    row.querySelector('.state').textContent = cb.checked ? 'דולק' : 'כבוי';
+  }
+</script>
+</body>
+</html>
