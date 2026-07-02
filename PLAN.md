@@ -29,8 +29,11 @@ keep working even if the internet drops — this is the single most important ar
 **Execution authority (who toggles, when):**
 - **The DEVICE is authoritative** for schedule execution. When it executes an event it publishes
   `{"schedule_id":N, "occurrence":"2026-07-03T18:00+03:00", "state":"on"}` on its status topic.
-- **The server backup fires only if** the device is offline OR no execution report for that
-  `(schedule_id, occurrence)` arrived within a grace window (2 min after due time).
+- **The server backup fires only if the device is ONLINE** yet no execution report for that
+  `(schedule_id, occurrence)` arrived within a grace window (2 min after due time) — e.g. the
+  device missed a schedule sync. If the device is **offline**, the server cannot command it
+  either: mark the occurrence `unverified_offline` and rely on local execution (that's what
+  it's for); reconcile from the device's status report when it reconnects.
 - **All commands are idempotent by design**: actions are absolute (`on`/`off`), never toggle —
   a duplicate delivery sets the same state, it cannot flip a relay wrong.
 - **Correlation:** every command carries `cmd_id`; every scheduled execution is keyed by
@@ -64,15 +67,23 @@ devices           (id, user_id FK, device_uid CHAR(12) UNIQUE, -- ESP32 MAC
                    last_pushed_at DATETIME,
                    sync_status ENUM('pending','synced','error') DEFAULT 'pending',
                    sync_error VARCHAR(255),
-                   created_at)
+                   created_at,
+                   UNIQUE(id, user_id))                        -- composite-FK target for relays guardrail
 
 relays            (id, device_id FK, user_id FK,              -- user_id denormalized for constraint
                    relay_no TINYINT,                          -- channel 1-20 (GPIO or MCP23017)
                    name VARCHAR(50),                          -- "מטבח", "סלון"
                    ivr_digit TINYINT,                         -- stored as int, rendered "%02d" (7→"07")
+                   boot_behavior ENUM('off','last_state','schedule') DEFAULT 'schedule',
                    current_state ENUM('on','off','unknown'), state_updated_at,
                    UNIQUE(device_id, relay_no),               -- one row per physical channel
-                   UNIQUE(user_id, ivr_digit))                -- IVR menu spans ALL user's devices
+                   UNIQUE(user_id, ivr_digit),                -- IVR menu spans ALL user's devices
+                   -- ownership consistency: relays.user_id MUST equal devices.user_id.
+                   -- Enforced at DB level via composite FK:
+                   --   devices: add UNIQUE(id, user_id)
+                   --   relays:  FOREIGN KEY (device_id, user_id) REFERENCES devices(id, user_id)
+                   -- so reassigning a device to another user forces its relays to move with it.
+                   FOREIGN KEY (device_id, user_id) REFERENCES devices(id, user_id))
 
 -- ── Scheduling (diagram steps 4.1 / 4.2) ─────────────────
 -- A schedule is an ON/OFF *pair*, each with its own day — the canonical Shabbat
@@ -83,8 +94,12 @@ schedules         (id, user_id FK, relay_id FK,
                    off_day_of_week TINYINT,                   -- may differ from on-day
                    off_time TIME,
                    repeat_type ENUM('weekly','once'),
+                   on_date DATE NULL, off_date DATE NULL,     -- REQUIRED when repeat_type='once'
                    is_enabled BOOL,
                    created_via ENUM('ivr','web','admin'), created_at, updated_at)
+-- 'once' semantics: explicit dates, auto-disabled after execution.
+-- v1 scope: the IVR creates WEEKLY schedules only (matches the day-of-week flow);
+-- 'once' is created via the web panel (date picker). IVR one-time = v2.
 -- NOTE: sync state lives on `devices` (schedule_version / device_ack_version / sync_status),
 -- not per schedule row — the device always receives its FULL schedule set as one versioned payload.
 
@@ -99,6 +114,15 @@ commands          (id, relay_id FK, action ENUM('on','off'),
                    schedule_id FK NULL, call_id FK NULL,
                    status ENUM('pending','sent','acked','failed'),
                    requested_at, acked_at)
+
+-- One row per scheduled occurrence — THE dedupe/authority record.
+-- UNIQUE constraint makes double-execution logging impossible at the DB level.
+schedule_executions (id, schedule_id FK, occurrence_at DATETIME, action ENUM('on','off'),
+                   executed_by ENUM('device','server_backup'),
+                   status ENUM('executed','unverified_offline','failed'),
+                   command_id FK NULL,                        -- set when server_backup fired
+                   reported_at,
+                   UNIQUE(schedule_id, occurrence_at, action))
 
 call_logs         (id, yemot_call_id, phone, user_id FK NULL,
                    menu_path VARCHAR(255),                    -- what the caller did
@@ -204,8 +228,14 @@ online → `sync_status = 'error'` + alert in admin monitoring. Retained deliver
 device syncs automatically on reconnect.
 
 Mosquitto with **per-device username/password**, TLS on 8883, ACL so each device only sees its
-own topics. Secrets: plaintext generated once at provisioning (flashed to device NVS + written to
-Mosquitto via `mosquitto_passwd`); DB stores only a bcrypt hash. Rotation = issue new secret.
+own topics.
+
+**Credential lifecycle (be precise):** the plaintext secret necessarily exists briefly at
+provisioning — generated in memory, flashed to device NVS, piped to `mosquitto_passwd`, and
+shown/downloaded **exactly once** in the admin UI. Rules: it is **never written to any log**
+(provisioning endpoint excluded from request/response logging), never stored in the DB
+(bcrypt hash only, for verification/audit), and **cannot be retrieved later — lost secret =
+rotate**, which is a one-click reprovision in the admin panel.
 
 ### ESP32 firmware outline
 
