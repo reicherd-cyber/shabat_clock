@@ -50,6 +50,7 @@ admins            (id, name, email, password_hash, role ENUM('superadmin','suppo
                    is_active, last_login_at, created_at)
 
 users             (id, full_name, pin_code CHAR(4),          -- PIN for unknown caller-ID
+                   require_pin BOOL DEFAULT FALSE,            -- force PIN even from known caller-ID
                    status ENUM('active','suspended'), max_devices,
                    language DEFAULT 'he', notes, created_at)
 
@@ -118,7 +119,8 @@ commands          (id, relay_id FK, action ENUM('on','off'),
 -- One row per scheduled occurrence — THE dedupe/authority record.
 -- UNIQUE constraint makes double-execution logging impossible at the DB level.
 schedule_executions (id, schedule_id FK, occurrence_at DATETIME, action ENUM('on','off'),
-                   executed_by ENUM('device','server_backup'),
+                   executed_by ENUM('device','server_backup') NULL,  -- NULL when nothing executed
+                                                                     -- (unverified_offline/failed)
                    status ENUM('executed','unverified_offline','failed'),
                    command_id FK NULL,                        -- set when server_backup fired
                    reported_at,
@@ -134,7 +136,8 @@ device_events     (id, device_id FK, event ENUM('online','offline','boot','ack',
 
 audit_log         (id, admin_id FK, action, entity, entity_id, diff JSON, created_at)
 
-settings          (key PRIMARY, value, description)           -- IVR texts, feature flags
+settings          (setting_key PRIMARY, value, description)   -- IVR texts, feature flags
+                                                              -- (avoid reserved word `key` in MySQL)
 ```
 
 ---
@@ -284,8 +287,9 @@ This audience often uses kosher phones — the web panel is secondary to the IVR
   - **Port 1883 bound to localhost ONLY** (server-internal); devices connect exclusively
     via **8883 TLS**. Firewall (ufw): allow 80/443/8883, deny 1883 external.
   - Per-device creds + ACL (`dev/{uid}/#` only); secret rotatable from admin
-  - `mqtt_secret` never stored raw: bcrypt hash in DB, live cred in Mosquitto passwd file
-    (written via `mosquitto_passwd` at provisioning), plaintext exists only on the device
+  - device secret never stored raw: DB holds `devices.mqtt_secret_hash` (bcrypt), live cred in
+    Mosquitto passwd file (written via `mosquitto_passwd` at provisioning), plaintext exists
+    only on the device
 - HTTPS via Let's Encrypt; PM2 (`shabat-clock` app) + Mosquitto as systemd service
 - Daily MySQL backup (or DO Managed MySQL)
 
