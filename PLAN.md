@@ -28,7 +28,7 @@ keep working even if the internet drops — this is the single most important ar
 
 **Execution authority (who toggles, when):**
 - **The DEVICE is authoritative** for schedule execution. When it executes an event it publishes
-  `{"schedule_id":N, "occurrence":"2026-07-03T18:00+03:00", "state":"on"}` on its status topic.
+  `{"schedule_id":N, "occurrence":"2026-07-03T18:00+03:00", "action":"on"}` on `dev/{uid}/exec`.
 - **The server backup fires only if the device is ONLINE** yet no execution report for that
   `(schedule_id, occurrence)` arrived within a grace window (2 min after due time) — e.g. the
   device missed a schedule sync. If the device is **offline**, the server cannot command it
@@ -38,7 +38,8 @@ keep working even if the internet drops — this is the single most important ar
   a duplicate delivery sets the same state, it cannot flip a relay wrong.
 - **Correlation:** every command carries `cmd_id`; every scheduled execution is keyed by
   `(schedule_id, occurrence)`. Device dedupes on these; server logs one execution per occurrence,
-  tagged `executed_by: device|server_backup` — so logs never double-count.
+  tagged `executed_by: device|server_backup|NULL` (NULL = nothing executed — offline/failed) —
+  so logs never double-count.
 
 ---
 
@@ -49,7 +50,7 @@ keep working even if the internet drops — this is the single most important ar
 admins            (id, name, email, password_hash, role ENUM('superadmin','support'),
                    is_active, last_login_at, created_at)
 
-users             (id, full_name, pin_code CHAR(4),          -- PIN for unknown caller-ID
+users             (id, full_name, pin_hash CHAR(60),         -- bcrypt of 4-digit PIN; never store raw
                    require_pin BOOL DEFAULT FALSE,            -- force PIN even from known caller-ID
                    status ENUM('active','suspended'), max_devices,
                    language DEFAULT 'he', notes, created_at)
@@ -79,6 +80,7 @@ relays            (id, device_id FK, user_id FK,              -- user_id denorma
                    current_state ENUM('on','off','unknown'), state_updated_at,
                    UNIQUE(device_id, relay_no),               -- one row per physical channel
                    UNIQUE(user_id, ivr_digit),                -- IVR menu spans ALL user's devices
+                   UNIQUE(id, user_id),                       -- composite-FK target for schedules guardrail
                    -- ownership consistency: relays.user_id MUST equal devices.user_id.
                    -- Enforced at DB level via composite FK:
                    --   devices: add UNIQUE(id, user_id)
@@ -97,7 +99,10 @@ schedules         (id, user_id FK, relay_id FK,
                    repeat_type ENUM('weekly','once'),
                    on_date DATE NULL, off_date DATE NULL,     -- REQUIRED when repeat_type='once'
                    is_enabled BOOL,
-                   created_via ENUM('ivr','web','admin'), created_at, updated_at)
+                   created_via ENUM('ivr','web','admin'), created_at, updated_at,
+                   -- ownership guardrail (same pattern as relays→devices): a schedule can
+                   -- never point at another user's relay.
+                   FOREIGN KEY (relay_id, user_id) REFERENCES relays(id, user_id))
 -- 'once' semantics: explicit dates, auto-disabled after execution.
 -- v1 scope: the IVR creates WEEKLY schedules only (matches the day-of-week flow);
 -- 'once' is created via the web panel (date picker). IVR one-time = v2.
@@ -106,8 +111,10 @@ schedules         (id, user_id FK, relay_id FK,
 
 -- Sync layer flattens each pair into two independent events for the ESP32:
 --   {day:6, time:"18:00", relay:1, action:"on"}, {day:7, time:"20:00", relay:1, action:"off"}
--- Validation: reject pairs where off <= on within the same week cycle;
--- daily (NULL day) requires off_day also NULL.
+-- Validation: the week is CYCLIC — duration = (off − on) mod week. Wrap-around pairs are
+-- legal (Saturday 23:00 ON → Sunday 01:00 OFF). Reject only zero-length pairs
+-- (identical on/off day+time). Daily (NULL day) requires off_day also NULL; a daily pair
+-- crossing midnight (on 18:00 → off 01:00) is legal, interpreted as next-day off.
 
 -- ── Operations / audit ────────────────────────────────────
 commands          (id, relay_id FK, action ENUM('on','off'),
@@ -136,8 +143,8 @@ device_events     (id, device_id FK, event ENUM('online','offline','boot','ack',
 
 audit_log         (id, admin_id FK, action, entity, entity_id, diff JSON, created_at)
 
-settings          (setting_key PRIMARY, value, description)   -- IVR texts, feature flags
-                                                              -- (avoid reserved word `key` in MySQL)
+settings          (setting_key VARCHAR(100) PRIMARY KEY,      -- IVR texts, feature flags
+                   setting_value TEXT, description)           -- (avoid reserved words key/value)
 ```
 
 ---
@@ -186,20 +193,21 @@ replies with plain-text commands: `read=` (play + capture digits), `id_list_mess
    └─ not found → "הקש מספר משתמש ואישור" + PIN → auth
 
 2. Main menu (תפריט ראשי):
-   1 = הדלקה מיידית   → relay menu (built from `relays` table) → MQTT cmd → wait ≤5s for ack
+   1 = הדלקה מיידית   → relay menu → MQTT cmd → wait ≤5s for ack
    2 = כיבוי מיידי    → same
-
-   ★ Relay menu is DYNAMIC — never hardcoded. The server reads the caller's relays
-     from the DB and builds the prompt at call time, e.g.:
-       "למטבח הקש 01, לסלון הקש 02, לדוד שמש הקש 03..."
-     Names + codes come from relays.name / relays.ivr_digit — add/rename/remove a relay
-     in the admin panel (or user panel) and the IVR menu updates instantly, no redeploy.
-     TTS reads the Hebrew name straight from the DB.
-   3 = תזמון עתידי    → step 4.1: day (1-7) → time HHMM (on)
+   3 = תזמון עתידי    → relay menu (which relay to schedule)
+                       → step 4.1: day (1-7) → time HHMM (on)
                        → step 4.2: day (1-7) → time HHMM (off)
                        → read back for confirmation → save + push to device
    4 = מצב נוכחי      → read relay states from retained MQTT status
    * = back, 0 = repeat
+
+   ★ Relay menu (used by 1, 2 AND 3) is DYNAMIC — never hardcoded. The server reads
+     the caller's relays from the DB and builds the prompt at call time, e.g.:
+       "למטבח הקש 01, לסלון הקש 02, לדוד שמש הקש 03..."
+     Names + codes come from relays.name / relays.ivr_digit — add/rename/remove a relay
+     in the admin panel (or user panel) and the IVR menu updates instantly, no redeploy.
+     TTS reads the Hebrew name straight from the DB.
 
 3. Feedback (step 10): "הפקודה בוצעה בהצלחה" / "אירעה שגיאה, המכשיר לא מחובר" → hangup
 ```
@@ -220,6 +228,7 @@ The two-step flow is the fallback design; the 5s blocking wait is the preferred 
 | `dev/{uid}/cmd` | server → ESP32 | `{"cmd_id":123,"relay":1,"action":"on"}` |
 | `dev/{uid}/ack` | ESP32 → server | `{"cmd_id":123,"ok":true,"state":"on"}` |
 | `dev/{uid}/status` | ESP32 → server (retained) | full relay states + fw + rssi |
+| `dev/{uid}/exec` | ESP32 → server | schedule execution report: `{"schedule_id":N,"occurrence":"...","action":"on"}` |
 | `dev/{uid}/schedule` | server → ESP32 (retained) | full schedule JSON **+ `version` + `sha256` hash** |
 | `dev/{uid}/schedule_ack` | ESP32 → server | `{"version":N,"hash":"...","ok":true}` — ACKs that EXACT version |
 | LWT → `dev/{uid}/status` | broker | `{"online":false}` on disconnect |
