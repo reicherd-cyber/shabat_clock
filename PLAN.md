@@ -54,13 +54,22 @@ relays            (id, device_id FK, relay_no TINYINT,        -- channel 1-20 (G
                    current_state ENUM('on','off','unknown'), state_updated_at)
 
 -- ── Scheduling (diagram steps 4.1 / 4.2) ─────────────────
+-- A schedule is an ON/OFF *pair*, each with its own day — the canonical Shabbat
+-- case crosses days (ON Friday 18:00 → OFF Saturday 20:00).
 schedules         (id, user_id FK, relay_id FK,
-                   day_of_week TINYINT,                       -- 1-7 (א׳-ש׳), NULL = daily
-                   on_time TIME, off_time TIME,
+                   on_day_of_week TINYINT,                    -- 1-7 (א׳-ש׳), NULL = daily
+                   on_time TIME,
+                   off_day_of_week TINYINT,                   -- may differ from on-day
+                   off_time TIME,
                    repeat_type ENUM('weekly','once'),
                    is_enabled BOOL,
                    synced_to_device BOOL,                     -- pushed to ESP32?
                    created_via ENUM('ivr','web','admin'), created_at)
+
+-- Sync layer flattens each pair into two independent events for the ESP32:
+--   {day:6, time:"18:00", relay:1, action:"on"}, {day:7, time:"20:00", relay:1, action:"off"}
+-- Validation: reject pairs where off <= on within the same week cycle;
+-- daily (NULL day) requires off_day also NULL.
 
 -- ── Operations / audit ────────────────────────────────────
 commands          (id, relay_id FK, action ENUM('on','off'),
