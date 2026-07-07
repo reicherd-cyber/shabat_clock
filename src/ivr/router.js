@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Router } from 'express';
 import { env } from '../config/env.js';
 import { normalizePhone } from '../services/phone.js';
@@ -6,8 +7,15 @@ import { getSession, setSession } from './session.js';
 
 export const ivrRouter = Router();
 
+// Constant-time comparison so the IVR token can't be recovered via timing.
+function tokenValid(provided) {
+  const a = Buffer.from(String(provided ?? ''), 'utf8');
+  const b = Buffer.from(String(env.ivrToken ?? ''), 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 ivrRouter.get('/', async (req, res) => {
-  if (req.query.token !== env.ivrToken) {
+  if (!tokenValid(req.query.token)) {
     return res.status(403).type('text/plain').send('Forbidden');
   }
 

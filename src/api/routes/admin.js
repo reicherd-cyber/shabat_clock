@@ -2,10 +2,11 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env.js';
 import { requireAuth } from '../authMiddleware.js';
+import { authLimiter } from '../rateLimit.js';
 
 export const adminRouter = Router();
 
-adminRouter.post('/auth/login', async (req, res) => {
+adminRouter.post('/auth/login', authLimiter, async (req, res) => {
   // TODO: bcrypt compare and reject inactive admins with generic 401.
   const token = jwt.sign({ sub: 1, role: 'superadmin' }, env.jwtSecret, { expiresIn: '12h' });
   res.json({ token, admin: { id: 1, name: 'Admin', role: 'superadmin' } });

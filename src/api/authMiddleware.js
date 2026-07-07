@@ -8,7 +8,7 @@ export function requireAuth(role) {
     const token = header.startsWith('Bearer ') ? header.slice(7) : null;
     if (!token) return next(unauthenticated());
     try {
-      const payload = jwt.verify(token, env.jwtSecret);
+      const payload = jwt.verify(token, env.jwtSecret, { algorithms: ['HS256'] });
       if (role && payload.role !== role && payload.role !== 'superadmin') return next(unauthenticated());
       req.auth = payload;
       return next();
