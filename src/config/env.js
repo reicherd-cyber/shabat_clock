@@ -1,27 +1,36 @@
-import dotenv from 'dotenv';
+import 'dotenv/config';
 
-dotenv.config();
-
-const required = ['DATABASE_URL', 'JWT_SECRET', 'IVR_TOKEN'];
-
-export function loadEnv() {
-  const env = {
-    port: Number(process.env.PORT || 3001),
-    databaseUrl: process.env.DATABASE_URL,
-    ivrToken: process.env.IVR_TOKEN,
-    mqttUrl: process.env.MQTT_URL || 'mqtt://localhost:1883',
-    mqttServerUser: process.env.MQTT_SERVER_USER,
-    mqttServerPass: process.env.MQTT_SERVER_PASS,
-    jwtSecret: process.env.JWT_SECRET,
-    nodeEnv: process.env.NODE_ENV || 'development',
-  };
-
-  const missing = required.filter((key) => !process.env[key]);
-  if (missing.length && env.nodeEnv === 'production') {
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
-  }
-
-  return env;
+function required(name) {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing required env var ${name}`);
+  return v;
 }
 
-export const env = loadEnv();
+function parseDatabaseUrl(url) {
+  const u = new URL(url);
+  return {
+    host: u.hostname,
+    port: Number(u.port || 3306),
+    user: decodeURIComponent(u.username),
+    password: decodeURIComponent(u.password),
+    database: u.pathname.replace(/^\//, ''),
+  };
+}
+
+export const env = {
+  nodeEnv: process.env.NODE_ENV || 'development',
+  port: Number(process.env.PORT || 3001),
+  db: parseDatabaseUrl(required('DATABASE_URL')),
+  ivrToken: required('IVR_TOKEN'),
+  mqtt: {
+    url: process.env.MQTT_URL || 'mqtt://localhost:1883',
+    username: process.env.MQTT_SERVER_USER || '',
+    password: process.env.MQTT_SERVER_PASS || '',
+  },
+  jwtSecret: required('JWT_SECRET'),
+  otpYemot: {
+    user: process.env.OTP_YEMOT_USER || '',
+    pass: process.env.OTP_YEMOT_PASS || '',
+  },
+  mosquittoPasswdFile: process.env.MOSQUITTO_PASSWD_FILE || '',
+};

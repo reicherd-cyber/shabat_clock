@@ -1,3 +1,4 @@
+// [D4] API error envelope: {"error":{"code","message"}} + optional fields map.
 export class ApiError extends Error {
   constructor(status, code, message, fields) {
     super(message);
@@ -7,32 +8,23 @@ export class ApiError extends Error {
   }
 }
 
-export function validation(code, message, fields) {
-  return new ApiError(400, code || 'VALIDATION', message || 'Validation failed', fields);
-}
+export const errors = {
+  validation: (message = 'Invalid input', fields) => new ApiError(400, 'VALIDATION', message, fields),
+  unauthenticated: (message = 'Authentication required') => new ApiError(401, 'UNAUTHENTICATED', message),
+  badCode: () => new ApiError(401, 'BAD_CODE', 'Wrong or expired code'),
+  forbidden: (message = 'Forbidden') => new ApiError(403, 'FORBIDDEN', message),
+  notFound: (code = 'NOT_FOUND', message = 'Not found') => new ApiError(404, code, message),
+  conflict: (code, message) => new ApiError(409, code, message),
+  rateLimited: () => new ApiError(429, 'RATE_LIMITED', 'Too many requests'),
+};
 
-export function notFound(code = 'NOT_FOUND', message = 'Not found') {
-  return new ApiError(404, code, message);
-}
-
-export function conflict(code = 'CONFLICT', message = 'Conflict') {
-  return new ApiError(409, code, message);
-}
-
-export function unauthenticated(message = 'Unauthenticated') {
-  return new ApiError(401, 'UNAUTHENTICATED', message);
-}
-
-export function errorMiddleware(err, req, res, next) {
-  if (res.headersSent) return next(err);
-  const status = err.status || 500;
-  const body = {
-    error: {
-      code: err.code || 'INTERNAL',
-      message: status >= 500 ? 'Internal server error' : err.message,
-    },
-  };
-  if (err.fields) body.error.fields = err.fields;
-  if (status >= 500) console.error(err);
-  return res.status(status).json(body);
+// Express error handler emitting the [D4] envelope.
+export function errorHandler(err, req, res, _next) {
+  if (err instanceof ApiError) {
+    const body = { error: { code: err.code, message: err.message } };
+    if (err.fields) body.error.fields = err.fields;
+    return res.status(err.status).json(body);
+  }
+  console.error('Unhandled error:', err);
+  return res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
 }

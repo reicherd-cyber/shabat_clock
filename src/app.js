@@ -1,27 +1,45 @@
 import express from 'express';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { apiRouter } from './api/router.js';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { errorHandler } from './config/errors.js';
 import { ivrRouter } from './ivr/router.js';
-import { errorMiddleware } from './config/errors.js';
+import { ivrLimiter } from './api/middleware.js';
+import { authRouter } from './api/routes/auth.js';
+import { userRouter } from './api/routes/user.js';
+import { adminRouter } from './api/routes/admin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function createApp() {
   const app = express();
+  app.set('trust proxy', 1); // behind nginx [D6]
+  app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(express.json({ limit: '100kb' }));
 
-  app.disable('x-powered-by');
-  app.use(helmet());
-  app.use(express.json({ limit: '1mb' }));
-
-  app.use('/ivr', rateLimit({ windowMs: 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false }), ivrRouter);
-  app.use('/api/v1', apiRouter);
-  app.use(express.static(path.join(__dirname, 'web', 'dist')));
+  // Request log — never the query string on /ivr (token) and never bodies at all;
+  // provisioning/rotate responses are thereby excluded from logging (§8.4 [D29]).
+  app.use((req, res, next) => {
+    console.log(`${req.method} ${req.path}`);
+    next();
+  });
 
   app.get('/healthz', (req, res) => res.json({ ok: true }));
-  app.use(errorMiddleware);
 
+  app.use(ivrLimiter, ivrRouter); // GET /ivr — Yemot webhook (30 req/min/phone)
+  app.use('/api/v1', authRouter);
+  app.use('/api/v1', userRouter);
+  app.use('/api/v1/admin', adminRouter);
+
+  // Web panels (React RTL) served same-origin — no CORS [D27].
+  const dist = path.join(__dirname, 'web', 'dist');
+  app.use(express.static(dist));
+  app.get(/^\/(?!api|ivr).*/, (req, res) => {
+    res.sendFile(path.join(dist, 'index.html'), (err) => {
+      if (err) res.status(404).send('web panel not built — run npm run build:web');
+    });
+  });
+
+  app.use(errorHandler);
   return app;
 }

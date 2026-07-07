@@ -1,0 +1,215 @@
+// Compact admin pages: monitoring, call logs, schedules, settings, admins, audit.
+import { useEffect, useState } from 'react';
+import { adminApi } from '../api.js';
+import { Card, Button, Input, Badge, ErrorNote, useAsync, useInterval, DAY_NAMES } from '../ui.jsx';
+
+const Stat = ({ label, value, ok }) => (
+  <Card className="text-center">
+    <div className={`text-3xl font-bold ${ok === false ? 'text-err' : ok ? 'text-ok' : ''}`}>{value}</div>
+    <div className="text-muted text-sm">{label}</div>
+  </Card>
+);
+
+export function Monitoring() {
+  const [m, setM] = useState(null);
+  const [error, setError] = useState(null);
+  useInterval(() => adminApi.get('/monitoring').then(setM).catch(setError), 10_000);
+  if (!m) return <p className="text-muted">טוען…</p>;
+  return (
+    <div className="space-y-4">
+      <h2 className="font-bold text-xl">ניטור</h2>
+      <ErrorNote error={error} />
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <Stat label="מכשירים מחוברים" value={`${m.devices_online}/${m.devices_total}`} ok={m.devices_online === m.devices_total} />
+        <Stat label="פקודות ממתינות" value={m.commands_pending} />
+        <Stat label="פקודות שנכשלו (24ש)" value={m.commands_failed_24h} ok={m.commands_failed_24h === 0} />
+        <Stat label="כשלי זיהוי (24ש)" value={m.auth_failures_24h} ok={m.auth_failures_24h < 5} />
+        <Stat label="ברוקר MQTT" value={m.broker_ok ? 'תקין' : 'מנותק'} ok={m.broker_ok} />
+      </div>
+      {m.sync_errors.length > 0 && (
+        <Card>
+          <h3 className="font-bold text-err mb-2">שגיאות סנכרון</h3>
+          {m.sync_errors.map((d) => (
+            <div key={d.id} className="text-sm border-b border-line last:border-0 py-1">
+              <b>{d.name}</b> <span dir="ltr">{d.device_uid}</span> — {d.sync_error} (v{d.schedule_version}, ack v{d.device_ack_version})
+            </div>
+          ))}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+export function CallLogs() {
+  const [logs, setLogs] = useState(null);
+  const [phone, setPhone] = useState('');
+  const { error, run, setError } = useAsync();
+  const refresh = (p = '') => run(async () => setLogs(await adminApi.get(`/call-logs${p ? `?phone=${encodeURIComponent(p)}` : ''}`)));
+  useEffect(() => { refresh().catch(setError); }, []);
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center gap-2 flex-wrap">
+        <h2 className="font-bold text-xl">יומני שיחות</h2>
+        <div className="flex gap-2">
+          <Input dir="ltr" placeholder="סינון לפי טלפון" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <Button variant="ghost" onClick={() => refresh(phone)}>סנן</Button>
+        </div>
+      </div>
+      <ErrorNote error={error} />
+      <Card className="overflow-x-auto p-0">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-right text-muted border-b border-line">
+              <th className="p-2">מתי</th><th className="p-2">טלפון</th><th className="p-2">מסלול תפריט</th><th className="p-2">תוצאה</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(logs || []).map((l) => (
+              <tr key={l.id} className="border-b border-line last:border-0">
+                <td className="p-2 whitespace-nowrap">{new Date(l.started_at).toLocaleString('he-IL')}</td>
+                <td className="p-2" dir="ltr">{l.phone}</td>
+                <td className="p-2" dir="ltr">{l.menu_path}</td>
+                <td className="p-2"><Badge ok={!['auth_fail', 'abandoned'].includes(l.outcome)}>{l.outcome || '—'}</Badge></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+export function AdminSchedules() {
+  const [schedules, setSchedules] = useState(null);
+  const { busy, error, run, setError } = useAsync();
+  const refresh = async () => setSchedules(await adminApi.get('/schedules'));
+  useEffect(() => { refresh().catch(setError); }, []);
+  const toggle = (s) => run(async () => { await adminApi.patch(`/schedules/${s.id}`, { is_enabled: !s.is_enabled }); await refresh(); });
+  const remove = (s) => run(async () => { await adminApi.del(`/schedules/${s.id}`); await refresh(); });
+  return (
+    <div className="space-y-4">
+      <h2 className="font-bold text-xl">תזמונים (כל המשתמשים)</h2>
+      <ErrorNote error={error} />
+      {(schedules || []).map((s) => (
+        <Card key={s.id} className="flex items-center justify-between flex-wrap gap-2 py-3">
+          <div className="text-sm">
+            <b>{s.relay_name}</b> <span className="text-muted">({s.device_name})</span>
+            {' — '}
+            {s.repeat_type === 'once'
+              ? `${String(s.on_date).slice(0, 10)} ${s.on_time} ← ${String(s.off_date).slice(0, 10)} ${s.off_time}`
+              : s.on_day_of_week == null
+                ? `כל יום ${s.on_time} ← ${s.off_time}`
+                : `${DAY_NAMES[s.on_day_of_week]} ${s.on_time} ← ${DAY_NAMES[s.off_day_of_week]} ${s.off_time}`}
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge ok={s.sync_status === 'synced'}>{s.sync_status}</Badge>
+            <Badge ok={!!s.is_enabled}>{s.is_enabled ? 'פעיל' : 'מושבת'}</Badge>
+            <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => toggle(s)}>{s.is_enabled ? 'השבת' : 'הפעל'}</Button>
+            <Button variant="danger" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => remove(s)}>מחק</Button>
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+export function SystemSettings() {
+  const [settings, setSettings] = useState(null);
+  const [dirty, setDirty] = useState({});
+  const { busy, error, run, setError } = useAsync();
+  useEffect(() => { adminApi.get('/settings').then(setSettings).catch(setError); }, []);
+  const save = () => run(async () => {
+    await adminApi.put('/settings', { settings: Object.entries(dirty).map(([setting_key, setting_value]) => ({ setting_key, setting_value })) });
+    setDirty({});
+  });
+  if (!settings) return <p className="text-muted">טוען…</p>;
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h2 className="font-bold text-xl">הגדרות מערכת (טקסטים של המענה)</h2>
+        <Button disabled={busy || !Object.keys(dirty).length} onClick={save}>שמור ({Object.keys(dirty).length})</Button>
+      </div>
+      <ErrorNote error={error} />
+      <Card className="space-y-3">
+        {settings.map((s) => (
+          <label key={s.setting_key} className="block">
+            <span className="text-sm text-muted" dir="ltr">{s.setting_key}</span>
+            {s.description && <span className="text-xs text-muted"> — {s.description}</span>}
+            <Input defaultValue={s.setting_value} onChange={(e) => setDirty({ ...dirty, [s.setting_key]: e.target.value })} />
+          </label>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
+export function Admins() {
+  const [admins, setAdmins] = useState(null);
+  const [form, setForm] = useState(null);
+  const { busy, error, run, setError } = useAsync();
+  const refresh = async () => setAdmins(await adminApi.get('/admins'));
+  useEffect(() => { refresh().catch(setError); }, []);
+  const create = () => run(async () => { await adminApi.post('/admins', form); setForm(null); await refresh(); });
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h2 className="font-bold text-xl">מנהלים</h2>
+        <Button onClick={() => setForm({ name: '', email: '', password: '', role: 'support' })}>+ מנהל</Button>
+      </div>
+      <ErrorNote error={error} />
+      {(admins || []).map((a) => (
+        <Card key={a.id} className="flex items-center justify-between py-3">
+          <div><b>{a.name}</b> <span className="text-muted text-sm" dir="ltr">{a.email}</span></div>
+          <div className="flex gap-2 items-center">
+            <Badge ok={a.role === 'superadmin'}>{a.role}</Badge>
+            <Badge ok={!!a.is_active}>{a.is_active ? 'פעיל' : 'מנוטרל'}</Badge>
+          </div>
+        </Card>
+      ))}
+      {form && (
+        <Card className="space-y-3">
+          <Input placeholder="שם" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <Input dir="ltr" placeholder="אימייל" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          <Input dir="ltr" type="password" placeholder="סיסמה" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <select className="border border-line rounded-xl px-3 py-2" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+            <option value="support">support (קריאה בלבד)</option>
+            <option value="superadmin">superadmin</option>
+          </select>
+          <Button disabled={busy} onClick={create}>צור</Button>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+export function Audit() {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => { adminApi.get('/audit-log').then(setRows).catch(setError); }, []);
+  return (
+    <div className="space-y-4">
+      <h2 className="font-bold text-xl">יומן ביקורת</h2>
+      <ErrorNote error={error} />
+      <Card className="overflow-x-auto p-0">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-right text-muted border-b border-line">
+              <th className="p-2">מתי</th><th className="p-2">מנהל</th><th className="p-2">פעולה</th><th className="p-2">ישות</th><th className="p-2">שינוי</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows || []).map((r) => (
+              <tr key={r.id} className="border-b border-line last:border-0 align-top">
+                <td className="p-2 whitespace-nowrap">{new Date(r.created_at).toLocaleString('he-IL')}</td>
+                <td className="p-2">{r.admin_name}</td>
+                <td className="p-2">{r.action}</td>
+                <td className="p-2">{r.entity}{r.entity_id ? ` #${r.entity_id}` : ''}</td>
+                <td className="p-2 text-xs" dir="ltr"><code>{r.diff ? JSON.stringify(r.diff).slice(0, 120) : ''}</code></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}

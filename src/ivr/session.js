@@ -1,30 +1,26 @@
+// [D16] Per-call state, in-memory, keyed by ApiCallId. TTL 10 min, swept each minute.
+// A restart loses only in-flight calls (caller redials); menu_path persists in call_logs.
+import { IVR_SESSION_TTL_MS } from '../config/constants.js';
+
 const sessions = new Map();
-const TTL_MS = 10 * 60 * 1000;
 
 export function getSession(callId) {
-  const session = sessions.get(callId);
-  if (!session) return null;
-  if (Date.now() - session.updated_at > TTL_MS) {
-    sessions.delete(callId);
-    return null;
-  }
-  return session;
+  const s = sessions.get(callId);
+  if (s) s.updatedAt = Date.now();
+  return s || null;
 }
 
-export function setSession(callId, data) {
-  const session = { ...data, updated_at: Date.now() };
-  sessions.set(callId, session);
-  return session;
+export function createSession(callId, data) {
+  const s = { callId, state: 'MAIN', invalidCount: 0, data: {}, updatedAt: Date.now(), ...data };
+  sessions.set(callId, s);
+  return s;
 }
 
-export function deleteSession(callId) {
+export function endSession(callId) {
   sessions.delete(callId);
 }
 
-export function sweepSessions() {
-  for (const [callId, session] of sessions.entries()) {
-    if (Date.now() - session.updated_at > TTL_MS) sessions.delete(callId);
-  }
-}
-
-setInterval(sweepSessions, 60 * 1000).unref();
+setInterval(() => {
+  const cutoff = Date.now() - IVR_SESSION_TTL_MS;
+  for (const [k, s] of sessions) if (s.updatedAt < cutoff) sessions.delete(k);
+}, 60_000).unref();

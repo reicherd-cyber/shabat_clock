@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+/* Palette per design/mockup-user-dashboard.html [D27] */
+@theme {
+  --color-cream: #FAF9F5;
+  --color-paper: #FFFFFF;
+  --color-ink: #29261B;
+  --color-muted: #87867F;
+  --color-line: #E5E1D8;
+  --color-accent: #D97757;
+  --color-accent-deep: #C4633F;
+  --color-ok: #6A8A5E;
+  --color-ok-bg: #EDF2EA;
+  --color-err: #BF4D43;
+  --color-err-bg: #F7ECEA;
+  --font-sans: "Segoe UI", "Heebo", Arial, sans-serif;
+}
+
+body {
+  background: var(--color-cream);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
+}

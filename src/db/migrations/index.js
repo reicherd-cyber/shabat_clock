@@ -1,3 +1,5 @@
-import { migration as migrate1 } from './migrate1.js';
+import { migrate1 } from './migrate1.js';
 
-export const migrations = [migrate1];
+export const migrations = [
+  { version: 1, up: migrate1 },
+];

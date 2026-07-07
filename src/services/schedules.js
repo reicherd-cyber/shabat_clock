@@ -1,80 +1,204 @@
-import { validation } from '../config/errors.js';
+// §1.1 schedule validation — single source of truth for IVR, web API and admin API —
+// plus schedule CRUD with the version-bump + push side effect.
+import { ApiError, errors } from '../config/errors.js';
+import { query, withTransaction } from '../db/pool.js';
+import { MINUTES_PER_WEEK, MINUTES_PER_DAY } from '../config/constants.js';
+import { timeToMinutes, localParts, wallToUtc } from './time.js';
 
-const DAY_MINUTES = 1440;
-const WEEK_MINUTES = 7 * DAY_MINUTES;
+const mod = (n, m) => ((n % m) + m) % m;
 
-function parseTimeToMinutes(value, field) {
-  const text = String(value || '');
-  const match = /^([01]\d|2[0-3]):([0-5]\d)(?::00)?$/.exec(text);
-  if (!match) {
-    throw validation('VALIDATION', 'Invalid schedule time', { [field]: 'Expected HH:MM minute granularity' });
-  }
-  return Number(match[1]) * 60 + Number(match[2]);
-}
-
-function normalizeDay(day, field) {
-  if (day === null || day === undefined || day === '') return null;
-  const number = Number(day);
-  if (!Number.isInteger(number) || number < 1 || number > 7) {
-    throw validation('VALIDATION', 'Invalid day of week', { [field]: 'Expected integer 1..7 or null' });
-  }
-  return number;
-}
-
-function dateTimeMs(date, time) {
-  return Date.parse(`${date}T${time.length === 5 ? `${time}:00` : time}+00:00`);
-}
-
-export function validateSchedule(schedule, { now = new Date() } = {}) {
-  const repeatType = schedule.repeat_type || 'weekly';
-  const onMin = parseTimeToMinutes(schedule.on_time, 'on_time');
-  const offMin = parseTimeToMinutes(schedule.off_time, 'off_time');
-
-  if (repeatType === 'weekly') {
-    if (schedule.on_date || schedule.off_date) {
-      throw validation('VALIDATION', 'Weekly schedules cannot have dates', {
-        on_date: 'must be null',
-        off_date: 'must be null',
-      });
-    }
-    const onDay = normalizeDay(schedule.on_day_of_week, 'on_day_of_week');
-    const offDay = normalizeDay(schedule.off_day_of_week, 'off_day_of_week');
-    if ((onDay === null) !== (offDay === null)) {
-      throw validation('VALIDATION', 'Schedule days must both be set or both be daily', {
-        on_day_of_week: 'must match off_day_of_week nullness',
-        off_day_of_week: 'must match on_day_of_week nullness',
-      });
-    }
-
-    const duration = onDay === null
-      ? (offMin - onMin + DAY_MINUTES) % DAY_MINUTES
-      : ((offDay * DAY_MINUTES + offMin) - (onDay * DAY_MINUTES + onMin) + WEEK_MINUTES) % WEEK_MINUTES;
-
-    if (duration <= 0) throw validation('ZERO_LENGTH_PAIR', 'Schedule ON and OFF cannot be identical');
-    return { ...schedule, repeat_type: 'weekly', on_day_of_week: onDay, off_day_of_week: offDay };
+// Pure rules 1–3. `schedule` fields: on_day_of_week, on_time "HH:MM", off_day_of_week,
+// off_time, repeat_type, on_date "YYYY-MM-DD", off_date. For 'once', pass {tz, now}
+// so ALREADY_PAST is judged in device-local time. Returns normalized copy.
+export function validateScheduleRules(schedule, { tz = 'Asia/Jerusalem', now = new Date() } = {}) {
+  const s = { ...schedule };
+  const onMin = timeToMinutes(s.on_time);
+  const offMin = timeToMinutes(s.off_time);
+  if (onMin == null || offMin == null || onMin >= MINUTES_PER_DAY || offMin >= MINUTES_PER_DAY) {
+    throw errors.validation('on_time/off_time required, HH:MM', { on_time: 'HH:MM', off_time: 'HH:MM' });
   }
 
-  if (repeatType === 'once') {
-    if (!schedule.on_date || !schedule.off_date) {
-      throw validation('VALIDATION', 'Once schedules require dates', {
-        on_date: 'required',
-        off_date: 'required',
-      });
+  if (s.repeat_type === 'once') {
+    if (!s.on_date || !s.off_date) {
+      throw errors.validation('on_date and off_date required for once', { on_date: 'required', off_date: 'required' });
     }
-    const onMs = dateTimeMs(schedule.on_date, schedule.on_time);
-    const offMs = dateTimeMs(schedule.off_date, schedule.off_time);
-    if (!Number.isFinite(onMs) || !Number.isFinite(offMs)) {
-      throw validation('VALIDATION', 'Invalid once schedule date/time');
+    s.on_day_of_week = null; // derived from the date at sync time
+    s.off_day_of_week = null;
+    const onLocal = `${s.on_date}T00:00`;
+    const offLocal = `${s.off_date}T00:00`;
+    const onKey = `${onLocal.slice(0, 10)} ${String(onMin)}`;
+    const offKey = `${offLocal.slice(0, 10)} ${String(offMin)}`;
+    if (s.off_date < s.on_date || (s.off_date === s.on_date && offMin <= onMin)) {
+      throw new ApiError(400, 'OFF_BEFORE_ON', 'OFF must be after ON');
     }
-    if (offMs <= onMs) throw validation('OFF_BEFORE_ON', 'OFF must be after ON');
-    if (onMs <= now.getTime()) throw validation('ALREADY_PAST', 'ON time must be in the future');
-    return {
-      ...schedule,
-      repeat_type: 'once',
-      on_day_of_week: null,
-      off_day_of_week: null,
+    // ALREADY_PAST: ON must be in the future in device-local time (covers OFF too).
+    const p = localParts(now, tz);
+    const pad = (n) => String(n).padStart(2, '0');
+    const nowLocalKey = `${p.y}-${pad(p.mo)}-${pad(p.d)}T${pad(p.hh)}:${pad(p.mm)}`;
+    const onKeyIso = `${s.on_date}T${String(Math.floor(onMin / 60)).padStart(2, '0')}:${String(onMin % 60).padStart(2, '0')}`;
+    if (onKeyIso <= nowLocalKey) throw new ApiError(400, 'ALREADY_PAST', 'ON time is in the past');
+    void onKey; void offKey;
+  } else {
+    s.repeat_type = 'weekly';
+    if (s.on_date || s.off_date) {
+      throw errors.validation('weekly schedules must not carry dates', { on_date: 'must be null' });
+    }
+    const onDay = s.on_day_of_week == null ? null : Number(s.on_day_of_week);
+    const offDay = s.off_day_of_week == null ? null : Number(s.off_day_of_week);
+    if ((onDay == null) !== (offDay == null)) {
+      throw errors.validation('days must both be set or both be null (daily)', { off_day_of_week: 'mismatch' });
+    }
+    if (onDay != null) {
+      if (onDay < 1 || onDay > 7 || offDay < 1 || offDay > 7) {
+        throw errors.validation('day of week must be 1–7', { on_day_of_week: '1-7' });
+      }
+      // Cyclic week: duration = (off − on) mod 10080, must be > 0. Wrap-around legal.
+      const duration = mod((offDay * MINUTES_PER_DAY + offMin) - (onDay * MINUTES_PER_DAY + onMin), MINUTES_PER_WEEK);
+      if (duration === 0) throw new ApiError(400, 'ZERO_LENGTH_PAIR', 'ON and OFF are identical');
+    } else {
+      // Daily pair: off before on = next-day off; only zero length rejected.
+      const duration = mod(offMin - onMin, MINUTES_PER_DAY);
+      if (duration === 0) throw new ApiError(400, 'ZERO_LENGTH_PAIR', 'ON and OFF are identical');
+    }
+    s.on_day_of_week = onDay;
+    s.off_day_of_week = offDay;
+  }
+  return s;
+}
+
+// Rule 4: relay must belong to the acting user, be enabled, and live. Same error for
+// missing/deleted/foreign — don't leak existence.
+async function requireRelay(conn, relayId, userId) {
+  const [rows] = await conn.query(
+    `SELECT r.*, d.id AS device_id2, d.timezone FROM relays r JOIN devices d ON d.id = r.device_id
+     WHERE r.id = ? ${userId != null ? 'AND r.user_id = ?' : ''} AND r.deleted_at IS NULL AND r.is_enabled = TRUE`,
+    userId != null ? [relayId, userId] : [relayId],
+  );
+  if (!rows[0]) throw errors.notFound('RELAY_NOT_FOUND', 'Relay not found');
+  return rows[0];
+}
+
+// Bumps schedule_version + sets sync_status='pending' inside the caller's transaction;
+// returns deviceIds for the post-commit push (§5.3).
+export async function bumpDevices(conn, deviceIds) {
+  if (!deviceIds.length) return;
+  await conn.query(
+    `UPDATE devices SET schedule_version = schedule_version + 1, sync_status = 'pending' WHERE id IN (${deviceIds.map(() => '?').join(',')})`,
+    deviceIds,
+  );
+}
+
+async function pushAfterCommit(deviceIds) {
+  const { pushScheduleToDevice } = await import('../mqtt/client.js');
+  for (const id of deviceIds) {
+    pushScheduleToDevice(id).catch((e) => console.error(`schedule push to device ${id} failed:`, e.message));
+  }
+}
+
+export async function createSchedule({ userId, relayId, createdVia, actingUserId = userId, ...fields }) {
+  const deviceIds = [];
+  const result = await withTransaction(async (conn) => {
+    const relay = await requireRelay(conn, relayId, actingUserId);
+    const s = validateScheduleRules(fields, { tz: relay.timezone });
+    const res = await conn.query(
+      `INSERT INTO schedules (user_id, relay_id, on_day_of_week, on_time, off_day_of_week, off_time,
+        repeat_type, on_date, off_date, is_enabled, created_via)
+       VALUES (?,?,?,?,?,?,?,?,?,TRUE,?)`,
+      [relay.user_id, relayId, s.on_day_of_week, s.on_time, s.off_day_of_week, s.off_time,
+        s.repeat_type, s.on_date ?? null, s.off_date ?? null, createdVia],
+    );
+    deviceIds.push(relay.device_id);
+    await bumpDevices(conn, deviceIds);
+    return { id: res[0].insertId };
+  });
+  await pushAfterCommit(deviceIds);
+  return result;
+}
+
+export async function updateSchedule({ userId, scheduleId, patch }) {
+  const deviceIds = [];
+  await withTransaction(async (conn) => {
+    const [rows] = await conn.query(
+      `SELECT s.*, r.device_id, d.timezone FROM schedules s
+       JOIN relays r ON r.id = s.relay_id JOIN devices d ON d.id = r.device_id
+       WHERE s.id = ? ${userId != null ? 'AND s.user_id = ?' : ''} AND s.deleted_at IS NULL FOR UPDATE`,
+      userId != null ? [scheduleId, userId] : [scheduleId],
+    );
+    const existing = rows[0];
+    if (!existing) throw errors.notFound('NOT_FOUND', 'Schedule not found');
+
+    const merged = {
+      on_day_of_week: patch.on_day_of_week !== undefined ? patch.on_day_of_week : existing.on_day_of_week,
+      on_time: patch.on_time !== undefined ? patch.on_time : String(existing.on_time),
+      off_day_of_week: patch.off_day_of_week !== undefined ? patch.off_day_of_week : existing.off_day_of_week,
+      off_time: patch.off_time !== undefined ? patch.off_time : String(existing.off_time),
+      repeat_type: patch.repeat_type !== undefined ? patch.repeat_type : existing.repeat_type,
+      on_date: patch.on_date !== undefined ? patch.on_date : (existing.on_date ? ymdOf(existing.on_date) : null),
+      off_date: patch.off_date !== undefined ? patch.off_date : (existing.off_date ? ymdOf(existing.off_date) : null),
     };
-  }
+    const onlyToggle = Object.keys(patch).every((k) => k === 'is_enabled');
+    const s = onlyToggle ? merged : validateScheduleRules(merged, { tz: existing.timezone });
+    const is_enabled = patch.is_enabled !== undefined ? (patch.is_enabled ? 1 : 0) : existing.is_enabled;
 
-  throw validation('VALIDATION', 'Invalid repeat_type', { repeat_type: 'Expected weekly or once' });
+    await conn.query(
+      `UPDATE schedules SET on_day_of_week=?, on_time=?, off_day_of_week=?, off_time=?,
+        repeat_type=?, on_date=?, off_date=?, is_enabled=? WHERE id = ?`,
+      [s.on_day_of_week, s.on_time, s.off_day_of_week, s.off_time, s.repeat_type,
+        s.on_date ?? null, s.off_date ?? null, is_enabled, scheduleId],
+    );
+    deviceIds.push(existing.device_id);
+    await bumpDevices(conn, deviceIds);
+  });
+  await pushAfterCommit(deviceIds);
 }
+
+// [D37] Soft delete — physical DELETE is never issued against schedules, by any actor.
+export async function deleteSchedule({ userId, scheduleId }) {
+  const deviceIds = [];
+  await withTransaction(async (conn) => {
+    const [rows] = await conn.query(
+      `SELECT s.id, r.device_id FROM schedules s JOIN relays r ON r.id = s.relay_id
+       WHERE s.id = ? ${userId != null ? 'AND s.user_id = ?' : ''} AND s.deleted_at IS NULL FOR UPDATE`,
+      userId != null ? [scheduleId, userId] : [scheduleId],
+    );
+    if (!rows[0]) throw errors.notFound('NOT_FOUND', 'Schedule not found');
+    await conn.query('UPDATE schedules SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE WHERE id = ?', [scheduleId]);
+    deviceIds.push(rows[0].device_id);
+    await bumpDevices(conn, deviceIds);
+  });
+  await pushAfterCommit(deviceIds);
+}
+
+export async function listSchedules({ userId }) {
+  return query(
+    `SELECT s.id, s.relay_id, r.name AS relay_name, d.name AS device_name, d.sync_status,
+            s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time,
+            s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time,
+            s.repeat_type, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
+     FROM schedules s
+     JOIN relays r ON r.id = s.relay_id
+     JOIN devices d ON d.id = r.device_id
+     WHERE s.deleted_at IS NULL ${userId != null ? 'AND s.user_id = ?' : ''}
+     ORDER BY s.id DESC`,
+    userId != null ? [userId] : [],
+  );
+}
+
+function ymdOf(v) {
+  if (v instanceof Date) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${v.getUTCFullYear()}-${pad(v.getUTCMonth() + 1)}-${pad(v.getUTCDate())}`;
+  }
+  return String(v).slice(0, 10);
+}
+
+// Used by the scheduler and firmware-boot logic mirrors: expand a schedule row into
+// its two (day,time,action) events. Weekly only; once handled by dates.
+export function scheduleEvents(row) {
+  return [
+    { day: row.on_day_of_week ?? 0, time: String(row.on_time), action: 'on' },
+    { day: row.off_day_of_week ?? 0, time: String(row.off_time), action: 'off' },
+  ];
+}
+
+export { wallToUtc };

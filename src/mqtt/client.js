@@ -1,49 +1,215 @@
+// MQTT contract per SPEC §5. Server connects via localhost 1883 with its superuser
+// cred [D13]; devices use 8883 TLS with per-device creds + ACL.
 import mqtt from 'mqtt';
 import { env } from '../config/env.js';
+import { query } from '../db/pool.js';
+import { buildWirePayload } from '../services/schedulePayload.js';
+import { ingestExecReport, reconcileDevice } from '../services/executions.js';
+import { SCHEDULE_ACK_TIMEOUT_MS } from '../config/constants.js';
 
-let client;
-const ackWaiters = new Map();
+let client = null;
+const ackWaiters = new Map();      // cmd_id → resolve
+const scheduleAckTimers = new Map(); // device_id → timeout
+const lastExecDropped = new Map(); // device_id → last seen exec_dropped counter
 
-export function getMqttClient() {
-  if (!client) {
-    client = mqtt.connect(env.mqttUrl, {
-      username: env.mqttServerUser,
-      password: env.mqttServerPass,
-    });
-    client.on('message', handleMessage);
-    client.on('connect', () => client.subscribe('dev/+/ack'));
-  }
+export function connectMqtt() {
+  if (client) return client;
+  client = mqtt.connect(env.mqtt.url, {
+    username: env.mqtt.username,
+    password: env.mqtt.password,
+    reconnectPeriod: 2000,
+  });
+  client.on('connect', () => {
+    console.log('MQTT connected');
+    client.subscribe([
+      'dev/+/ack', 'dev/+/status', 'dev/+/exec', 'dev/+/schedule_ack',
+    ], { qos: 1 });
+  });
+  client.on('error', (e) => console.error('MQTT error:', e.message));
+  client.on('message', (topic, buf) => {
+    handleMessage(topic, buf).catch((e) => console.error(`MQTT handler ${topic}:`, e));
+  });
   return client;
 }
 
-function handleMessage(topic, payload) {
-  if (!topic.endsWith('/ack')) return;
+async function handleMessage(topic, buf) {
+  const m = /^dev\/([0-9a-f]{12})\/(ack|status|exec|schedule_ack)$/.exec(topic);
+  if (!m) return;
+  const [, uid, kind] = m;
+  let payload;
   try {
-    const ack = JSON.parse(payload.toString('utf8'));
-    const waiter = ackWaiters.get(Number(ack.cmd_id));
-    if (!waiter) return;
-    ackWaiters.delete(Number(ack.cmd_id));
-    waiter.resolve(ack);
-  } catch (err) {
-    console.error('Invalid MQTT ack payload', err);
+    payload = JSON.parse(buf.toString('utf8'));
+  } catch {
+    return;
+  }
+  if (kind === 'ack') return handleAck(uid, payload);
+  if (kind === 'status') return handleStatus(uid, payload);
+  if (kind === 'exec') return ingestExecReport(uid, payload);
+  if (kind === 'schedule_ack') return handleScheduleAck(uid, payload);
+}
+
+// ── commands ────────────────────────────────────────────────
+
+export function publishCommand(uid, payload) {
+  return new Promise((resolve, reject) => {
+    connectMqtt().publish(`dev/${uid}/cmd`, JSON.stringify(payload), { qos: 1 }, (err) => {
+      if (err) reject(err); else resolve();
+    });
+  });
+}
+
+export function waitForAck(cmdId, timeoutMs) {
+  return new Promise((resolve) => {
+    const key = Number(cmdId);
+    const timer = setTimeout(() => {
+      ackWaiters.delete(key);
+      resolve(null); // timeout
+    }, timeoutMs);
+    ackWaiters.set(key, (ack) => {
+      clearTimeout(timer);
+      ackWaiters.delete(key);
+      resolve(ack);
+    });
+  });
+}
+
+async function handleAck(uid, ack) {
+  const cmdId = Number(ack?.cmd_id);
+  if (!Number.isInteger(cmdId)) return;
+
+  // Relay state updates on EVERY ack — including late ones; the command row's
+  // status is owned by whoever waited on it [D22].
+  if (ack.state === 'on' || ack.state === 'off') {
+    await query(
+      `UPDATE relays r JOIN commands c ON c.relay_id = r.id
+       SET r.current_state = ?, r.state_updated_at = UTC_TIMESTAMP()
+       WHERE c.id = ?`,
+      [ack.state, cmdId],
+    );
+  }
+  const waiter = ackWaiters.get(cmdId);
+  if (waiter) waiter(ack);
+}
+
+// ── status ingestion (§5.1) ─────────────────────────────────
+
+async function handleStatus(uid, st) {
+  const [device] = await query('SELECT * FROM devices WHERE device_uid = ?', [uid]);
+  if (!device) return;
+  const online = st.online !== false;
+
+  await query(
+    'UPDATE devices SET is_online = ?, last_seen_at = UTC_TIMESTAMP(), fw_version = COALESCE(?, fw_version) WHERE id = ?',
+    [online ? 1 : 0, st.fw ?? null, device.id],
+  );
+
+  // device_events on online/offline EDGE transitions only, not every heartbeat.
+  if (Boolean(device.is_online) !== online) {
+    await query(
+      'INSERT INTO device_events (device_id, event, payload) VALUES (?,?,?)',
+      [device.id, online ? 'online' : 'offline', JSON.stringify({ rssi: st.rssi ?? null, ip: st.ip ?? null })],
+    );
+  }
+  if (!online) return; // LWT — nothing else to ingest
+
+  if (Array.isArray(st.relays)) {
+    for (const r of st.relays) {
+      if (r.state === 'on' || r.state === 'off') {
+        await query(
+          `UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP()
+           WHERE device_id = ? AND relay_no = ? AND deleted_at IS NULL`,
+          [r.state, device.id, Number(r.no)],
+        );
+      }
+    }
+    // Relay list vs declared hardware profile [D40].
+    if (st.relays.length !== device.relay_count) {
+      await query(
+        "INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
+        [device.id, JSON.stringify({ kind: 'relay_count_mismatch', reported: st.relays.length, declared: device.relay_count })],
+      );
+    }
+  }
+
+  // [D41] exec report queue overflow surfaced as an error event.
+  const dropped = Number(st.exec_dropped ?? 0);
+  const prev = lastExecDropped.get(device.id) ?? 0;
+  if (dropped > prev) {
+    await query(
+      "INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
+      [device.id, JSON.stringify({ kind: 'exec_reports_dropped', dropped, prev })],
+    );
+  }
+  lastExecDropped.set(device.id, dropped);
+
+  // Device missed a schedule push → re-push (retained delivery covers reconnect;
+  // this covers a stale retained payload).
+  if (Number(st.sched_version ?? 0) < Number(device.schedule_version)) {
+    pushScheduleToDevice(device.id).catch((e) => console.error('re-push failed:', e.message));
+  }
+
+  await reconcileDevice(device.id, st.relays); // [D21]
+}
+
+// ── schedule sync (§5.3) ────────────────────────────────────
+
+export async function pushScheduleToDevice(deviceId) {
+  const [device] = await query('SELECT id, device_uid, schedule_version, is_online FROM devices WHERE id = ?', [deviceId]);
+  if (!device || !device.device_uid) return; // unflashed [D31]: stays pending until UID set
+
+  const wire = await buildWirePayload(deviceId);
+  await new Promise((resolve, reject) => {
+    connectMqtt().publish(`dev/${device.device_uid}/schedule`, JSON.stringify(wire), { qos: 1, retain: true }, (err) => {
+      if (err) reject(err); else resolve();
+    });
+  });
+  await query('UPDATE devices SET last_pushed_at = UTC_TIMESTAMP() WHERE id = ?', [deviceId]);
+
+  // No ack in 60s WHILE ONLINE → sync error + admin alert; offline stays 'pending'
+  // and the retained message syncs it on reconnect.
+  clearTimeout(scheduleAckTimers.get(deviceId));
+  scheduleAckTimers.set(deviceId, setTimeout(async () => {
+    scheduleAckTimers.delete(deviceId);
+    try {
+      const [d] = await query('SELECT schedule_version, device_ack_version, is_online, sync_status FROM devices WHERE id = ?', [deviceId]);
+      if (d && d.is_online && Number(d.device_ack_version) < Number(d.schedule_version)) {
+        await query(
+          "UPDATE devices SET sync_status = 'error', sync_error = ? WHERE id = ?",
+          [`no schedule_ack for version ${d.schedule_version} within 60s`, deviceId],
+        );
+      }
+    } catch (e) {
+      console.error('schedule ack timer:', e.message);
+    }
+  }, SCHEDULE_ACK_TIMEOUT_MS));
+}
+
+async function handleScheduleAck(uid, ack) {
+  const [device] = await query('SELECT id, schedule_version FROM devices WHERE device_uid = ?', [uid]);
+  if (!device) return;
+  const version = Number(ack?.version);
+  if (!Number.isInteger(version)) return;
+
+  if (ack.ok === false) {
+    // Hash mismatch on the device → re-publish (§6.6).
+    await query("UPDATE devices SET sync_status = 'error', sync_error = 'device rejected payload (hash mismatch)' WHERE id = ?", [device.id]);
+    pushScheduleToDevice(device.id).catch(() => {});
+    return;
+  }
+  // ACKs that EXACT version; an ack for an older version leaves 'pending' (newer push in flight).
+  await query(
+    `UPDATE devices SET device_ack_version = GREATEST(device_ack_version, ?),
+       sync_status = IF(? >= schedule_version, 'synced', sync_status),
+       sync_error  = IF(? >= schedule_version, NULL, sync_error)
+     WHERE id = ?`,
+    [version, version, version, device.id],
+  );
+  if (version >= Number(device.schedule_version)) {
+    clearTimeout(scheduleAckTimers.get(device.id));
+    scheduleAckTimers.delete(device.id);
   }
 }
 
-export async function publishCommand({ uid, cmd_id, relay, action }, timeoutMs = 5000) {
-  const mqttClient = getMqttClient();
-  const payload = JSON.stringify({ cmd_id, relay, action });
-  await new Promise((resolve, reject) => mqttClient.publish(`dev/${uid}/cmd`, payload, { qos: 1 }, (err) => (err ? reject(err) : resolve())));
-
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      ackWaiters.delete(cmd_id);
-      resolve(null);
-    }, timeoutMs);
-    ackWaiters.set(cmd_id, {
-      resolve: (ack) => {
-        clearTimeout(timer);
-        resolve(ack);
-      },
-    });
-  });
+export function brokerConnected() {
+  return Boolean(client?.connected);
 }
