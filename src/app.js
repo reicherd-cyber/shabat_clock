@@ -28,8 +28,10 @@ export function createApp() {
 
   app.use(ivrLimiter, ivrRouter); // GET /ivr — Yemot webhook (30 req/min/phone)
   app.use('/api/v1', authRouter);
-  app.use('/api/v1', userRouter);
+  // adminRouter's specific /api/v1/admin prefix MUST be mounted before the catch-all
+  // userRouter — userRouter.use(requireUser) would otherwise 403 every admin request.
   app.use('/api/v1/admin', adminRouter);
+  app.use('/api/v1', userRouter);
 
   // Web panels (React RTL) served same-origin — no CORS [D27].
   const dist = path.join(__dirname, 'web', 'dist');

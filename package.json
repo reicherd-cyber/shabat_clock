@@ -3,11 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "migrate": "node src/db/migrate.js",
+    "seed": "node src/db/seed.js",
     "test": "node --test",
     "build:web": "cd src/web && npm install && npm run build"
   },
@@ -20,6 +23,7 @@
     "jsonwebtoken": "^9.0.2",
     "mqtt": "^5.10.1",
     "mysql2": "^3.11.3",
+    "nodemailer": "^9.0.3",
     "qrcode": "^1.5.4"
   }
 }

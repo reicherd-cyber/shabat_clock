@@ -1,23 +1,44 @@
 import { useState } from 'react';
 import { api } from '../api.js';
-import { Card, Badge, OnlineDot, RelayToggle, ErrorNote, useInterval } from '../ui.jsx';
+import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, useInterval } from '../ui.jsx';
 
-// Device cards: online dot, relay toggles with instant on/off, last-seen (PLAN §3).
-// Polls every 10s [D28].
+const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
+
+function relativeHe(ts) {
+  const min = Math.round((Date.now() - new Date(ts).getTime()) / 60000);
+  if (min < 1) return 'עכשיו';
+  if (min === 1) return 'לפני דקה';
+  if (min < 60) return `לפני ${min} דקות`;
+  const h = Math.round(min / 60);
+  return h === 1 ? 'לפני שעה' : h < 24 ? `לפני ${h} שעות` : `לפני ${Math.round(h / 24)} ימים`;
+}
+
+// Mockup layout: hero greeting → device-card grid; each card = header strip
+// (serif name + online badge) + relay rows (code chip · name · state · toggle).
+// Polls every 10s [D28]; toggle is optimistic-off with a busy pulse until the
+// 5s command round-trip resolves.
 export default function Dashboard() {
+  const [me, setMe] = useState(null);
   const [devices, setDevices] = useState(null);
+  const [schedCount, setSchedCount] = useState(null);
   const [busyRelays, setBusyRelays] = useState({});
   const [error, setError] = useState(null);
 
-  const refresh = async () => {
+  useInterval(async () => {
     try {
-      setDevices(await api.get('/devices'));
+      const [meRes, devRes, schedRes] = await Promise.all([
+        me ? Promise.resolve(null) : api.get('/me'),
+        api.get('/devices'),
+        api.get('/schedules'),
+      ]);
+      if (meRes) setMe(meRes);
+      setDevices(devRes);
+      setSchedCount(schedRes.filter((s) => s.is_enabled).length);
       setError(null);
     } catch (e) {
       setError(e);
     }
-  };
-  useInterval(refresh, 10_000);
+  }, 10_000);
 
   const toggle = async (relay) => {
     const action = relay.current_state === 'on' ? 'off' : 'on';
@@ -25,50 +46,67 @@ export default function Dashboard() {
     try {
       const res = await api.post(`/relays/${relay.id}/command`, { action });
       if (res.status !== 'acked') setError(new Error('המכשיר לא הגיב — נסו שוב'));
+      setDevices(await api.get('/devices')); // true state, not the optimistic one
     } catch (e) {
       setError(e);
     } finally {
       setBusyRelays((b) => ({ ...b, [relay.id]: false }));
-      refresh(); // true state, not the optimistic one
     }
   };
 
   if (!devices) return <p className="text-muted">טוען…</p>;
+  // Removed devices (is_enabled=false) never appear on the dashboard — Settings is
+  // where they're restored.
+  const visibleDevices = devices.filter((d) => d.is_enabled);
+  const online = visibleDevices.filter((d) => d.is_online).length;
+  const lastSeen = visibleDevices.map((d) => d.last_seen_at).filter(Boolean).sort().pop();
+
   return (
-    <div className="space-y-4">
+    <>
+      <div className="mb-7">
+        <h1 className="font-serif font-bold text-[34px] tracking-tight">
+          שלום{me ? `, ${me.user.full_name.split(' ')[0]}` : ''}
+        </h1>
+        <p className="text-muted mt-1">
+          {online === 1 ? 'מכשיר אחד מחובר' : `${online} מכשירים מחוברים`}
+          {schedCount != null && <> · {schedCount} תזמונים פעילים</>}
+          {lastSeen && <> · העדכון האחרון {relativeHe(lastSeen)}</>}
+        </p>
+      </div>
       <ErrorNote error={error} />
-      {devices.length === 0 && <Card>אין מכשירים משויכים לחשבון. פנו למנהל המערכת.</Card>}
-      {devices.map((d) => (
-        <Card key={d.id}>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <OnlineDot online={d.is_online} />
-              <h2 className="font-bold text-lg">{d.name}</h2>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge ok={d.sync_status === 'synced'}>
-                {d.sync_status === 'synced' ? 'מסונכרן ✓' : d.sync_status === 'pending' ? 'ממתין לסנכרון' : 'שגיאת סנכרון'}
-              </Badge>
-              {d.last_seen_at && (
-                <span className="text-muted text-xs">נראה: {new Date(d.last_seen_at).toLocaleString('he-IL')}</span>
-              )}
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {d.relays.filter((r) => r.is_enabled).map((r) => (
-              <div key={r.id} className="flex items-center justify-between border border-line rounded-xl px-4 py-3">
-                <div>
-                  <div className="font-semibold">{r.name}</div>
-                  <div className={`text-sm ${r.current_state === 'on' ? 'text-ok' : r.current_state === 'off' ? 'text-muted' : 'text-err'}`}>
-                    {r.current_state === 'on' ? 'דולק' : r.current_state === 'off' ? 'כבוי' : 'מצב לא ידוע'}
-                  </div>
-                </div>
-                <RelayToggle state={r.current_state} busy={!!busyRelays[r.id]} onToggle={() => toggle(r)} />
+      {visibleDevices.length === 0 && <Card>אין מכשירים משויכים לחשבון. פנו למנהל המערכת.</Card>}
+
+      <div className="grid gap-[18px]" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 340px), 1fr))' }}>
+        {visibleDevices.map((d) => (
+          <Card key={d.id} flush>
+            <CardHead>
+              <span className="font-serif font-bold text-[17px]">🏠 {d.name}</span>
+              <StatusBadge online={d.is_online}>{d.is_online ? 'מחובר' : 'מנותק'}</StatusBadge>
+            </CardHead>
+            {d.relays.filter((r) => r.is_enabled).map((r, i) => (
+              <div key={r.id}
+                className={`flex items-center gap-3.5 px-5 py-3.5 ${i > 0 ? 'border-t border-dashed border-line' : ''} ${d.is_online ? '' : 'opacity-55'}`}>
+                <CodeChip>{r.ivr_digit}</CodeChip>
+                <span className="flex-1 font-medium">{r.name}</span>
+                <span className={`text-[12.5px] font-medium min-w-11 ${r.current_state === 'on' ? 'text-on' : 'text-muted'}`}>
+                  {STATE_HE[r.current_state] || STATE_HE.unknown}
+                </span>
+                <Toggle
+                  checked={r.current_state === 'on'}
+                  busy={!!busyRelays[r.id]}
+                  disabled={!d.is_online}
+                  onChange={() => toggle(r)}
+                />
               </div>
             ))}
-          </div>
-        </Card>
-      ))}
-    </div>
+            {!d.is_online && (
+              <div className="px-5 py-3 text-[13px] text-off bg-off-bg border-t border-line">
+                ⚠ המכשיר לא מחובר{d.last_seen_at ? ` — דווח לאחרונה ${relativeHe(d.last_seen_at)}` : ''} — התזמונים ממשיכים לפעול מקומית.
+              </div>
+            )}
+          </Card>
+        ))}
+      </div>
+    </>
   );
 }

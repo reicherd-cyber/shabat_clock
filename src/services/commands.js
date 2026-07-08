@@ -49,7 +49,7 @@ async function markCommand(id, status, failReason = null) {
 // Returns {command_id, status, fail_reason} — the caller (IVR or web) reports truth.
 export async function sendImmediateCommand({ relayId, action, source, callId = null }) {
   const [relay] = await query(
-    `SELECT r.id, r.relay_no, d.id AS device_id, d.device_uid, d.is_online
+    `SELECT r.id, r.relay_no, d.id AS device_id, d.device_uid, d.is_online, d.device_type, d.ip_address
      FROM relays r JOIN devices d ON d.id = r.device_id
      WHERE r.id = ? AND r.deleted_at IS NULL`,
     [relayId],
@@ -57,6 +57,24 @@ export async function sendImmediateCommand({ relayId, action, source, callId = n
   if (!relay) throw errors.notFound('RELAY_NOT_FOUND', 'Relay not found');
 
   const commandId = await createCommand({ relayId, action, source, callId });
+
+  // Shelly: synchronous HTTP RPC. A 200 is the ack; we own the relay-state write here
+  // (no async ack ingester like MQTT). Absolute on/off keeps it idempotent.
+  if (relay.device_type === 'shelly') {
+    const { shellySet } = await import('./shelly.js');
+    try {
+      await shellySet(relay.ip_address, relay.relay_no, action === 'on');
+      await query(
+        `UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?`,
+        [action, relayId],
+      );
+      await markCommand(commandId, 'acked');
+      return { command_id: commandId, status: 'acked' };
+    } catch (e) {
+      await markCommand(commandId, 'failed', 'shelly_unreachable');
+      return { command_id: commandId, status: 'failed', fail_reason: 'shelly_unreachable' };
+    }
+  }
 
   if (!relay.is_online || !relay.device_uid) {
     await markCommand(commandId, 'failed', 'offline'); // §5.2: no publish

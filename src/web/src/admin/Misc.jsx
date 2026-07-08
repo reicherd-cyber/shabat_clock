@@ -1,14 +1,24 @@
-// Compact admin pages: monitoring, call logs, schedules, settings, admins, audit.
+// Compact admin pages: monitoring, call logs, commands, schedules, settings, admins, audit.
 import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Badge, ErrorNote, useAsync, useInterval, DAY_NAMES } from '../ui.jsx';
 
-const Stat = ({ label, value, ok }) => (
-  <Card className="text-center">
-    <div className={`text-3xl font-bold ${ok === false ? 'text-err' : ok ? 'text-ok' : ''}`}>{value}</div>
-    <div className="text-muted text-sm">{label}</div>
-  </Card>
-);
+// `to` makes the tile a clickable drill-down into the underlying data.
+const Stat = ({ label, value, ok, to }) => {
+  const nav = useNavigate();
+  return (
+    <Card
+      className={`text-center ${to ? 'cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition' : ''}`}
+      onClick={to ? () => nav(to) : undefined}
+      role={to ? 'button' : undefined}
+    >
+      <div className={`text-3xl font-bold ${ok === false ? 'text-off' : ok ? 'text-on' : ''}`}>{value}</div>
+      <div className="text-muted text-sm">{label}</div>
+      {to && <div className="text-muted text-xs mt-1">פרטים ›</div>}
+    </Card>
+  );
+};
 
 export function Monitoring() {
   const [m, setM] = useState(null);
@@ -20,15 +30,15 @@ export function Monitoring() {
       <h2 className="font-bold text-xl">ניטור</h2>
       <ErrorNote error={error} />
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Stat label="מכשירים מחוברים" value={`${m.devices_online}/${m.devices_total}`} ok={m.devices_online === m.devices_total} />
-        <Stat label="פקודות ממתינות" value={m.commands_pending} />
-        <Stat label="פקודות שנכשלו (24ש)" value={m.commands_failed_24h} ok={m.commands_failed_24h === 0} />
-        <Stat label="כשלי זיהוי (24ש)" value={m.auth_failures_24h} ok={m.auth_failures_24h < 5} />
+        <Stat label="מכשירים מחוברים" value={`${m.devices_online}/${m.devices_total}`} ok={m.devices_online === m.devices_total} to="/admin/devices" />
+        <Stat label="פקודות ממתינות" value={m.commands_pending} to="/admin/commands?status=pending" />
+        <Stat label="פקודות שנכשלו (24ש)" value={m.commands_failed_24h} ok={m.commands_failed_24h === 0} to="/admin/commands?status=failed" />
+        <Stat label="כשלי זיהוי (24ש)" value={m.auth_failures_24h} ok={m.auth_failures_24h < 5} to="/admin/call-logs" />
         <Stat label="ברוקר MQTT" value={m.broker_ok ? 'תקין' : 'מנותק'} ok={m.broker_ok} />
       </div>
       {m.sync_errors.length > 0 && (
         <Card>
-          <h3 className="font-bold text-err mb-2">שגיאות סנכרון</h3>
+          <h3 className="font-bold text-off mb-2">שגיאות סנכרון</h3>
           {m.sync_errors.map((d) => (
             <div key={d.id} className="text-sm border-b border-line last:border-0 py-1">
               <b>{d.name}</b> <span dir="ltr">{d.device_uid}</span> — {d.sync_error} (v{d.schedule_version}, ack v{d.device_ack_version})
@@ -56,7 +66,7 @@ export function CallLogs() {
         </div>
       </div>
       <ErrorNote error={error} />
-      <Card className="overflow-x-auto p-0">
+      <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
@@ -72,6 +82,47 @@ export function CallLogs() {
                 <td className="p-2"><Badge ok={!['auth_fail', 'abandoned'].includes(l.outcome)}>{l.outcome || '—'}</Badge></td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+export function Commands() {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState(null);
+  const [params] = useSearchParams();
+  const status = params.get('status') || '';
+  useEffect(() => {
+    setRows(null);
+    adminApi.get(`/commands${status ? `?status=${status}` : ''}`).then(setRows).catch(setError);
+  }, [status]);
+  const title = status === 'pending' ? 'פקודות ממתינות' : status === 'failed' ? 'פקודות שנכשלו (24ש)' : 'כל הפקודות';
+  return (
+    <div className="space-y-4">
+      <h2 className="font-bold text-xl">{title}</h2>
+      <ErrorNote error={error} />
+      <Card flush className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-right text-muted border-b border-line">
+              <th className="p-2">מתי</th><th className="p-2">מכשיר</th><th className="p-2">ערוץ</th>
+              <th className="p-2">פעולה</th><th className="p-2">מקור</th><th className="p-2">סטטוס</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows || []).map((c) => (
+              <tr key={c.id} className="border-b border-line last:border-0">
+                <td className="p-2 whitespace-nowrap">{new Date(c.requested_at).toLocaleString('he-IL')}</td>
+                <td className="p-2">{c.device_name} <span className="text-muted text-xs">{c.owner_name}</span></td>
+                <td className="p-2">{c.relay_name}</td>
+                <td className="p-2">{c.action === 'on' ? 'הדלקה' : 'כיבוי'}</td>
+                <td className="p-2" dir="ltr">{c.source}</td>
+                <td className="p-2"><Badge ok={c.status === 'acked'}>{c.status}{c.fail_reason ? ` (${c.fail_reason})` : ''}</Badge></td>
+              </tr>
+            ))}
+            {rows && rows.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-muted">אין פקודות</td></tr>}
           </tbody>
         </table>
       </Card>
@@ -190,7 +241,7 @@ export function Audit() {
     <div className="space-y-4">
       <h2 className="font-bold text-xl">יומן ביקורת</h2>
       <ErrorNote error={error} />
-      <Card className="overflow-x-auto p-0">
+      <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">

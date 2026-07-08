@@ -1,4 +1,5 @@
 // [D7] Sequential migrations guarded by schema_migrations.
+import { pathToFileURL } from 'node:url';
 import { pool } from './pool.js';
 import { migrations } from './migrations/index.js';
 
@@ -25,7 +26,7 @@ export async function migrate() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   migrate()
     .then(() => process.exit(0))
     .catch((e) => { console.error(e); process.exit(1); });

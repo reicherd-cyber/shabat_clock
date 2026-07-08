@@ -42,6 +42,12 @@ export default function Devices() {
     await refresh();
   });
 
+  // Only super-admin can restore a device the owner removed from their own page (requireWrite-gated).
+  const toggleEnabled = (d) => run(async () => {
+    await adminApi.patch(`/devices/${d.id}`, { is_enabled: !d.is_enabled });
+    await refresh();
+  });
+
   const addRelay = () => run(async () => {
     await adminApi.post(`/devices/${relayForm.device.id}/relays`, {
       relay_no: Number(relayForm.relay_no), name: relayForm.name, ivr_digit: Number(relayForm.ivr_digit),
@@ -68,6 +74,7 @@ export default function Devices() {
               {d.device_uid
                 ? <span className="text-muted text-xs" dir="ltr">{d.device_uid}</span>
                 : <Badge ok={false}>ללא UID</Badge>}
+              {!d.is_enabled && <Badge ok={false}>הוסר על ידי המשתמש</Badge>}
             </div>
             <div className="flex items-center gap-2">
               <Badge ok={d.sync_status === 'synced'}>{d.sync_status}</Badge>
@@ -75,11 +82,14 @@ export default function Devices() {
               {d.fw_version && <span className="text-muted text-xs">fw {d.fw_version}</span>}
             </div>
           </div>
-          {d.sync_error && <div className="text-err text-sm mt-1">{d.sync_error}</div>}
+          {d.sync_error && <div className="text-off text-sm mt-1">{d.sync_error}</div>}
           <div className="flex gap-2 mt-3 flex-wrap">
             {!d.device_uid && <Button variant="ghost" onClick={() => setUidForm({ device: d, uid: '' })}>קביעת UID</Button>}
             <Button variant="ghost" onClick={() => setRelayForm({ device: d, relay_no: 1, name: '', ivr_digit: 1 })}>+ ממסר</Button>
             <Button variant="ghost" disabled={busy} onClick={() => rotate(d)}>החלפת סוד</Button>
+            {d.is_enabled
+              ? <Button variant="danger" disabled={busy} onClick={() => toggleEnabled(d)}>השבתת מכשיר</Button>
+              : <Button variant="ghost" disabled={busy} onClick={() => toggleEnabled(d)}>שחזר מכשיר</Button>}
           </div>
         </Card>
       ))}
@@ -105,8 +115,8 @@ export default function Devices() {
       <Modal open={!!secretView} onClose={() => secretView?.saved && setSecretView(null)} title="סוד MQTT — מוצג פעם אחת בלבד" closable={secretView?.saved}>
         {secretView && (
           <div className="space-y-3">
-            <p className="text-err text-sm font-semibold">הסוד לא יוצג שוב לעולם. אובדן = החלפת סוד וצריבה מחדש.</p>
-            <code className="block bg-cream border border-line rounded-xl p-3 break-all select-all" dir="ltr">{secretView.mqtt_secret}</code>
+            <p className="text-off text-sm font-semibold">הסוד לא יוצג שוב לעולם. אובדן = החלפת סוד וצריבה מחדש.</p>
+            <code className="block bg-surface2 border border-line rounded-xl p-3 break-all select-all" dir="ltr">{secretView.mqtt_secret}</code>
             <img alt="QR" className="mx-auto border border-line rounded-xl" src={`data:image/png;base64,${secretView.qr_png_base64}`} />
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={secretView.saved} onChange={(e) => setSecretView({ ...secretView, saved: e.target.checked })} />

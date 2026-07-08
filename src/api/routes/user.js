@@ -7,6 +7,7 @@ import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { getUser, verifyPin, setPin } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
+import { patchDevice } from '../../services/devices.js';
 import { sendImmediateCommand } from '../../services/commands.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { getHistory } from '../../services/history.js';
@@ -24,7 +25,7 @@ userRouter.get('/me', async (req, res, next) => {
   try {
     const user = await getUser(req.auth.userId);
     const phones = await query(
-      'SELECT id, phone, label, is_primary, verified_at FROM user_phones WHERE user_id = ?',
+      'SELECT id, phone, label, is_primary, verified_at FROM user_phones WHERE user_id = ? AND deleted_at IS NULL',
       [req.auth.userId],
     );
     res.json({ user, phones });
@@ -45,7 +46,7 @@ userRouter.post('/me/pin', async (req, res, next) => {
 // ── phones [D34]: adding a phone must prove control of it ──
 userRouter.get('/me/phones', async (req, res, next) => {
   try {
-    res.json(await query('SELECT id, phone, label, is_primary, verified_at FROM user_phones WHERE user_id = ?', [req.auth.userId]));
+    res.json(await query('SELECT id, phone, label, is_primary, verified_at FROM user_phones WHERE user_id = ? AND deleted_at IS NULL', [req.auth.userId]));
   } catch (e) { next(e); }
 });
 
@@ -76,17 +77,22 @@ userRouter.post('/me/phones/:id/verify', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Soft remove only (deleted_at) — never a hard delete; a removed number stops
+// appearing anywhere and can't be used for caller-ID, but the row/history stays.
 userRouter.delete('/me/phones/:id', async (req, res, next) => {
   try {
     await withTransaction(async (conn) => {
-      const [rows] = await conn.query('SELECT * FROM user_phones WHERE id = ? AND user_id = ? FOR UPDATE', [req.params.id, req.auth.userId]);
+      const [rows] = await conn.query(
+        'SELECT * FROM user_phones WHERE id = ? AND user_id = ? AND deleted_at IS NULL FOR UPDATE',
+        [req.params.id, req.auth.userId],
+      );
       if (!rows[0]) throw errors.notFound();
       const [verified] = await conn.query(
-        'SELECT COUNT(*) AS n FROM user_phones WHERE user_id = ? AND verified_at IS NOT NULL AND id <> ?',
+        'SELECT COUNT(*) AS n FROM user_phones WHERE user_id = ? AND verified_at IS NOT NULL AND deleted_at IS NULL AND id <> ?',
         [req.auth.userId, req.params.id],
       );
-      if (rows[0].verified_at && verified[0].n === 0) throw errors.conflict('LAST_PHONE', 'Cannot delete the last verified phone');
-      await conn.query('DELETE FROM user_phones WHERE id = ?', [req.params.id]);
+      if (rows[0].verified_at && verified[0].n === 0) throw errors.conflict('LAST_PHONE', 'Cannot remove the last verified phone');
+      await conn.query('UPDATE user_phones SET deleted_at = UTC_TIMESTAMP() WHERE id = ?', [req.params.id]);
     });
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -96,6 +102,19 @@ userRouter.delete('/me/phones/:id', async (req, res, next) => {
 userRouter.get('/devices', async (req, res, next) => {
   try {
     res.json(await listDevicesWithRelays(req.auth.userId));
+  } catch (e) { next(e); }
+});
+
+// Rename + remove/restore (is_enabled) only — other device fields (relay_count,
+// uid, owner) are admin-only. "Remove" is a soft is_enabled=false, never deleted.
+userRouter.patch('/devices/:id', async (req, res, next) => {
+  try {
+    const patch = {};
+    if (req.body?.name !== undefined) patch.name = req.body.name;
+    if (req.body?.is_enabled !== undefined) patch.is_enabled = req.body.is_enabled;
+    await patchDevice(Number(req.params.id), patch, { userId: req.auth.userId });
+    await auditImp(req, 'update', 'device', Number(req.params.id), { after: patch });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

@@ -7,7 +7,10 @@
 //   go_to_folder=hangup                                          — hang up
 // Steps chain with '&'. Collected digits come back as query param <param>.
 
-const clean = (t) => String(t).replace(/[=&\r\n]/g, ' ').trim();
+// '.' separates data items in Yemot syntax (t-a.f-b) — a dot inside TTS text makes
+// Yemot treat the rest as a new (prefix-less) item and abort the call. Verified live
+// 2026-07-08: menu text with ". " hung up 1s in. Replace with ',' (a TTS pause).
+const clean = (t) => String(t).replace(/[=&\r\n]/g, ' ').replace(/\./g, ',').trim();
 
 // Play optional message, then prompt and collect min..max digits into query param "val".
 export function ask(text, { min = 1, max = 1, message = null } = {}) {

@@ -8,11 +8,13 @@ export default function Login() {
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [stage, setStage] = useState('phone');
+  const [sentVia, setSentVia] = useState(null); // {channel, email_masked}
   const { busy, error, run } = useAsync();
   const nav = useNavigate();
 
-  const requestCode = () => run(async () => {
-    await publicApi.post('/auth/otp/request', { phone });
+  const requestCode = (channel = 'call') => run(async () => {
+    const res = await publicApi.post('/auth/otp/request', { phone, channel });
+    setSentVia(res);
     setStage('code');
   });
 
@@ -32,14 +34,21 @@ export default function Login() {
           <div className="space-y-3">
             <Input type="tel" dir="ltr" placeholder="מספר טלפון" value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && requestCode()} />
-            <Button className="w-full" disabled={busy || phone.length < 9} onClick={requestCode}>
+              onKeyDown={(e) => e.key === 'Enter' && requestCode('call')} />
+            <Button className="w-full" disabled={busy || phone.length < 9} onClick={() => requestCode('call')}>
               שלחו לי קוד בשיחה
+            </Button>
+            <Button variant="ghost" className="w-full" disabled={busy || phone.length < 9} onClick={() => requestCode('email')}>
+              שלחו קוד לאימייל
             </Button>
           </div>
         ) : (
           <div className="space-y-3">
-            <p className="text-sm">תתקבל שיחה עם קוד בן 6 ספרות למספר <b dir="ltr">{phone}</b></p>
+            <p className="text-sm">
+              {sentVia?.channel === 'email'
+                ? <>קוד בן 6 ספרות נשלח לאימייל <b dir="ltr">{sentVia.email_masked}</b></>
+                : <>תתקבל שיחה עם קוד בן 6 ספרות למספר <b dir="ltr">{phone}</b></>}
+            </p>
             <Input inputMode="numeric" dir="ltr" placeholder="קוד אימות" value={code}
               onChange={(e) => setCode(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && verify()} />

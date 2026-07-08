@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
+import { Card, Button, Input, Select, Toggle, SyncNote, SectionHead, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
 
 const emptyForm = {
   relay_id: '', repeat_type: 'weekly',
@@ -8,6 +8,8 @@ const emptyForm = {
   on_date: '', off_date: '', daily: false,
 };
 
+// Mockup .sched: one bordered list; each row = relay (+device·code small) →
+// green ON pill ← red OFF pill → sync note → enable toggle.
 export default function Schedules() {
   const [schedules, setSchedules] = useState(null);
   const [relays, setRelays] = useState([]);
@@ -48,36 +50,43 @@ export default function Schedules() {
     await refresh();
   });
 
-  const describe = (s) => s.repeat_type === 'once'
-    ? `${String(s.on_date).slice(0, 10)} ${s.on_time} ← ${String(s.off_date).slice(0, 10)} ${s.off_time}`
-    : s.on_day_of_week == null
-      ? `כל יום ${s.on_time} ← ${s.off_time}`
-      : `${DAY_NAMES[s.on_day_of_week]} ${s.on_time} ← ${DAY_NAMES[s.off_day_of_week]} ${s.off_time}`;
+  const onLabel = (s) => s.repeat_type === 'once'
+    ? `${String(s.on_date).slice(0, 10)} ${s.on_time} · הדלקה`
+    : `${s.on_day_of_week == null ? 'כל יום' : DAY_NAMES[s.on_day_of_week]} ${s.on_time} · הדלקה`;
+  const offLabel = (s) => s.repeat_type === 'once'
+    ? `${String(s.off_date).slice(0, 10)} ${s.off_time} · כיבוי`
+    : `${s.off_day_of_week == null ? 'כל יום' : DAY_NAMES[s.off_day_of_week]} ${s.off_time} · כיבוי`;
 
   if (!schedules) return <p className="text-muted">טוען…</p>;
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h2 className="font-bold text-xl">תזמונים</h2>
+    <>
+      <SectionHead title="תזמונים">
         <Button onClick={() => setForm({ ...emptyForm, relay_id: relays[0]?.id || '' })} disabled={!relays.length}>+ תזמון חדש</Button>
-      </div>
+      </SectionHead>
       <ErrorNote error={error} />
       {schedules.length === 0 && <Card>אין תזמונים עדיין.</Card>}
-      {schedules.map((s) => (
-        <Card key={s.id} className="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <div className="font-semibold">{s.relay_name} <span className="text-muted text-sm">({s.device_name})</span></div>
-            <div className="text-sm">{describe(s)}</div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge ok={s.sync_status === 'synced'}>{s.sync_status === 'synced' ? 'מסונכרן ✓' : 'ממתין'}</Badge>
-            <Button variant="ghost" disabled={busy} onClick={() => toggleEnabled(s)}>
-              {s.is_enabled ? 'השבת' : 'הפעל'}
-            </Button>
-            <Button variant="danger" disabled={busy} onClick={() => remove(s)}>מחק</Button>
-          </div>
+      {schedules.length > 0 && (
+        <Card flush>
+          {schedules.map((s, i) => (
+            <div key={s.id} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''}`}>
+              <div className="min-w-[120px] font-bold">
+                {s.relay_name}
+                <small className="block font-normal text-muted text-[12.5px]">🏠 {s.device_name}</small>
+              </div>
+              <div className="flex-1 flex items-center gap-2.5 flex-wrap">
+                <span className="pill on-p">{onLabel(s)}</span>
+                <span className="text-muted">←</span>
+                <span className="pill off-p">{offLabel(s)}</span>
+              </div>
+              <SyncNote ok={s.sync_status === 'synced'}>
+                {s.sync_status === 'synced' ? '✓ מסונכרן' : '⟳ ממתין לסנכרון'}
+              </SyncNote>
+              <Toggle checked={!!s.is_enabled} busy={busy} onChange={() => toggleEnabled(s)} />
+              <button disabled={busy} className={`text-muted text-lg ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`} title="מחק" onClick={() => remove(s)}>🗑</button>
+            </div>
+          ))}
         </Card>
-      ))}
+      )}
 
       <Modal open={!!form} onClose={() => setForm(null)} title="תזמון חדש">
         {form && (
@@ -88,7 +97,7 @@ export default function Schedules() {
                 {relays.map((r) => <option key={r.id} value={r.id}>{r.name} — {r.device}</option>)}
               </Select>
             </label>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
               <Button variant={form.repeat_type === 'weekly' ? 'primary' : 'ghost'} onClick={() => setForm({ ...form, repeat_type: 'weekly' })}>שבועי</Button>
               <Button variant={form.repeat_type === 'once' ? 'primary' : 'ghost'} onClick={() => setForm({ ...form, repeat_type: 'once' })}>חד-פעמי</Button>
               {form.repeat_type === 'weekly' && (
@@ -99,7 +108,7 @@ export default function Schedules() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <span className="text-sm font-semibold text-ok">הדלקה</span>
+                <span className="text-sm font-medium text-on">הדלקה</span>
                 {form.repeat_type === 'weekly' && !form.daily && (
                   <Select className="w-full" value={form.on_day_of_week} onChange={(e) => setForm({ ...form, on_day_of_week: e.target.value })}>
                     {Object.entries(DAY_NAMES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
@@ -111,7 +120,7 @@ export default function Schedules() {
                 <Input type="time" value={form.on_time} onChange={(e) => setForm({ ...form, on_time: e.target.value })} />
               </div>
               <div className="space-y-2">
-                <span className="text-sm font-semibold text-err">כיבוי</span>
+                <span className="text-sm font-medium text-off">כיבוי</span>
                 {form.repeat_type === 'weekly' && !form.daily && (
                   <Select className="w-full" value={form.off_day_of_week} onChange={(e) => setForm({ ...form, off_day_of_week: e.target.value })}>
                     {Object.entries(DAY_NAMES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
@@ -128,6 +137,6 @@ export default function Schedules() {
           </div>
         )}
       </Modal>
-    </div>
+    </>
   );
 }

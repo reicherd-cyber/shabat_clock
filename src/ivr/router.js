@@ -16,8 +16,6 @@ import { DAY_NAMES_HE } from '../config/constants.js';
 
 export const ivrRouter = Router();
 
-const pad2 = (n) => String(n).padStart(2, '0');
-
 async function mainMenu(session, message = null) {
   session.state = 'MAIN';
   session.invalidCount = 0;
@@ -42,9 +40,15 @@ async function relayMenu(session, ctx) {
   session.state = 'RELAY_SELECT';
   const itemTpl = await getText('ivr.relay_menu_item');
   const prompt = relays
-    .map((r) => itemTpl.replaceAll('{name}', r.name).replaceAll('{digit}', pad2(r.ivr_digit)))
+    .map((r) => itemTpl.replaceAll('{name}', r.name).replaceAll('{digit}', String(r.ivr_digit)))
     .join(', ');
-  return ask(prompt, { min: 2, max: 2 }); // two-digit input 01–20 (PLAN Decisions #2)
+  // Fixed-width entry (min===max), same pattern as the reliably-working main menu —
+  // a variable min<max range left every real call stuck unanswered at this exact
+  // step (confirmed via call_logs: every real call reaching RELAY_SELECT was
+  // abandoned, min=1/max=2 never actually submitted on Yemot's real DTMF collection).
+  // Width only grows to 2 digits once a relay actually needs it (digit ≥ 10).
+  const width = Math.max(...relays.map((r) => r.ivr_digit)) >= 10 ? 2 : 1;
+  return ask(prompt, { min: width, max: width });
 }
 
 async function runImmediate(session, relay) {
@@ -112,9 +116,12 @@ async function authFailed(session, phone) {
   return ask(await getText('ivr.pin_prompt'), { min: 4, max: 4, message: await getText('ivr.auth_fail') });
 }
 
-ivrRouter.get('/ivr', async (req, res, next) => {
+// Token in the path (/ivr/<token>) — Yemot's api_link appends its params with '?'
+// even when the URL already has a query string, which would mangle a ?token= query.
+// The bare /ivr?token= form still works for manual testing.
+ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
   try {
-    if (req.query.token !== env.ivrToken) {
+    if ((req.params.token || req.query.token) !== env.ivrToken) {
       console.warn(`IVR: bad token from ${req.ip}`);
       return res.status(403).send('forbidden');
     }
@@ -161,7 +168,12 @@ ivrRouter.get('/ivr', async (req, res, next) => {
       return res.send(ask(await getText('ivr.user_code_prompt'), { min: 6, max: 6 }));
     }
 
-    const input = String(req.query.val ?? '').trim();
+    // Yemot re-sends every prior val= on the query string across the whole call rather
+    // than just the newest one, so from the 2nd digit-collecting step onward this
+    // arrives as an array (e.g. ["2","1"]) — take the last (current) entry, not the
+    // whole array (String(array) joins with commas and never matches anything).
+    const rawVal = req.query.val;
+    const input = String(Array.isArray(rawVal) ? rawVal[rawVal.length - 1] : (rawVal ?? '')).trim();
 
     switch (session.state) {
       // ── auth: unknown caller — ivr_code then PIN, verified together ──
@@ -218,7 +230,7 @@ ivrRouter.get('/ivr', async (req, res, next) => {
         if (session.data.ctx === 'sched') {
           session.data.relay = relay;
           session.state = 'SCHED_ON_DAY';
-          await appendPath(session.callLogId, `relay:${pad2(digit)}`);
+          await appendPath(session.callLogId, `relay:${digit}`);
           return res.send(ask(await getText('ivr.sched_on_day')));
         }
         return res.send(await runImmediate(session, relay));

@@ -12,11 +12,58 @@ import { listSettings, putSettings } from '../../services/settings.js';
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
 import { brokerConnected } from '../../mqtt/client.js';
+import { generateSecret, otpauthUri, verifyTotp } from '../../services/totp.js';
+import QRCode from 'qrcode';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
 
 const audit = (req, action, entity, id, diff) => auditLog(req.auth.adminId, action, entity, id, diff);
+
+// ── 2FA (TOTP) enrollment for the logged-in admin's own account ──
+adminRouter.get('/2fa/status', async (req, res, next) => {
+  try {
+    const [a] = await query('SELECT totp_enabled FROM admins WHERE id = ?', [req.auth.adminId]);
+    res.json({ enabled: !!a?.totp_enabled });
+  } catch (e) { next(e); }
+});
+
+// Generate a fresh secret (stored but NOT yet enforced) + a scannable QR. Re-running
+// before enable() overwrites the pending secret; harmless.
+adminRouter.post('/2fa/setup', async (req, res, next) => {
+  try {
+    const [a] = await query('SELECT email FROM admins WHERE id = ?', [req.auth.adminId]);
+    const secret = generateSecret();
+    await query('UPDATE admins SET totp_secret = ?, totp_enabled = FALSE WHERE id = ?', [secret, req.auth.adminId]);
+    const uri = otpauthUri(secret, a.email);
+    const qr = await QRCode.toDataURL(uri);
+    res.json({ secret, uri, qr });
+  } catch (e) { next(e); }
+});
+
+// Confirm a code from the app to switch enforcement on.
+adminRouter.post('/2fa/enable', async (req, res, next) => {
+  try {
+    const [a] = await query('SELECT totp_secret, totp_enabled FROM admins WHERE id = ?', [req.auth.adminId]);
+    if (!a?.totp_secret) throw errors.validation('אין סוד להפעלה, התחל מחדש את ההגדרה');
+    if (!verifyTotp(a.totp_secret, req.body?.code)) throw errors.validation('קוד שגוי, נסה שוב');
+    await query('UPDATE admins SET totp_enabled = TRUE WHERE id = ?', [req.auth.adminId]);
+    audit(req, 'enable_2fa', 'admin', req.auth.adminId);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Turn 2FA off — requires a valid current code so a hijacked session can't silently disable it.
+adminRouter.post('/2fa/disable', async (req, res, next) => {
+  try {
+    const [a] = await query('SELECT totp_secret, totp_enabled FROM admins WHERE id = ?', [req.auth.adminId]);
+    if (!a?.totp_enabled) return res.json({ ok: true });
+    if (!verifyTotp(a.totp_secret, req.body?.code)) throw errors.validation('קוד שגוי, נסה שוב');
+    await query('UPDATE admins SET totp_enabled = FALSE, totp_secret = NULL WHERE id = ?', [req.auth.adminId]);
+    audit(req, 'disable_2fa', 'admin', req.auth.adminId);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
 
 // ── users [D39]: no DELETE ever; terminal state is status='suspended' ──
 adminRouter.get('/users', async (req, res, next) => {
@@ -184,6 +231,26 @@ adminRouter.get('/monitoring', async (req, res, next) => {
       auth_failures_24h: await recentFailureCount(24),
       broker_ok: brokerConnected(),
     });
+  } catch (e) { next(e); }
+});
+
+// Commands list behind the monitoring stat tiles. status=pending → pending|sent;
+// status=failed → failed within 24h (matches the monitoring counters).
+adminRouter.get('/commands', async (req, res, next) => {
+  try {
+    const cond = [];
+    if (req.query.status === 'pending') cond.push("c.status IN ('pending','sent')");
+    else if (req.query.status === 'failed') cond.push("c.status = 'failed' AND c.requested_at > UTC_TIMESTAMP() - INTERVAL 24 HOUR");
+    res.json(await query(
+      `SELECT c.id, c.action, c.source, c.status, c.fail_reason, c.requested_at, c.acked_at,
+              r.name AS relay_name, d.name AS device_name, u.full_name AS owner_name
+       FROM commands c
+       JOIN relays r ON r.id = c.relay_id
+       JOIN devices d ON d.id = r.device_id
+       JOIN users u ON u.id = d.user_id
+       ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''}
+       ORDER BY c.id DESC LIMIT 200`,
+    ));
   } catch (e) { next(e); }
 });
 

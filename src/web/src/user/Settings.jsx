@@ -7,9 +7,11 @@ import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '
 export default function Settings() {
   const [me, setMe] = useState(null);
   const [devices, setDevices] = useState([]);
-  const [newPhone, setNewPhone] = useState('');
   const [verifying, setVerifying] = useState(null); // {id, code}
   const [pinForm, setPinForm] = useState(null);
+  const [deleting, setDeleting] = useState(null); // relay pending removal confirmation
+  const [disablingDevice, setDisablingDevice] = useState(null); // device pending "disable all" confirmation
+  const [removingDevice, setRemovingDevice] = useState(null); // device pending removal confirmation
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -19,21 +21,9 @@ export default function Settings() {
   };
   useEffect(() => { refresh().catch(setError); }, []);
 
-  const addPhone = () => run(async () => {
-    const { id } = await api.post('/me/phones', { phone: newPhone });
-    setNewPhone('');
-    setVerifying({ id, code: '' });
-    await refresh();
-  });
-
   const verifyPhone = () => run(async () => {
     await api.post(`/me/phones/${verifying.id}/verify`, { code: verifying.code });
     setVerifying(null);
-    await refresh();
-  });
-
-  const deletePhone = (id) => run(async () => {
-    await api.del(`/me/phones/${id}`);
     await refresh();
   });
 
@@ -44,6 +34,38 @@ export default function Settings() {
 
   const patchRelay = (relay, patch) => run(async () => {
     await api.patch(`/relays/${relay.id}`, patch);
+    await refresh();
+  });
+
+  // "Remove" is a soft disable (is_enabled=false), never a real delete — the relay
+  // stays manageable and can be re-enabled later. force=true also disables any
+  // schedules still attached to it, since deletion intent should always succeed.
+  const removeRelay = () => run(async () => {
+    await api.patch(`/relays/${deleting.id}?force=true`, { is_enabled: false });
+    setDeleting(null);
+    await refresh();
+  });
+
+  const renameDevice = (device, name) => run(async () => {
+    await api.patch(`/devices/${device.id}`, { name });
+    await refresh();
+  });
+
+  // Same soft-disable as a single relay's "remove", applied to every relay on the device at once.
+  const disableAllRelays = () => run(async () => {
+    await Promise.all(
+      disablingDevice.relays.filter((r) => r.is_enabled)
+        .map((r) => api.patch(`/relays/${r.id}?force=true`, { is_enabled: false })),
+    );
+    setDisablingDevice(null);
+    await refresh();
+  });
+
+  // Device-level soft remove (is_enabled=false) — never deleted. Once removed it
+  // disappears from this page entirely; only a super-admin can restore it.
+  const removeDevice = () => run(async () => {
+    await api.patch(`/devices/${removingDevice.id}`, { is_enabled: false });
+    setRemovingDevice(null);
     await refresh();
   });
 
@@ -67,26 +89,27 @@ export default function Settings() {
                 {p.label && <span className="text-muted text-sm">{p.label}</span>}
                 <Badge ok={!!p.verified_at}>{p.verified_at ? 'מאומת' : 'ממתין לאימות'}</Badge>
               </div>
-              <div className="flex gap-2">
-                {!p.verified_at && <Button variant="ghost" onClick={() => setVerifying({ id: p.id, code: '' })}>אימות</Button>}
-                <Button variant="ghost" disabled={busy} onClick={() => deletePhone(p.id)}>הסר</Button>
-              </div>
+              {!p.verified_at && (
+                <Button variant="ghost" onClick={() => setVerifying({ id: p.id, code: '' })}>אימות</Button>
+              )}
             </div>
           ))}
         </div>
-        <div className="flex gap-2 mt-3">
-          <Input dir="ltr" type="tel" placeholder="מספר חדש" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} />
-          <Button disabled={busy || newPhone.length < 9} onClick={addPhone}>הוסף</Button>
-        </div>
-        <p className="text-muted text-xs mt-2">לאחר ההוספה תתקבל שיחת אימות למספר החדש.</p>
+        <p className="text-muted text-xs mt-2">לניהול מספרי טלפון פנו למנהל המערכת.</p>
       </Card>
 
-      {devices.map((d) => (
+      {devices.filter((d) => d.is_enabled).map((d) => (
         <Card key={d.id}>
-          <h3 className="font-bold mb-2">ממסרים — {d.name}</h3>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="font-bold">ממסרים —</span>
+            <Input defaultValue={d.name} onBlur={(e) => e.target.value !== d.name && renameDevice(d, e.target.value)} />
+            {d.relays.length > 0 && d.relays.every((r) => !r.is_enabled) && <Badge ok={false}>מושבת</Badge>}
+            <Button variant="ghost" className="shrink-0" onClick={() => setDisablingDevice(d)}>השבת הכל</Button>
+            <Button variant="danger" className="shrink-0" onClick={() => setRemovingDevice(d)}>הסר מכשיר</Button>
+          </div>
           <div className="space-y-2">
             {d.relays.map((r) => (
-              <div key={r.id} className="grid grid-cols-2 sm:grid-cols-5 gap-2 items-center border border-line rounded-xl px-3 py-2">
+              <div key={r.id} className="grid grid-cols-2 sm:grid-cols-6 gap-2 items-center border border-line rounded-xl px-3 py-2">
                 <Input defaultValue={r.name} onBlur={(e) => e.target.value !== r.name && patchRelay(r, { name: e.target.value })} />
                 <label className="text-sm flex items-center gap-1">
                   קוד:
@@ -103,6 +126,7 @@ export default function Settings() {
                     onChange={(e) => patchRelay(r, { is_enabled: e.target.checked })} /> פעיל
                 </label>
                 <span className="text-muted text-xs">ערוץ {r.relay_no}</span>
+                <Button variant="ghost" className="justify-self-end" onClick={() => setDeleting(r)}>הסר</Button>
               </div>
             ))}
           </div>
@@ -117,6 +141,51 @@ export default function Settings() {
               onChange={(e) => setVerifying({ ...verifying, code: e.target.value })} />
             <ErrorNote error={error} />
             <Button className="w-full" disabled={busy || verifying.code.length !== 6} onClick={verifyPhone}>אמת</Button>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!deleting} onClose={() => setDeleting(null)} title="הסרת ממסר">
+        {deleting && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              להסיר את הממסר <b>{deleting.name}</b>? הממסר יושבת ולא יופיע יותר בלוח הבקרה, אך ניתן יהיה להפעילו מחדש בעתיד דרך תיבת "פעיל".
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setDeleting(null)}>ביטול</Button>
+              <Button variant="danger" className="flex-1" disabled={busy} onClick={removeRelay}>הסר ממסר</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!disablingDevice} onClose={() => setDisablingDevice(null)} title="השבתת כל הממסרים">
+        {disablingDevice && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              להשבית את כל הממסרים במכשיר <b>{disablingDevice.name}</b>? הממסרים לא יופיעו יותר בלוח הבקרה, אך ניתן יהיה להפעילם מחדש בעתיד דרך תיבת "פעיל" בכל ממסר בנפרד.
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setDisablingDevice(null)}>ביטול</Button>
+              <Button variant="danger" className="flex-1" disabled={busy} onClick={disableAllRelays}>השבת הכל</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!removingDevice} onClose={() => setRemovingDevice(null)} title="הסרת מכשיר">
+        {removingDevice && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              להסיר את המכשיר <b>{removingDevice.name}</b>? המכשיר ייעלם מהעמוד הזה והממסרים שלו לא יגיבו בשיחות טלפון. שחזור המכשיר אפשרי רק על ידי מנהל המערכת.
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setRemovingDevice(null)}>ביטול</Button>
+              <Button variant="danger" className="flex-1" disabled={busy} onClick={removeDevice}>הסר מכשיר</Button>
+            </div>
           </div>
         )}
       </Modal>

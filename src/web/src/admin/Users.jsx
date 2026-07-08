@@ -45,7 +45,7 @@ export default function Users() {
         <Button onClick={() => setCreateForm({ full_name: '', pin: '', phone: '', require_pin: false, max_devices: 3 })}>+ משתמש חדש</Button>
       </div>
       <ErrorNote error={error} />
-      <Card className="overflow-x-auto p-0">
+      <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">

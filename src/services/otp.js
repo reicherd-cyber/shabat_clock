@@ -9,29 +9,58 @@ import { recordFailure, isLockedOut } from './authFailures.js';
 import { OTP_TTL_MIN, OTP_MAX_ATTEMPTS } from '../config/constants.js';
 
 async function deliverOtp(phone, code) {
-  // Yemot outbound call reads the code. Credentials on account 043131481 —
-  // availability is an open item (SPEC "Open items"); in development we log instead.
-  if (!env.otpYemot.user) {
-    console.log(`[dev] OTP for ${phone}: ${code}`);
-    return;
-  }
+  // In dev always log the code, so local testing works even when the call fails.
+  if (env.nodeEnv !== 'production') console.log(`[dev] OTP for ${phone}: ${code}`);
+
+  // Prefer an API-key token; fall back to legacy user:pass. No creds → dev-log only.
+  const token = env.otpYemot.token || (env.otpYemot.user ? `${env.otpYemot.user}:${env.otpYemot.pass}` : '');
+  if (!token) return;
+
   const params = new URLSearchParams({
-    token: `${env.otpYemot.user}:${env.otpYemot.pass}`,
+    token,
     phones: phone,
     ttsMessage: `הקוד שלך הוא: ${code.split('').join(', ')}`,
   });
-  const res = await fetch(`https://www.call2all.co.il/ym/api/RunTzintuk?${params}`);
-  if (!res.ok) throw new Error(`Yemot OTP call failed: ${res.status}`);
+  if (env.otpYemot.callerId) params.set('callerId', env.otpYemot.callerId);
+
+  let ok = false;
+  let detail = '';
+  try {
+    const res = await fetch(`https://www.call2all.co.il/ym/api/RunTzintuk?${params}`);
+    // Yemot returns HTTP 200 with a JSON envelope even on logical errors, so check the body.
+    const body = await res.json().catch(() => ({}));
+    detail = JSON.stringify(body);
+    // Yemot signals success only with responseStatus 'OK'; 'ERROR'/'Exception' are failures.
+    ok = res.ok && body.responseStatus === 'OK';
+    console.log(`[yemot] OTP call to ${phone}: ${ok ? 'OK' : 'FAILED'} ${detail}`);
+  } catch (e) {
+    detail = e.message;
+    console.log(`[yemot] OTP call to ${phone} threw: ${detail}`);
+  }
+
+  // In production a failed call must surface; in dev the code was already logged, so keep going.
+  if (!ok && env.nodeEnv === 'production') throw new Error(`Yemot OTP call failed: ${detail}`);
 }
 
-export async function requestOtp({ phone, purpose, userPhoneId = null }) {
+async function deliverOtpEmail(email, code) {
+  const { sendEmail } = await import('./email.js');
+  await sendEmail({
+    to: email,
+    subject: `קוד הכניסה שלך: ${code}`,
+    text: `קוד הכניסה שלך לשעון שבת הוא: ${code}\nהקוד תקף ל-${OTP_TTL_MIN} דקות.`,
+  });
+}
+
+// channel 'call' (default, Yemot) or 'email' (requires a target email).
+export async function requestOtp({ phone, purpose, userPhoneId = null, channel = 'call', email = null }) {
   const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
   await query(
     `INSERT INTO otp_codes (phone, purpose, user_phone_id, code_hash, expires_at)
      VALUES (?,?,?,?, UTC_TIMESTAMP() + INTERVAL ? MINUTE)`,
     [phone, purpose, userPhoneId, bcryptHash(code), OTP_TTL_MIN],
   );
-  await deliverOtp(phone, code);
+  if (channel === 'email' && email) await deliverOtpEmail(email, code);
+  else await deliverOtp(phone, code);
 }
 
 // Verify: lockout checked BEFORE the code; failed verify writes code attempts++ AND a

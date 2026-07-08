@@ -110,15 +110,29 @@ export async function rotateSecret(deviceId, { relay_count } = {}) {
 
 // PATCH per §3.3: rename/timezone always; relay_count & uid-set only while unflashed;
 // reassign owner in one transaction with uq_ivr + max_devices pre-checks.
-export async function patchDevice(deviceId, patch) {
+// userId scopes to the owner's own device and restricts the patch to name/is_enabled
+// (the user panel's rename + remove/restore use case) — admin callers omit it for full access.
+export async function patchDevice(deviceId, patch, { userId = null } = {}) {
   await withTransaction(async (conn) => {
-    const [rows] = await conn.query('SELECT * FROM devices WHERE id = ? FOR UPDATE', [deviceId]);
+    const [rows] = await conn.query(
+      `SELECT * FROM devices WHERE id = ? ${userId != null ? 'AND user_id = ?' : ''} FOR UPDATE`,
+      userId != null ? [deviceId, userId] : [deviceId],
+    );
     const device = rows[0];
     if (!device) throw errors.notFound('NOT_FOUND', 'Device not found');
     const fields = {};
 
     if (patch.name !== undefined) fields.name = patch.name;
+    if (userId != null) {
+      if (patch.is_enabled !== undefined) fields.is_enabled = Boolean(patch.is_enabled);
+      if (Object.keys(fields).length) {
+        const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
+        await conn.query(`UPDATE devices SET ${sets} WHERE id = ?`, [...Object.values(fields), deviceId]);
+      }
+      return;
+    }
     if (patch.timezone !== undefined) fields.timezone = patch.timezone;
+    if (patch.is_enabled !== undefined) fields.is_enabled = Boolean(patch.is_enabled);
 
     if (patch.relay_count !== undefined) {
       if (device.device_uid) throw errors.conflict('DEVICE_FLASHED', 'relay_count is pinned once flashed; use rotate-secret');
@@ -164,7 +178,7 @@ export async function listAllDevices() {
   return query(
     `SELECT d.id, d.user_id, u.full_name AS owner_name, d.device_uid, d.name, d.fw_version, d.timezone,
             d.relay_count, d.is_online, d.last_seen_at, d.schedule_version, d.device_ack_version,
-            d.sync_status, d.sync_error, d.created_at
+            d.sync_status, d.sync_error, d.created_at, d.is_enabled
      FROM devices d JOIN users u ON u.id = d.user_id ORDER BY d.id`,
   );
 }

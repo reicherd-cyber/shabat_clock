@@ -11,7 +11,7 @@ async function pushAfterCommit(deviceIds) {
 
 export async function listDevicesWithRelays(userId) {
   const devices = await query(
-    `SELECT id, name, is_online, last_seen_at, sync_status, fw_version, relay_count
+    `SELECT id, name, is_online, last_seen_at, sync_status, fw_version, relay_count, is_enabled
      FROM devices WHERE user_id = ? ORDER BY id`,
     [userId],
   );
@@ -157,6 +157,7 @@ export async function enabledRelaysForUser(userId) {
     `SELECT r.id, r.name, r.ivr_digit, r.current_state, r.relay_no, r.device_id, d.is_online
      FROM relays r JOIN devices d ON d.id = r.device_id
      WHERE r.user_id = ? AND r.is_enabled = TRUE AND r.deleted_at IS NULL AND r.ivr_digit IS NOT NULL
+       AND d.is_enabled = TRUE
      ORDER BY r.sort_order, r.ivr_digit`,
     [userId],
   );

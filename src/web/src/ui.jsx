@@ -12,19 +12,27 @@ export function useInterval(fn, ms) {
   }, [ms]);
 }
 
-export const Card = ({ children, className = '' }) => (
-  <div className={`bg-paper border border-line rounded-2xl p-4 shadow-sm ${className}`}>{children}</div>
+// mockup .card: radius 14, hairline border, soft shadow, overflow hidden.
+// flush = row-list cards whose rows carry their own padding.
+export const Card = ({ children, className = '', flush = false, ...props }) => (
+  <div {...props} className={`bg-surface border border-line rounded-card shadow-card overflow-hidden ${flush ? '' : 'p-4'} ${className}`}>{children}</div>
 );
 
+// mockup .card-head: surface-2 strip with serif name
+export const CardHead = ({ children }) => (
+  <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-surface2">{children}</div>
+);
+
+// mockup .btn / .btn.primary
 export const Button = ({ children, variant = 'primary', className = '', ...props }) => {
   const styles = {
-    primary: 'bg-accent hover:bg-accent-deep text-white',
-    ghost: 'bg-transparent hover:bg-cream border border-line text-ink',
-    danger: 'bg-err text-white hover:opacity-90',
+    primary: 'bg-accent border-accent text-white hover:bg-accent-dk',
+    ghost: 'bg-surface border-line text-ink hover:border-[#CFC9BB]',
+    danger: 'bg-off border-off text-white hover:opacity-90',
   }[variant];
   return (
     <button
-      className={`rounded-xl px-4 py-2.5 font-semibold transition disabled:opacity-50 ${styles} ${className}`}
+      className={`font-medium text-sm cursor-pointer rounded-[10px] px-4 py-2 border transition disabled:opacity-50 ${styles} ${className}`}
       {...props}
     >
       {children}
@@ -34,62 +42,72 @@ export const Button = ({ children, variant = 'primary', className = '', ...props
 
 export const Input = ({ className = '', ...props }) => (
   <input
-    className={`border border-line rounded-xl px-3 py-2.5 bg-paper w-full focus:outline-none focus:border-accent ${className}`}
+    className={`border border-line rounded-[10px] px-3 py-2.5 bg-surface w-full focus:outline-none focus:border-accent ${className}`}
     {...props}
   />
 );
 
 export const Select = ({ className = '', children, ...props }) => (
-  <select className={`border border-line rounded-xl px-3 py-2.5 bg-paper ${className}`} {...props}>
+  <select className={`border border-line rounded-[10px] px-3 py-2.5 bg-surface ${className}`} {...props}>
     {children}
   </select>
 );
 
+// mockup .badge online/offline (glowing dot via index.css)
+export const StatusBadge = ({ online, children }) => (
+  <span className={`badge ${online ? 'online' : 'offline'}`}>
+    <span className="dot" />{children}
+  </span>
+);
+
 export const Badge = ({ ok, children }) => (
-  <span className={`inline-block text-xs font-semibold rounded-full px-2.5 py-0.5 ${ok ? 'bg-ok-bg text-ok' : 'bg-err-bg text-err'}`}>
+  <span className={`inline-block text-[12.5px] font-medium rounded-full px-2.5 py-0.5 whitespace-nowrap ${ok ? 'bg-on-bg text-on' : 'bg-off-bg text-off'}`}>
     {children}
   </span>
 );
 
+export const CodeChip = ({ children }) => <span className="code-chip">{children}</span>;
+
 export const OnlineDot = ({ online }) => (
-  <span className={`inline-block w-2.5 h-2.5 rounded-full ${online ? 'bg-ok' : 'bg-err'}`} title={online ? 'מחובר' : 'מנותק'} />
+  <span className={`inline-block w-2.5 h-2.5 rounded-full ${online ? 'bg-on' : 'bg-off'}`} title={online ? 'מחובר' : 'מנותק'} />
 );
 
-export const Spinner = () => (
-  <span className="inline-block w-4 h-4 border-2 border-line border-t-accent rounded-full animate-spin align-middle" />
+// mockup .toggle — terracotta when on; pulses while a command is in flight
+export function Toggle({ checked, disabled, busy, onChange }) {
+  return (
+    <label className={`toggle ${busy ? 'busy' : ''}`}>
+      <input type="checkbox" checked={checked} disabled={disabled || busy} onChange={onChange} />
+      <span className="track" />
+    </label>
+  );
+}
+
+// mockup .sync
+export const SyncNote = ({ ok, children }) => (
+  <span className={`text-[12.5px] font-medium whitespace-nowrap ${ok ? 'text-on' : 'text-off'}`}>{children}</span>
 );
 
 export function ErrorNote({ error }) {
   if (!error) return null;
-  return <div className="bg-err-bg text-err rounded-xl px-3 py-2 text-sm my-2">{String(error.message || error)}</div>;
+  return <div className="bg-off-bg text-off rounded-[10px] px-3 py-2 text-sm my-2">{String(error.message || error)}</div>;
 }
 
-// Large touch-target relay toggle (PLAN §3): optimistic-off — spinner until the
-// 5s command round-trip resolves, then true state [D28].
-export function RelayToggle({ state, busy, onToggle }) {
-  const isOn = state === 'on';
-  return (
-    <button
-      onClick={onToggle}
-      disabled={busy}
-      className={`relative w-16 h-9 rounded-full transition border ${isOn ? 'bg-ok border-ok' : 'bg-line border-line'}`}
-      aria-label={isOn ? 'כבה' : 'הדלק'}
-    >
-      {busy
-        ? <span className="absolute inset-0 flex items-center justify-center"><Spinner /></span>
-        : <span className={`absolute top-1 w-7 h-7 bg-paper rounded-full shadow transition-all ${isOn ? 'right-8' : 'right-1'}`} />}
-    </button>
-  );
-}
+// mockup .section-head — serif h2
+export const SectionHead = ({ title, children }) => (
+  <div className="flex items-baseline justify-between mt-8 mb-3.5">
+    <h2 className="font-serif font-bold text-[22px]">{title}</h2>
+    {children}
+  </div>
+);
 
 export function Modal({ open, onClose, title, children, closable = true }) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={closable ? onClose : undefined}>
-      <div className="bg-paper rounded-2xl p-5 max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-surface rounded-card shadow-card p-5 max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-3">
-          <h3 className="font-bold text-lg">{title}</h3>
-          {closable && <button onClick={onClose} className="text-muted text-xl leading-none">×</button>}
+          <h3 className="font-serif font-bold text-lg">{title}</h3>
+          {closable && <button onClick={onClose} className="text-muted text-xl leading-none cursor-pointer">×</button>}
         </div>
         {children}
       </div>

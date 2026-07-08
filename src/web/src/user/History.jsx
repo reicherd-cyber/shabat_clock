@@ -1,9 +1,46 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Badge, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, SectionHead, ErrorNote, useAsync } from '../ui.jsx';
 
-const SOURCE_HE = { ivr: 'טלפון', web: 'אתר', schedule: 'תזמון', admin: 'מנהל' };
-const OUTCOME_HE = { command: 'פקודה', schedule: 'תזמון', status: 'בירור מצב', auth_fail: 'כשל זיהוי', abandoned: 'נותקה' };
+// Mockup .hist rows: icon square · sentence · time at the far edge.
+const SOURCE_HE = { ivr: 'דרך הטלפון', web: 'דרך האתר', schedule: 'לפי תזמון', admin: 'על ידי מנהל' };
+const OUTCOME_HE = { command: 'פקודה', schedule: 'תזמון חדש נשמר', status: 'בירור מצב', auth_fail: 'כשל זיהוי', abandoned: 'שיחה נותקה' };
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const days = Math.floor((Date.now() - d) / 86400000);
+  const time = d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+  if (days === 0) return `היום ${time}`;
+  if (days === 1) return `אתמול ${time}`;
+  return `${d.toLocaleDateString('he-IL', { weekday: 'long' })} ${time}`;
+}
+
+function Row({ item, first }) {
+  const d = item.data;
+  const isCmd = item.type === 'cmd';
+  const ok = isCmd ? d.status === 'acked' : !['auth_fail', 'abandoned'].includes(d.outcome);
+  const icon = isCmd ? (ok ? '💡' : '✕') : '📞';
+  const iconBg = isCmd ? (ok ? 'bg-on-bg' : 'bg-off-bg') : 'bg-[#EFEAF7]';
+  return (
+    <div className={`flex items-center gap-3 px-5 py-[13px] text-sm ${first ? '' : 'border-t border-line'}`}>
+      <span className={`w-[30px] h-[30px] rounded-[9px] grid place-items-center text-sm shrink-0 ${iconBg}`}>{icon}</span>
+      <span className="min-w-0">
+        {isCmd ? (
+          <>
+            <b>{d.relay_name}</b> {d.action === 'on' ? 'הודלק' : 'כובה'} {SOURCE_HE[d.source] || ''}
+            {d.status === 'failed' && <span className="text-off"> — נכשל{d.fail_reason === 'offline' ? ' (המכשיר לא היה מחובר)' : ''}</span>}
+          </>
+        ) : (
+          <>
+            שיחה מ־<span dir="ltr">{d.phone}</span> — {OUTCOME_HE[d.outcome] || 'ללא פעולה'}
+            {d.menu_path && <small className="block text-muted text-[12px]" dir="ltr">{d.menu_path}</small>}
+          </>
+        )}
+      </span>
+      <time className="mr-auto text-muted text-[12.5px] whitespace-nowrap">{fmtTime(item.ts)}</time>
+    </div>
+  );
+}
 
 export default function History() {
   const [items, setItems] = useState([]);
@@ -21,46 +58,18 @@ export default function History() {
   useEffect(() => { load(true); }, []);
 
   return (
-    <div className="space-y-3">
-      <h2 className="font-bold text-xl">היסטוריה</h2>
+    <>
+      <SectionHead title="פעילות אחרונה" />
       <ErrorNote error={error} />
-      {items.map((it) => (
-        <Card key={`${it.type}:${it.id}`} className="flex items-center justify-between gap-3 flex-wrap py-3">
-          {it.type === 'cmd' ? (
-            <>
-              <div>
-                <span className="font-semibold">{it.data.relay_name}</span>
-                {' — '}{it.data.action === 'on' ? 'הדלקה' : 'כיבוי'}
-                <span className="text-muted text-sm"> ({SOURCE_HE[it.data.source] || it.data.source})</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge ok={it.data.status === 'acked'}>
-                  {it.data.status === 'acked' ? 'בוצע' : it.data.status === 'failed' ? 'נכשל' : it.data.status}
-                </Badge>
-                <span className="text-muted text-xs">{new Date(it.ts).toLocaleString('he-IL')}</span>
-              </div>
-            </>
-          ) : (
-            <>
-              <div>
-                <span className="font-semibold">שיחה</span>
-                <span className="text-muted text-sm" dir="ltr"> {it.data.phone}</span>
-                {it.data.menu_path && <div className="text-muted text-xs" dir="ltr">{it.data.menu_path}</div>}
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge ok={!['auth_fail', 'abandoned'].includes(it.data.outcome)}>
-                  {OUTCOME_HE[it.data.outcome] || '—'}
-                </Badge>
-                <span className="text-muted text-xs">{new Date(it.ts).toLocaleString('he-IL')}</span>
-              </div>
-            </>
-          )}
-        </Card>
-      ))}
       {items.length === 0 && !busy && <Card>אין פעילות עדיין.</Card>}
-      {!done && items.length > 0 && (
-        <Button variant="ghost" className="w-full" disabled={busy} onClick={() => load(false)}>טען עוד</Button>
+      {items.length > 0 && (
+        <Card flush>
+          {items.map((it, i) => <Row key={`${it.type}:${it.id}`} item={it} first={i === 0} />)}
+        </Card>
       )}
-    </div>
+      {!done && items.length > 0 && (
+        <Button variant="ghost" className="w-full mt-3" disabled={busy} onClick={() => load(false)}>טען עוד</Button>
+      )}
+    </>
   );
 }
