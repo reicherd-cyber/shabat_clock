@@ -194,6 +194,54 @@ export function SystemSettings() {
   );
 }
 
+// 2FA (TOTP) self-enrollment for the logged-in admin — drives the /2fa/* endpoints.
+function TwoFactorCard() {
+  const [enabled, setEnabled] = useState(null);
+  const [setup, setSetup] = useState(null); // {qr, secret} while enrolling
+  const [code, setCode] = useState('');
+  const { busy, error, run, setError } = useAsync();
+  const refresh = async () => setEnabled((await adminApi.get('/2fa/status')).enabled);
+  useEffect(() => { refresh().catch(setError); }, []);
+
+  const begin = () => run(async () => { setSetup(await adminApi.post('/2fa/setup', {})); setCode(''); });
+  const enable = () => run(async () => { await adminApi.post('/2fa/enable', { code }); setSetup(null); setCode(''); await refresh(); });
+  const disable = () => run(async () => { await adminApi.post('/2fa/disable', { code }); setCode(''); await refresh(); });
+
+  if (enabled === null) return null;
+  return (
+    <Card className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-bold">אימות דו-שלבי (2FA) לחשבון שלי</h3>
+        <Badge ok={enabled}>{enabled ? 'פעיל' : 'כבוי'}</Badge>
+      </div>
+      <ErrorNote error={error} />
+      {!enabled && !setup && (
+        <Button disabled={busy} onClick={begin}>הפעל אימות דו-שלבי</Button>
+      )}
+      {!enabled && setup && (
+        <div className="space-y-3">
+          <p className="text-sm">סרקו את הקוד באפליקציית אימות (Google Authenticator וכדומה), ואז הזינו את הקוד בן 6 הספרות לאישור.</p>
+          <img alt="QR" className="mx-auto border border-line rounded-xl" src={setup.qr} />
+          <p className="text-xs text-muted text-center" dir="ltr">{setup.secret}</p>
+          <div className="flex gap-2">
+            <Input dir="ltr" inputMode="numeric" placeholder="קוד בן 6 ספרות" value={code} onChange={(e) => setCode(e.target.value)} />
+            <Button disabled={busy || code.length !== 6} onClick={enable}>אשר והפעל</Button>
+          </div>
+        </div>
+      )}
+      {enabled && (
+        <div className="space-y-2">
+          <p className="text-sm text-muted">לכיבוי — הזינו קוד נוכחי מהאפליקציה (הגנה מפני כיבוי על ידי מי שאינו בעל החשבון).</p>
+          <div className="flex gap-2">
+            <Input dir="ltr" inputMode="numeric" placeholder="קוד בן 6 ספרות" value={code} onChange={(e) => setCode(e.target.value)} />
+            <Button variant="danger" disabled={busy || code.length !== 6} onClick={disable}>כבה 2FA</Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function Admins() {
   const [admins, setAdmins] = useState(null);
   const [form, setForm] = useState(null);
@@ -207,6 +255,7 @@ export function Admins() {
         <h2 className="font-bold text-xl">מנהלים</h2>
         <Button onClick={() => setForm({ name: '', email: '', password: '', role: 'support' })}>+ מנהל</Button>
       </div>
+      <TwoFactorCard />
       <ErrorNote error={error} />
       {(admins || []).map((a) => (
         <Card key={a.id} className="flex items-center justify-between py-3">
