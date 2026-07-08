@@ -11,6 +11,7 @@ export default function Devices() {
   const [secretView, setSecretView] = useState(null); // {mqtt_secret, qr_png_base64, saved}
   const [relayForm, setRelayForm] = useState(null);   // {device, relay_no, name, ivr_digit}
   const [uidForm, setUidForm] = useState(null);       // {device, uid}
+  const [shelly, setShelly] = useState(null);         // wizard: {step, ip, user_id, name, probe, relays}
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -56,12 +57,32 @@ export default function Devices() {
     await refresh();
   });
 
+  // Shelly wizard: step 1 (ip+owner) → probe → step 2 (confirm channels) → register → step 3 (done)
+  const shellyProbe = () => run(async () => {
+    const probe = await adminApi.post('/shelly/probe', { ip: shelly.ip });
+    setShelly({
+      ...shelly, step: 2, probe,
+      name: shelly.name || `Shelly (${probe.model})`,
+      relays: probe.channels.map((c) => ({ relay_no: c.relay_no, name: `ערוץ ${c.relay_no}`, ivr_digit: c.relay_no, state: c.state })),
+    });
+  });
+  const shellyRegister = () => run(async () => {
+    const result = await adminApi.post('/shelly/register', {
+      user_id: Number(shelly.user_id), ip: shelly.ip, name: shelly.name, relays: shelly.relays,
+    });
+    setShelly({ ...shelly, step: 3, result });
+    await refresh();
+  });
+
   if (!devices) return <p className="text-muted">טוען…</p>;
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center flex-wrap gap-2">
         <h2 className="font-bold text-xl">מכשירים</h2>
-        <Button onClick={() => setProvForm({ user_id: users[0]?.id || '', name: '', relay_count: 2, device_uid: '' })}>+ הקצאת מכשיר</Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={() => setShelly({ step: 1, ip: '', user_id: users[0]?.id || '', name: '' })}>+ Shelly</Button>
+          <Button onClick={() => setProvForm({ user_id: users[0]?.id || '', name: '', relay_count: 2, device_uid: '' })}>+ הקצאת מכשיר</Button>
+        </div>
       </div>
       <ErrorNote error={error} />
       {devices.map((d) => (
@@ -93,6 +114,54 @@ export default function Devices() {
           </div>
         </Card>
       ))}
+
+      <Modal open={!!shelly} onClose={() => setShelly(null)} title={`הוספת Shelly — שלב ${shelly?.step || 1} מתוך 3`}>
+        {shelly?.step === 1 && (
+          <div className="space-y-3">
+            <p className="text-sm text-muted">המכשיר חייב להיות נגיש מהשרת ברשת (כתובת IP מקומית עובדת רק כשהשרת באותה רשת).</p>
+            <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>
+              {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+            </Select>
+            <Input dir="ltr" placeholder="כתובת IP (למשל 192.168.1.50)" value={shelly.ip} onChange={(e) => setShelly({ ...shelly, ip: e.target.value })} />
+            <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
+            <ErrorNote error={error} />
+            <Button className="w-full" disabled={busy || !shelly.ip} onClick={shellyProbe}>בדוק חיבור ›</Button>
+          </div>
+        )}
+        {shelly?.step === 2 && (
+          <div className="space-y-3">
+            <Card className="text-sm">
+              נמצא: <b>{shelly.probe.model}</b> · fw {shelly.probe.fw_version || '?'} · <span dir="ltr">{shelly.probe.mac}</span>
+              {shelly.probe.already_registered_as && <div className="text-off mt-1">⚠ המכשיר כבר רשום (מספר {shelly.probe.already_registered_as})</div>}
+            </Card>
+            <Input placeholder="שם המכשיר" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
+            {shelly.relays.map((r, i) => (
+              <div key={r.relay_no} className="flex items-center gap-2">
+                <span className="text-muted text-xs whitespace-nowrap">ערוץ {r.relay_no} ({r.state === 'on' ? 'דולק' : 'כבוי'})</span>
+                <Input placeholder="שם" value={r.name}
+                  onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, name: e.target.value } : x) })} />
+                <label className="text-sm flex items-center gap-1 whitespace-nowrap">קוד IVR:
+                  <Input className="w-16" inputMode="numeric" value={r.ivr_digit}
+                    onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, ivr_digit: e.target.value } : x) })} />
+                </label>
+              </div>
+            ))}
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setShelly({ ...shelly, step: 1 })}>‹ חזרה</Button>
+              <Button className="flex-1" disabled={busy || !!shelly.probe.already_registered_as} onClick={shellyRegister}>הוסף מכשיר</Button>
+            </div>
+          </div>
+        )}
+        {shelly?.step === 3 && (
+          <div className="space-y-3 text-center">
+            <div className="text-4xl">✅</div>
+            <p><b>{shelly.name}</b> נוסף בהצלחה (מכשיר מספר {shelly.result.id}, {shelly.result.relays} ממסרים).</p>
+            <p className="text-sm text-muted">הממסרים זמינים עכשיו בלוח הבקרה של המשתמש ובתפריט הטלפוני.</p>
+            <Button className="w-full" onClick={() => setShelly(null)}>סגור</Button>
+          </div>
+        )}
+      </Modal>
 
       <Modal open={!!provForm} onClose={() => setProvForm(null)} title="הקצאת מכשיר חדש">
         {provForm && (

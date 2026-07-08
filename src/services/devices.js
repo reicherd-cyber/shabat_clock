@@ -8,6 +8,7 @@ import { query, withTransaction } from '../db/pool.js';
 import { errors } from '../config/errors.js';
 import { env } from '../config/env.js';
 import { bcryptHash } from './users.js';
+import { shellyInfo, shellyGetState } from './shelly.js';
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -171,6 +172,75 @@ export async function patchDevice(deviceId, patch, { userId = null } = {}) {
     }
     // Setting the UID creates the broker passwd entry [D31].
     if (fields.device_uid) writeBrokerPasswdEntry(fields.device_uid, device.mqtt_passwd_hash);
+  });
+}
+
+// ── Shelly wizard (admin panel) ──
+// Probe: reach the Shelly over HTTP RPC from the SERVER (not the admin's browser) and
+// report identity + channels. The server must have a network route to the device.
+export async function probeShelly(ip) {
+  let info;
+  try {
+    info = await shellyInfo(ip);
+  } catch {
+    throw errors.validation('לא ניתן להגיע למכשיר Shelly בכתובת זו מהשרת. ודאו שהמכשיר דלוק ושהשרת באותה רשת (או שיש נתיב רשת אליו).', { ip: 'unreachable' });
+  }
+  const uid = String(info.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '').slice(0, 12);
+  // Discover channels by probing 1..4 — Pro 2 answers for 1-2, extra probes fail quietly.
+  const channels = [];
+  for (let relayNo = 1; relayNo <= 4; relayNo++) {
+    const state = await shellyGetState(ip, relayNo).catch(() => undefined);
+    if (state === undefined) break;
+    channels.push({ relay_no: relayNo, state: state ? 'on' : 'off' });
+  }
+  if (channels.length === 0) throw errors.validation('המכשיר נמצא אך לא נמצאו ערוצי מיתוג (Switch).', { ip: 'no_channels' });
+  const [existing] = await query('SELECT id FROM devices WHERE device_uid = ? OR ip_address = ?', [uid, ip]);
+  return {
+    model: info.model || info.app || 'Shelly',
+    mac: uid,
+    fw_version: info.ver || null,
+    channels,
+    already_registered_as: existing?.id ?? null,
+  };
+}
+
+// Register a probed Shelly as a device + its relays for a user. relays: [{relay_no, name, ivr_digit}].
+export async function registerShellyDevice({ userId, ip, name, relays }) {
+  const probe = await probeShelly(ip); // re-verify live + get fresh states
+  if (probe.already_registered_as) throw errors.conflict('CONFLICT', `מכשיר זה כבר רשום (מספר ${probe.already_registered_as})`);
+  const wanted = (relays || []).filter((r) => probe.channels.some((c) => c.relay_no === Number(r.relay_no)));
+  if (wanted.length === 0) throw errors.validation('יש לבחור לפחות ערוץ אחד');
+  for (const r of wanted) {
+    const digit = Number(r.ivr_digit);
+    if (!Number.isInteger(digit) || digit < 1 || digit > 20) throw errors.validation('קוד IVR חייב להיות 1–20', { ivr_digit: '1-20' });
+  }
+  return withTransaction(async (conn) => {
+    const [uRows] = await conn.query('SELECT id, max_devices FROM users WHERE id = ? FOR UPDATE', [userId]);
+    if (!uRows[0]) throw errors.notFound('NOT_FOUND', 'User not found');
+    const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ?', [userId]);
+    if (dCount[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'המשתמש הגיע למכסת המכשירים');
+    const [taken] = await conn.query(
+      'SELECT ivr_digit FROM relays WHERE user_id = ? AND ivr_digit IN (?)',
+      [userId, wanted.map((r) => Number(r.ivr_digit))],
+    );
+    if (taken.length) throw errors.conflict('IVR_DIGIT_TAKEN', `קוד IVR כבר תפוס אצל משתמש זה: ${taken.map((t) => t.ivr_digit).join(', ')}`);
+
+    const [d] = await conn.query(
+      `INSERT INTO devices
+         (user_id, device_uid, device_type, ip_address, name,
+          mqtt_secret_hash, mqtt_passwd_hash, relay_count, is_online, fw_version)
+       VALUES (?,?, 'shelly', ?,?, '', '', ?, TRUE, ?)`,
+      [userId, probe.mac, ip, name || `Shelly (${probe.model})`, probe.channels.length, probe.fw_version],
+    );
+    for (const r of wanted) {
+      const live = probe.channels.find((c) => c.relay_no === Number(r.relay_no));
+      await conn.query(
+        `INSERT INTO relays (device_id, user_id, relay_no, name, ivr_digit, current_state, state_updated_at, sort_order)
+         VALUES (?,?,?,?,?,?, UTC_TIMESTAMP(), ?)`,
+        [d.insertId, userId, Number(r.relay_no), r.name || `ערוץ ${r.relay_no}`, Number(r.ivr_digit), live.state, Number(r.relay_no)],
+      );
+    }
+    return { id: d.insertId, relays: wanted.length };
   });
 }
 

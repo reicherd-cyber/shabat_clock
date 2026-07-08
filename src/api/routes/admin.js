@@ -5,7 +5,7 @@ import { errors } from '../../config/errors.js';
 import { requireAdmin, requireWrite, requireSuperadmin, signUserToken } from '../middleware.js';
 import { createUser, getUser, setPin, bcryptHash } from '../../services/users.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { provisionDevice, rotateSecret, patchDevice, listAllDevices } from '../../services/devices.js';
+import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
@@ -163,6 +163,24 @@ adminRouter.post('/devices/provision', requireWrite, async (req, res, next) => {
       device_uid: b.device_uid || null, timezone: b.timezone,
     });
     await audit(req, 'provision', 'device', result.device.id, { after: { name: b.name, user_id: b.user_id, relay_count: b.relay_count } });
+    res.status(201).json(result);
+  } catch (e) { next(e); }
+});
+
+// ── Shelly wizard: probe (read-only reachability + identity) then register ──
+adminRouter.post('/shelly/probe', requireWrite, async (req, res, next) => {
+  try {
+    res.json(await probeShelly(String(req.body?.ip || '').trim()));
+  } catch (e) { next(e); }
+});
+
+adminRouter.post('/shelly/register', requireWrite, async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const result = await registerShellyDevice({
+      userId: Number(b.user_id), ip: String(b.ip || '').trim(), name: b.name, relays: b.relays,
+    });
+    await audit(req, 'register_shelly', 'device', result.id, { after: { ip: b.ip, user_id: b.user_id } });
     res.status(201).json(result);
   } catch (e) { next(e); }
 });
