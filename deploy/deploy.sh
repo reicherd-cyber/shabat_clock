@@ -21,7 +21,7 @@ echo "==> Running DB migrations (against DATABASE_URL from .env)"
 npm run migrate
 
 echo "==> Reloading app via PM2"
-pm2 startOrReload ecosystem.config.js --update-env
+pm2 startOrReload ecosystem.config.cjs --update-env
 pm2 save
 
 echo "==> Health check"
