@@ -46,8 +46,9 @@ function occurrencesInWindow(s, winStart, winEnd) {
       { day: s.off_day_of_week ?? 0, time: s.off_time, action: 'off' },
     ]
     : [
-      { date: ymdParts(s.on_date), time: s.on_time, action: 'on' },
-      { date: ymdParts(s.off_date), time: s.off_time, action: 'off' },
+      // 'once' may be one-sided — only sides that exist produce occurrences.
+      ...(s.on_date && s.on_time ? [{ date: ymdParts(s.on_date), time: s.on_time, action: 'on' }] : []),
+      ...(s.off_date && s.off_time ? [{ date: ymdParts(s.off_date), time: s.off_time, action: 'off' }] : []),
     ];
 
   for (const ev of events) {
@@ -196,13 +197,15 @@ async function retryFailed(schedules) {
   }
 }
 
-// §5.4.4 once-schedules auto-disable when the OFF occurrence resolves (or its
-// retry window is exhausted) — never on a fresh failure.
+// §5.4.4 once-schedules auto-disable when their FINAL occurrence resolves (or its
+// retry window is exhausted) — never on a fresh failure. The final action is OFF,
+// except for one-sided ON-only schedules where it's the ON itself.
 async function autoDisableOnce() {
   const rows = await query(
     `SELECT s.id, r.device_id FROM schedules s
      JOIN relays r ON r.id = s.relay_id
-     JOIN schedule_executions se ON se.schedule_id = s.id AND se.action = 'off'
+     JOIN schedule_executions se ON se.schedule_id = s.id
+       AND se.action = (CASE WHEN s.off_time IS NULL THEN 'on' ELSE 'off' END)
      WHERE s.repeat_type = 'once' AND s.is_enabled = TRUE AND s.deleted_at IS NULL
        AND (se.status IN ('executed','unverified_offline')
             OR (se.status = 'failed' AND se.occurrence_utc < UTC_TIMESTAMP() - INTERVAL ? MINUTE))`,

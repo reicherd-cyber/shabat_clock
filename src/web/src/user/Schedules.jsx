@@ -50,12 +50,14 @@ export default function Schedules() {
     await refresh();
   });
 
-  const onLabel = (s) => s.repeat_type === 'once'
+  // A 'once' schedule may be one-sided (e.g. the dashboard's quick "turn off at…") —
+  // a missing side yields null and renders no pill.
+  const onLabel = (s) => (s.on_time == null ? null : s.repeat_type === 'once'
     ? `${String(s.on_date).slice(0, 10)} ${s.on_time} · הדלקה`
-    : `${s.on_day_of_week == null ? 'כל יום' : DAY_NAMES[s.on_day_of_week]} ${s.on_time} · הדלקה`;
-  const offLabel = (s) => s.repeat_type === 'once'
+    : `${s.on_day_of_week == null ? 'כל יום' : DAY_NAMES[s.on_day_of_week]} ${s.on_time} · הדלקה`);
+  const offLabel = (s) => (s.off_time == null ? null : s.repeat_type === 'once'
     ? `${String(s.off_date).slice(0, 10)} ${s.off_time} · כיבוי`
-    : `${s.off_day_of_week == null ? 'כל יום' : DAY_NAMES[s.off_day_of_week]} ${s.off_time} · כיבוי`;
+    : `${s.off_day_of_week == null ? 'כל יום' : DAY_NAMES[s.off_day_of_week]} ${s.off_time} · כיבוי`);
 
   if (!schedules) return <p className="text-muted">טוען…</p>;
   return (
@@ -74,9 +76,9 @@ export default function Schedules() {
                 <small className="block font-normal text-muted text-[12.5px]">🏠 {s.device_name}</small>
               </div>
               <div className="flex-1 flex items-center gap-2.5 flex-wrap">
-                <span className="pill on-p">{onLabel(s)}</span>
-                <span className="text-muted">←</span>
-                <span className="pill off-p">{offLabel(s)}</span>
+                {onLabel(s) && <span className="pill on-p">{onLabel(s)}</span>}
+                {onLabel(s) && offLabel(s) && <span className="text-muted">←</span>}
+                {offLabel(s) && <span className="pill off-p">{offLabel(s)}</span>}
               </div>
               <SyncNote ok={s.sync_status === 'synced'}>
                 {s.sync_status === 'synced' ? '✓ מסונכרן' : '⟳ ממתין לסנכרון'}

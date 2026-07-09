@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { api } from '../api.js';
-import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, useInterval } from '../ui.jsx';
+import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, Input, useInterval } from '../ui.jsx';
 
 const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
+
+const pad2 = (n) => String(n).padStart(2, '0');
+const localYmd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const hhmmOf = (d) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 
 function relativeHe(ts) {
   const min = Math.round((Date.now() - new Date(ts).getTime()) / 60000);
@@ -23,6 +27,9 @@ export default function Dashboard() {
   const [schedCount, setSchedCount] = useState(null);
   const [busyRelays, setBusyRelays] = useState({});
   const [error, setError] = useState(null);
+  // Quick "turn off at…" — a one-sided once-schedule (OFF only) on a lit relay.
+  const [quickOff, setQuickOff] = useState(null); // { relayId, time }
+  const [notices, setNotices] = useState({}); // relayId -> confirmation text
 
   useInterval(async () => {
     try {
@@ -47,6 +54,24 @@ export default function Dashboard() {
       const res = await api.post(`/relays/${relay.id}/command`, { action });
       if (res.status !== 'acked') setError(new Error('המכשיר לא הגיב — נסו שוב'));
       setDevices(await api.get('/devices')); // true state, not the optimistic one
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusyRelays((b) => ({ ...b, [relay.id]: false }));
+    }
+  };
+
+  const saveQuickOff = async (relay) => {
+    const now = new Date();
+    const today = localYmd(now);
+    // A time at-or-before "now" means tomorrow (you can't turn it off in the past).
+    const off_date = quickOff.time > hhmmOf(now) ? today : localYmd(new Date(now.getTime() + 86400000));
+    setBusyRelays((b) => ({ ...b, [relay.id]: true }));
+    try {
+      await api.post('/schedules', { relay_id: relay.id, repeat_type: 'once', off_time: quickOff.time, off_date });
+      setQuickOff(null);
+      setNotices((n) => ({ ...n, [relay.id]: `✓ יכבה ${off_date === today ? 'היום' : 'מחר'} בשעה ${quickOff.time}` }));
+      setTimeout(() => setNotices((n) => ({ ...n, [relay.id]: null })), 8000);
     } catch (e) {
       setError(e);
     } finally {
@@ -84,19 +109,39 @@ export default function Dashboard() {
               <StatusBadge online={d.is_online}>{d.is_online ? 'מחובר' : 'מנותק'}</StatusBadge>
             </CardHead>
             {d.relays.filter((r) => r.is_enabled).map((r, i) => (
-              <div key={r.id}
-                className={`flex items-center gap-3.5 px-5 py-3.5 ${i > 0 ? 'border-t border-dashed border-line' : ''} ${d.is_online ? '' : 'opacity-55'}`}>
-                <CodeChip>{r.ivr_digit}</CodeChip>
-                <span className="flex-1 font-medium">{r.name}</span>
-                <span className={`text-[12.5px] font-medium min-w-11 ${r.current_state === 'on' ? 'text-on' : 'text-muted'}`}>
-                  {STATE_HE[r.current_state] || STATE_HE.unknown}
-                </span>
-                <Toggle
-                  checked={r.current_state === 'on'}
-                  busy={!!busyRelays[r.id]}
-                  disabled={!d.is_online}
-                  onChange={() => toggle(r)}
-                />
+              <div key={r.id} className={i > 0 ? 'border-t border-dashed border-line' : ''}>
+                <div className={`flex items-center gap-3.5 px-5 py-3.5 ${d.is_online ? '' : 'opacity-55'}`}>
+                  <CodeChip>{r.ivr_digit}</CodeChip>
+                  <span className="flex-1 font-medium">{r.name}</span>
+                  {r.current_state === 'on' && (
+                    <button
+                      title="כיבוי בשעה…"
+                      className="text-lg text-muted hover:text-off cursor-pointer"
+                      onClick={() => setQuickOff(quickOff?.relayId === r.id ? null : { relayId: r.id, time: hhmmOf(new Date(Date.now() + 3600000)) })}
+                    >⏱</button>
+                  )}
+                  <span className={`text-[12.5px] font-medium min-w-11 ${r.current_state === 'on' ? 'text-on' : 'text-muted'}`}>
+                    {STATE_HE[r.current_state] || STATE_HE.unknown}
+                  </span>
+                  <Toggle
+                    checked={r.current_state === 'on'}
+                    busy={!!busyRelays[r.id]}
+                    disabled={!d.is_online}
+                    onChange={() => toggle(r)}
+                  />
+                </div>
+                {quickOff?.relayId === r.id && (
+                  <div className="flex items-center gap-2.5 px-5 pb-3.5 flex-wrap">
+                    <span className="text-[13px] text-muted">כיבוי בשעה</span>
+                    <Input type="time" className="w-28" value={quickOff.time}
+                      onChange={(e) => setQuickOff({ ...quickOff, time: e.target.value })} />
+                    <Button disabled={!!busyRelays[r.id] || !quickOff.time} onClick={() => saveQuickOff(r)}>אישור</Button>
+                    <Button variant="ghost" onClick={() => setQuickOff(null)}>ביטול</Button>
+                  </div>
+                )}
+                {notices[r.id] && (
+                  <div className="px-5 pb-3 text-[12.5px] font-medium text-on">{notices[r.id]}</div>
+                )}
               </div>
             ))}
             {!d.is_online && (

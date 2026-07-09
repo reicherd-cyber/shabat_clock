@@ -81,3 +81,44 @@ test('once: valid future pair; day-of-week columns forced NULL', () => {
   assert.equal(s.on_day_of_week, null);
   assert.equal(s.off_day_of_week, null);
 });
+
+test('once: OFF-only is legal (quick "turn off at…"); ON side normalized to NULL', () => {
+  const s = validateScheduleRules({ repeat_type: 'once', off_time: '22:30', off_date: '2126-09-22' });
+  assert.equal(s.on_time, null);
+  assert.equal(s.on_date, null);
+  assert.equal(s.off_time, '22:30');
+});
+
+test('once: ON-only is legal; OFF side normalized to NULL', () => {
+  const s = validateScheduleRules({ repeat_type: 'once', on_time: '06:00', on_date: '2126-09-22' });
+  assert.equal(s.off_time, null);
+  assert.equal(s.off_date, null);
+});
+
+test('once: past OFF-only rejected (ALREADY_PAST)', () => {
+  assert.throws(
+    () => validateScheduleRules({ repeat_type: 'once', off_time: '22:30', off_date: '2020-01-01' }),
+    (e) => e.code === 'ALREADY_PAST',
+  );
+});
+
+test('once: no side at all → VALIDATION', () => {
+  assert.throws(
+    () => validateScheduleRules({ repeat_type: 'once' }),
+    (e) => e.code === 'VALIDATION',
+  );
+});
+
+test('once: time without its date → VALIDATION', () => {
+  assert.throws(
+    () => validateScheduleRules({ repeat_type: 'once', off_time: '22:30' }),
+    (e) => e.code === 'VALIDATION',
+  );
+});
+
+test('weekly: missing off_time still rejected', () => {
+  assert.throws(
+    () => validateScheduleRules(weekly({ off_time: null })),
+    (e) => e.code === 'VALIDATION',
+  );
+});

@@ -49,8 +49,10 @@ export async function buildDevicePayload(deviceId) {
       events.push({ sid: Number(s.id), relay: s.relay_no, day: s.on_day_of_week ?? 0, time: hhmm(s.on_time), action: 'on' });
       events.push({ sid: Number(s.id), relay: s.relay_no, day: s.off_day_of_week ?? 0, time: hhmm(s.off_time), action: 'off' });
     } else {
-      once.push({ sid: Number(s.id), relay: s.relay_no, date: ymd(s.on_date), time: hhmm(s.on_time), action: 'on' });
-      once.push({ sid: Number(s.id), relay: s.relay_no, date: ymd(s.off_date), time: hhmm(s.off_time), action: 'off' });
+      // One-sided 'once' contributes a single entry — the wire format is unchanged,
+      // each entry was always an independent action.
+      if (s.on_date && s.on_time) once.push({ sid: Number(s.id), relay: s.relay_no, date: ymd(s.on_date), time: hhmm(s.on_time), action: 'on' });
+      if (s.off_date && s.off_time) once.push({ sid: Number(s.id), relay: s.relay_no, date: ymd(s.off_date), time: hhmm(s.off_time), action: 'off' });
     }
   }
 

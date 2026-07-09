@@ -14,32 +14,42 @@ export function validateScheduleRules(schedule, { tz = 'Asia/Jerusalem', now = n
   const s = { ...schedule };
   const onMin = timeToMinutes(s.on_time);
   const offMin = timeToMinutes(s.off_time);
-  if (onMin == null || offMin == null || onMin >= MINUTES_PER_DAY || offMin >= MINUTES_PER_DAY) {
-    throw errors.validation('on_time/off_time required, HH:MM', { on_time: 'HH:MM', off_time: 'HH:MM' });
-  }
 
   if (s.repeat_type === 'once') {
-    if (!s.on_date || !s.off_date) {
-      throw errors.validation('on_date and off_date required for once', { on_date: 'required', off_date: 'required' });
+    // One-sided is legal ("the light is already on — just turn it off at 22:30"):
+    // a present side needs BOTH its date and a valid time; at least one side required.
+    const hasOn = Boolean(s.on_time) || Boolean(s.on_date);
+    const hasOff = Boolean(s.off_time) || Boolean(s.off_date);
+    if (!hasOn && !hasOff) {
+      throw errors.validation('once needs an ON and/or OFF side', { on_date: 'required', off_date: 'required' });
+    }
+    if (hasOn && (onMin == null || onMin >= MINUTES_PER_DAY || !s.on_date)) {
+      throw errors.validation('ON side needs on_date and on_time HH:MM', { on_date: 'required', on_time: 'HH:MM' });
+    }
+    if (hasOff && (offMin == null || offMin >= MINUTES_PER_DAY || !s.off_date)) {
+      throw errors.validation('OFF side needs off_date and off_time HH:MM', { off_date: 'required', off_time: 'HH:MM' });
     }
     s.on_day_of_week = null; // derived from the date at sync time
     s.off_day_of_week = null;
-    const onLocal = `${s.on_date}T00:00`;
-    const offLocal = `${s.off_date}T00:00`;
-    const onKey = `${onLocal.slice(0, 10)} ${String(onMin)}`;
-    const offKey = `${offLocal.slice(0, 10)} ${String(offMin)}`;
-    if (s.off_date < s.on_date || (s.off_date === s.on_date && offMin <= onMin)) {
+    if (!hasOn) { s.on_time = null; s.on_date = null; }
+    if (!hasOff) { s.off_time = null; s.off_date = null; }
+    if (hasOn && hasOff && (s.off_date < s.on_date || (s.off_date === s.on_date && offMin <= onMin))) {
       throw new ApiError(400, 'OFF_BEFORE_ON', 'OFF must be after ON');
     }
-    // ALREADY_PAST: ON must be in the future in device-local time (covers OFF too).
+    // ALREADY_PAST: the first (or only) event must be in the future, device-local.
     const p = localParts(now, tz);
     const pad = (n) => String(n).padStart(2, '0');
     const nowLocalKey = `${p.y}-${pad(p.mo)}-${pad(p.d)}T${pad(p.hh)}:${pad(p.mm)}`;
-    const onKeyIso = `${s.on_date}T${String(Math.floor(onMin / 60)).padStart(2, '0')}:${String(onMin % 60).padStart(2, '0')}`;
-    if (onKeyIso <= nowLocalKey) throw new ApiError(400, 'ALREADY_PAST', 'ON time is in the past');
-    void onKey; void offKey;
+    const keyOf = (date, min) => `${date}T${pad(Math.floor(min / 60))}:${pad(min % 60)}`;
+    const firstKey = hasOn ? keyOf(s.on_date, onMin) : keyOf(s.off_date, offMin);
+    if (firstKey <= nowLocalKey) {
+      throw new ApiError(400, 'ALREADY_PAST', `${hasOn ? 'ON' : 'OFF'} time is in the past`);
+    }
   } else {
     s.repeat_type = 'weekly';
+    if (onMin == null || offMin == null || onMin >= MINUTES_PER_DAY || offMin >= MINUTES_PER_DAY) {
+      throw errors.validation('on_time/off_time required, HH:MM', { on_time: 'HH:MM', off_time: 'HH:MM' });
+    }
     if (s.on_date || s.off_date) {
       throw errors.validation('weekly schedules must not carry dates', { on_date: 'must be null' });
     }
@@ -129,9 +139,9 @@ export async function updateSchedule({ userId, scheduleId, patch }) {
 
     const merged = {
       on_day_of_week: patch.on_day_of_week !== undefined ? patch.on_day_of_week : existing.on_day_of_week,
-      on_time: patch.on_time !== undefined ? patch.on_time : String(existing.on_time),
+      on_time: patch.on_time !== undefined ? patch.on_time : (existing.on_time != null ? String(existing.on_time) : null),
       off_day_of_week: patch.off_day_of_week !== undefined ? patch.off_day_of_week : existing.off_day_of_week,
-      off_time: patch.off_time !== undefined ? patch.off_time : String(existing.off_time),
+      off_time: patch.off_time !== undefined ? patch.off_time : (existing.off_time != null ? String(existing.off_time) : null),
       repeat_type: patch.repeat_type !== undefined ? patch.repeat_type : existing.repeat_type,
       on_date: patch.on_date !== undefined ? patch.on_date : (existing.on_date ? ymdOf(existing.on_date) : null),
       off_date: patch.off_date !== undefined ? patch.off_date : (existing.off_date ? ymdOf(existing.off_date) : null),
