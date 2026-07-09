@@ -8,11 +8,14 @@ const OUTCOME_HE = { command: 'פקודה', schedule: 'תזמון חדש נשמ�
 
 function fmtTime(ts) {
   const d = new Date(ts);
-  const days = Math.floor((Date.now() - d) / 86400000);
   const time = d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+  // Calendar days, not 24h blocks — yesterday evening must not read "היום".
+  const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const days = Math.round((startOfDay(new Date()) - startOfDay(d)) / 86400000);
   if (days === 0) return `היום ${time}`;
   if (days === 1) return `אתמול ${time}`;
-  return `${d.toLocaleDateString('he-IL', { weekday: 'long' })} ${time}`;
+  if (days < 7) return `${d.toLocaleDateString('he-IL', { weekday: 'long' })} ${time}`;
+  return `${d.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: '2-digit' })} ${time}`;
 }
 
 function Row({ item, first }) {
