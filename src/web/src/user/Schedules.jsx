@@ -14,6 +14,9 @@ const DURATIONS = [
   { label: '30 דק׳', min: 30 }, { label: 'שעה', min: 60 }, { label: '3 שעות', min: 180 },
   { label: '12 שעות', min: 720 },
 ];
+const pad2 = (n) => String(n).padStart(2, '0');
+const todayYmd = () => { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+const nowHm = () => { const d = new Date(Date.now() + 60000); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
 
 // Mockup .sched: one bordered list; each row = relay (+device·code small) →
 // green ON pill ← red OFF pill → sync note → enable toggle.
@@ -48,15 +51,17 @@ export default function Schedules() {
   });
 
   // once only: fill the OFF side as ON + duration, rolling the calendar date.
+  // Missing ON side defaults to "now" (today, next minute) — i.e. off after X from now.
   const applyDuration = (minutes) => {
-    if (!form.on_time || !form.on_date) return;
-    const d = new Date(`${form.on_date}T${form.on_time}:00`);
+    const on_date = form.on_date || todayYmd();
+    const on_time = form.on_time || nowHm();
+    const d = new Date(`${on_date}T${on_time}:00`);
     d.setMinutes(d.getMinutes() + minutes);
-    const pad = (n) => String(n).padStart(2, '0');
     setForm({
       ...form,
-      off_date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
-      off_time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+      on_date, on_time,
+      off_date: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
+      off_time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
     });
   };
 
@@ -121,7 +126,8 @@ export default function Schedules() {
             </label>
             <div className="flex gap-2 items-center">
               <Button variant={form.repeat_type === 'weekly' ? 'primary' : 'ghost'} onClick={() => setForm({ ...form, repeat_type: 'weekly' })}>שבועי</Button>
-              <Button variant={form.repeat_type === 'once' ? 'primary' : 'ghost'} onClick={() => setForm({ ...form, repeat_type: 'once' })}>חד-פעמי</Button>
+              <Button variant={form.repeat_type === 'once' ? 'primary' : 'ghost'}
+                onClick={() => setForm({ ...form, repeat_type: 'once', on_date: form.on_date || todayYmd(), on_time: form.on_time || nowHm() })}>חד-פעמי</Button>
               {form.repeat_type === 'weekly' && (
                 <label className="flex items-center gap-1 text-sm mr-2">
                   <input type="checkbox" checked={form.daily} onChange={(e) => setForm({ ...form, daily: e.target.checked })} /> כל יום
@@ -159,7 +165,6 @@ export default function Schedules() {
                 <span className="text-sm text-muted shrink-0">כיבוי אחרי:</span>
                 {DURATIONS.map((p) => (
                   <Button key={p.min} variant="ghost" className="!px-2 !py-1 text-xs"
-                    disabled={!form.on_time || !form.on_date}
                     onClick={() => applyDuration(p.min)}>{p.label}</Button>
                 ))}
               </div>
