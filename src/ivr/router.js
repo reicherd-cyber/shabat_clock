@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { env } from '../config/env.js';
 import { normalizePhone } from '../services/phone.js';
-import { findUserByPhone, findUserByIvrCode, verifyPin } from '../services/users.js';
+import { findUserByPhone, verifyPin } from '../services/users.js';
 import { isLockedOut, recordFailure } from '../services/authFailures.js';
 import { enabledRelaysForUser } from '../services/relays.js';
 import { sendImmediateCommand } from '../services/commands.js';
@@ -124,10 +124,6 @@ async function authFailed(session, phone) {
     return sayAndHangup(await speak('ivr.goodbye'));
   }
   // Generic failure — no hint which part was wrong.
-  if (session.state === 'AUTH_CODE_PIN') {
-    session.state = 'AUTH_CODE';
-    return ask(await speak('ivr.user_code_prompt'), { min: 6, max: 6, message: await speak('ivr.auth_fail') });
-  }
   return ask(await speak('ivr.pin_prompt'), { min: 4, max: 4, message: await speak('ivr.auth_fail') });
 }
 
@@ -177,10 +173,11 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         await appendPath(callLogId, 'main');
         return res.send(await mainMenu(session));
       }
-      session = createSession(callId, { callLogId, phone, userId: null });
-      session.state = 'AUTH_CODE';
-      await appendPath(callLogId, 'auth');
-      return res.send(ask(await speak('ivr.user_code_prompt'), { min: 6, max: 6 }));
+      // Unregistered (or suspended) caller-ID → polite refusal + hangup. There is
+      // deliberately no code-entry fallback: users must call from a registered number.
+      await appendPath(callLogId, 'unknown');
+      await finishCall(callLogId, 'auth_fail');
+      return res.send(sayAndHangup(await speak('ivr.unknown_caller')));
     }
 
     // Yemot re-sends every prior val= on the query string across the whole call rather
@@ -191,24 +188,6 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
     const input = String(Array.isArray(rawVal) ? rawVal[rawVal.length - 1] : (rawVal ?? '')).trim();
 
     switch (session.state) {
-      // ── auth: unknown caller — ivr_code then PIN, verified together ──
-      case 'AUTH_CODE': {
-        if (!/^\d{6}$/.test(input)) return res.send(await invalidInput(session));
-        session.data.enteredCode = input;
-        session.state = 'AUTH_CODE_PIN';
-        return res.send(ask(await speak('ivr.pin_prompt'), { min: 4, max: 4 }));
-      }
-      case 'AUTH_CODE_PIN': {
-        const user = await findUserByIvrCode(session.data.enteredCode);
-        if (!user || user.status !== 'active' || !/^\d{4}$/.test(input) || !verifyPin(user, input)) {
-          return res.send(await authFailed(session, session.phone));
-        }
-        session.userId = user.id;
-        session.userName = user.full_name;
-        await setCallUser(session.callLogId, user.id);
-        await appendPath(session.callLogId, 'main');
-        return res.send(await mainMenu(session));
-      }
       // ── auth: known caller with require_pin ──
       case 'AUTH_PIN': {
         const user = session.data.pinUser;

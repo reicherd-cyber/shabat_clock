@@ -19,7 +19,8 @@
     "state_off": "כבוי",
     "state_unknown": "מצב לא ידוע",
     "invalid_input": "בחירה לא תקינה",
-    "goodbye": "להתראות"
+    "goodbye": "להתראות",
+    "unknown_caller": "המספר אינו קיים במערכת, שלום ולהתראות"
   },
   "files": {
     "main_menu": "99/100",
@@ -40,6 +41,7 @@
     "state_off": "99/115",
     "state_unknown": "99/116",
     "invalid_input": "99/117",
-    "goodbye": "99/118"
+    "goodbye": "99/118",
+    "unknown_caller": "99/119"
   }
 }

@@ -141,11 +141,12 @@ export function CallFlow() {
         <Lane title="מספר מזוהה" chip="☎">
           <Node k="pin_prompt" title="בקשת קוד סודי" kind="entry" {...nodeProps}
             hint="נשאל רק אם למשתמש מוגדר קוד חובה; אחרת ישר לתפריט" />
+          <Arrow label="קוד שגוי" />
+          <Node k="auth_fail" title="פרטים שגויים" kind="err" {...nodeProps} hint="עד 3 ניסיונות" />
         </Lane>
         <Lane title="מספר לא מזוהה" chip="?">
-          <Node k="user_code_prompt" title="בקשת מספר משתמש" kind="entry" {...nodeProps} />
-          <Arrow label="ואז קוד סודי" />
-          <Node k="auth_fail" title="פרטים שגויים" kind="err" {...nodeProps} hint="עד 3 ניסיונות" />
+          <Node k="unknown_caller" title="המספר אינו רשום" kind="end" {...nodeProps}
+            hint="ההודעה מושמעת והשיחה מתנתקת — אין אפשרות הזדהות בקוד" />
         </Lane>
       </div>
       <div className="grid gap-3 md:grid-cols-2 mt-2">

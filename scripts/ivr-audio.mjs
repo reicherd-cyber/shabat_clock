@@ -44,6 +44,8 @@ const PROMPTS = {
   state_unknown: 'מצב לא ידוע',
   invalid_input: 'בחירה לא תקינה',
   goodbye: 'להתראות',
+  // Append new prompts at the END — file numbers derive from key order (100 + index).
+  unknown_caller: 'המספר אינו קיים במערכת, שלום ולהתראות',
 };
 
 async function synthToMp3(text, outFile) {
