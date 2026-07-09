@@ -8,13 +8,12 @@ const emptyForm = {
   on_date: '', off_date: '', daily: false,
 };
 
-// Quick duration chips: OFF = ON + duration, rolling over midnight / week / date.
+// Quick duration chips (once mode only): OFF = ON + duration, rolling the date.
 const DURATIONS = [
   { label: 'דקה', min: 1 }, { label: '5 דק׳', min: 5 }, { label: '10 דק׳', min: 10 },
   { label: '30 דק׳', min: 30 }, { label: 'שעה', min: 60 }, { label: '3 שעות', min: 180 },
   { label: '12 שעות', min: 720 },
 ];
-const hhmm = (mins) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
 
 // Mockup .sched: one bordered list; each row = relay (+device·code small) →
 // green ON pill ← red OFF pill → sync note → enable toggle.
@@ -48,27 +47,17 @@ export default function Schedules() {
     await refresh();
   });
 
-  // Fill the OFF side as ON + duration. Weekly wraps the 7-day cycle (day 1=ראשון);
-  // once adds to the real date; daily wraps midnight.
+  // once only: fill the OFF side as ON + duration, rolling the calendar date.
   const applyDuration = (minutes) => {
-    if (!form.on_time) return;
-    const [h, m] = form.on_time.split(':').map(Number);
-    if (form.repeat_type === 'once') {
-      if (!form.on_date) return;
-      const d = new Date(`${form.on_date}T${form.on_time}:00`);
-      d.setMinutes(d.getMinutes() + minutes);
-      const pad = (n) => String(n).padStart(2, '0');
-      setForm({
-        ...form,
-        off_date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
-        off_time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
-      });
-    } else if (form.daily) {
-      setForm({ ...form, off_time: hhmm((h * 60 + m + minutes) % 1440) });
-    } else {
-      const end = ((Number(form.on_day_of_week) - 1) * 1440 + h * 60 + m + minutes) % (7 * 1440);
-      setForm({ ...form, off_day_of_week: Math.floor(end / 1440) + 1, off_time: hhmm(end % 1440) });
-    }
+    if (!form.on_time || !form.on_date) return;
+    const d = new Date(`${form.on_date}T${form.on_time}:00`);
+    d.setMinutes(d.getMinutes() + minutes);
+    const pad = (n) => String(n).padStart(2, '0');
+    setForm({
+      ...form,
+      off_date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+      off_time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+    });
   };
 
   const toggleEnabled = (s) => run(async () => {
@@ -165,14 +154,16 @@ export default function Schedules() {
                 <Input type="time" value={form.off_time} onChange={(e) => setForm({ ...form, off_time: e.target.value })} />
               </div>
             </div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-sm text-muted shrink-0">כיבוי אחרי:</span>
-              {DURATIONS.map((p) => (
-                <Button key={p.min} variant="ghost" className="!px-2 !py-1 text-xs"
-                  disabled={!form.on_time || (form.repeat_type === 'once' && !form.on_date)}
-                  onClick={() => applyDuration(p.min)}>{p.label}</Button>
-              ))}
-            </div>
+            {form.repeat_type === 'once' && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-sm text-muted shrink-0">כיבוי אחרי:</span>
+                {DURATIONS.map((p) => (
+                  <Button key={p.min} variant="ghost" className="!px-2 !py-1 text-xs"
+                    disabled={!form.on_time || !form.on_date}
+                    onClick={() => applyDuration(p.min)}>{p.label}</Button>
+                ))}
+              </div>
+            )}
             <ErrorNote error={error} />
             <Button className="w-full" disabled={busy} onClick={save}>שמור תזמון</Button>
           </div>
