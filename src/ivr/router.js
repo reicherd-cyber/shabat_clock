@@ -9,18 +9,31 @@ import { enabledRelaysForUser } from '../services/relays.js';
 import { sendImmediateCommand } from '../services/commands.js';
 import { createSchedule, validateScheduleRules } from '../services/schedules.js';
 import { startCall, setCallUser, appendPath, finishCall } from '../services/callLogs.js';
-import { getText } from '../services/settings.js';
+import { getText, getSetting } from '../services/settings.js';
 import { getSession, createSession, endSession } from './session.js';
 import { ask, sayAndHangup } from './responses.js';
 import { DAY_NAMES_HE } from '../config/constants.js';
 
 export const ivrRouter = Router();
 
+// Prompt as response items: the neural-voice recording when ivr.audio.<key> is set
+// (see scripts/ivr-audio.mjs), else the editable TTS text. Delete the audio setting
+// row after editing a text to make the change audible again.
+async function speak(key, vars = {}) {
+  const audio = await getSetting(key.replace(/^ivr\./, 'ivr.audio.'));
+  if (audio) return [{ f: audio }];
+  return [{ t: await getText(key, vars) }];
+}
+
 async function mainMenu(session, message = null) {
   session.state = 'MAIN';
   session.invalidCount = 0;
-  const text = await getText('ivr.main_menu', { name: session.userName || '' });
-  return ask(text, { message });
+  // The recording excludes the personal greeting — prepend it as TTS when known.
+  const audio = await getSetting('ivr.audio.main_menu');
+  const items = audio
+    ? [...(session.userName ? [{ t: `שלום ${session.userName},` }] : []), { f: audio }]
+    : [{ t: await getText('ivr.main_menu', { name: session.userName || '' }) }];
+  return ask(items, { message });
 }
 
 async function relayMenu(session, ctx) {
@@ -28,7 +41,7 @@ async function relayMenu(session, ctx) {
   if (relays.length === 0) {
     await finishCall(session.callLogId, 'abandoned');
     endSession(session.callId);
-    return sayAndHangup(await getText('ivr.no_relays'));
+    return sayAndHangup(await speak('ivr.no_relays'));
   }
   session.data.ctx = ctx;
 
@@ -60,7 +73,7 @@ async function runImmediate(session, relay) {
   await appendPath(session.callLogId, result.status === 'acked' ? 'ok' : `fail:${result.fail_reason}`);
   await finishCall(session.callLogId, 'command');
   // [D19] back to MAIN, not hangup — allow another action.
-  const feedback = await getText(result.status === 'acked' ? 'ivr.cmd_ok' : 'ivr.cmd_offline');
+  const feedback = await speak(result.status === 'acked' ? 'ivr.cmd_ok' : 'ivr.cmd_offline');
   return mainMenu(session, feedback);
 }
 
@@ -68,20 +81,22 @@ async function runStatus(session) {
   const relays = await enabledRelaysForUser(session.userId);
   if (relays.length === 0) {
     endSession(session.callId);
-    return sayAndHangup(await getText('ivr.no_relays'));
+    return sayAndHangup(await speak('ivr.no_relays'));
   }
-  const stateText = {
-    on: await getText('ivr.state_on'),
-    off: await getText('ivr.state_off'),
-    unknown: await getText('ivr.state_unknown'),
+  // Relay names are user data (TTS); states are recorded fragments when available.
+  // Juxtaposes name + state directly, superseding the ivr.status_item template.
+  const stateItems = {
+    on: await speak('ivr.state_on'),
+    off: await speak('ivr.state_off'),
+    unknown: await speak('ivr.state_unknown'),
   };
-  const itemTpl = await getText('ivr.status_item');
-  const text = relays
-    .map((r) => itemTpl.replaceAll('{name}', r.name).replaceAll('{state}', stateText[r.current_state] || stateText.unknown))
-    .join(', ');
+  const items = relays.flatMap((r) => [
+    { t: `${r.name},` },
+    ...(stateItems[r.current_state] || stateItems.unknown),
+  ]);
   await appendPath(session.callLogId, 'status');
   await finishCall(session.callLogId, 'status');
-  return mainMenu(session, text);
+  return mainMenu(session, items);
 }
 
 async function invalidInput(session) {
@@ -89,9 +104,9 @@ async function invalidInput(session) {
   if (session.invalidCount >= 3) {
     await finishCall(session.callLogId, 'abandoned');
     endSession(session.callId);
-    return sayAndHangup(await getText('ivr.goodbye'));
+    return sayAndHangup(await speak('ivr.goodbye'));
   }
-  return ask(await getText('ivr.invalid_input'));
+  return ask(await speak('ivr.invalid_input'));
 }
 
 async function authFailed(session, phone) {
@@ -100,20 +115,20 @@ async function authFailed(session, phone) {
   if (await isLockedOut(phone, 'ivr_pin')) {
     await finishCall(session.callLogId, 'auth_fail');
     endSession(session.callId);
-    return sayAndHangup(await getText('ivr.locked_out'));
+    return sayAndHangup(await speak('ivr.locked_out'));
   }
   session.invalidCount += 1;
   if (session.invalidCount >= 3) {
     await finishCall(session.callLogId, 'auth_fail');
     endSession(session.callId);
-    return sayAndHangup(await getText('ivr.goodbye'));
+    return sayAndHangup(await speak('ivr.goodbye'));
   }
   // Generic failure — no hint which part was wrong.
   if (session.state === 'AUTH_CODE_PIN') {
     session.state = 'AUTH_CODE';
-    return ask(await getText('ivr.user_code_prompt'), { min: 6, max: 6, message: await getText('ivr.auth_fail') });
+    return ask(await speak('ivr.user_code_prompt'), { min: 6, max: 6, message: await speak('ivr.auth_fail') });
   }
-  return ask(await getText('ivr.pin_prompt'), { min: 4, max: 4, message: await getText('ivr.auth_fail') });
+  return ask(await speak('ivr.pin_prompt'), { min: 4, max: 4, message: await speak('ivr.auth_fail') });
 }
 
 // Token in the path (/ivr/<token>) — Yemot's api_link appends its params with '?'
@@ -146,7 +161,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       const callLogId = await startCall(callId, phone);
       if (await isLockedOut(phone, 'ivr_pin')) {
         await finishCall(callLogId, 'auth_fail');
-        return res.send(sayAndHangup(await getText('ivr.locked_out')));
+        return res.send(sayAndHangup(await speak('ivr.locked_out')));
       }
       const user = await findUserByPhone(phone);
       // Suspended → treated as not found (no info leak).
@@ -157,7 +172,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           session.state = 'AUTH_PIN';
           session.data.pinUser = user;
           await appendPath(callLogId, 'pin');
-          return res.send(ask(await getText('ivr.pin_prompt'), { min: 4, max: 4 }));
+          return res.send(ask(await speak('ivr.pin_prompt'), { min: 4, max: 4 }));
         }
         await appendPath(callLogId, 'main');
         return res.send(await mainMenu(session));
@@ -165,7 +180,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       session = createSession(callId, { callLogId, phone, userId: null });
       session.state = 'AUTH_CODE';
       await appendPath(callLogId, 'auth');
-      return res.send(ask(await getText('ivr.user_code_prompt'), { min: 6, max: 6 }));
+      return res.send(ask(await speak('ivr.user_code_prompt'), { min: 6, max: 6 }));
     }
 
     // Yemot re-sends every prior val= on the query string across the whole call rather
@@ -181,7 +196,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         if (!/^\d{6}$/.test(input)) return res.send(await invalidInput(session));
         session.data.enteredCode = input;
         session.state = 'AUTH_CODE_PIN';
-        return res.send(ask(await getText('ivr.pin_prompt'), { min: 4, max: 4 }));
+        return res.send(ask(await speak('ivr.pin_prompt'), { min: 4, max: 4 }));
       }
       case 'AUTH_CODE_PIN': {
         const user = await findUserByIvrCode(session.data.enteredCode);
@@ -231,7 +246,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           session.data.relay = relay;
           session.state = 'SCHED_ON_DAY';
           await appendPath(session.callLogId, `relay:${digit}`);
-          return res.send(ask(await getText('ivr.sched_on_day')));
+          return res.send(ask(await speak('ivr.sched_on_day')));
         }
         return res.send(await runImmediate(session, relay));
       }
@@ -241,19 +256,19 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         if (!/^[1-7]$/.test(input)) return res.send(await invalidInput(session));
         session.data.on_day = Number(input);
         session.state = 'SCHED_ON_TIME';
-        return res.send(ask(await getText('ivr.sched_on_time'), { min: 4, max: 4 }));
+        return res.send(ask(await speak('ivr.sched_on_time'), { min: 4, max: 4 }));
       }
       case 'SCHED_ON_TIME': {
         if (!/^([01]\d|2[0-3])[0-5]\d$/.test(input)) return res.send(await invalidInput(session));
         session.data.on_time = `${input.slice(0, 2)}:${input.slice(2)}`;
         session.state = 'SCHED_OFF_DAY';
-        return res.send(ask(await getText('ivr.sched_off_day')));
+        return res.send(ask(await speak('ivr.sched_off_day')));
       }
       case 'SCHED_OFF_DAY': {
         if (!/^[1-7]$/.test(input)) return res.send(await invalidInput(session));
         session.data.off_day = Number(input);
         session.state = 'SCHED_OFF_TIME';
-        return res.send(ask(await getText('ivr.sched_off_time'), { min: 4, max: 4 }));
+        return res.send(ask(await speak('ivr.sched_off_time'), { min: 4, max: 4 }));
       }
       case 'SCHED_OFF_TIME': {
         if (!/^([01]\d|2[0-3])[0-5]\d$/.test(input)) return res.send(await invalidInput(session));
@@ -267,7 +282,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           });
         } catch {
           session.state = 'SCHED_ON_DAY';
-          return res.send(ask(await getText('ivr.sched_on_day'), { message: await getText('ivr.sched_invalid') }));
+          return res.send(ask(await speak('ivr.sched_on_day'), { message: await speak('ivr.sched_invalid') }));
         }
         session.state = 'SCHED_CONFIRM';
         const confirm = await getText('ivr.sched_confirm', {
@@ -290,11 +305,11 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           });
         } catch {
           session.state = 'SCHED_ON_DAY';
-          return res.send(ask(await getText('ivr.sched_on_day'), { message: await getText('ivr.sched_invalid') }));
+          return res.send(ask(await speak('ivr.sched_on_day'), { message: await speak('ivr.sched_invalid') }));
         }
         await appendPath(session.callLogId, 'sched_saved');
         await finishCall(session.callLogId, 'schedule');
-        return res.send(await mainMenu(session, await getText('ivr.sched_saved')));
+        return res.send(await mainMenu(session, await speak('ivr.sched_saved')));
       }
 
       default:

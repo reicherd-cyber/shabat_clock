@@ -12,17 +12,23 @@
 // 2026-07-08: menu text with ". " hung up 1s in. Replace with ',' (a TTS pause).
 const clean = (t) => String(t).replace(/[=&\r\n]/g, ' ').replace(/\./g, ',').trim();
 
+// A prompt is a plain string (TTS text) or an array of items mixing recorded audio
+// with TTS: { f: '99/100' } plays the file at ivr2:/99/100.wav, { t: 'טקסט' } speaks.
+const data = (spec) => (typeof spec === 'string' ? [{ t: spec }] : spec)
+  .map((it) => (it.f != null ? `f-${String(it.f).replace(/[^\w/]/g, '')}` : `t-${clean(it.t)}`))
+  .join('.');
+
 // Play optional message, then prompt and collect min..max digits into query param "val".
-export function ask(text, { min = 1, max = 1, message = null } = {}) {
+export function ask(spec, { min = 1, max = 1, message = null } = {}) {
   const parts = [];
-  if (message) parts.push(`id_list_message=t-${clean(message)}`);
-  parts.push(`read=t-${clean(text)}=val,no,${max},${min},7,No,yes,no`);
+  if (message) parts.push(`id_list_message=${data(message)}`);
+  parts.push(`read=${data(spec)}=val,no,${max},${min},7,No,yes,no`);
   return parts.join('&');
 }
 
 // Play a message and hang up.
-export function sayAndHangup(text) {
-  return `id_list_message=t-${clean(text)}&go_to_folder=hangup`;
+export function sayAndHangup(spec) {
+  return `id_list_message=${data(spec)}&go_to_folder=hangup`;
 }
 
 export function hangup() {
