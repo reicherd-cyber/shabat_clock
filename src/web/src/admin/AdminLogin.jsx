@@ -9,9 +9,6 @@ export default function AdminLogin() {
   const [code, setCode] = useState('');
   const [needCode, setNeedCode] = useState(false);
   const [emailedTo, setEmailedTo] = useState(null);
-  // Set when Google verified the account but the admin's 2FA code is still needed;
-  // login() then re-posts this credential together with the code.
-  const [googleCred, setGoogleCred] = useState(null);
   const { busy, error, run, setError } = useAsync();
   const nav = useNavigate();
   const googleBtn = useRef(null);
@@ -37,14 +34,9 @@ export default function AdminLogin() {
         window.google.accounts.id.initialize({
           client_id: google_client_id,
           callback: (resp) => run(async () => {
-            try {
-              const { token } = await publicApi.post('/admin/auth/google', { credential: resp.credential });
-              tokens.admin = token;
-              nav('/admin');
-            } catch (e) {
-              if (e.code === 'TWOFA_REQUIRED') { setGoogleCred(resp.credential); setNeedCode(true); return; }
-              throw e;
-            }
+            const { token } = await publicApi.post('/admin/auth/google', { credential: resp.credential });
+            tokens.admin = token;
+            nav('/admin');
           }),
         });
         window.google.accounts.id.renderButton(googleBtn.current, {
@@ -59,11 +51,9 @@ export default function AdminLogin() {
 
   const login = () => run(async () => {
     try {
-      const { token } = googleCred
-        ? await publicApi.post('/admin/auth/google', { credential: googleCred, code })
-        : await publicApi.post('/admin/auth/login', {
-            email, password, ...(needCode ? { code } : {}),
-          });
+      const { token } = await publicApi.post('/admin/auth/login', {
+        email, password, ...(needCode ? { code } : {}),
+      });
       tokens.admin = token;
       nav('/admin');
     } catch (e) {
@@ -86,13 +76,11 @@ export default function AdminLogin() {
         <h1 className="text-2xl font-bold mb-4">ניהול — שעון שבת</h1>
         <ErrorNote error={error} />
         <div className="space-y-3">
-          {!googleCred && (<>
-            <Input dir="ltr" type="email" placeholder="אימייל" value={email}
-              disabled={needCode} onChange={(e) => setEmail(e.target.value)} />
-            <Input dir="ltr" type="password" placeholder="סיסמה" value={password}
-              disabled={needCode} onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && login()} />
-          </>)}
+          <Input dir="ltr" type="email" placeholder="אימייל" value={email}
+            disabled={needCode} onChange={(e) => setEmail(e.target.value)} />
+          <Input dir="ltr" type="password" placeholder="סיסמה" value={password}
+            disabled={needCode} onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && login()} />
           {needCode && (
             <div className="space-y-1">
               <Input inputMode="numeric" dir="ltr" placeholder="קוד אימות (6 ספרות)" value={code}
@@ -106,7 +94,7 @@ export default function AdminLogin() {
           <Button className="w-full" disabled={busy || (needCode && code.length !== 6)} onClick={login}>
             {needCode ? 'אימות וכניסה' : 'כניסה'}
           </Button>
-          {needCode && !googleCred && (
+          {needCode && (
             <Button variant="ghost" className="w-full" disabled={busy || !email || !password} onClick={sendEmailCode}>
               שלחו קוד לאימייל במקום
             </Button>

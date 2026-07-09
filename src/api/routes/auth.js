@@ -20,9 +20,8 @@ authRouter.get('/auth/config', (req, res) => {
 
 // "Sign in with Google" for admins. The browser's GIS button yields a Google-signed
 // ID token; Google's tokeninfo endpoint validates signature+expiry, we validate the
-// audience and match the (verified) email against an active admin. Admins with 2FA
-// enrolled must additionally present their code (TOTP or emailed), same as the
-// password path — TWOFA_REQUIRED tells the client to re-post credential+code.
+// audience and match the (verified) email against an active admin. The second factor
+// (SMS G-codes etc.) is enforced by Google on the Google account itself.
 authRouter.post('/admin/auth/google', adminLoginLimiter, async (req, res, next) => {
   try {
     if (!env.googleClientId) throw errors.validation('Google sign-in is not configured');
@@ -39,14 +38,6 @@ authRouter.post('/admin/auth/google', adminLoginLimiter, async (req, res, next) 
     }
     const [admin] = await query('SELECT * FROM admins WHERE email = ? AND is_active = TRUE', [claims.email]);
     if (!admin) throw errors.unauthenticated('חשבון Google זה אינו מנהל במערכת');
-    if (admin.totp_enabled) {
-      const code = String(req.body?.code || '');
-      if (!code) throw new ApiError(401, 'TWOFA_REQUIRED', 'נדרש קוד אימות דו-שלבי');
-      const totpOk = verifyTotp(admin.totp_secret, code);
-      const emailOk = totpOk ? false : await verifyAdminEmailCode(admin, code);
-      if (!totpOk && !emailOk) throw new ApiError(401, 'BAD_2FA', 'קוד אימות שגוי');
-    }
-    await query('UPDATE admins SET last_login_at = UTC_TIMESTAMP() WHERE id = ?', [admin.id]);
     res.json({ token: signAdminToken(admin.id, admin.role), role: admin.role, name: admin.name });
   } catch (e) { next(e); }
 });
