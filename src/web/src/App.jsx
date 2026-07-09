@@ -10,6 +10,7 @@ import AdminLogin from './admin/AdminLogin.jsx';
 import Users from './admin/Users.jsx';
 import Devices from './admin/Devices.jsx';
 import { Monitoring, CallLogs, Commands, AdminSchedules, SystemSettings, Admins, Audit } from './admin/Misc.jsx';
+import { CallFlow } from './admin/CallFlow.jsx';
 
 // Decode a JWT payload client-side (base64url) — used only to detect impersonation.
 function tokenPayload(t) {
@@ -102,6 +103,7 @@ function AdminLayout() {
           <NavLink to="/admin/devices" className={navCls}>מכשירים</NavLink>
           <NavLink to="/admin/schedules" className={navCls}>תזמונים</NavLink>
           <NavLink to="/admin/call-logs" className={navCls}>שיחות</NavLink>
+          <NavLink to="/admin/call-flow" className={navCls}>תרשים שיחה</NavLink>
           <NavLink to="/admin/settings" className={navCls}>הגדרות</NavLink>
           <NavLink to="/admin/admins" className={navCls}>מנהלים</NavLink>
           <NavLink to="/admin/audit" className={navCls}>ביקורת</NavLink>
@@ -133,6 +135,7 @@ export default function App() {
           <Route path="devices" element={<Devices />} />
           <Route path="schedules" element={<AdminSchedules />} />
           <Route path="call-logs" element={<CallLogs />} />
+          <Route path="call-flow" element={<CallFlow />} />
           <Route path="commands" element={<Commands />} />
           <Route path="settings" element={<SystemSettings />} />
           <Route path="admins" element={<Admins />} />
