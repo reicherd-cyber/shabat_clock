@@ -100,6 +100,9 @@ export default function AdminLogin() {
             </Button>
           )}
           <div className="flex justify-center pt-2" ref={googleBtn} />
+          <p className="text-muted text-xs text-center">
+            אם החלון של Google נתקע ריק — ודאו ש"חסימת עוגיות צד שלישי" כבויה בדפדפן (chrome://settings/cookies), או נסו חלון גלישה בסתר ללא תוספים.
+          </p>
         </div>
       </Card>
     </div>
