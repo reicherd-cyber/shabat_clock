@@ -45,6 +45,12 @@ export default function Settings() {
     setPinForm(null);
   });
 
+  // In-place rename, same gesture as device/relay names (edit → blur saves).
+  const renameMe = (full_name) => run(async () => {
+    await api.patch('/me', { full_name });
+    await refresh();
+  });
+
   const patchRelay = (relay, patch) => run(async () => {
     await api.patch(`/relays/${relay.id}`, patch);
     await refresh();
@@ -87,7 +93,19 @@ export default function Settings() {
     <div className="space-y-5">
       <Card>
         <h3 className="font-bold mb-1">פרטי חשבון</h3>
-        <p>{me.user.full_name} <span className="text-muted text-sm">· קוד משתמש לטלפון: <b dir="ltr">{me.user.ivr_code}</b></span></p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="text-sm flex items-center gap-2">
+            שם:
+            <Input defaultValue={me.user.full_name}
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                if (v && v !== me.user.full_name) renameMe(v);
+                else e.target.value = me.user.full_name; // empty → revert
+              }} />
+          </label>
+          <span className="text-muted text-sm">· קוד משתמש לטלפון: <b dir="ltr">{me.user.ivr_code}</b></span>
+        </div>
+        <p className="text-muted text-xs mt-1">השם נשמע בברכת הפתיחה בשיחות הטלפון.</p>
         <Button variant="ghost" className="mt-2" onClick={() => setPinForm({ old_pin: '', new_pin: '' })}>שינוי קוד סודי</Button>
       </Card>
 

@@ -32,6 +32,20 @@ userRouter.get('/me', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Display name only — heard in the IVR greeting and shown on the dashboard.
+// The login session suffices; unlike phones, no PIN gate (no auth surface change).
+userRouter.patch('/me', async (req, res, next) => {
+  try {
+    const full_name = String(req.body?.full_name ?? '').trim();
+    if (!full_name || full_name.length > 100) {
+      throw errors.validation('full_name required, up to 100 chars', { full_name: '1-100' });
+    }
+    await query('UPDATE users SET full_name = ? WHERE id = ?', [full_name, req.auth.userId]);
+    await auditImp(req, 'update', 'user', req.auth.userId, { after: { full_name } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 userRouter.post('/me/pin', async (req, res, next) => {
   try {
     const { old_pin, new_pin } = req.body || {};
