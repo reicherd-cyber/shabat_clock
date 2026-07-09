@@ -64,17 +64,8 @@ export async function sendImmediateCommand({ relayId, action, source, callId = n
   // ack and we own the relay-state write here.
   if (relay.device_type === 'shelly') {
     try {
-      if (relay.transport === 'mqtt') {
-        const { shellyMqttRpc } = await import('../mqtt/client.js');
-        const reply = await shellyMqttRpc(relay.device_uid, 'Switch.Set', {
-          id: relay.relay_no - 1, on: action === 'on',
-        });
-        if (!reply) throw new Error('mqtt rpc timeout');
-        if (reply.error) throw new Error(reply.error.message || 'shelly rpc error');
-      } else {
-        const { shellySet } = await import('./shelly.js');
-        await shellySet(relay.ip_address, relay.relay_no, action === 'on');
-      }
+      const { shellyDispatch } = await import('./shelly.js');
+      await shellyDispatch(relay, relay.relay_no, action === 'on');
       await query(
         `UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?`,
         [action, relayId],

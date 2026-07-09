@@ -19,6 +19,21 @@ export async function shellySet(ip, relayNo, on) {
   return rpc(ip, 'Switch.Set', { id: channelFor(relayNo), on: on ? 'true' : 'false' });
 }
 
+// Absolute on/off over whichever transport the device uses — 'mqtt': Switch.Set
+// RPC through the broker (device connects out to us, works from anywhere);
+// 'lan': direct HTTP (same network only). Throws on failure; single source for
+// both immediate commands and the scheduler.
+export async function shellyDispatch({ device_uid, transport, ip_address }, relayNo, on) {
+  if (transport === 'mqtt') {
+    const { shellyMqttRpc } = await import('../mqtt/client.js');
+    const reply = await shellyMqttRpc(device_uid, 'Switch.Set', { id: channelFor(relayNo), on });
+    if (!reply) throw new Error('mqtt rpc timeout');
+    if (reply.error) throw new Error(reply.error.message || 'shelly rpc error');
+    return reply.result;
+  }
+  return shellySet(ip_address, relayNo, on);
+}
+
 // Current output state of one channel → boolean.
 export async function shellyGetState(ip, relayNo) {
   const s = await rpc(ip, 'Switch.GetStatus', { id: channelFor(relayNo) });

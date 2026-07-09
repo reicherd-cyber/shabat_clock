@@ -243,8 +243,18 @@ async function handleStatus(uid, st) {
 // ── schedule sync (§5.3) ────────────────────────────────────
 
 export async function pushScheduleToDevice(deviceId) {
-  const [device] = await query('SELECT id, device_uid, schedule_version, is_online FROM devices WHERE id = ?', [deviceId]);
+  const [device] = await query('SELECT id, device_uid, device_type, schedule_version, is_online FROM devices WHERE id = ?', [deviceId]);
   if (!device || !device.device_uid) return; // unflashed [D31]: stays pending until UID set
+
+  // Shelly holds no schedule store — the server executes its schedules (scheduler
+  // tick), so there is nothing to push and the version is satisfied by definition.
+  if (device.device_type === 'shelly') {
+    await query(
+      "UPDATE devices SET sync_status = 'synced', device_ack_version = schedule_version, sync_error = NULL WHERE id = ?",
+      [deviceId],
+    );
+    return;
+  }
 
   const wire = await buildWirePayload(deviceId);
   await new Promise((resolve, reject) => {

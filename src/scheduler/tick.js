@@ -17,7 +17,8 @@ async function loadActiveSchedules() {
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time,
             s.repeat_type, s.on_date, s.off_date,
             r.id AS relay_id, r.relay_no,
-            d.id AS device_id, d.device_uid, d.is_online, d.timezone
+            d.id AS device_id, d.device_uid, d.is_online, d.timezone,
+            d.device_type, d.transport, d.ip_address
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
      JOIN devices d ON d.id = r.device_id
@@ -116,6 +117,26 @@ async function fireBackupCommand(occ, executionRow) {
   });
   await repointCommand(executionRow.id, commandId);
 
+  // Shelly holds no schedules — the server IS the executor: RPC over the device's
+  // transport, the reply is the ack, and we own the relay-state write.
+  if (s.device_type === 'shelly') {
+    try {
+      const { shellyDispatch } = await import('../services/shelly.js');
+      await shellyDispatch(s, s.relay_no, occ.action === 'on');
+      await query('UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?', [occ.action, s.relay_id]);
+      await query("UPDATE commands SET status = 'acked', acked_at = UTC_TIMESTAMP() WHERE id = ?", [commandId]);
+      await query(
+        `UPDATE schedule_executions SET status = 'executed', executed_by = 'server_backup'
+         WHERE id = ? AND status IN ('pending','failed')`,
+        [executionRow.id],
+      );
+    } catch {
+      await query("UPDATE commands SET status = 'failed', fail_reason = 'shelly_unreachable' WHERE id = ?", [commandId]);
+      await query("UPDATE schedule_executions SET status = 'failed', executed_by = NULL WHERE id = ? AND status IN ('pending','failed')", [executionRow.id]);
+    }
+    return;
+  }
+
   try {
     await publishCommand(s.device_uid, { cmd_id: Number(commandId), relay: s.relay_no, action: occ.action });
     await query("UPDATE commands SET status = 'sent' WHERE id = ?", [commandId]);
@@ -146,12 +167,17 @@ async function fireBackupCommand(occ, executionRow) {
 
 export async function tick(now = new Date()) {
   const nowM = floorMinute(now);
-  // Grace elapsed: due window [now−3min, now−2min).
+  // ESP32: grace elapsed — the device executes locally first, we only back it up.
+  // Due window [now−3min, now−2min).
   const winStart = new Date(nowM.getTime() - (BACKUP_GRACE_MIN + 1) * 60000);
   const winEnd = new Date(nowM.getTime() - BACKUP_GRACE_MIN * 60000);
+  // Shelly: no local executor — the server fires at the occurrence minute itself.
+  const shellyEnd = new Date(nowM.getTime() + 60000);
 
   const schedules = await loadActiveSchedules();
-  const due = sortDue(schedules.flatMap((s) => occurrencesInWindow(s, winStart, winEnd)));
+  const due = sortDue(schedules.flatMap((s) => (s.device_type === 'shelly'
+    ? occurrencesInWindow(s, nowM, shellyEnd)
+    : occurrencesInWindow(s, winStart, winEnd))));
 
   for (const occ of due) {
     const s = occ.schedule;
