@@ -14,7 +14,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export function createApp() {
   const app = express();
   app.set('trust proxy', 1); // behind nginx [D6]
-  app.use(helmet({ contentSecurityPolicy: false }));
+  // COOP must allow popups: helmet's default `same-origin` severs window.opener,
+  // leaving the Google sign-in popup blank (it can't post the credential back).
+  app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  }));
   app.use(express.json({ limit: '100kb' }));
 
   // Request log — never the query string on /ivr (token) and never bodies at all;
