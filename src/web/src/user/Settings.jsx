@@ -10,6 +10,7 @@ export default function Settings() {
   const [verifying, setVerifying] = useState(null); // {id, code}
   const [phoneForm, setPhoneForm] = useState(null); // {mode:'add'|'edit', id?, phone, pin}
   const [pinForm, setPinForm] = useState(null);
+  const [nameEdit, setNameEdit] = useState(null); // null = display mode; string = editing value
   const [deleting, setDeleting] = useState(null); // relay pending removal confirmation
   const [disablingDevice, setDisablingDevice] = useState(null); // device pending "disable all" confirmation
   const [removingDevice, setRemovingDevice] = useState(null); // device pending removal confirmation
@@ -45,9 +46,12 @@ export default function Settings() {
     setPinForm(null);
   });
 
-  // In-place rename, same gesture as device/relay names (edit → blur saves).
-  const renameMe = (full_name) => run(async () => {
-    await api.patch('/me', { full_name });
+  // Name shows as text with a pencil; the pencil swaps it for an input
+  // (Enter/שמור saves, Escape/ביטול cancels).
+  const saveName = () => run(async () => {
+    const full_name = nameEdit.trim();
+    if (full_name && full_name !== me.user.full_name) await api.patch('/me', { full_name });
+    setNameEdit(null);
     await refresh();
   });
 
@@ -94,15 +98,23 @@ export default function Settings() {
       <Card>
         <h3 className="font-bold mb-1">פרטי חשבון</h3>
         <div className="flex items-center gap-2 flex-wrap">
-          <label className="text-sm flex items-center gap-2">
-            שם:
-            <Input defaultValue={me.user.full_name}
-              onBlur={(e) => {
-                const v = e.target.value.trim();
-                if (v && v !== me.user.full_name) renameMe(v);
-                else e.target.value = me.user.full_name; // empty → revert
-              }} />
-          </label>
+          {nameEdit == null ? (
+            <>
+              <span>{me.user.full_name}</span>
+              <button title="עריכת שם" className="text-muted hover:text-ink cursor-pointer"
+                onClick={() => setNameEdit(me.user.full_name)}>✏️</button>
+            </>
+          ) : (
+            <>
+              <Input autoFocus value={nameEdit} onChange={(e) => setNameEdit(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveName();
+                  if (e.key === 'Escape') setNameEdit(null);
+                }} />
+              <Button disabled={busy || !nameEdit.trim()} onClick={saveName}>שמור</Button>
+              <Button variant="ghost" onClick={() => setNameEdit(null)}>ביטול</Button>
+            </>
+          )}
           <span className="text-muted text-sm">· קוד משתמש לטלפון: <b dir="ltr">{me.user.ivr_code}</b></span>
         </div>
         <p className="text-muted text-xs mt-1">השם נשמע בברכת הפתיחה בשיחות הטלפון.</p>
