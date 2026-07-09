@@ -50,6 +50,8 @@ export const env = {
     callerId: process.env.OTP_YEMOT_CALLER_ID || '',
   },
   mosquittoPasswdFile: process.env.MOSQUITTO_PASSWD_FILE || '',
+  // "Sign in with Google" for the admin panel; empty = the button is hidden.
+  googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   smtp: {
     host: process.env.SMTP_HOST || '',
     port: Number(process.env.SMTP_PORT || 587),

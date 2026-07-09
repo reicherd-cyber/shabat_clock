@@ -44,5 +44,6 @@ export const adminApi = {
 };
 
 export const publicApi = {
+  get: (p) => call('GET', p, undefined, null),
   post: (p, b) => call('POST', p, b, null),
 };

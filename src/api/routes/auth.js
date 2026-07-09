@@ -8,8 +8,39 @@ import { bcryptCompare, bcryptHash } from '../../services/users.js';
 import { verifyTotp } from '../../services/totp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
 import { signUserToken, signAdminToken, otpRequestLimiter, otpRequestIpLimiter, adminLoginLimiter } from '../middleware.js';
+import { env } from '../../config/env.js';
 
 export const authRouter = Router();
+
+// Public login-page config — the Google client id is public by design (it ships in
+// every browser that renders the button); empty means the button is hidden.
+authRouter.get('/auth/config', (req, res) => {
+  res.json({ google_client_id: env.googleClientId });
+});
+
+// "Sign in with Google" for admins. The browser's GIS button yields a Google-signed
+// ID token; Google's tokeninfo endpoint validates signature+expiry, we validate the
+// audience and match the (verified) email against an active admin. The second factor
+// (SMS G-codes etc.) is enforced by Google on the Google account itself.
+authRouter.post('/admin/auth/google', adminLoginLimiter, async (req, res, next) => {
+  try {
+    if (!env.googleClientId) throw errors.validation('Google sign-in is not configured');
+    const credential = String(req.body?.credential || '');
+    if (!credential) throw errors.unauthenticated();
+    const gRes = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`,
+      { signal: AbortSignal.timeout(10000) },
+    );
+    if (!gRes.ok) throw errors.unauthenticated('אימות Google נכשל');
+    const claims = await gRes.json();
+    if (claims.aud !== env.googleClientId || claims.email_verified !== 'true') {
+      throw errors.unauthenticated('אימות Google נכשל');
+    }
+    const [admin] = await query('SELECT * FROM admins WHERE email = ? AND is_active = TRUE', [claims.email]);
+    if (!admin) throw errors.unauthenticated('חשבון Google זה אינו מנהל במערכת');
+    res.json({ token: signAdminToken(admin.id, admin.role), role: admin.role, name: admin.name });
+  } catch (e) { next(e); }
+});
 
 // a***@example.com — enough to recognize your own address, not to reveal it.
 function maskEmail(email) {

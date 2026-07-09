@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { publicApi, tokens } from '../api.js';
 import { Card, Button, Input, ErrorNote, useAsync } from '../ui.jsx';
@@ -9,8 +9,45 @@ export default function AdminLogin() {
   const [code, setCode] = useState('');
   const [needCode, setNeedCode] = useState(false);
   const [emailedTo, setEmailedTo] = useState(null);
-  const { busy, error, run } = useAsync();
+  const { busy, error, run, setError } = useAsync();
   const nav = useNavigate();
+  const googleBtn = useRef(null);
+
+  // "Sign in with Google" — Google's own 2-Step Verification (SMS G-codes) is the
+  // second factor on that path; the server only accepts admins' verified emails.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { google_client_id } = await publicApi.get('/auth/config');
+        if (!google_client_id || cancelled) return;
+        await new Promise((resolve, reject) => {
+          if (window.google?.accounts?.id) return resolve();
+          const s = document.createElement('script');
+          s.src = 'https://accounts.google.com/gsi/client';
+          s.async = true;
+          s.onload = resolve;
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
+        if (cancelled || !googleBtn.current) return;
+        window.google.accounts.id.initialize({
+          client_id: google_client_id,
+          callback: (resp) => run(async () => {
+            const { token } = await publicApi.post('/admin/auth/google', { credential: resp.credential });
+            tokens.admin = token;
+            nav('/admin');
+          }),
+        });
+        window.google.accounts.id.renderButton(googleBtn.current, {
+          theme: 'outline', size: 'large', width: 320, locale: 'he',
+        });
+      } catch (e) {
+        if (!cancelled) setError(e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const login = () => run(async () => {
     try {
@@ -62,6 +99,7 @@ export default function AdminLogin() {
               שלחו קוד לאימייל במקום
             </Button>
           )}
+          <div className="flex justify-center pt-2" ref={googleBtn} />
         </div>
       </Card>
     </div>
