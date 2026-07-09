@@ -8,6 +8,7 @@ export default function Settings() {
   const [me, setMe] = useState(null);
   const [devices, setDevices] = useState([]);
   const [verifying, setVerifying] = useState(null); // {id, code}
+  const [phoneForm, setPhoneForm] = useState(null); // {mode:'add'|'edit', id?, phone, pin}
   const [pinForm, setPinForm] = useState(null);
   const [deleting, setDeleting] = useState(null); // relay pending removal confirmation
   const [disablingDevice, setDisablingDevice] = useState(null); // device pending "disable all" confirmation
@@ -24,6 +25,18 @@ export default function Settings() {
   const verifyPhone = () => run(async () => {
     await api.post(`/me/phones/${verifying.id}/verify`, { code: verifying.code });
     setVerifying(null);
+    await refresh();
+  });
+
+  // Add/edit a phone: PIN proves the account owner; then an OTP call to the (new)
+  // number proves control of it — the verify modal opens right after.
+  const submitPhone = () => run(async () => {
+    const { mode, id, phone, pin } = phoneForm;
+    const res = mode === 'edit'
+      ? await api.patch(`/me/phones/${id}`, { phone, pin })
+      : await api.post('/me/phones', { phone, pin });
+    setPhoneForm(null);
+    setVerifying({ id: res.id, code: '' });
     await refresh();
   });
 
@@ -89,13 +102,17 @@ export default function Settings() {
                 {p.label && <span className="text-muted text-sm">{p.label}</span>}
                 <Badge ok={!!p.verified_at}>{p.verified_at ? 'מאומת' : 'ממתין לאימות'}</Badge>
               </div>
-              {!p.verified_at && (
-                <Button variant="ghost" onClick={() => setVerifying({ id: p.id, code: '' })}>אימות</Button>
-              )}
+              <div className="flex gap-2">
+                {!p.verified_at && (
+                  <Button variant="ghost" onClick={() => setVerifying({ id: p.id, code: '' })}>אימות</Button>
+                )}
+                <Button variant="ghost" onClick={() => setPhoneForm({ mode: 'edit', id: p.id, phone: p.phone, pin: '' })}>עריכה</Button>
+              </div>
             </div>
           ))}
         </div>
-        <p className="text-muted text-xs mt-2">לניהול מספרי טלפון פנו למנהל המערכת.</p>
+        <Button variant="ghost" className="mt-3" onClick={() => setPhoneForm({ mode: 'add', phone: '', pin: '' })}>+ הוסף מספר</Button>
+        <p className="text-muted text-xs mt-2">הוספה או עריכה דורשות את הקוד הסודי, והמספר החדש מאומת בשיחת טלפון.</p>
       </Card>
 
       {devices.filter((d) => d.is_enabled).map((d) => (
@@ -132,6 +149,22 @@ export default function Settings() {
           </div>
         </Card>
       ))}
+
+      <Modal open={!!phoneForm} onClose={() => setPhoneForm(null)} title={phoneForm?.mode === 'edit' ? 'עריכת מספר טלפון' : 'הוספת מספר טלפון'}>
+        {phoneForm && (
+          <div className="space-y-3">
+            <Input dir="ltr" type="tel" placeholder="מספר טלפון" value={phoneForm.phone}
+              onChange={(e) => setPhoneForm({ ...phoneForm, phone: e.target.value })} />
+            <Input dir="ltr" type="password" inputMode="numeric" placeholder="הקוד הסודי שלך (4 ספרות)" value={phoneForm.pin}
+              onChange={(e) => setPhoneForm({ ...phoneForm, pin: e.target.value })} />
+            <p className="text-muted text-xs">לאחר האישור תתקבל שיחת אימות למספר. הזינו את הקוד מהשיחה בחלון הבא.</p>
+            <ErrorNote error={error} />
+            <Button className="w-full" disabled={busy || phoneForm.phone.length < 9 || phoneForm.pin.length !== 4} onClick={submitPhone}>
+              {phoneForm.mode === 'edit' ? 'עדכן ושלח קוד אימות' : 'הוסף ושלח קוד אימות'}
+            </Button>
+          </div>
+        )}
+      </Modal>
 
       <Modal open={!!verifying} onClose={() => setVerifying(null)} title="אימות מספר">
         {verifying && (

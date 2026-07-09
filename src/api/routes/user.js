@@ -50,8 +50,18 @@ userRouter.get('/me/phones', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Adding/editing a phone requires the account PIN — proves it's the account owner
+// acting, on top of the OTP call proving control of the number itself.
+async function requirePin(userId, pin) {
+  const [user] = await query('SELECT * FROM users WHERE id = ?', [userId]);
+  if (!user || !verifyPin(user, String(pin || ''))) {
+    throw errors.unauthenticated('קוד סודי שגוי');
+  }
+}
+
 userRouter.post('/me/phones', async (req, res, next) => {
   try {
+    await requirePin(req.auth.userId, req.body?.pin);
     const phone = normalizePhone(req.body?.phone);
     if (!isValidIsraeliPhone(phone)) throw errors.validation('Invalid phone', { phone: 'invalid' });
     const result = await query(
@@ -64,6 +74,30 @@ userRouter.post('/me/phones', async (req, res, next) => {
     // OTP call TO THE NEW NUMBER; code bound to this pending row, not just the string.
     await requestOtp({ phone, purpose: 'phone_add', userPhoneId: result.insertId });
     res.json({ id: result.insertId, verified: false });
+  } catch (e) { next(e); }
+});
+
+// Edit = same guarantees as add: PIN first, then the NEW number must be re-verified
+// by an OTP call to it (verified_at resets until then).
+userRouter.patch('/me/phones/:id', async (req, res, next) => {
+  try {
+    await requirePin(req.auth.userId, req.body?.pin);
+    const phone = normalizePhone(req.body?.phone);
+    if (!isValidIsraeliPhone(phone)) throw errors.validation('Invalid phone', { phone: 'invalid' });
+    const [row] = await query(
+      'SELECT * FROM user_phones WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
+      [req.params.id, req.auth.userId],
+    );
+    if (!row) throw errors.notFound();
+    await query(
+      'UPDATE user_phones SET phone = ?, verified_at = NULL WHERE id = ?',
+      [phone, row.id],
+    ).catch((e) => {
+      if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', 'Phone already registered');
+      throw e;
+    });
+    await requestOtp({ phone, purpose: 'phone_add', userPhoneId: row.id });
+    res.json({ id: row.id, verified: false });
   } catch (e) { next(e); }
 });
 
