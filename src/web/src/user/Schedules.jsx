@@ -17,7 +17,7 @@ const ONCE_MODES = [
 
 // Quick duration chips (once mode only): OFF = ON + duration, rolling the date.
 const DURATIONS = [
-  { label: 'דקה', min: 1 }, { label: '5 דק׳', min: 5 }, { label: '10 דק׳', min: 10 },
+  { label: '2 דק׳', min: 2 }, { label: '5 דק׳', min: 5 }, { label: '10 דק׳', min: 10 },
   { label: '30 דק׳', min: 30 }, { label: 'שעה', min: 60 }, { label: '3 שעות', min: 180 },
   { label: '12 שעות', min: 720 },
 ];
