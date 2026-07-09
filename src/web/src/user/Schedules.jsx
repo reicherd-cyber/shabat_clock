@@ -36,7 +36,9 @@ export default function Schedules() {
   const refresh = async () => {
     const [s, devices] = await Promise.all([api.get('/schedules'), api.get('/devices')]);
     setSchedules(s);
-    setRelays(devices.flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => ({ ...r, device: d.name }))));
+    // Removed devices (is_enabled=false) offer no relays — same rule as the dashboard.
+    setRelays(devices.filter((d) => d.is_enabled)
+      .flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => ({ ...r, device: d.name }))));
   };
   useEffect(() => { refresh().catch(setError); }, []);
 

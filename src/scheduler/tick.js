@@ -23,7 +23,8 @@ async function loadActiveSchedules() {
      JOIN relays r ON r.id = s.relay_id
      JOIN devices d ON d.id = r.device_id
      WHERE s.is_enabled = TRUE AND s.deleted_at IS NULL
-       AND r.is_enabled = TRUE AND r.deleted_at IS NULL`,
+       AND r.is_enabled = TRUE AND r.deleted_at IS NULL
+       AND d.is_enabled = TRUE`,
   );
 }
 
