@@ -11,6 +11,12 @@ let client = null;
 const ackWaiters = new Map();      // cmd_id → resolve
 const scheduleAckTimers = new Map(); // device_id → timeout
 const lastExecDropped = new Map(); // device_id → last seen exec_dropped counter
+const shellyRpcWaiters = new Map(); // rpc id → resolve
+let shellyRpcSeq = 1;
+
+// Shelly Gen2 topics: <prefix>/online (LWT), <prefix>/status/switch:N (state
+// notifications), <prefix>/rpc (requests in), replies land on <src>/rpc.
+const SHELLY_REPLY_TOPIC = 'shabat-server/rpc';
 
 export function connectMqtt() {
   if (client) return client;
@@ -23,6 +29,7 @@ export function connectMqtt() {
     console.log('MQTT connected');
     client.subscribe([
       'dev/+/ack', 'dev/+/status', 'dev/+/exec', 'dev/+/schedule_ack',
+      SHELLY_REPLY_TOPIC, '+/online', '+/status/#',
     ], { qos: 1 });
   });
   client.on('error', (e) => console.error('MQTT error:', e.message));
@@ -34,7 +41,7 @@ export function connectMqtt() {
 
 async function handleMessage(topic, buf) {
   const m = /^dev\/([0-9a-f]{12})\/(ack|status|exec|schedule_ack)$/.exec(topic);
-  if (!m) return;
+  if (!m) return handleShellyMessage(topic, buf);
   const [, uid, kind] = m;
   let payload;
   try {
@@ -46,6 +53,88 @@ async function handleMessage(topic, buf) {
   if (kind === 'status') return handleStatus(uid, payload);
   if (kind === 'exec') return ingestExecReport(uid, payload);
   if (kind === 'schedule_ack') return handleScheduleAck(uid, payload);
+}
+
+// ── Shelly Gen2 over MQTT ───────────────────────────────────
+
+// prefix 'shellypro2-80f3dac7deec' → device row (uid = the trailing mac).
+async function shellyDeviceByPrefix(prefix) {
+  const uid = prefix.slice(prefix.lastIndexOf('-') + 1);
+  if (!/^[0-9a-f]{12}$/.test(uid)) return null;
+  const [device] = await query(
+    "SELECT * FROM devices WHERE device_uid = ? AND device_type = 'shelly'", [uid],
+  );
+  return device || null;
+}
+
+async function handleShellyMessage(topic, buf) {
+  const text = buf.toString('utf8');
+
+  if (topic === SHELLY_REPLY_TOPIC) {
+    let payload;
+    try { payload = JSON.parse(text); } catch { return; }
+    const waiter = shellyRpcWaiters.get(Number(payload?.id));
+    if (waiter) waiter(payload);
+    return;
+  }
+
+  const online = /^([\w.-]+)\/online$/.exec(topic);
+  if (online) {
+    const device = await shellyDeviceByPrefix(online[1]);
+    if (!device) return;
+    const isOnline = text === 'true';
+    await query(
+      'UPDATE devices SET is_online = ?, last_seen_at = UTC_TIMESTAMP() WHERE id = ?',
+      [isOnline ? 1 : 0, device.id],
+    );
+    if (Boolean(device.is_online) !== isOnline) {
+      await query(
+        'INSERT INTO device_events (device_id, event, payload) VALUES (?,?,?)',
+        [device.id, isOnline ? 'online' : 'offline', JSON.stringify({ via: 'mqtt' })],
+      );
+    }
+    return;
+  }
+
+  const status = /^([\w.-]+)\/status\/switch:(\d+)$/.exec(topic);
+  if (status) {
+    const device = await shellyDeviceByPrefix(status[1]);
+    if (!device) return;
+    let st;
+    try { st = JSON.parse(text); } catch { return; }
+    if (typeof st?.output !== 'boolean') return;
+    await query(
+      `UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP()
+       WHERE device_id = ? AND relay_no = ? AND deleted_at IS NULL`,
+      [st.output ? 'on' : 'off', device.id, Number(status[2]) + 1],
+    );
+  }
+}
+
+// JSON-RPC request to a Shelly through the broker; resolves the device's reply
+// or null on timeout (device offline / not connected to the broker).
+export function shellyMqttRpc(deviceUid, method, params = undefined, timeoutMs = 5000) {
+  const prefix = `shellypro2-${deviceUid}`;
+  const id = shellyRpcSeq++;
+  return new Promise((resolve, reject) => {
+    const req = { id, src: 'shabat-server', method, ...(params ? { params } : {}) };
+    const timer = setTimeout(() => {
+      shellyRpcWaiters.delete(id);
+      resolve(null);
+    }, timeoutMs);
+    shellyRpcWaiters.set(id, (reply) => {
+      clearTimeout(timer);
+      shellyRpcWaiters.delete(id);
+      resolve(reply);
+    });
+    connectMqtt().publish(`${prefix}/rpc`, JSON.stringify(req), { qos: 1 }, (err) => {
+      if (err) {
+        clearTimeout(timer);
+        shellyRpcWaiters.delete(id);
+        reject(err);
+      }
+    });
+  });
 }
 
 // ── commands ────────────────────────────────────────────────

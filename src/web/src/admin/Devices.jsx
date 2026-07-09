@@ -57,9 +57,9 @@ export default function Devices() {
     await refresh();
   });
 
-  // Shelly wizard: step 1 (ip+owner) → probe → step 2 (confirm channels) → register → step 3 (done)
+  // Shelly wizard: step 1 (connection+owner) → probe → step 2 (confirm channels) → register → step 3 (done)
   const shellyProbe = () => run(async () => {
-    const probe = await adminApi.post('/shelly/probe', { ip: shelly.ip });
+    const probe = await adminApi.post('/shelly/probe', { transport: shelly.transport, ip: shelly.ip, mac: shelly.mac });
     setShelly({
       ...shelly, step: 2, probe,
       name: shelly.name || `Shelly (${probe.model})`,
@@ -68,7 +68,8 @@ export default function Devices() {
   });
   const shellyRegister = () => run(async () => {
     const result = await adminApi.post('/shelly/register', {
-      user_id: Number(shelly.user_id), ip: shelly.ip, name: shelly.name, relays: shelly.relays,
+      user_id: Number(shelly.user_id), transport: shelly.transport, ip: shelly.ip, mac: shelly.mac,
+      name: shelly.name, relays: shelly.relays,
     });
     setShelly({ ...shelly, step: 3, result });
     await refresh();
@@ -80,7 +81,7 @@ export default function Devices() {
       <div className="flex justify-between items-center flex-wrap gap-2">
         <h2 className="font-bold text-xl">מכשירים</h2>
         <div className="flex gap-2">
-          <Button variant="ghost" onClick={() => setShelly({ step: 1, ip: '', user_id: users[0]?.id || '', name: '' })}>+ Shelly</Button>
+          <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: users[0]?.id || '', name: '' })}>+ Shelly</Button>
           <Button onClick={() => setProvForm({ user_id: users[0]?.id || '', name: '', relay_count: 2, device_uid: '' })}>+ הקצאת מכשיר</Button>
         </div>
       </div>
@@ -118,14 +119,33 @@ export default function Devices() {
       <Modal open={!!shelly} onClose={() => setShelly(null)} title={`הוספת Shelly — שלב ${shelly?.step || 1} מתוך 3`}>
         {shelly?.step === 1 && (
           <div className="space-y-3">
-            <p className="text-sm text-muted">המכשיר חייב להיות נגיש מהשרת ברשת (כתובת IP מקומית עובדת רק כשהשרת באותה רשת).</p>
             <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>
               {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
             </Select>
-            <Input dir="ltr" placeholder="כתובת IP (למשל 192.168.1.50)" value={shelly.ip} onChange={(e) => setShelly({ ...shelly, ip: e.target.value })} />
+            <div className="flex gap-3 text-sm">
+              <label className="flex items-center gap-1">
+                <input type="radio" checked={shelly.transport === 'mqtt'} onChange={() => setShelly({ ...shelly, transport: 'mqtt' })} />
+                מרחוק (MQTT)
+              </label>
+              <label className="flex items-center gap-1">
+                <input type="radio" checked={shelly.transport === 'lan'} onChange={() => setShelly({ ...shelly, transport: 'lan' })} />
+                רשת מקומית (IP)
+              </label>
+            </div>
+            {shelly.transport === 'mqtt' ? (
+              <>
+                <p className="text-sm text-muted">המכשיר מתחבר בעצמו לשרת — עובד מכל מקום. יש להגדיר קודם את חיבור ה-MQTT במכשיר.</p>
+                <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל 80f3dac7deec)" value={shelly.mac} onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted">עובד רק כשהשרת באותה רשת כמו המכשיר (למשל בפיתוח מקומי).</p>
+                <Input dir="ltr" placeholder="כתובת IP (למשל 192.168.1.50)" value={shelly.ip} onChange={(e) => setShelly({ ...shelly, ip: e.target.value })} />
+              </>
+            )}
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
             <ErrorNote error={error} />
-            <Button className="w-full" disabled={busy || !shelly.ip} onClick={shellyProbe}>בדוק חיבור ›</Button>
+            <Button className="w-full" disabled={busy || (shelly.transport === 'mqtt' ? !shelly.mac : !shelly.ip)} onClick={shellyProbe}>בדוק חיבור ›</Button>
           </div>
         )}
         {shelly?.step === 2 && (

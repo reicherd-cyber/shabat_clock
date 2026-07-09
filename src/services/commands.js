@@ -49,7 +49,7 @@ async function markCommand(id, status, failReason = null) {
 // Returns {command_id, status, fail_reason} — the caller (IVR or web) reports truth.
 export async function sendImmediateCommand({ relayId, action, source, callId = null }) {
   const [relay] = await query(
-    `SELECT r.id, r.relay_no, d.id AS device_id, d.device_uid, d.is_online, d.device_type, d.ip_address
+    `SELECT r.id, r.relay_no, d.id AS device_id, d.device_uid, d.is_online, d.device_type, d.ip_address, d.transport
      FROM relays r JOIN devices d ON d.id = r.device_id
      WHERE r.id = ? AND r.deleted_at IS NULL`,
     [relayId],
@@ -58,12 +58,23 @@ export async function sendImmediateCommand({ relayId, action, source, callId = n
 
   const commandId = await createCommand({ relayId, action, source, callId });
 
-  // Shelly: synchronous HTTP RPC. A 200 is the ack; we own the relay-state write here
-  // (no async ack ingester like MQTT). Absolute on/off keeps it idempotent.
+  // Shelly: absolute on/off (idempotent). Two transports — 'lan': synchronous HTTP
+  // RPC to ip_address (same network only); 'mqtt': Switch.Set through the broker
+  // (device connects out to us — works from anywhere). Either way the reply is the
+  // ack and we own the relay-state write here.
   if (relay.device_type === 'shelly') {
-    const { shellySet } = await import('./shelly.js');
     try {
-      await shellySet(relay.ip_address, relay.relay_no, action === 'on');
+      if (relay.transport === 'mqtt') {
+        const { shellyMqttRpc } = await import('../mqtt/client.js');
+        const reply = await shellyMqttRpc(relay.device_uid, 'Switch.Set', {
+          id: relay.relay_no - 1, on: action === 'on',
+        });
+        if (!reply) throw new Error('mqtt rpc timeout');
+        if (reply.error) throw new Error(reply.error.message || 'shelly rpc error');
+      } else {
+        const { shellySet } = await import('./shelly.js');
+        await shellySet(relay.ip_address, relay.relay_no, action === 'on');
+      }
       await query(
         `UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?`,
         [action, relayId],

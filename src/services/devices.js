@@ -176,26 +176,49 @@ export async function patchDevice(deviceId, patch, { userId = null } = {}) {
 }
 
 // ── Shelly wizard (admin panel) ──
-// Probe: reach the Shelly over HTTP RPC from the SERVER (not the admin's browser) and
-// report identity + channels. The server must have a network route to the device.
-export async function probeShelly(ip) {
-  let info;
-  try {
-    info = await shellyInfo(ip);
-  } catch {
-    throw errors.validation('לא ניתן להגיע למכשיר Shelly בכתובת זו מהשרת. ודאו שהמכשיר דלוק ושהשרת באותה רשת (או שיש נתיב רשת אליו).', { ip: 'unreachable' });
+// Probe: reach the Shelly FROM THE SERVER and report identity + channels.
+// transport 'lan'  → HTTP RPC to ip (server must share a network with the device);
+// transport 'mqtt' → RPC through our broker (the Shelly connects out to us; works
+//                    from anywhere — enter the device MAC instead of an IP).
+export async function probeShelly({ transport = 'lan', ip, mac }) {
+  let info; let getState;
+  if (transport === 'mqtt') {
+    const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+    if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה — 12 תווים הקסדצימליים', { mac: 'invalid' });
+    const { shellyMqttRpc } = await import('../mqtt/client.js');
+    const reply = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo');
+    if (!reply || reply.error) {
+      throw errors.validation('המכשיר לא מחובר לשרת ה-MQTT. ודאו שהגדרתם במכשיר את חיבור ה-MQTT ושיש לו אינטרנט.', { mac: 'unreachable' });
+    }
+    info = reply.result;
+    getState = async (relayNo) => {
+      const r = await shellyMqttRpc(uid, 'Switch.GetStatus', { id: relayNo - 1 });
+      if (!r || r.error) throw new Error('no channel');
+      return !!r.result.output;
+    };
+  } else {
+    try {
+      info = await shellyInfo(ip);
+    } catch {
+      throw errors.validation('לא ניתן להגיע למכשיר Shelly בכתובת זו מהשרת. ודאו שהמכשיר דלוק ושהשרת באותה רשת (או השתמשו בחיבור מרחוק דרך MQTT).', { ip: 'unreachable' });
+    }
+    getState = (relayNo) => shellyGetState(ip, relayNo);
   }
   const uid = String(info.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '').slice(0, 12);
   // Discover channels by probing 1..4 — Pro 2 answers for 1-2, extra probes fail quietly.
   const channels = [];
   for (let relayNo = 1; relayNo <= 4; relayNo++) {
-    const state = await shellyGetState(ip, relayNo).catch(() => undefined);
+    const state = await getState(relayNo).catch(() => undefined);
     if (state === undefined) break;
     channels.push({ relay_no: relayNo, state: state ? 'on' : 'off' });
   }
   if (channels.length === 0) throw errors.validation('המכשיר נמצא אך לא נמצאו ערוצי מיתוג (Switch).', { ip: 'no_channels' });
-  const [existing] = await query('SELECT id FROM devices WHERE device_uid = ? OR ip_address = ?', [uid, ip]);
+  const [existing] = await query(
+    'SELECT id FROM devices WHERE device_uid = ? OR (ip_address IS NOT NULL AND ip_address = ?)',
+    [uid, ip || ''],
+  );
   return {
+    transport,
     model: info.model || info.app || 'Shelly',
     mac: uid,
     fw_version: info.ver || null,
@@ -205,8 +228,8 @@ export async function probeShelly(ip) {
 }
 
 // Register a probed Shelly as a device + its relays for a user. relays: [{relay_no, name, ivr_digit}].
-export async function registerShellyDevice({ userId, ip, name, relays }) {
-  const probe = await probeShelly(ip); // re-verify live + get fresh states
+export async function registerShellyDevice({ userId, transport = 'lan', ip, mac, name, relays }) {
+  const probe = await probeShelly({ transport, ip, mac }); // re-verify live + get fresh states
   if (probe.already_registered_as) throw errors.conflict('CONFLICT', `מכשיר זה כבר רשום (מספר ${probe.already_registered_as})`);
   const wanted = (relays || []).filter((r) => probe.channels.some((c) => c.relay_no === Number(r.relay_no)));
   if (wanted.length === 0) throw errors.validation('יש לבחור לפחות ערוץ אחד');
@@ -227,10 +250,11 @@ export async function registerShellyDevice({ userId, ip, name, relays }) {
 
     const [d] = await conn.query(
       `INSERT INTO devices
-         (user_id, device_uid, device_type, ip_address, name,
+         (user_id, device_uid, device_type, transport, ip_address, name,
           mqtt_secret_hash, mqtt_passwd_hash, relay_count, is_online, fw_version)
-       VALUES (?,?, 'shelly', ?,?, '', '', ?, TRUE, ?)`,
-      [userId, probe.mac, ip, name || `Shelly (${probe.model})`, probe.channels.length, probe.fw_version],
+       VALUES (?,?, 'shelly', ?,?,?, '', '', ?, TRUE, ?)`,
+      [userId, probe.mac, transport, transport === 'lan' ? ip : null,
+        name || `Shelly (${probe.model})`, probe.channels.length, probe.fw_version],
     );
     for (const r of wanted) {
       const live = probe.channels.find((c) => c.relay_no === Number(r.relay_no));

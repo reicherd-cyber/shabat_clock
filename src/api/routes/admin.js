@@ -170,7 +170,11 @@ adminRouter.post('/devices/provision', requireWrite, async (req, res, next) => {
 // ── Shelly wizard: probe (read-only reachability + identity) then register ──
 adminRouter.post('/shelly/probe', requireWrite, async (req, res, next) => {
   try {
-    res.json(await probeShelly(String(req.body?.ip || '').trim()));
+    const b = req.body || {};
+    res.json(await probeShelly({
+      transport: b.transport === 'mqtt' ? 'mqtt' : 'lan',
+      ip: String(b.ip || '').trim(), mac: String(b.mac || '').trim(),
+    }));
   } catch (e) { next(e); }
 });
 
@@ -178,9 +182,12 @@ adminRouter.post('/shelly/register', requireWrite, async (req, res, next) => {
   try {
     const b = req.body || {};
     const result = await registerShellyDevice({
-      userId: Number(b.user_id), ip: String(b.ip || '').trim(), name: b.name, relays: b.relays,
+      userId: Number(b.user_id),
+      transport: b.transport === 'mqtt' ? 'mqtt' : 'lan',
+      ip: String(b.ip || '').trim(), mac: String(b.mac || '').trim(),
+      name: b.name, relays: b.relays,
     });
-    await audit(req, 'register_shelly', 'device', result.id, { after: { ip: b.ip, user_id: b.user_id } });
+    await audit(req, 'register_shelly', 'device', result.id, { after: { ip: b.ip, mac: b.mac, transport: b.transport, user_id: b.user_id } });
     res.status(201).json(result);
   } catch (e) { next(e); }
 });
