@@ -167,6 +167,18 @@ adminRouter.post('/devices/provision', requireWrite, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Remote-Shelly onboarding: creates broker credentials + ACL for the device and
+// returns the one-time setup script for a person on the device's LAN. The script
+// embeds the fresh password, so it is returned once and never logged/audited.
+adminRouter.post('/shelly/onboard', requireWrite, async (req, res, next) => {
+  try {
+    const { onboardShelly } = await import('../../services/shellyOnboard.js');
+    const result = await onboardShelly({ mac: req.body?.mac });
+    await audit(req, 'onboard_shelly', 'device', null, { after: { mac: result.mac } });
+    res.json(result);
+  } catch (e) { next(e); }
+});
+
 // ── Shelly wizard: probe (read-only reachability + identity) then register ──
 adminRouter.post('/shelly/probe', requireWrite, async (req, res, next) => {
   try {

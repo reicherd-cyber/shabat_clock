@@ -50,6 +50,15 @@ export const env = {
     callerId: process.env.OTP_YEMOT_CALLER_ID || '',
   },
   mosquittoPasswdFile: process.env.MOSQUITTO_PASSWD_FILE || '',
+  // Remote-Shelly onboarding: the public broker devices dial into + the broker files
+  // the app manages for per-device credentials. Empty host = onboarding unavailable.
+  deviceBroker: {
+    host: process.env.DEVICE_MQTT_HOST || '',
+    port: Number(process.env.DEVICE_MQTT_PORT || 8883),
+    caFile: process.env.DEVICE_CA_FILE || '',
+    aclFile: process.env.MOSQUITTO_ACL_FILE || '',
+    reloadCmd: process.env.MOSQUITTO_RELOAD_CMD || '',
+  },
   // "Sign in with Google" for the admin panel; empty = the button is hidden.
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   smtp: {

@@ -57,7 +57,21 @@ export default function Devices() {
     await refresh();
   });
 
-  // Shelly wizard: step 1 (connection+owner) → probe → step 2 (confirm channels) → register → step 3 (done)
+  // Shelly wizard: step 1 (connection+owner) → probe → step 2 (confirm channels) → register → step 3 (done).
+  // Side branch 'prep': a NEW remote device that has never dialed our broker — the server
+  // mints its broker credentials and returns a one-time setup script for a person on the
+  // device's LAN; after they run it, "בדוק חיבור" resumes the normal probe flow.
+  const shellyOnboard = () => run(async () => {
+    const prep = await adminApi.post('/shelly/onboard', { mac: shelly.mac });
+    setShelly({ ...shelly, step: 'prep', mac: prep.mac, prep, copied: null });
+  });
+
+  const copyScript = async (kind, text) => {
+    await navigator.clipboard.writeText(text);
+    setShelly((s) => ({ ...s, copied: kind }));
+    setTimeout(() => setShelly((s) => (s ? { ...s, copied: null } : s)), 2500);
+  };
+
   const shellyProbe = () => run(async () => {
     const probe = await adminApi.post('/shelly/probe', { transport: shelly.transport, ip: shelly.ip, mac: shelly.mac });
     setShelly({
@@ -116,7 +130,8 @@ export default function Devices() {
         </Card>
       ))}
 
-      <Modal open={!!shelly} onClose={() => setShelly(null)} title={`הוספת Shelly — שלב ${shelly?.step || 1} מתוך 3`}>
+      <Modal open={!!shelly} onClose={() => setShelly(null)}
+        title={shelly?.step === 'prep' ? 'הוספת Shelly — הכנת מכשיר מרוחק' : `הוספת Shelly — שלב ${shelly?.step || 1} מתוך 3`}>
         {shelly?.step === 1 && (
           <div className="space-y-3">
             <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>
@@ -136,6 +151,10 @@ export default function Devices() {
               <>
                 <p className="text-sm text-muted">המכשיר מתחבר בעצמו לשרת — עובד מכל מקום. יש להגדיר קודם את חיבור ה-MQTT במכשיר.</p>
                 <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל 80f3dac7deec)" value={shelly.mac} onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
+                <button className="text-sm text-accent-dk underline cursor-pointer disabled:opacity-50"
+                  disabled={busy || !shelly.mac} onClick={shellyOnboard}>
+                  המכשיר חדש ועדיין לא הוגדר? הכנת מכשיר מרוחק ›
+                </button>
               </>
             ) : (
               <>
@@ -146,6 +165,40 @@ export default function Devices() {
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
             <ErrorNote error={error} />
             <Button className="w-full" disabled={busy || (shelly.transport === 'mqtt' ? !shelly.mac : !shelly.ip)} onClick={shellyProbe}>בדוק חיבור ›</Button>
+          </div>
+        )}
+        {shelly?.step === 'prep' && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              נוצרו פרטי חיבור למכשיר <b dir="ltr">{shelly.prep.mac}</b> בשרת <span dir="ltr">{shelly.prep.broker}</span>.
+              שלחו את הסקריפט המתאים לאדם שנמצא ליד המכשיר — הוא מריץ אותו במחשב שמחובר
+              לאותו Wi-Fi כמו ה-Shelly, מזין את כתובת ה-IP של המכשיר, וזהו.
+            </p>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">Windows (PowerShell)</span>
+                <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => copyScript('ps', shelly.prep.script_ps)}>
+                  {shelly.copied === 'ps' ? 'הועתק ✓' : 'העתק'}
+                </Button>
+              </div>
+              <pre dir="ltr" className="text-[11px] bg-surface2 border border-line rounded-xl p-2 max-h-40 overflow-auto whitespace-pre">{shelly.prep.script_ps}</pre>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">Mac / Linux (Terminal)</span>
+                <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => copyScript('sh', shelly.prep.script_sh)}>
+                  {shelly.copied === 'sh' ? 'הועתק ✓' : 'העתק'}
+                </Button>
+              </div>
+              <pre dir="ltr" className="text-[11px] bg-surface2 border border-line rounded-xl p-2 max-h-40 overflow-auto whitespace-pre">{shelly.prep.script_sh}</pre>
+            </div>
+            <p className="text-muted text-xs">
+              הסקריפט מכיל סיסמה ייחודית למכשיר הזה — שלחו אותו בערוץ פרטי. אפשר לסגור חלון זה
+              ולחזור מאוחר יותר: לאחר שהמכשיר חובר, הזינו את ה-MAC ולחצו "בדוק חיבור".
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setShelly({ ...shelly, step: 1 })}>‹ חזרה</Button>
+              <Button className="flex-1" disabled={busy} onClick={shellyProbe}>המכשיר חובר — בדוק חיבור ›</Button>
+            </div>
           </div>
         )}
         {shelly?.step === 2 && (
