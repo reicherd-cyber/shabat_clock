@@ -151,8 +151,8 @@ export default function Devices() {
               <>
                 <p className="text-sm text-muted">המכשיר מתחבר בעצמו לשרת — עובד מכל מקום. יש להגדיר קודם את חיבור ה-MQTT במכשיר.</p>
                 <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל 80f3dac7deec)" value={shelly.mac} onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
-                <button className="text-sm text-accent-dk underline cursor-pointer disabled:opacity-50"
-                  disabled={busy || !shelly.mac} onClick={shellyOnboard}>
+                <button className="text-sm text-accent-dk underline cursor-pointer"
+                  onClick={() => setShelly({ ...shelly, step: 'prep', prep: null, copied: null })}>
                   המכשיר חדש ועדיין לא הוגדר? הכנת מכשיר מרוחק ›
                 </button>
               </>
@@ -167,7 +167,23 @@ export default function Devices() {
             <Button className="w-full" disabled={busy || (shelly.transport === 'mqtt' ? !shelly.mac : !shelly.ip)} onClick={shellyProbe}>בדוק חיבור ›</Button>
           </div>
         )}
-        {shelly?.step === 'prep' && (
+        {shelly?.step === 'prep' && !shelly.prep && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              הכנת Shelly חדש לחיבור מרחוק: השרת ייצור למכשיר פרטי התחברות, ותקבלו סקריפט
+              חד-פעמי לשליחה למי שנמצא ליד המכשיר. נדרשת כתובת ה-MAC של המכשיר —
+              מופיעה באפליקציית Shelly תחת Device Information, או על המדבקה שעל המכשיר.
+            </p>
+            <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל a8032abcdef0)" value={shelly.mac}
+              onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setShelly({ ...shelly, step: 1 })}>‹ חזרה</Button>
+              <Button className="flex-1" disabled={busy || !shelly.mac} onClick={shellyOnboard}>צור פרטי חיבור וסקריפט ›</Button>
+            </div>
+          </div>
+        )}
+        {shelly?.step === 'prep' && shelly.prep && (
           <div className="space-y-3">
             <p className="text-sm">
               נוצרו פרטי חיבור למכשיר <b dir="ltr">{shelly.prep.mac}</b> בשרת <span dir="ltr">{shelly.prep.broker}</span>.
