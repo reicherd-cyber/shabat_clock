@@ -210,6 +210,10 @@ export default function Devices() {
               הסקריפט מכיל סיסמה ייחודית למכשיר הזה — שלחו אותו בערוץ פרטי. אפשר לסגור חלון זה
               ולחזור מאוחר יותר: לאחר שהמכשיר חובר, הזינו את ה-MAC ולחצו "בדוק חיבור".
             </p>
+            <p className="text-off text-xs font-medium">
+              ⚠ כל יצירה חוזרת מחליפה את הסיסמה — רק הסקריפט האחרון שנוצר יעבוד. אם יצרתם
+              שוב אחרי ששלחתם, שלחו את הסקריפט החדש והריצו אותו מחדש.
+            </p>
             <ErrorNote error={error} />
             <div className="flex gap-2">
               <Button variant="ghost" className="flex-1" onClick={() => setShelly({ ...shelly, step: 1 })}>‹ חזרה</Button>
