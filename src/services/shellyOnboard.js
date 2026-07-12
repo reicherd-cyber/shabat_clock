@@ -68,10 +68,16 @@ function powershellScript(uid, b) {
   const sntpArray = b.sntp.map((j) => `'${j}'`).join(', ');
   return `# Shabat-Clock: one-time Shelly setup (device ${uid}). Run in PowerShell on the same Wi-Fi as the Shelly.
 $ErrorActionPreference = 'Stop'
-$ip = Read-Host 'Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]'
-if (-not $ip) { $ip = '192.168.33.1' }
 function Rpc($json) {
-  Invoke-RestMethod -Uri ("http://{0}/rpc" -f $ip) -Method Post -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($json))
+  Invoke-RestMethod -Uri ("http://{0}/rpc" -f $ip) -Method Post -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 8
+}
+# The device announces itself as shellypro2-<mac>.local on the LAN — try that first,
+# so in most cases nobody has to hunt for an IP address.
+$ip = 'shellypro2-${uid}.local'
+Write-Host "Looking for the Shelly automatically ($ip)..."
+try { Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' | Out-Null } catch {
+  $ip = Read-Host 'Not found automatically. Enter the Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]'
+  if (-not $ip) { $ip = '192.168.33.1' }
 }
 function WaitBack {
   Write-Host 'Waiting for the device to restart...'
@@ -135,9 +141,14 @@ function bashScript(uid, b) {
   return `#!/usr/bin/env bash
 # Shabat-Clock: one-time Shelly setup (device ${uid}). Run on the same Wi-Fi as the Shelly.
 set -uo pipefail
-read -rp 'Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]: ' IP
-IP=\${IP:-192.168.33.1}
 rpc() { curl -sf --max-time 8 "http://$IP/rpc" -H 'Content-Type: application/json' -d "$1"; }
+# The device announces itself as shellypro2-<mac>.local on the LAN — try that first.
+IP='shellypro2-${uid}.local'
+echo "Looking for the Shelly automatically ($IP)..."
+if ! rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' >/dev/null 2>&1; then
+  read -rp 'Not found automatically. Enter the Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]: ' IP
+  IP=\${IP:-192.168.33.1}
+fi
 wait_back() {
   echo 'Waiting for the device to restart...'
   sleep 5
