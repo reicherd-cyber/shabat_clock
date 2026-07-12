@@ -219,6 +219,7 @@ exit 1
 }
 
 export async function onboardShelly({ mac }) {
+  const { appVersion } = await import('../config/version.js');
   const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה — 12 תווים הקסדצימליים', { mac: 'invalid' });
   if (!env.deviceBroker.host) {
@@ -237,10 +238,13 @@ export async function onboardShelly({ mac }) {
   reloadBroker();
 
   const bodies = rpcBodies({ uid, password, ca });
+  const stamp = `# script version ${appVersion.commit} — generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC\n`;
   return {
     mac: uid,
     broker: `${env.deviceBroker.host}:${env.deviceBroker.port}`,
-    script_ps: powershellScript(uid, bodies),
-    script_sh: bashScript(uid, bodies),
+    version: appVersion.commit,
+    script_ps: stamp + powershellScript(uid, bodies),
+    // keep the shebang as line 1 — the stamp goes right after it
+    script_sh: bashScript(uid, bodies).replace('\n', `\n${stamp}`),
   };
 }

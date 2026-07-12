@@ -86,6 +86,10 @@ function UserLayout() {
 
 function AdminLayout() {
   const nav = useNavigate();
+  const [ver, setVer] = useState(null);
+  useEffect(() => {
+    fetch('/healthz').then((r) => r.json()).then(setVer).catch(() => {});
+  }, []);
   if (!tokens.admin) return <Navigate to="/admin/login" replace />;
   const navCls = ({ isActive }) =>
     `px-3 py-1.5 rounded-[10px] font-medium text-sm whitespace-nowrap ${isActive ? 'bg-accent text-white' : 'text-ink hover:bg-line/50'}`;
@@ -113,6 +117,11 @@ function AdminLayout() {
       <main className="max-w-5xl mx-auto px-6 py-8">
         <Outlet />
       </main>
+      {ver?.version && (
+        <footer className="max-w-5xl mx-auto px-6 pb-4 text-muted text-xs" dir="ltr">
+          v {ver.version}{ver.version_date ? ` · ${ver.version_date}` : ''}
+        </footer>
+      )}
     </div>
   );
 }

@@ -29,7 +29,10 @@ export function createApp() {
     next();
   });
 
-  app.get('/healthz', (req, res) => res.json({ ok: true }));
+  app.get('/healthz', async (req, res) => {
+    const { appVersion } = await import('./config/version.js');
+    res.json({ ok: true, version: appVersion.commit, version_date: appVersion.date });
+  });
 
   app.use(ivrLimiter, ivrRouter); // GET /ivr — Yemot webhook (30 req/min/phone)
   app.use('/api/v1', authRouter);
