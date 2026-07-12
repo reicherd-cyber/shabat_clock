@@ -71,6 +71,9 @@ function powershellScript(uid, b) {
   // the throw in red and always pauses at the end.
   return `# Shabat-Clock: one-time Shelly setup (device ${uid}). Run in PowerShell on the same Wi-Fi as the Shelly.
 $ErrorActionPreference = 'Stop'
+# Talk to the device directly — corporate/system proxies answer local addresses with
+# their own pages and break every step (burned a real onboarding).
+[System.Net.WebRequest]::DefaultWebProxy = $null
 function Main {
   function Rpc($json) {
     Invoke-RestMethod -Uri ("http://{0}/rpc" -f $script:ip) -Method Post -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 8
@@ -148,7 +151,7 @@ function bashScript(uid, b) {
 set -uo pipefail
 # Keep the verdict readable even when the terminal window closes on exit.
 trap 'read -rp "Finished - press Enter to close this window: "' EXIT
-rpc() { curl -sf --max-time 8 "http://$IP/rpc" -H 'Content-Type: application/json' -d "$1"; }
+rpc() { curl -sf --noproxy '*' --max-time 8 "http://$IP/rpc" -H 'Content-Type: application/json' -d "$1"; }
 # The device announces itself as shellypro2-<mac>.local on the LAN — try that first,
 # accepting only an answer that actually looks like a Shelly (routers may hijack
 # unresolved names).
