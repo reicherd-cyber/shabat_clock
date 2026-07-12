@@ -76,7 +76,11 @@ $ErrorActionPreference = 'Stop'
 [System.Net.WebRequest]::DefaultWebProxy = $null
 function Main {
   function Rpc($json) {
-    Invoke-RestMethod -Uri ("http://{0}/rpc" -f $script:ip) -Method Post -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 8
+    # POST /rpc answers with a JSON-RPC envelope {id, src, result|error} — unwrap it.
+    $r = Invoke-RestMethod -Uri ("http://{0}/rpc" -f $script:ip) -Method Post -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 8
+    if ($null -ne $r -and $null -ne $r.PSObject.Properties['error'] -and $r.error) { throw ("Device returned error: " + $r.error.message) }
+    if ($null -ne $r -and $null -ne $r.PSObject.Properties['result']) { return $r.result }
+    return $r
   }
   function WaitBack {
     Write-Host 'Waiting for the device to restart...'
