@@ -205,19 +205,22 @@ export default function Devices() {
             </p>
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">Windows (PowerShell)</span>
+                <span className="text-sm font-medium">Windows — מדביקים ב-PowerShell</span>
                 <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => copyScript('ps', shelly.prep.script_ps)}>
                   {shelly.copied === 'ps' ? 'הועתק ✓' : 'העתק'}
                 </Button>
               </div>
               <pre dir="ltr" className="text-[11px] bg-surface2 border border-line rounded-xl p-2 max-h-40 overflow-auto whitespace-pre">{shelly.prep.script_ps}</pre>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">Mac / Linux (Terminal)</span>
-                <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => copyScript('sh', shelly.prep.script_sh)}>
-                  {shelly.copied === 'sh' ? 'הועתק ✓' : 'העתק'}
-                </Button>
-              </div>
-              <pre dir="ltr" className="text-[11px] bg-surface2 border border-line rounded-xl p-2 max-h-40 overflow-auto whitespace-pre">{shelly.prep.script_sh}</pre>
+              <details>
+                <summary className="text-sm text-muted cursor-pointer">המחשב שם הוא Mac או Linux? סקריפט Terminal ›</summary>
+                <div className="flex items-center gap-2 mt-2">
+                  <span className="text-sm font-medium">Mac / Linux — מדביקים ב-Terminal (לא ב-PowerShell!)</span>
+                  <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => copyScript('sh', shelly.prep.script_sh)}>
+                    {shelly.copied === 'sh' ? 'הועתק ✓' : 'העתק'}
+                  </Button>
+                </div>
+                <pre dir="ltr" className="text-[11px] bg-surface2 border border-line rounded-xl p-2 max-h-40 overflow-auto whitespace-pre mt-2">{shelly.prep.script_sh}</pre>
+              </details>
             </div>
             <p className="text-muted text-xs">
               הסקריפט מכיל סיסמה ייחודית למכשיר הזה — שלחו אותו בערוץ פרטי. אפשר לסגור חלון זה
