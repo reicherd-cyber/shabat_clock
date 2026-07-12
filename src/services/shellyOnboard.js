@@ -68,7 +68,8 @@ function powershellScript(uid, b) {
   const sntpArray = b.sntp.map((j) => `'${j}'`).join(', ');
   return `# Shabat-Clock: one-time Shelly setup (device ${uid}). Run in PowerShell on the same Wi-Fi as the Shelly.
 $ErrorActionPreference = 'Stop'
-$ip = Read-Host 'Enter the Shelly IP address (e.g. 192.168.1.50)'
+$ip = Read-Host 'Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]'
+if (-not $ip) { $ip = '192.168.33.1' }
 function Rpc($json) {
   Invoke-RestMethod -Uri ("http://{0}/rpc" -f $ip) -Method Post -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($json))
 }
@@ -91,6 +92,12 @@ Write-Host 'Checking device...'
 $info = Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}'
 $mac = ($info.mac -replace '[^0-9a-fA-F]', '').ToLower()
 if ($mac -ne '${uid}') { throw "This is a different Shelly (MAC $mac, expected ${uid}). Wrong IP?" }
+$wifi = Rpc '{"id":0,"method":"Wifi.GetStatus"}'
+if ($wifi.status -ne 'got ip') {
+  Write-Host 'PROBLEM: the Shelly is not connected to the site Wi-Fi (no internet).' -ForegroundColor Red
+  Write-Host 'Connect it to the Wi-Fi first (Shelly app > device > Wi-Fi settings), then run this script again.' -ForegroundColor Red
+  exit 1
+}
 Write-Host 'Installing server certificate...'
 Rpc '${b.putCa}' | Out-Null
 Write-Host 'Configuring server connection...'
@@ -128,7 +135,8 @@ function bashScript(uid, b) {
   return `#!/usr/bin/env bash
 # Shabat-Clock: one-time Shelly setup (device ${uid}). Run on the same Wi-Fi as the Shelly.
 set -uo pipefail
-read -rp 'Enter the Shelly IP address (e.g. 192.168.1.50): ' IP
+read -rp 'Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]: ' IP
+IP=\${IP:-192.168.33.1}
 rpc() { curl -sf --max-time 8 "http://$IP/rpc" -H 'Content-Type: application/json' -d "$1"; }
 wait_back() {
   echo 'Waiting for the device to restart...'
@@ -147,6 +155,11 @@ clock_ok() {
 echo 'Checking device...'
 MAC=$(rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' | tr '[:upper:]' '[:lower:]' | grep -o '"mac" *: *"[0-9a-f:]*"' | grep -o '[0-9a-f]\\{2\\}\\(:\\?[0-9a-f]\\{2\\}\\)\\{5\\}' | tr -d ':')
 [ "$MAC" = "${uid}" ] || { echo "This is a different Shelly (MAC $MAC, expected ${uid}). Wrong IP?"; exit 1; }
+rpc '{"id":0,"method":"Wifi.GetStatus"}' | grep -q '"status" *: *"got ip"' || {
+  echo 'PROBLEM: the Shelly is not connected to the site Wi-Fi (no internet).'
+  echo 'Connect it to the Wi-Fi first (Shelly app > device > Wi-Fi settings), then run this script again.'
+  exit 1
+}
 echo 'Installing server certificate...'
 rpc '${b.putCa}' >/dev/null || { echo 'Certificate install failed'; exit 1; }
 echo 'Configuring server connection...'

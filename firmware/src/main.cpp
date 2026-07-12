@@ -577,11 +577,18 @@ void loop() {
   }
 
   // WiFi/MQTT reconnect, exponential backoff 1s→5min; local execution continues.
+  // Jitter (±50% of the doubled delay) desynchronizes fleet reconnects after a
+  // broker outage — without it every device retries at the same instants
+  // (thundering herd). Baked in pre-fleet: there is no OTA to fix it later.
   if (WiFi.status() == WL_CONNECTED && !mqttClient.connected() && brokerHost.length()) {
     if (millis() - lastReconnectMs > reconnectDelayMs) {
       lastReconnectMs = millis();
-      if (mqttConnect()) reconnectDelayMs = 1000;
-      else reconnectDelayMs = min(reconnectDelayMs * 2, 300000UL);
+      if (mqttConnect()) {
+        reconnectDelayMs = 1000;
+      } else {
+        unsigned long base = min(reconnectDelayMs * 2, 300000UL);
+        reconnectDelayMs = base / 2 + random(base / 2 + 1);
+      }
     }
   }
   mqttClient.loop();
