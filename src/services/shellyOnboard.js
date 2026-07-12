@@ -66,74 +66,74 @@ function rpcBodies({ uid, password, ca }) {
 // verdict at the end, so a non-technical helper can just read it back.
 function powershellScript(uid, b) {
   const sntpArray = b.sntp.map((j) => `'${j}'`).join(', ');
+  // Everything lives inside Main so failures throw (never `exit`, which closes a
+  // pasted-into console window before anyone reads the verdict); the wrapper prints
+  // the throw in red and always pauses at the end.
   return `# Shabat-Clock: one-time Shelly setup (device ${uid}). Run in PowerShell on the same Wi-Fi as the Shelly.
 $ErrorActionPreference = 'Stop'
-function Rpc($json) {
-  Invoke-RestMethod -Uri ("http://{0}/rpc" -f $ip) -Method Post -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 8
-}
-# The device announces itself as shellypro2-<mac>.local on the LAN — try that first,
-# so in most cases nobody has to hunt for an IP address.
-$ip = 'shellypro2-${uid}.local'
-Write-Host "Looking for the Shelly automatically ($ip)..."
-try { Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' | Out-Null } catch {
-  $ip = Read-Host 'Not found automatically. Enter the Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]'
-  if (-not $ip) { $ip = '192.168.33.1' }
-}
-function WaitBack {
-  Write-Host 'Waiting for the device to restart...'
-  Start-Sleep 5
-  foreach ($i in 1..30) {
-    try { Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' | Out-Null; return } catch { Start-Sleep 2 }
+function Main {
+  function Rpc($json) {
+    Invoke-RestMethod -Uri ("http://{0}/rpc" -f $script:ip) -Method Post -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 8
   }
-  throw 'Device did not come back after reboot — check its power and IP.'
-}
-function ClockOk {
-  foreach ($i in 1..10) {
-    try { $s = Rpc '{"id":0,"method":"Sys.GetStatus"}'; if ($s.unixtime -gt 1700000000) { return $true } } catch {}
+  function WaitBack {
+    Write-Host 'Waiting for the device to restart...'
+    Start-Sleep 5
+    foreach ($i in 1..30) {
+      try { Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' | Out-Null; return } catch { Start-Sleep 2 }
+    }
+    throw 'PROBLEM: device did not come back after reboot - check its power and IP.'
+  }
+  function ClockOk {
+    foreach ($i in 1..10) {
+      try { $s = Rpc '{"id":0,"method":"Sys.GetStatus"}'; if ($s.unixtime -gt 1700000000) { return $true } } catch {}
+      Start-Sleep 2
+    }
+    return $false
+  }
+  # The device announces itself as shellypro2-<mac>.local on the LAN — try that first.
+  $script:ip = 'shellypro2-${uid}.local'
+  Write-Host "Looking for the Shelly automatically ($script:ip)..."
+  try { Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' | Out-Null } catch {
+    $script:ip = Read-Host 'Not found automatically. Enter the Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]'
+    if (-not $script:ip) { $script:ip = '192.168.33.1' }
+  }
+  Write-Host 'Checking device...'
+  $info = Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}'
+  $mac = ($info.mac -replace '[^0-9a-fA-F]', '').ToLower()
+  if ($mac -ne '${uid}') { throw "PROBLEM: this is a different Shelly (MAC $mac, expected ${uid}). Wrong IP?" }
+  $wifi = Rpc '{"id":0,"method":"Wifi.GetStatus"}'
+  if ($wifi.status -ne 'got ip') {
+    throw 'PROBLEM: the Shelly is not connected to the site Wi-Fi (no internet). Connect it to the Wi-Fi first (Shelly app > device > Wi-Fi settings), then run this script again.'
+  }
+  Write-Host 'Installing server certificate...'
+  Rpc '${b.putCa}' | Out-Null
+  Write-Host 'Configuring server connection...'
+  Rpc '${b.mqtt}' | Out-Null
+  $sntp = @(${sntpArray})
+  $clock = $false
+  foreach ($cfg in $sntp) {
+    Write-Host 'Setting time server and restarting...'
+    Rpc $cfg | Out-Null
+    try { Rpc '${b.reboot}' | Out-Null } catch {}
+    WaitBack
+    if (ClockOk) { $clock = $true; break }
+    Write-Host 'Clock not synced yet - trying another time server...' -ForegroundColor Yellow
+  }
+  if (-not $clock) {
+    throw 'PROBLEM: the device clock never synced (the router may block NTP/UDP-123). The server connection cannot work until the clock syncs. Report this exact message.'
+  }
+  Write-Host 'Clock OK. Verifying server connection...'
+  foreach ($i in 1..30) {
+    try { if ((Rpc '{"id":0,"method":"MQTT.GetStatus"}').connected) {
+      Write-Host 'SUCCESS! The device is connected to the server.' -ForegroundColor Green
+      return
+    } } catch {}
     Start-Sleep 2
   }
-  return $false
+  throw 'PROBLEM: clock is fine but the server connection did not come up within a minute. Most common cause: an older setup script was used - ask for the NEWEST script and run it again.'
 }
-Write-Host 'Checking device...'
-$info = Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}'
-$mac = ($info.mac -replace '[^0-9a-fA-F]', '').ToLower()
-if ($mac -ne '${uid}') { throw "This is a different Shelly (MAC $mac, expected ${uid}). Wrong IP?" }
-$wifi = Rpc '{"id":0,"method":"Wifi.GetStatus"}'
-if ($wifi.status -ne 'got ip') {
-  Write-Host 'PROBLEM: the Shelly is not connected to the site Wi-Fi (no internet).' -ForegroundColor Red
-  Write-Host 'Connect it to the Wi-Fi first (Shelly app > device > Wi-Fi settings), then run this script again.' -ForegroundColor Red
-  exit 1
-}
-Write-Host 'Installing server certificate...'
-Rpc '${b.putCa}' | Out-Null
-Write-Host 'Configuring server connection...'
-Rpc '${b.mqtt}' | Out-Null
-$sntp = @(${sntpArray})
-$clock = $false
-foreach ($cfg in $sntp) {
-  Write-Host 'Setting time server and restarting...'
-  Rpc $cfg | Out-Null
-  try { Rpc '${b.reboot}' | Out-Null } catch {}
-  WaitBack
-  if (ClockOk) { $clock = $true; break }
-  Write-Host 'Clock not synced yet - trying another time server...' -ForegroundColor Yellow
-}
-if (-not $clock) {
-  Write-Host 'PROBLEM: the device clock never synced (the router may block NTP/UDP-123).' -ForegroundColor Red
-  Write-Host 'The server connection cannot work until the clock syncs. Report this exact message.' -ForegroundColor Red
-  exit 1
-}
-Write-Host 'Clock OK. Verifying server connection...'
-foreach ($i in 1..30) {
-  try { if ((Rpc '{"id":0,"method":"MQTT.GetStatus"}').connected) {
-    Write-Host 'SUCCESS! The device is connected to the server.' -ForegroundColor Green
-    exit 0
-  } } catch {}
-  Start-Sleep 2
-}
-Write-Host 'PROBLEM: clock is fine but the server connection did not come up within a minute.' -ForegroundColor Red
-Write-Host 'Most common cause: an older setup script was used - ask for the NEWEST script and run it again.' -ForegroundColor Red
-exit 1
+try { Main } catch { Write-Host $_.Exception.Message -ForegroundColor Red }
+Read-Host 'Finished - press Enter to close this window' | Out-Null
 `;
 }
 
@@ -141,6 +141,8 @@ function bashScript(uid, b) {
   return `#!/usr/bin/env bash
 # Shabat-Clock: one-time Shelly setup (device ${uid}). Run on the same Wi-Fi as the Shelly.
 set -uo pipefail
+# Keep the verdict readable even when the terminal window closes on exit.
+trap 'read -rp "Finished - press Enter to close this window: "' EXIT
 rpc() { curl -sf --max-time 8 "http://$IP/rpc" -H 'Content-Type: application/json' -d "$1"; }
 # The device announces itself as shellypro2-<mac>.local on the LAN — try that first.
 IP='shellypro2-${uid}.local'
