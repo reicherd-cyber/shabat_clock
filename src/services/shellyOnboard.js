@@ -90,16 +90,21 @@ function Main {
     }
     return $false
   }
-  # The device announces itself as shellypro2-<mac>.local on the LAN — try that first.
+  # The device announces itself as shellypro2-<mac>.local on the LAN — try that first,
+  # but only accept an answer that actually looks like a Shelly (some routers hijack
+  # unresolved names and answer with their own web page).
   $script:ip = 'shellypro2-${uid}.local'
   Write-Host "Looking for the Shelly automatically ($script:ip)..."
-  try { Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' | Out-Null } catch {
+  $found = $false
+  try { if ((Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}').mac) { $found = $true } } catch {}
+  if (-not $found) {
     $script:ip = Read-Host 'Not found automatically. Enter the Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]'
     if (-not $script:ip) { $script:ip = '192.168.33.1' }
   }
   Write-Host 'Checking device...'
   $info = Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}'
   $mac = ($info.mac -replace '[^0-9a-fA-F]', '').ToLower()
+  if (-not $mac) { throw 'PROBLEM: this address did not answer like a Shelly (the router may have answered instead). Run the script again and TYPE the device IP address (shown in the Shelly app under Device Information).' }
   if ($mac -ne '${uid}') { throw "PROBLEM: this is a different Shelly (MAC $mac, expected ${uid}). Wrong IP?" }
   $wifi = Rpc '{"id":0,"method":"Wifi.GetStatus"}'
   if ($wifi.status -ne 'got ip') {
@@ -144,10 +149,12 @@ set -uo pipefail
 # Keep the verdict readable even when the terminal window closes on exit.
 trap 'read -rp "Finished - press Enter to close this window: "' EXIT
 rpc() { curl -sf --max-time 8 "http://$IP/rpc" -H 'Content-Type: application/json' -d "$1"; }
-# The device announces itself as shellypro2-<mac>.local on the LAN — try that first.
+# The device announces itself as shellypro2-<mac>.local on the LAN — try that first,
+# accepting only an answer that actually looks like a Shelly (routers may hijack
+# unresolved names).
 IP='shellypro2-${uid}.local'
 echo "Looking for the Shelly automatically ($IP)..."
-if ! rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' >/dev/null 2>&1; then
+if ! rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' 2>/dev/null | grep -q '"mac"'; then
   read -rp 'Not found automatically. Enter the Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]: ' IP
   IP=\${IP:-192.168.33.1}
 fi
