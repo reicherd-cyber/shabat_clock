@@ -42,7 +42,15 @@ const SNTP_SERVERS = ['pool.ntp.org', 'time.google.com', 'time.cloudflare.com'];
 function rpcBodies({ uid, password, ca }) {
   const { host, port } = env.deviceBroker;
   return {
+    // Single call with append:false is a complete upload (data:null would DELETE).
+    // The reply's {len} is echoed so a mangled upload is visible immediately.
     putCa: JSON.stringify({ id: 1, method: 'Shelly.PutUserCA', params: { append: false, data: ca } }),
+    caLen: ca.length,
+    // Last-resort fallback (prompt-gated in the script): TLS without server-cert
+    // verification — still encrypted, still per-device credentials + topic ACL.
+    mqttNoVerify: JSON.stringify({
+      id: 5, method: 'MQTT.SetConfig', params: { config: { ssl_ca: '*' } },
+    }),
     mqtt: JSON.stringify({
       id: 2,
       method: 'MQTT.SetConfig',
@@ -118,7 +126,8 @@ function Main {
     throw 'PROBLEM: the Shelly is not connected to the site Wi-Fi (no internet). Connect it to the Wi-Fi first (Shelly app > device > Wi-Fi settings), then run this script again.'
   }
   Write-Host 'Installing server certificate...'
-  Rpc '${b.putCa}' | Out-Null
+  $ca = Rpc '${b.putCa}'
+  Write-Host "Certificate stored: $($ca.len) bytes (expected ${b.caLen})"
   Write-Host 'Configuring server connection...'
   Rpc '${b.mqtt}' | Out-Null
   $sntp = @(${sntpArray})
@@ -142,7 +151,23 @@ function Main {
     } } catch {}
     Start-Sleep 2
   }
-  throw 'PROBLEM: clock is fine but the server connection did not come up within a minute. Most common cause: an older setup script was used - ask for the NEWEST script and run it again.'
+  Write-Host 'The verified connection did not come up.' -ForegroundColor Yellow
+  $ans = Read-Host 'Try again WITHOUT certificate verification (still encrypted)? y/n'
+  if ($ans -ne 'y') {
+    throw 'PROBLEM: server connection did not come up (certificate-verified mode). Report this.'
+  }
+  Rpc '${b.mqttNoVerify}' | Out-Null
+  try { Rpc '${b.reboot}' | Out-Null } catch {}
+  WaitBack
+  Write-Host 'Verifying server connection (no-verify mode)...'
+  foreach ($i in 1..30) {
+    try { if ((Rpc '{"id":0,"method":"MQTT.GetStatus"}').connected) {
+      Write-Host 'SUCCESS - BUT connected WITHOUT certificate verification. Report this exact sentence.' -ForegroundColor Yellow
+      return
+    } } catch {}
+    Start-Sleep 2
+  }
+  throw 'PROBLEM: no connection even without certificate verification. Report this.'
 }
 try { Main } catch { Write-Host $_.Exception.Message -ForegroundColor Red }
 Read-Host 'Finished - press Enter to close this window' | Out-Null
@@ -188,7 +213,8 @@ rpc '{"id":0,"method":"Wifi.GetStatus"}' | grep -q '"status" *: *"got ip"' || {
   exit 1
 }
 echo 'Installing server certificate...'
-rpc '${b.putCa}' >/dev/null || { echo 'Certificate install failed'; exit 1; }
+CA_REPLY=$(rpc '${b.putCa}') || { echo 'Certificate install failed'; exit 1; }
+echo "Certificate stored: $CA_REPLY (expected len ${b.caLen})"
 echo 'Configuring server connection...'
 rpc '${b.mqtt}' >/dev/null || { echo 'MQTT config failed'; exit 1; }
 CLOCK=0
@@ -212,8 +238,18 @@ for i in $(seq 1 30); do
   rpc '{"id":0,"method":"MQTT.GetStatus"}' 2>/dev/null | grep -q '"connected" *: *true' && { echo 'SUCCESS! The device is connected to the server.'; exit 0; }
   sleep 2
 done
-echo 'PROBLEM: clock is fine but the server connection did not come up within a minute.'
-echo 'Most common cause: an older setup script was used - ask for the NEWEST script and run it again.'
+echo 'The verified connection did not come up.'
+read -rp 'Try again WITHOUT certificate verification (still encrypted)? y/n: ' ANS
+[ "$ANS" = 'y' ] || { echo 'PROBLEM: server connection did not come up (certificate-verified mode). Report this.'; exit 1; }
+rpc '${b.mqttNoVerify}' >/dev/null
+rpc '${b.reboot}' >/dev/null || true
+wait_back
+echo 'Verifying server connection (no-verify mode)...'
+for i in $(seq 1 30); do
+  rpc '{"id":0,"method":"MQTT.GetStatus"}' 2>/dev/null | grep -q '"connected" *: *true' && { echo 'SUCCESS - BUT connected WITHOUT certificate verification. Report this exact sentence.'; exit 0; }
+  sleep 2
+done
+echo 'PROBLEM: no connection even without certificate verification. Report this.'
 exit 1
 `;
 }
