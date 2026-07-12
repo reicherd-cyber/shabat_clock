@@ -12,6 +12,7 @@ export default function Devices() {
   const [relayForm, setRelayForm] = useState(null);   // {device, relay_no, name, ivr_digit}
   const [uidForm, setUidForm] = useState(null);       // {device, uid}
   const [shelly, setShelly] = useState(null);         // wizard: {step, ip, user_id, name, probe, relays}
+  const [showRemoved, setShowRemoved] = useState(false);
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -90,17 +91,26 @@ export default function Devices() {
   });
 
   if (!devices) return <p className="text-muted">טוען…</p>;
+  // Removed devices (is_enabled=false) are hidden by default — a toggle reveals
+  // them for inspection/restore.
+  const removedCount = devices.filter((d) => !d.is_enabled).length;
+  const visibleDevices = devices.filter((d) => d.is_enabled || showRemoved);
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center flex-wrap gap-2">
         <h2 className="font-bold text-xl">מכשירים</h2>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {removedCount > 0 && (
+            <Button variant="ghost" onClick={() => setShowRemoved(!showRemoved)}>
+              {showRemoved ? 'הסתר מכשירים שהוסרו' : `הצג מכשירים שהוסרו (${removedCount})`}
+            </Button>
+          )}
           <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: users[0]?.id || '', name: '' })}>+ Shelly</Button>
           <Button onClick={() => setProvForm({ user_id: users[0]?.id || '', name: '', relay_count: 2, device_uid: '' })}>+ הקצאת מכשיר</Button>
         </div>
       </div>
       <ErrorNote error={error} />
-      {devices.map((d) => (
+      {visibleDevices.map((d) => (
         <Card key={d.id}>
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2">
