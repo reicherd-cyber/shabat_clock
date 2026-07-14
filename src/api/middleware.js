@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { env } from '../config/env.js';
-import { errors } from '../config/errors.js';
+import { errors, ApiError } from '../config/errors.js';
 
 // [D14] JWT HS256. user: {sub, role:'user'} 30d; admin: {sub, role} 12h;
 // impersonation: {sub:user_id, role:'user', imp:admin_id} 1h.
@@ -22,7 +22,9 @@ function decode(req) {
   try {
     return jwt.verify(m[1], env.jwtSecret);
   } catch {
-    throw errors.unauthenticated();
+    // Distinct code: an expired/invalid SESSION (vs. a wrong PIN/password, which is
+    // plain UNAUTHENTICATED) — the web client auto-logs-out only on this code.
+    throw new ApiError(401, 'SESSION_EXPIRED', 'פג תוקף החיבור — יש להתחבר מחדש');
   }
 }
 

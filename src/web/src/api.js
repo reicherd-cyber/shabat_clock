@@ -8,7 +8,7 @@ export const tokens = {
   set admin(v) { v ? localStorage.setItem('admin_token', v) : localStorage.removeItem('admin_token'); },
 };
 
-async function call(method, path, body, token) {
+async function call(method, path, body, token, scope = null) {
   const res = await fetch(BASE + path, {
     method,
     headers: {
@@ -23,24 +23,30 @@ async function call(method, path, body, token) {
     err.code = data?.error?.code || 'HTTP_' + res.status;
     err.status = res.status;
     err.fields = data?.error?.fields;
+    // Session expired (distinct from wrong-PIN 401s): drop the dead token and land
+    // on the matching login page.
+    if (err.code === 'SESSION_EXPIRED' && scope) {
+      tokens[scope] = null;
+      window.location.href = scope === 'admin' ? '/admin/login' : '/login';
+    }
     throw err;
   }
   return data;
 }
 
 export const api = {
-  get: (p) => call('GET', p, undefined, tokens.user),
-  post: (p, b) => call('POST', p, b, tokens.user),
-  patch: (p, b) => call('PATCH', p, b, tokens.user),
-  del: (p) => call('DELETE', p, undefined, tokens.user),
+  get: (p) => call('GET', p, undefined, tokens.user, 'user'),
+  post: (p, b) => call('POST', p, b, tokens.user, 'user'),
+  patch: (p, b) => call('PATCH', p, b, tokens.user, 'user'),
+  del: (p) => call('DELETE', p, undefined, tokens.user, 'user'),
 };
 
 export const adminApi = {
-  get: (p) => call('GET', '/admin' + p, undefined, tokens.admin),
-  post: (p, b) => call('POST', '/admin' + p, b, tokens.admin),
-  patch: (p, b) => call('PATCH', '/admin' + p, b, tokens.admin),
-  put: (p, b) => call('PUT', '/admin' + p, b, tokens.admin),
-  del: (p) => call('DELETE', '/admin' + p, undefined, tokens.admin),
+  get: (p) => call('GET', '/admin' + p, undefined, tokens.admin, 'admin'),
+  post: (p, b) => call('POST', '/admin' + p, b, tokens.admin, 'admin'),
+  patch: (p, b) => call('PATCH', '/admin' + p, b, tokens.admin, 'admin'),
+  put: (p, b) => call('PUT', '/admin' + p, b, tokens.admin, 'admin'),
+  del: (p) => call('DELETE', '/admin' + p, undefined, tokens.admin, 'admin'),
 };
 
 export const publicApi = {
