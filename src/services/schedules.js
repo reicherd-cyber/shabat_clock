@@ -47,31 +47,49 @@ export function validateScheduleRules(schedule, { tz = 'Asia/Jerusalem', now = n
     }
   } else {
     s.repeat_type = 'weekly';
-    if (onMin == null || offMin == null || onMin >= MINUTES_PER_DAY || offMin >= MINUTES_PER_DAY) {
-      throw errors.validation('on_time/off_time required, HH:MM', { on_time: 'HH:MM', off_time: 'HH:MM' });
-    }
     if (s.on_date || s.off_date) {
       throw errors.validation('weekly schedules must not carry dates', { on_date: 'must be null' });
     }
+    // One-sided is legal here too ("every night turn off at 23:00", no ON side):
+    // at least one side required; a present side needs a valid time.
+    const hasOn = Boolean(s.on_time);
+    const hasOff = Boolean(s.off_time);
+    if (!hasOn && !hasOff) {
+      throw errors.validation('weekly needs an ON and/or OFF side', { on_time: 'required', off_time: 'required' });
+    }
+    if (hasOn && (onMin == null || onMin >= MINUTES_PER_DAY)) {
+      throw errors.validation('ON side needs on_time HH:MM', { on_time: 'HH:MM' });
+    }
+    if (hasOff && (offMin == null || offMin >= MINUTES_PER_DAY)) {
+      throw errors.validation('OFF side needs off_time HH:MM', { off_time: 'HH:MM' });
+    }
     const onDay = s.on_day_of_week == null ? null : Number(s.on_day_of_week);
     const offDay = s.off_day_of_week == null ? null : Number(s.off_day_of_week);
-    if ((onDay == null) !== (offDay == null)) {
-      throw errors.validation('days must both be set or both be null (daily)', { off_day_of_week: 'mismatch' });
+    if (hasOn && onDay != null && (onDay < 1 || onDay > 7)) {
+      throw errors.validation('day of week must be 1–7', { on_day_of_week: '1-7' });
     }
-    if (onDay != null) {
-      if (onDay < 1 || onDay > 7 || offDay < 1 || offDay > 7) {
-        throw errors.validation('day of week must be 1–7', { on_day_of_week: '1-7' });
+    if (hasOff && offDay != null && (offDay < 1 || offDay > 7)) {
+      throw errors.validation('day of week must be 1–7', { off_day_of_week: '1-7' });
+    }
+    if (hasOn && hasOff) {
+      // Both sides present: the original pair rules — same-null-ness, non-zero cyclic length.
+      if ((onDay == null) !== (offDay == null)) {
+        throw errors.validation('days must both be set or both be null (daily)', { off_day_of_week: 'mismatch' });
       }
-      // Cyclic week: duration = (off − on) mod 10080, must be > 0. Wrap-around legal.
-      const duration = mod((offDay * MINUTES_PER_DAY + offMin) - (onDay * MINUTES_PER_DAY + onMin), MINUTES_PER_WEEK);
-      if (duration === 0) throw new ApiError(400, 'ZERO_LENGTH_PAIR', 'ON and OFF are identical');
-    } else {
-      // Daily pair: off before on = next-day off; only zero length rejected.
-      const duration = mod(offMin - onMin, MINUTES_PER_DAY);
-      if (duration === 0) throw new ApiError(400, 'ZERO_LENGTH_PAIR', 'ON and OFF are identical');
+      if (onDay != null) {
+        // Cyclic week: duration = (off − on) mod 10080, must be > 0. Wrap-around legal.
+        const duration = mod((offDay * MINUTES_PER_DAY + offMin) - (onDay * MINUTES_PER_DAY + onMin), MINUTES_PER_WEEK);
+        if (duration === 0) throw new ApiError(400, 'ZERO_LENGTH_PAIR', 'ON and OFF are identical');
+      } else {
+        // Daily pair: off before on = next-day off; only zero length rejected.
+        const duration = mod(offMin - onMin, MINUTES_PER_DAY);
+        if (duration === 0) throw new ApiError(400, 'ZERO_LENGTH_PAIR', 'ON and OFF are identical');
+      }
     }
-    s.on_day_of_week = onDay;
-    s.off_day_of_week = offDay;
+    s.on_day_of_week = hasOn ? onDay : null;
+    s.off_day_of_week = hasOff ? offDay : null;
+    if (!hasOn) s.on_time = null;
+    if (!hasOff) s.off_time = null;
   }
   return s;
 }

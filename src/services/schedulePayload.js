@@ -45,9 +45,10 @@ export async function buildDevicePayload(deviceId) {
   const once = [];
   for (const s of schedules) {
     if (s.repeat_type === 'weekly') {
-      // [D5] 0 on the wire = daily (NULL in DB)
-      events.push({ sid: Number(s.id), relay: s.relay_no, day: s.on_day_of_week ?? 0, time: hhmm(s.on_time), action: 'on' });
-      events.push({ sid: Number(s.id), relay: s.relay_no, day: s.off_day_of_week ?? 0, time: hhmm(s.off_time), action: 'off' });
+      // [D5] 0 on the wire = daily (NULL in DB). One-sided weekly contributes a
+      // single entry — the wire format is unchanged, entries were always independent.
+      if (s.on_time) events.push({ sid: Number(s.id), relay: s.relay_no, day: s.on_day_of_week ?? 0, time: hhmm(s.on_time), action: 'on' });
+      if (s.off_time) events.push({ sid: Number(s.id), relay: s.relay_no, day: s.off_day_of_week ?? 0, time: hhmm(s.off_time), action: 'off' });
     } else {
       // One-sided 'once' contributes a single entry — the wire format is unchanged,
       // each entry was always an independent action.

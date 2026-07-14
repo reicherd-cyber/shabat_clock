@@ -6,10 +6,10 @@ const emptyForm = {
   relay_id: '', repeat_type: 'weekly',
   on_day_of_week: 6, on_time: '18:00', off_day_of_week: 7, off_time: '20:00',
   on_date: '', off_date: '', daily: false,
-  once_mode: 'both', // once only: 'both' | 'on' | 'off' — which side(s) the one-shot performs
+  mode: 'both', // 'both' | 'on' | 'off' — which side(s) the schedule performs (weekly or once)
 };
 
-const ONCE_MODES = [
+const MODES = [
   { v: 'both', label: 'הדלקה וכיבוי' },
   { v: 'on', label: 'הדלקה בלבד' },
   { v: 'off', label: 'כיבוי בלבד' },
@@ -43,15 +43,14 @@ export default function Schedules() {
   useEffect(() => { refresh().catch(setError); }, []);
 
   const save = () => run(async () => {
+    // Both repeat types may be one-sided — send only the side(s) the chosen mode performs.
     const b = { relay_id: Number(form.relay_id), repeat_type: form.repeat_type };
     if (form.repeat_type === 'weekly') {
-      b.on_time = form.on_time; b.off_time = form.off_time;
-      b.on_day_of_week = form.daily ? null : Number(form.on_day_of_week);
-      b.off_day_of_week = form.daily ? null : Number(form.off_day_of_week);
+      if (form.mode !== 'off') { b.on_time = form.on_time; b.on_day_of_week = form.daily ? null : Number(form.on_day_of_week); }
+      if (form.mode !== 'on') { b.off_time = form.off_time; b.off_day_of_week = form.daily ? null : Number(form.off_day_of_week); }
     } else {
-      // One-shot: send only the side(s) the chosen mode performs (one-sided is legal).
-      if (form.once_mode !== 'off') { b.on_date = form.on_date; b.on_time = form.on_time; }
-      if (form.once_mode !== 'on') { b.off_date = form.off_date; b.off_time = form.off_time; }
+      if (form.mode !== 'off') { b.on_date = form.on_date; b.on_time = form.on_time; }
+      if (form.mode !== 'on') { b.off_date = form.off_date; b.off_time = form.off_time; }
     }
     await api.post('/schedules', b);
     setForm(null);
@@ -69,14 +68,14 @@ export default function Schedules() {
         time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
       };
     };
-    if (form.once_mode === 'both') {
+    if (form.mode === 'both') {
       const on_date = form.on_date || todayYmd();
       const on_time = form.on_time || nowHm();
       const off = plus(on_date, on_time, minutes);
       setForm({ ...form, on_date, on_time, off_date: off.date, off_time: off.time });
     } else {
       const t = plus(todayYmd(), nowHm(), minutes);
-      setForm(form.once_mode === 'on'
+      setForm(form.mode === 'on'
         ? { ...form, on_date: t.date, on_time: t.time }
         : { ...form, off_date: t.date, off_time: t.time });
     }
@@ -151,20 +150,18 @@ export default function Schedules() {
                 </label>
               )}
             </div>
-            {form.repeat_type === 'once' && (
-              <div className="flex gap-1.5 flex-wrap">
-                {ONCE_MODES.map((m) => (
-                  <Button key={m.v} variant={form.once_mode === m.v ? 'primary' : 'ghost'} className="!px-2.5 !py-1 text-xs"
-                    onClick={() => setForm({
-                      ...form, once_mode: m.v,
-                      ...(m.v !== 'off' ? { on_date: form.on_date || todayYmd(), on_time: form.on_time || nowHm() } : {}),
-                      ...(m.v !== 'on' ? { off_date: form.off_date || todayYmd() } : {}),
-                    })}>{m.label}</Button>
-                ))}
-              </div>
-            )}
+            <div className="flex gap-1.5 flex-wrap">
+              {MODES.map((m) => (
+                <Button key={m.v} variant={form.mode === m.v ? 'primary' : 'ghost'} className="!px-2.5 !py-1 text-xs"
+                  onClick={() => setForm({
+                    ...form, mode: m.v,
+                    ...(form.repeat_type === 'once' && m.v !== 'off' ? { on_date: form.on_date || todayYmd(), on_time: form.on_time || nowHm() } : {}),
+                    ...(form.repeat_type === 'once' && m.v !== 'on' ? { off_date: form.off_date || todayYmd() } : {}),
+                  })}>{m.label}</Button>
+              ))}
+            </div>
             <div className="grid grid-cols-2 gap-3">
-              {!(form.repeat_type === 'once' && form.once_mode === 'off') && <div className="space-y-2">
+              {form.mode !== 'off' && <div className="space-y-2">
                 <span className="text-sm font-medium text-on">הדלקה</span>
                 {form.repeat_type === 'weekly' && !form.daily && (
                   <Select className="w-full" value={form.on_day_of_week} onChange={(e) => setForm({ ...form, on_day_of_week: e.target.value })}>
@@ -176,7 +173,7 @@ export default function Schedules() {
                 )}
                 <Input type="time" value={form.on_time} onChange={(e) => setForm({ ...form, on_time: e.target.value })} />
               </div>}
-              {!(form.repeat_type === 'once' && form.once_mode === 'on') && <div className="space-y-2">
+              {form.mode !== 'on' && <div className="space-y-2">
                 <span className="text-sm font-medium text-off">כיבוי</span>
                 {form.repeat_type === 'weekly' && !form.daily && (
                   <Select className="w-full" value={form.off_day_of_week} onChange={(e) => setForm({ ...form, off_day_of_week: e.target.value })}>
@@ -192,7 +189,7 @@ export default function Schedules() {
             {form.repeat_type === 'once' && (
               <div className="flex items-center gap-1.5 flex-wrap">
                 <span className="text-sm text-muted shrink-0">
-                  {form.once_mode === 'on' ? 'הדלקה בעוד:' : form.once_mode === 'off' ? 'כיבוי בעוד:' : 'כיבוי אחרי:'}
+                  {form.mode === 'on' ? 'הדלקה בעוד:' : form.mode === 'off' ? 'כיבוי בעוד:' : 'כיבוי אחרי:'}
                 </span>
                 {DURATIONS.map((p) => (
                   <Button key={p.min} variant="ghost" className="!px-2 !py-1 text-xs"

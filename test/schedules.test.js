@@ -116,9 +116,38 @@ test('once: time without its date → VALIDATION', () => {
   );
 });
 
-test('weekly: missing off_time still rejected', () => {
+test('weekly: ON-only is legal (e.g. "every Friday turn on", no OFF); OFF side normalized to NULL', () => {
+  const s = validateScheduleRules(weekly({ off_time: null, off_day_of_week: null }));
+  assert.equal(s.on_day_of_week, 6);
+  assert.equal(s.on_time, '18:00');
+  assert.equal(s.off_time, null);
+  assert.equal(s.off_day_of_week, null);
+});
+
+test('weekly: OFF-only is legal; ON side normalized to NULL', () => {
+  const s = validateScheduleRules(weekly({ on_time: null, on_day_of_week: null }));
+  assert.equal(s.off_day_of_week, 7);
+  assert.equal(s.off_time, '20:00');
+  assert.equal(s.on_time, null);
+  assert.equal(s.on_day_of_week, null);
+});
+
+test('weekly: ON-only, daily (no day of week), is legal', () => {
+  const s = validateScheduleRules(weekly({ on_day_of_week: null, off_time: null, off_day_of_week: null }));
+  assert.equal(s.on_day_of_week, null);
+  assert.equal(s.on_time, '18:00');
+});
+
+test('weekly: no side at all → VALIDATION', () => {
   assert.throws(
-    () => validateScheduleRules(weekly({ off_time: null })),
+    () => validateScheduleRules({ repeat_type: 'weekly' }),
+    (e) => e.code === 'VALIDATION',
+  );
+});
+
+test('weekly: ON-only with bad time format → VALIDATION', () => {
+  assert.throws(
+    () => validateScheduleRules(weekly({ on_time: 'nope', off_time: null, off_day_of_week: null })),
     (e) => e.code === 'VALIDATION',
   );
 });

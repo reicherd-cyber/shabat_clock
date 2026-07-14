@@ -42,13 +42,13 @@ const ymdParts = (v) => {
 function occurrencesInWindow(s, winStart, winEnd) {
   const tz = s.timezone;
   const out = [];
+  // Both repeat types may be one-sided — only sides that exist produce occurrences.
   const events = s.repeat_type === 'weekly'
     ? [
-      { day: s.on_day_of_week ?? 0, time: s.on_time, action: 'on' },
-      { day: s.off_day_of_week ?? 0, time: s.off_time, action: 'off' },
+      ...(s.on_time ? [{ day: s.on_day_of_week ?? 0, time: s.on_time, action: 'on' }] : []),
+      ...(s.off_time ? [{ day: s.off_day_of_week ?? 0, time: s.off_time, action: 'off' }] : []),
     ]
     : [
-      // 'once' may be one-sided — only sides that exist produce occurrences.
       ...(s.on_date && s.on_time ? [{ date: ymdParts(s.on_date), time: s.on_time, action: 'on' }] : []),
       ...(s.off_date && s.off_time ? [{ date: ymdParts(s.off_date), time: s.off_time, action: 'off' }] : []),
     ];

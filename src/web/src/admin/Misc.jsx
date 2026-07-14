@@ -146,15 +146,17 @@ export function AdminSchedules() {
           <div className="text-sm">
             <b>{s.relay_name}</b> <span className="text-muted">({s.device_name})</span>
             {' — '}
+            {/* Both repeat types may be one-sided (e.g. dashboard quick "turn off at…",
+                or a weekly "every night off" with no ON) — render only present sides. */}
             {s.repeat_type === 'once'
-              // 'once' may be one-sided (dashboard quick "turn off at…") — render only present sides.
               ? [
                 s.on_time && `הדלקה ${String(s.on_date).slice(0, 10)} ${s.on_time}`,
                 s.off_time && `כיבוי ${String(s.off_date).slice(0, 10)} ${s.off_time}`,
               ].filter(Boolean).join(' ← ')
-              : s.on_day_of_week == null
-                ? `כל יום ${s.on_time} ← ${s.off_time}`
-                : `${DAY_NAMES[s.on_day_of_week]} ${s.on_time} ← ${DAY_NAMES[s.off_day_of_week]} ${s.off_time}`}
+              : [
+                s.on_time && `הדלקה ${s.on_day_of_week == null ? 'כל יום' : DAY_NAMES[s.on_day_of_week]} ${s.on_time}`,
+                s.off_time && `כיבוי ${s.off_day_of_week == null ? 'כל יום' : DAY_NAMES[s.off_day_of_week]} ${s.off_time}`,
+              ].filter(Boolean).join(' ← ')}
           </div>
           <div className="flex items-center gap-2">
             <Badge ok={s.sync_status === 'synced'}>{s.sync_status}</Badge>
