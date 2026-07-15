@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import jwt from 'jsonwebtoken';
 import { Router } from 'express';
 import { query } from '../../db/pool.js';
 import { errors, ApiError } from '../../config/errors.js';
@@ -7,7 +8,7 @@ import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { bcryptCompare, bcryptHash } from '../../services/users.js';
 import { verifyTotp } from '../../services/totp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
-import { signUserToken, signAdminToken, otpRequestLimiter, otpRequestIpLimiter, adminLoginLimiter } from '../middleware.js';
+import { signUserToken, signAdminToken, otpRequestLimiter, otpRequestIpLimiter, adminLoginLimiter, onboardStatusLimiter } from '../middleware.js';
 import { env } from '../../config/env.js';
 
 export const authRouter = Router();
@@ -59,6 +60,28 @@ authRouter.post('/auth/google', adminLoginLimiter, async (req, res, next) => {
     if (rows.length > 1) throw errors.conflict('CONFLICT', 'אימייל זה רשום ליותר ממשתמש אחד — יש להתחבר עם קוד טלפוני');
     const u = rows[0];
     res.json({ token: signUserToken(u.id), user: { id: Number(u.id), full_name: u.full_name } });
+  } catch (e) { next(e); }
+});
+
+// Verdict poll for the phone-based Shelly onboarding page (see shellyOnboard.js
+// htmlPage). Public + CORS:* because the page runs from file:// on a helper's phone;
+// the token (minted at onboard time, 48h) only reveals whether device <uid> is
+// connected to the broker — mac_ok=false flags a different physical Shelly answering
+// with this device's credentials (wrong IP configured on-site).
+authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, next) => {
+  try {
+    res.set('Access-Control-Allow-Origin', '*');
+    let claims;
+    try {
+      claims = jwt.verify(String(req.query.token || ''), env.jwtSecret);
+    } catch {
+      throw errors.unauthenticated();
+    }
+    if (claims.p !== 'shelly-onboard' || !claims.uid) throw errors.unauthenticated();
+    const { shellyMqttRpc } = await import('../../mqtt/client.js');
+    const reply = await shellyMqttRpc(claims.uid, 'Shelly.GetDeviceInfo', undefined, 4000);
+    const mac = reply?.result?.mac ? String(reply.result.mac).toLowerCase().replace(/[^0-9a-f]/g, '') : null;
+    res.json({ connected: !!mac, mac_ok: mac === claims.uid });
   } catch (e) { next(e); }
 });
 

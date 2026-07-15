@@ -82,6 +82,17 @@ export default function Devices() {
     setTimeout(() => setShelly((s) => (s ? { ...s, copied: null } : s)), 2500);
   };
 
+  // The phone variant must be OPENED AS A FILE (file://) — served over https the
+  // browser blocks requests to the Shelly's local http address. Hence download, not link.
+  const downloadPhonePage = () => {
+    const blob = new Blob([shelly.prep.script_html], { type: 'text/html' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `shelly-setup-${shelly.prep.mac}.html`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
   const shellyProbe = () => run(async () => {
     const probe = await adminApi.post('/shelly/probe', { transport: shelly.transport, ip: shelly.ip, mac: shelly.mac });
     setShelly({
@@ -215,6 +226,14 @@ export default function Devices() {
               אינטרנט לפני סיום — הסקריפט בודק ומדווח.
             </p>
             <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">טלפון (Android/iPhone) — הכי פשוט</span>
+                <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={downloadPhonePage}>הורדת דף התקנה</Button>
+              </div>
+              <p className="text-muted text-xs">
+                שלחו את הקובץ לטלפון (וואטסאפ/מייל), פתחו אותו מתיקיית ההורדות בדפדפן
+                כשהטלפון על ה-Wi-Fi של המכשיר, ולחצו "התחל התקנה". הדף מדווח הצלחה/כישלון בסוף.
+              </p>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium">Windows — מדביקים ב-PowerShell</span>
                 <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => copyScript('ps', shelly.prep.script_ps)}>

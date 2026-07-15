@@ -173,7 +173,7 @@ adminRouter.post('/devices/provision', requireWrite, async (req, res, next) => {
 adminRouter.post('/shelly/onboard', requireWrite, async (req, res, next) => {
   try {
     const { onboardShelly } = await import('../../services/shellyOnboard.js');
-    const result = await onboardShelly({ mac: req.body?.mac });
+    const result = await onboardShelly({ mac: req.body?.mac, statusBase: `${req.protocol}://${req.get('host')}` });
     await audit(req, 'onboard_shelly', 'device', null, { after: { mac: result.mac } });
     res.json(result);
   } catch (e) { next(e); }

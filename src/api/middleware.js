@@ -73,3 +73,5 @@ export const otpRequestLimiter = limited({
 });
 export const otpRequestIpLimiter = limited({ windowMs: 60 * 60_000, limit: 10 });
 export const adminLoginLimiter = limited({ windowMs: 15 * 60_000, limit: 5 });
+// The phone onboarding page polls its verdict every ~4s for up to ~90s per attempt.
+export const onboardStatusLimiter = limited({ windowMs: 60_000, limit: 30 });

@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { execSync } from 'node:child_process';
+import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import { errors } from '../config/errors.js';
 import { mosquittoPasswdHash, writeBrokerPasswdEntry } from './devices.js';
@@ -254,7 +255,107 @@ exit 1
 `;
 }
 
-export async function onboardShelly({ mac }) {
+// Phone (Android/iPhone) variant: a self-contained HTML page the helper opens in the
+// phone's browser on the device's Wi-Fi. Shelly fw 1.3.x answers CORS preflights but
+// omits Access-Control-Allow-Origin on real responses, so the browser can SEND
+// commands (no-cors, text/plain — the device parses the body regardless) but never
+// READ a reply. The page therefore fires the config blind and gets its green/red
+// verdict from OUR server instead (statusUrl → MQTT probe), which also catches the
+// wrong-physical-device case by comparing the connected device's reported MAC.
+function htmlPage(uid, b, statusUrl) {
+  // Injected as JS string literals — the RPC bodies are JSON (no backticks/quotes issues
+  // beyond '); JSON.stringify once more makes them safe literals.
+  const inject = {
+    uid: JSON.stringify(uid),
+    statusUrl: JSON.stringify(statusUrl),
+    putCa: JSON.stringify(b.putCa),
+    mqtt: JSON.stringify(b.mqtt),
+    noVerify: JSON.stringify(b.mqttNoVerify),
+    reboot: JSON.stringify(b.reboot),
+    sntp: JSON.stringify(b.sntp),
+  };
+  return `<!doctype html>
+<html dir="rtl" lang="he"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>חיבור Shelly — שעון שבת</title>
+<style>
+ body{font-family:system-ui,sans-serif;margin:0;padding:16px;background:#faf8f4;color:#2b2620;max-width:520px;margin-inline:auto}
+ h1{font-size:20px;margin:0 0 4px}
+ .mac{direction:ltr;display:inline-block;font-family:monospace;background:#efe9df;border-radius:8px;padding:2px 8px}
+ .box{background:#fff;border:1px solid #e3ddd1;border-radius:14px;padding:14px;margin:12px 0}
+ input{width:100%;box-sizing:border-box;font-size:18px;direction:ltr;text-align:center;padding:10px;border:1px solid #cfc9bb;border-radius:10px}
+ button{width:100%;font-size:18px;padding:12px;border:0;border-radius:10px;background:#b3654a;color:#fff;margin-top:10px}
+ button.alt{background:#fff;color:#2b2620;border:1px solid #cfc9bb}
+ button:disabled{opacity:.5}
+ #log div{padding:3px 0;font-size:15px}
+ .ok{color:#3a7d44}.bad{color:#b3372f}.warn{color:#a06a00}
+ .verdict{font-size:18px;font-weight:700;border-radius:12px;padding:12px;margin-top:10px}
+ .verdict.ok{background:#e5f2e7;color:#3a7d44}.verdict.bad{background:#f7e5e3;color:#b3372f}.verdict.warn{background:#f7efdc;color:#a06a00}
+ .hidden{display:none}
+</style></head><body>
+<h1>חיבור מכשיר Shelly לשעון שבת</h1>
+<div>מכשיר: <span class="mac" id="uid"></span></div>
+<div class="box" id="httpsWarn" style="display:none;color:#b3372f;font-weight:600">
+ הדף נפתח דרך אתר (https) ולכן הדפדפן יחסום את הגישה למכשיר.
+ יש להוריד את הקובץ ולפתוח אותו מתיקיית ההורדות של הטלפון.
+</div>
+<div class="box">
+ <b>לפני שמתחילים:</b> הטלפון חייב להיות מחובר לאותו Wi-Fi שאליו מחובר המכשיר.
+ מכשיר חדש לגמרי? התחברו לרשת שהוא משדר (ShellyPro2-...) והשאירו את השדה ריק.
+ <div style="margin-top:10px">
+  <input id="ip" placeholder="כתובת IP של המכשיר (ריק = ניסיון אוטומטי)">
+  <button id="go">התחל התקנה</button>
+ </div>
+</div>
+<div class="box hidden" id="progress"><div id="log"></div><div id="verdict"></div><div id="actions"></div></div>
+<script>
+const UID=${inject.uid}, STATUS_URL=${inject.statusUrl};
+const B={putCa:${inject.putCa},mqtt:${inject.mqtt},noVerify:${inject.noVerify},reboot:${inject.reboot},sntp:${inject.sntp}};
+let IP='', sntpIdx=0;
+const $=(id)=>document.getElementById(id);
+$('uid').textContent=UID;
+if(location.protocol==='https:')$('httpsWarn').style.display='block';
+const log=(t,cls)=>{const d=document.createElement('div');d.textContent=t;if(cls)d.className=cls;$('log').appendChild(d);d.scrollIntoView()};
+const verdict=(t,cls)=>{$('verdict').innerHTML='<div class="verdict '+cls+'">'+t+'</div>'};
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+// no-cors: an opaque response still resolves = the device answered; reject = unreachable.
+async function ping(ip){try{await fetch('http://'+ip+'/rpc/Shelly.GetDeviceInfo',{mode:'no-cors',cache:'no-store',signal:AbortSignal.timeout(4000)});return true}catch{return false}}
+async function rpc(body){await fetch('http://'+IP+'/rpc',{method:'POST',mode:'no-cors',cache:'no-store',body,signal:AbortSignal.timeout(10000)})}
+async function waitBack(){log('ממתין שהמכשיר יופעל מחדש...');await sleep(6000);for(let i=0;i<30;i++){if(await ping(IP))return true;await sleep(2000)}return false}
+async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok)return 'ok';if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
+function actionBtn(txt,fn,alt){const b=document.createElement('button');b.textContent=txt;if(alt)b.className='alt';b.onclick=()=>{$('actions').innerHTML='';fn()};$('actions').appendChild(b)}
+async function finish(){
+ const r=await serverCheck(90);
+ if(r==='ok'){verdict('הצליח! המכשיר מחובר לשרת. אפשר לחזור למסך הניהול וללחוץ "בדוק חיבור".','ok');return}
+ if(r==='wrong'){verdict('מכשיר אחר התחבר עם ההגדרות האלה — כנראה הוזנה כתובת IP של Shelly אחר. בדקו את הכתובת והריצו שוב.','bad');return}
+ verdict('המכשיר עדיין לא התחבר לשרת.','warn');
+ actionBtn('בדוק שוב מול השרת',async()=>{await finish()},true);
+ if(sntpIdx<B.sntp.length-1){actionBtn('נסה שרת זמן אחר (בעיית שעון נפוצה)',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true)}
+ actionBtn('נסה חיבור ללא אימות תעודה (עדיין מוצפן)',async()=>{log('מגדיר חיבור ללא אימות תעודה ומאתחל...');await rpc(B.noVerify);await rpc(B.reboot).catch(()=>{});await waitBack();const r2=await serverCheck(90);if(r2==='ok'){verdict('מחובר — אבל ללא אימות תעודה. דווחו על כך למנהל המערכת.','warn')}else{verdict('אין חיבור גם ללא אימות תעודה. צלמו מסך ודווחו.','bad')}},true);
+}
+$('go').onclick=async()=>{
+ $('go').disabled=true;$('progress').classList.remove('hidden');$('log').innerHTML='';$('verdict').innerHTML='';$('actions').innerHTML='';
+ const manual=$('ip').value.trim();
+ const candidates=manual?[manual]:['shellypro2-'+UID+'.local','192.168.33.1'];
+ IP='';
+ for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
+ if(!IP){verdict('המכשיר לא נמצא. ודאו שהטלפון באותו Wi-Fi, מצאו את כתובת ה-IP באפליקציית Shelly (תחת Device Information) והזינו אותה למעלה.','bad');$('go').disabled=false;return}
+ log('המכשיר נמצא ('+IP+'). שולח הגדרות...','ok');
+ try{
+  log('מתקין תעודת שרת...');await rpc(B.putCa);
+  log('מגדיר חיבור לשרת...');await rpc(B.mqtt);
+  log('מגדיר שרת זמן...');await rpc(B.sntp[0]);
+  log('מאתחל את המכשיר...');await rpc(B.reboot).catch(()=>{});
+ }catch(e){verdict('שגיאה בשליחת ההגדרות: '+e.message+' — ודאו שנשארתם על אותו Wi-Fi ונסו שוב.','bad');$('go').disabled=false;return}
+ if(!(await waitBack())){verdict('המכשיר לא חזר אחרי האתחול — בדקו חשמל וכתובת, ונסו שוב.','bad');$('go').disabled=false;return}
+ log('המכשיר חזר לרשת.','ok');
+ await finish();
+ $('go').disabled=false;
+};
+</script></body></html>`;
+}
+
+export async function onboardShelly({ mac, statusBase = '' }) {
   const { appVersion } = await import('../config/version.js');
   const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה — 12 תווים הקסדצימליים', { mac: 'invalid' });
@@ -275,6 +376,10 @@ export async function onboardShelly({ mac }) {
 
   const bodies = rpcBodies({ uid, password, ca });
   const stamp = `# script version ${appVersion.commit} — generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC\n`;
+  // The phone page polls this public endpoint for its verdict; the token only grants
+  // "is device <uid> connected to the broker" for 48h — nothing else.
+  const statusToken = jwt.sign({ p: 'shelly-onboard', uid }, env.jwtSecret, { expiresIn: '48h' });
+  const statusUrl = `${statusBase}/api/v1/shelly-onboard/status?token=${statusToken}`;
   return {
     mac: uid,
     broker: `${env.deviceBroker.host}:${env.deviceBroker.port}`,
@@ -282,5 +387,6 @@ export async function onboardShelly({ mac }) {
     script_ps: stamp + powershellScript(uid, bodies),
     // keep the shebang as line 1 — the stamp goes right after it
     script_sh: bashScript(uid, bodies).replace('\n', `\n${stamp}`),
+    script_html: htmlPage(uid, bodies, statusUrl),
   };
 }
