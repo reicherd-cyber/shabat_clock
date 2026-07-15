@@ -92,12 +92,15 @@ export default function Devices() {
     a.click();
     URL.revokeObjectURL(a.href);
   };
-  const downloadPhonePage = () => downloadHtml(`shelly-setup-${shelly.prep.mac}.html`, shelly.prep.script_html);
+  // Created-on date in the filename — tells stale files apart (the universal one
+  // expires after 30 days, and regenerating a per-device one rotates its password).
+  const today = () => new Date().toISOString().slice(0, 10);
+  const downloadPhonePage = () => downloadHtml(`shelly-setup-${shelly.prep.mac}-${today()}.html`, shelly.prep.script_html);
 
   // One reusable file for any device — the helper types the MAC on the page itself.
   const downloadUniversal = () => run(async () => {
     const { script_html } = await adminApi.post('/shelly/universal-installer', {});
-    downloadHtml('shelly-setup.html', script_html);
+    downloadHtml(`shelly-setup-${today()}.html`, script_html);
   });
 
   const shellyProbe = () => run(async () => {
