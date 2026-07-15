@@ -50,22 +50,96 @@ export function Monitoring() {
   );
 }
 
+// menu_path steps (see src/ivr/router.js appendPath calls) → Hebrew chip + tone.
+const STEP_LABELS = {
+  main: { label: 'תפריט ראשי' },
+  pin: { label: 'הזנת קוד' },
+  auth: { label: 'זיהוי' },
+  unknown: { label: 'מתקשר לא מזוהה', tone: 'warn' },
+  auth_fail: { label: 'זיהוי נכשל', tone: 'bad' },
+  immediate_on: { label: 'הדלקה מיידית' },
+  immediate_off: { label: 'כיבוי מיידי' },
+  schedule: { label: 'יצירת תזמון' },
+  status: { label: 'שמיעת מצב' },
+  ok: { label: 'בוצע ✓', tone: 'good' },
+  sched_saved: { label: 'תזמון נשמר ✓', tone: 'good' },
+};
+const OUTCOME_LABELS = {
+  command: 'פקודה', schedule: 'תזמון', status: 'סטטוס',
+  auth_fail: 'כשל זיהוי', abandoned: 'נותקה באמצע',
+};
+
+function stepChip(step) {
+  if (step.startsWith('relay:')) return { label: `ממסר ${step.slice(6)}` };
+  if (step.startsWith('fail:')) return { label: `נכשל: ${step.slice(5)}`, tone: 'bad' };
+  return STEP_LABELS[step] || { label: step };
+}
+
+// The call's route through the IVR as a breadcrumb of chips (RTL: flows right→left).
+function MenuPath({ path }) {
+  if (!path) return <span className="text-muted">—</span>;
+  const steps = path.split('>').map(stepChip);
+  const toneCls = {
+    good: 'bg-on-bg text-on',
+    bad: 'bg-off-bg text-off',
+    warn: 'bg-off-bg text-off',
+  };
+  return (
+    <span className="inline-flex items-center gap-1 flex-wrap">
+      {steps.map((s, i) => (
+        <span key={i} className="inline-flex items-center gap-1">
+          {i > 0 && <span className="text-muted text-xs">←</span>}
+          <span className={`inline-block text-[12px] font-medium rounded-full px-2 py-0.5 whitespace-nowrap ${toneCls[s.tone] || 'bg-surface2 border border-line'}`}>
+            {s.label}
+          </span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export function CallLogs() {
   const [logs, setLogs] = useState(null);
   const [phone, setPhone] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
   const { error, run, setError } = useAsync();
-  const refresh = (p = '') => run(async () => setLogs(await adminApi.get(`/call-logs${p ? `?phone=${encodeURIComponent(p)}` : ''}`)));
-  useEffect(() => { refresh().catch(setError); }, []);
+
+  // Date range filters server-side (DB stores UTC — convert the local picker value);
+  // the phone filter is applied client-side so it reacts on every keystroke.
+  const utc = (v) => new Date(v).toISOString().slice(0, 19).replace('T', ' ');
+  useEffect(() => {
+    run(async () => {
+      const q = new URLSearchParams();
+      if (from) q.set('from', utc(from));
+      if (to) q.set('to', utc(to));
+      setLogs(await adminApi.get(`/call-logs${from || to ? `?${q}` : ''}`));
+    }).catch(setError);
+  }, [from, to]);
+
+  const digits = phone.replace(/\D/g, '');
+  const shown = (logs || []).filter((l) => !digits || String(l.phone).replace(/\D/g, '').includes(digits));
+  const filtering = digits || from || to;
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center gap-2 flex-wrap">
         <h2 className="font-bold text-xl">יומני שיחות</h2>
-        <div className="flex gap-2">
-          <Input dir="ltr" placeholder="סינון לפי טלפון" value={phone} onChange={(e) => setPhone(e.target.value)} />
-          <Button variant="ghost" onClick={() => refresh(phone)}>סנן</Button>
+        <div className="flex gap-2 items-center flex-wrap">
+          <Input dir="ltr" className="w-40" placeholder="סינון לפי טלפון" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <label className="text-muted text-sm flex items-center gap-1">מ־
+            <Input type="datetime-local" className="w-auto" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </label>
+          <label className="text-muted text-sm flex items-center gap-1">עד
+            <Input type="datetime-local" className="w-auto" value={to} onChange={(e) => setTo(e.target.value)} />
+          </label>
+          {filtering && (
+            <Button variant="ghost" onClick={() => { setPhone(''); setFrom(''); setTo(''); }}>נקה סינון</Button>
+          )}
         </div>
       </div>
       <ErrorNote error={error} />
+      {logs && <p className="text-muted text-sm">{shown.length} שיחות{filtering ? ' (מסונן)' : ''}</p>}
       <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -74,14 +148,17 @@ export function CallLogs() {
             </tr>
           </thead>
           <tbody>
-            {(logs || []).map((l) => (
+            {shown.map((l) => (
               <tr key={l.id} className="border-b border-line last:border-0">
                 <td className="p-2 whitespace-nowrap">{new Date(l.started_at).toLocaleString('he-IL')}</td>
                 <td className="p-2" dir="ltr">{l.phone}</td>
-                <td className="p-2" dir="ltr">{l.menu_path}</td>
-                <td className="p-2"><Badge ok={!['auth_fail', 'abandoned'].includes(l.outcome)}>{l.outcome || '—'}</Badge></td>
+                <td className="p-2"><MenuPath path={l.menu_path} /></td>
+                <td className="p-2"><Badge ok={!['auth_fail', 'abandoned'].includes(l.outcome)}>{OUTCOME_LABELS[l.outcome] || l.outcome || '—'}</Badge></td>
               </tr>
             ))}
+            {shown.length === 0 && logs && (
+              <tr><td className="p-4 text-muted text-center" colSpan={4}>לא נמצאו שיחות</td></tr>
+            )}
           </tbody>
         </table>
       </Card>
