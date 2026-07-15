@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Badge, ErrorNote, useAsync, useInterval, DAY_NAMES } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, ErrorNote, useAsync, useInterval, DAY_NAMES } from '../ui.jsx';
 
 // `to` makes the tile a clickable drill-down into the underlying data.
 const Stat = ({ label, value, ok, to }) => {
@@ -69,6 +69,18 @@ const OUTCOME_LABELS = {
   auth_fail: 'כשל זיהוי', abandoned: 'נותקה באמצע',
 };
 
+// Hour dropdown for the call-log filters: empty = the whole day.
+function HourSelect({ value, onChange }) {
+  return (
+    <Select className="py-2 text-sm" value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">כל היום</option>
+      {Array.from({ length: 24 }, (_, h) => (
+        <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+      ))}
+    </Select>
+  );
+}
+
 function stepChip(step) {
   if (step.startsWith('relay:')) return { label: `ממסר ${step.slice(6)}` };
   if (step.startsWith('fail:')) return { label: `נכשל: ${step.slice(5)}`, tone: 'bad' };
@@ -101,18 +113,24 @@ function MenuPath({ path }) {
 export function CallLogs() {
   const [logs, setLogs] = useState(null);
   const [phone, setPhone] = useState('');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [fromHour, setFromHour] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [toHour, setToHour] = useState('');
   const { error, run, setError } = useAsync();
 
-  // Date range filters server-side (DB stores UTC — convert the local picker value);
-  // the phone filter is applied client-side so it reacts on every keystroke.
-  const utc = (v) => new Date(v).toISOString().slice(0, 19).replace('T', ' ');
+  // Date + optional hour filter server-side. No hour → the whole day; with an hour →
+  // from the start of that hour (מ־) / to the end of that hour (עד). DB stores UTC —
+  // the local date+hour is converted before querying. Phone filters client-side so it
+  // reacts on every keystroke.
+  const utc = (local) => new Date(local).toISOString().slice(0, 19).replace('T', ' ');
+  const from = fromDate ? utc(`${fromDate}T${fromHour !== '' ? fromHour.padStart(2, '0') : '00'}:00:00`) : '';
+  const to = toDate ? utc(`${toDate}T${toHour !== '' ? toHour.padStart(2, '0') : '23'}:59:59`) : '';
   useEffect(() => {
     run(async () => {
       const q = new URLSearchParams();
-      if (from) q.set('from', utc(from));
-      if (to) q.set('to', utc(to));
+      if (from) q.set('from', from);
+      if (to) q.set('to', to);
       setLogs(await adminApi.get(`/call-logs${from || to ? `?${q}` : ''}`));
     }).catch(setError);
   }, [from, to]);
@@ -128,13 +146,15 @@ export function CallLogs() {
         <div className="flex gap-2 items-center flex-wrap">
           <Input dir="ltr" className="w-40" placeholder="סינון לפי טלפון" value={phone} onChange={(e) => setPhone(e.target.value)} />
           <label className="text-muted text-sm flex items-center gap-1">מ־
-            <Input type="datetime-local" className="w-auto" value={from} onChange={(e) => setFrom(e.target.value)} />
+            <Input type="date" className="w-auto" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+            <HourSelect value={fromHour} onChange={setFromHour} />
           </label>
           <label className="text-muted text-sm flex items-center gap-1">עד
-            <Input type="datetime-local" className="w-auto" value={to} onChange={(e) => setTo(e.target.value)} />
+            <Input type="date" className="w-auto" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            <HourSelect value={toHour} onChange={setToHour} />
           </label>
           {filtering && (
-            <Button variant="ghost" onClick={() => { setPhone(''); setFrom(''); setTo(''); }}>נקה סינון</Button>
+            <Button variant="ghost" onClick={() => { setPhone(''); setFromDate(''); setFromHour(''); setToDate(''); setToHour(''); }}>נקה סינון</Button>
           )}
         </div>
       </div>
