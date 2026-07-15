@@ -18,27 +18,47 @@ authRouter.get('/auth/config', (req, res) => {
   res.json({ google_client_id: env.googleClientId });
 });
 
-// "Sign in with Google" for admins. The browser's GIS button yields a Google-signed
-// ID token; Google's tokeninfo endpoint validates signature+expiry, we validate the
-// audience and match the (verified) email against an active admin. The second factor
-// (SMS G-codes etc.) is enforced by Google on the Google account itself.
+// Validate a GIS credential via Google's tokeninfo endpoint (signature+expiry) and
+// our own audience + verified-email checks; returns the claims (email etc.).
+async function verifyGoogleCredential(credential) {
+  if (!env.googleClientId) throw errors.validation('Google sign-in is not configured');
+  if (!credential) throw errors.unauthenticated();
+  const gRes = await fetch(
+    `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`,
+    { signal: AbortSignal.timeout(10000) },
+  );
+  if (!gRes.ok) throw errors.unauthenticated('אימות Google נכשל');
+  const claims = await gRes.json();
+  if (claims.aud !== env.googleClientId || claims.email_verified !== 'true') {
+    throw errors.unauthenticated('אימות Google נכשל');
+  }
+  return claims;
+}
+
+// "Sign in with Google" for admins. The second factor (SMS G-codes etc.) is
+// enforced by Google on the Google account itself.
 authRouter.post('/admin/auth/google', adminLoginLimiter, async (req, res, next) => {
   try {
-    if (!env.googleClientId) throw errors.validation('Google sign-in is not configured');
-    const credential = String(req.body?.credential || '');
-    if (!credential) throw errors.unauthenticated();
-    const gRes = await fetch(
-      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`,
-      { signal: AbortSignal.timeout(10000) },
-    );
-    if (!gRes.ok) throw errors.unauthenticated('אימות Google נכשל');
-    const claims = await gRes.json();
-    if (claims.aud !== env.googleClientId || claims.email_verified !== 'true') {
-      throw errors.unauthenticated('אימות Google נכשל');
-    }
+    const claims = await verifyGoogleCredential(String(req.body?.credential || ''));
     const [admin] = await query('SELECT * FROM admins WHERE email = ? AND is_active = TRUE', [claims.email]);
     if (!admin) throw errors.unauthenticated('חשבון Google זה אינו מנהל במערכת');
     res.json({ token: signAdminToken(admin.id, admin.role), role: admin.role, name: admin.name });
+  } catch (e) { next(e); }
+});
+
+// "Sign in with Google" for users — an alternative to phone-OTP for users whose
+// (admin-registered) email is a Google account. No self-signup: unknown email = 401.
+authRouter.post('/auth/google', adminLoginLimiter, async (req, res, next) => {
+  try {
+    const claims = await verifyGoogleCredential(String(req.body?.credential || ''));
+    const rows = await query(
+      "SELECT id, full_name FROM users WHERE email = ? AND status = 'active'", [claims.email],
+    );
+    if (rows.length === 0) throw errors.unauthenticated('אימייל זה אינו רשום במערכת');
+    // users.email is not unique; refuse rather than guess which account was meant.
+    if (rows.length > 1) throw errors.conflict('CONFLICT', 'אימייל זה רשום ליותר ממשתמש אחד — יש להתחבר עם קוד טלפוני');
+    const u = rows[0];
+    res.json({ token: signUserToken(u.id), user: { id: Number(u.id), full_name: u.full_name } });
   } catch (e) { next(e); }
 });
 
@@ -96,8 +116,11 @@ authRouter.post('/auth/otp/verify', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Password login is normally OFF (Google-only policy); ADMIN_PASSWORD_LOGIN=1 in the
+// server env re-enables it as an emergency fallback if Google sign-in breaks.
 authRouter.post('/admin/auth/login', adminLoginLimiter, async (req, res, next) => {
   try {
+    if (!env.adminPasswordLogin) throw errors.forbidden('כניסה עם סיסמה מושבתת — יש להתחבר עם Google');
     const { email, password, code } = req.body || {};
     const [admin] = await query('SELECT * FROM admins WHERE email = ?', [String(email || '')]);
     // is_active=FALSE fails with the same generic 401 as unknown email / wrong password.
@@ -121,6 +144,7 @@ authRouter.post('/admin/auth/login', adminLoginLimiter, async (req, res, next) =
 // only the account owner can trigger it (and the generic 401 hides whether the email exists).
 authRouter.post('/admin/auth/email-code', adminLoginLimiter, async (req, res, next) => {
   try {
+    if (!env.adminPasswordLogin) throw errors.forbidden('כניסה עם סיסמה מושבתת — יש להתחבר עם Google');
     const { email, password } = req.body || {};
     const [admin] = await query('SELECT * FROM admins WHERE email = ?', [String(email || '')]);
     if (!admin || !admin.is_active || !bcryptCompare(String(password || ''), admin.password_hash)) {

@@ -61,6 +61,9 @@ export const env = {
   },
   // "Sign in with Google" for the admin panel; empty = the button is hidden.
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+  // Emergency escape hatch: ADMIN_PASSWORD_LOGIN=1 re-enables the email+password
+  // admin login if Google sign-in is ever unavailable. Off by default — Google only.
+  adminPasswordLogin: process.env.ADMIN_PASSWORD_LOGIN === '1',
   smtp: {
     host: process.env.SMTP_HOST || '',
     port: Number(process.env.SMTP_PORT || 587),
