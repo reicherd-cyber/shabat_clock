@@ -173,7 +173,7 @@ export default function Devices() {
       ))}
 
       <Modal open={!!shelly} onClose={() => setShelly(null)}
-        title={shelly?.step === 'prep' ? 'הוספת Shelly — הכנת מכשיר מרוחק' : `הוספת Shelly — שלב ${shelly?.step || 1} מתוך 3`}>
+        title={{ prep: 'הוספת Shelly — הכנת מכשיר מרוחק', 2: 'הוספת Shelly — הגדרת ערוצים', 3: 'הוספת Shelly — הושלם' }[shelly?.step] || 'הוספת Shelly'}>
         {shelly?.step === 1 && (
           <div className="space-y-3">
             <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>
