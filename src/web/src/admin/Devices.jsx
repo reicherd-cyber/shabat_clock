@@ -179,41 +179,22 @@ export default function Devices() {
             <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>
               {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
             </Select>
-            <div className="flex gap-3 text-sm">
-              <label className="flex items-center gap-1">
-                <input type="radio" checked={shelly.transport === 'mqtt'} onChange={() => setShelly({ ...shelly, transport: 'mqtt' })} />
-                מרחוק (MQTT)
-              </label>
-              <label className="flex items-center gap-1">
-                <input type="radio" checked={shelly.transport === 'lan'} onChange={() => setShelly({ ...shelly, transport: 'lan' })} />
-                רשת מקומית (IP)
-              </label>
+            <div className="border border-line rounded-xl p-3 space-y-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium">מכשיר חדש? דף התקנה לנייד — כל מכשיר</span>
+                <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={downloadUniversal}>הורדה</Button>
+              </div>
+              <p className="text-muted text-xs">
+                שלחו את הקובץ למי שנמצא ליד המכשיר: פותחים בטלפון, מקלידים את ה-MAC מהמדבקה
+                ולוחצים התקנה. קובץ אחד לכל המכשירים, תקף 30 יום — לשלוח בערוץ פרטי.
+              </p>
+              <button className="text-xs text-accent-dk underline cursor-pointer"
+                onClick={() => setShelly({ ...shelly, step: 'prep', prep: null, copied: null })}>
+                אפשרויות נוספות: סקריפט מחשב / קובץ למכשיר מסוים ›
+              </button>
             </div>
-            {shelly.transport === 'mqtt' ? (
-              <>
-                <div className="border border-line rounded-xl p-3 space-y-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium">מכשיר חדש? דף התקנה לנייד — כל מכשיר</span>
-                    <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={downloadUniversal}>הורדה</Button>
-                  </div>
-                  <p className="text-muted text-xs">
-                    שלחו את הקובץ למי שנמצא ליד המכשיר: פותחים בטלפון, מקלידים את ה-MAC מהמדבקה
-                    ולוחצים התקנה. קובץ אחד לכל המכשירים, תקף 30 יום — לשלוח בערוץ פרטי.
-                  </p>
-                  <button className="text-xs text-accent-dk underline cursor-pointer"
-                    onClick={() => setShelly({ ...shelly, step: 'prep', prep: null, copied: null })}>
-                    אפשרויות נוספות: סקריפט מחשב / קובץ למכשיר מסוים ›
-                  </button>
-                </div>
-                <p className="text-sm text-muted">המכשיר כבר חובר לשרת? הזינו את ה-MAC שלו ולחצו "בדוק חיבור".</p>
-                <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל 80f3dac7deec)" value={shelly.mac} onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
-              </>
-            ) : (
-              <>
-                <p className="text-sm text-muted">עובד רק כשהשרת באותה רשת כמו המכשיר (למשל בפיתוח מקומי).</p>
-                <Input dir="ltr" placeholder="כתובת IP (למשל 192.168.1.50)" value={shelly.ip} onChange={(e) => setShelly({ ...shelly, ip: e.target.value })} />
-              </>
-            )}
+            <p className="text-sm text-muted">המכשיר כבר חובר לשרת? הזינו את ה-MAC שלו ולחצו "בדוק חיבור".</p>
+            <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל 80f3dac7deec)" value={shelly.mac} onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
             <ErrorNote error={error} />
             <Button className="w-full" disabled={busy || (shelly.transport === 'mqtt' ? !shelly.mac : !shelly.ip)} onClick={shellyProbe}>בדוק חיבור ›</Button>
