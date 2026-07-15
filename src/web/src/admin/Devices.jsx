@@ -50,6 +50,15 @@ export default function Devices() {
     await refresh();
   });
 
+  // Frees device_uid/ip_address (and soft-deletes the relays) on a disabled device so
+  // the same physical hardware can be re-registered from scratch — e.g. a device that
+  // was set up under the wrong type and will never come online.
+  const releaseIdentity = (d) => run(async () => {
+    if (!confirm(`לשחרר את הזיהוי של ${d.name} (${d.device_uid})? הממסרים שלו יימחקו-רכות והמכשיר ניתן יהיה לרישום מחדש. הפעולה הפיכה חלקית — המכשיר עצמו נשאר, אך הזיהוי לא יחזור אוטומטית.`)) return;
+    await adminApi.post(`/devices/${d.id}/release-identity`, {});
+    await refresh();
+  });
+
   const addRelay = () => run(async () => {
     await adminApi.post(`/devices/${relayForm.device.id}/relays`, {
       relay_no: Number(relayForm.relay_no), name: relayForm.name, ivr_digit: Number(relayForm.ivr_digit),
@@ -136,6 +145,8 @@ export default function Devices() {
             {d.is_enabled
               ? <Button variant="danger" disabled={busy} onClick={() => toggleEnabled(d)}>השבתת מכשיר</Button>
               : <Button variant="ghost" disabled={busy} onClick={() => toggleEnabled(d)}>שחזר מכשיר</Button>}
+            {!d.is_enabled && d.device_uid &&
+              <Button variant="danger" disabled={busy} onClick={() => releaseIdentity(d)}>שחרור זיהוי (לרישום מחדש)</Button>}
           </div>
         </Card>
       ))}

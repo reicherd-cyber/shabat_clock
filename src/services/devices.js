@@ -39,6 +39,21 @@ export function writeBrokerPasswdEntry(deviceUid, passwdHash) {
   fs.writeFileSync(env.mosquittoPasswdFile, lines.join('\n') + '\n', { mode: 0o600 });
 }
 
+// Drop a device's broker credential once its identity is released — otherwise a
+// stale entry for a UID no row claims anymore lingers in the passwd file.
+function removeBrokerPasswdEntry(deviceUid) {
+  if (!env.mosquittoPasswdFile || !deviceUid) return;
+  let lines = [];
+  try {
+    lines = fs.readFileSync(env.mosquittoPasswdFile, 'utf8').split('\n').filter(Boolean);
+  } catch { return; }
+  fs.writeFileSync(
+    env.mosquittoPasswdFile,
+    lines.filter((l) => !l.startsWith(`${deviceUid}:`)).join('\n') + '\n',
+    { mode: 0o600 },
+  );
+}
+
 function normalizeUid(uid) {
   const u = String(uid).toLowerCase().replace(/[^0-9a-f]/g, '');
   if (u.length !== 12) throw errors.validation('device_uid must be a 12-hex-char MAC', { device_uid: '12 hex chars' });
@@ -173,6 +188,36 @@ export async function patchDevice(deviceId, patch, { userId = null } = {}) {
     // Setting the UID creates the broker passwd entry [D31].
     if (fields.device_uid) writeBrokerPasswdEntry(fields.device_uid, device.mqtt_passwd_hash);
   });
+}
+
+// Frees a disabled device's identity (device_uid, ip_address) so the same physical
+// hardware can be re-registered from scratch — e.g. a device set up under the wrong
+// device_type, which will never come online, and just needs to be redone via the
+// Shelly wizard. The row, its name, and history stay put (restorable); only the
+// relays are soft-deleted (freeing their ivr_digit slots) since a fresh registration
+// creates its own. Admin-only; requires the device to already be disabled.
+export async function releaseDeviceIdentity(deviceId) {
+  let uid;
+  await withTransaction(async (conn) => {
+    const [rows] = await conn.query('SELECT * FROM devices WHERE id = ? FOR UPDATE', [deviceId]);
+    const device = rows[0];
+    if (!device) throw errors.notFound('NOT_FOUND', 'Device not found');
+    if (device.is_enabled) throw errors.conflict('CONFLICT', 'יש להשבית את המכשיר לפני שחרור הזיהוי שלו');
+    if (!device.device_uid) throw errors.conflict('CONFLICT', 'למכשיר זה אין זיהוי לשחרר');
+    uid = device.device_uid;
+    await conn.query(
+      `UPDATE relays SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE, ivr_digit = NULL
+       WHERE device_id = ? AND deleted_at IS NULL`,
+      [deviceId],
+    );
+    await conn.query(
+      `UPDATE schedules SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE
+       WHERE relay_id IN (SELECT id FROM relays WHERE device_id = ?) AND deleted_at IS NULL`,
+      [deviceId],
+    );
+    await conn.query('UPDATE devices SET device_uid = NULL, ip_address = NULL WHERE id = ?', [deviceId]);
+  });
+  removeBrokerPasswdEntry(uid);
 }
 
 // ── Shelly wizard (admin panel) ──
