@@ -8,7 +8,7 @@ import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { bcryptCompare, bcryptHash } from '../../services/users.js';
 import { verifyTotp } from '../../services/totp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
-import { signUserToken, signAdminToken, otpRequestLimiter, otpRequestIpLimiter, adminLoginLimiter, onboardStatusLimiter } from '../middleware.js';
+import { signUserToken, signAdminToken, otpRequestLimiter, otpRequestIpLimiter, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter } from '../middleware.js';
 import { env } from '../../config/env.js';
 
 export const authRouter = Router();
@@ -82,6 +82,28 @@ authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, 
     const reply = await shellyMqttRpc(claims.uid, 'Shelly.GetDeviceInfo', undefined, 4000);
     const mac = reply?.result?.mac ? String(reply.result.mac).toLowerCase().replace(/[^0-9a-f]/g, '') : null;
     res.json({ connected: !!mac, mac_ok: mac === claims.uid });
+  } catch (e) { next(e); }
+});
+
+// Universal-installer page: mints broker credentials for the MAC the on-site helper
+// typed, authorized by the 30-day installer token embedded in the downloaded file
+// (p:'shelly-onboard-any', minted by an admin — their id rides along for the audit
+// trail). GET so the file:// page gets a readable (no-preflight, ACAO:*) response.
+authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, async (req, res, next) => {
+  try {
+    res.set('Access-Control-Allow-Origin', '*');
+    let claims;
+    try {
+      claims = jwt.verify(String(req.query.token || ''), env.jwtSecret);
+    } catch {
+      throw errors.unauthenticated('קובץ ההתקנה פג תוקף — יש לבקש קובץ חדש');
+    }
+    if (claims.p !== 'shelly-onboard-any') throw errors.unauthenticated();
+    const { prepareDevice } = await import('../../services/shellyOnboard.js');
+    const result = prepareDevice({ mac: String(req.query.mac || ''), statusBase: `${req.protocol}://${req.get('host')}` });
+    const { auditLog } = await import('../../services/audit.js');
+    await auditLog(Number(claims.adm) || null, 'onboard_shelly_remote', 'device', null, { after: { mac: result.mac } });
+    res.json(result);
   } catch (e) { next(e); }
 });
 

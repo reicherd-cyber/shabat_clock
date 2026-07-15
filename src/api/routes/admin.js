@@ -179,6 +179,17 @@ adminRouter.post('/shelly/onboard', requireWrite, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Universal phone installer — no MAC needed here; the on-site helper types it and the
+// page mints that device's credentials via the public prepare endpoint (30-day token).
+adminRouter.post('/shelly/universal-installer', requireWrite, async (req, res, next) => {
+  try {
+    const { universalInstaller } = await import('../../services/shellyOnboard.js');
+    const result = universalInstaller({ statusBase: `${req.protocol}://${req.get('host')}`, adminId: req.auth.adminId });
+    await audit(req, 'universal_installer', 'device', null);
+    res.json(result);
+  } catch (e) { next(e); }
+});
+
 // ── Shelly wizard: probe (read-only reachability + identity) then register ──
 adminRouter.post('/shelly/probe', requireWrite, async (req, res, next) => {
   try {

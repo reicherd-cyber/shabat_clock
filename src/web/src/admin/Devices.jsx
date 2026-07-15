@@ -84,14 +84,21 @@ export default function Devices() {
 
   // The phone variant must be OPENED AS A FILE (file://) — served over https the
   // browser blocks requests to the Shelly's local http address. Hence download, not link.
-  const downloadPhonePage = () => {
-    const blob = new Blob([shelly.prep.script_html], { type: 'text/html' });
+  const downloadHtml = (name, html) => {
+    const blob = new Blob([html], { type: 'text/html' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `shelly-setup-${shelly.prep.mac}.html`;
+    a.download = name;
     a.click();
     URL.revokeObjectURL(a.href);
   };
+  const downloadPhonePage = () => downloadHtml(`shelly-setup-${shelly.prep.mac}.html`, shelly.prep.script_html);
+
+  // One reusable file for any device — the helper types the MAC on the page itself.
+  const downloadUniversal = () => run(async () => {
+    const { script_html } = await adminApi.post('/shelly/universal-installer', {});
+    downloadHtml('shelly-setup.html', script_html);
+  });
 
   const shellyProbe = () => run(async () => {
     const probe = await adminApi.post('/shelly/probe', { transport: shelly.transport, ip: shelly.ip, mac: shelly.mac });
@@ -212,6 +219,16 @@ export default function Devices() {
             <div className="flex gap-2">
               <Button variant="ghost" className="flex-1" onClick={() => setShelly({ ...shelly, step: 1 })}>‹ חזרה</Button>
               <Button className="flex-1" disabled={busy || !shelly.mac} onClick={shellyOnboard}>צור פרטי חיבור וסקריפט ›</Button>
+            </div>
+            <div className="border-t border-line pt-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">אין לכם את ה-MAC? דף התקנה לנייד — כל מכשיר</span>
+                <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={downloadUniversal}>הורדה</Button>
+              </div>
+              <p className="text-muted text-xs mt-1">
+                קובץ אחד לכל המכשירים: מי שבשטח פותח אותו בטלפון, מקליד את ה-MAC מהמדבקה
+                שעל המכשיר ולוחץ התקנה. תקף 30 יום — שלחו בערוץ פרטי בלבד.
+              </p>
             </div>
           </div>
         )}

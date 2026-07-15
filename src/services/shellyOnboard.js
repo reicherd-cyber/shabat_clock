@@ -262,17 +262,20 @@ exit 1
 // READ a reply. The page therefore fires the config blind and gets its green/red
 // verdict from OUR server instead (statusUrl → MQTT probe), which also catches the
 // wrong-physical-device case by comparing the connected device's reported MAC.
-function htmlPage(uid, b, statusUrl) {
+//
+// Two modes share the template:
+//  - per-device: uid + RPC bodies + status URL baked in (b/statusUrl set, prepareUrl '')
+//  - universal:  the helper types the MAC; the page asks the server to mint that
+//    device's credentials at install time (GET prepareUrl&mac=..., authorized by the
+//    30-day installer token in the URL), then proceeds identically.
+function htmlPage(uid, b, statusUrl, prepareUrl = '') {
   // Injected as JS string literals — the RPC bodies are JSON (no backticks/quotes issues
   // beyond '); JSON.stringify once more makes them safe literals.
   const inject = {
-    uid: JSON.stringify(uid),
-    statusUrl: JSON.stringify(statusUrl),
-    putCa: JSON.stringify(b.putCa),
-    mqtt: JSON.stringify(b.mqtt),
-    noVerify: JSON.stringify(b.mqttNoVerify),
-    reboot: JSON.stringify(b.reboot),
-    sntp: JSON.stringify(b.sntp),
+    uid: JSON.stringify(uid || ''),
+    statusUrl: JSON.stringify(statusUrl || ''),
+    prepareUrl: JSON.stringify(prepareUrl),
+    bodies: b ? JSON.stringify({ putCa: b.putCa, mqtt: b.mqtt, noVerify: b.mqttNoVerify, reboot: b.reboot, sntp: b.sntp }) : 'null',
   };
   return `<!doctype html>
 <html dir="rtl" lang="he"><head><meta charset="utf-8">
@@ -294,26 +297,28 @@ function htmlPage(uid, b, statusUrl) {
  .hidden{display:none}
 </style></head><body>
 <h1>חיבור מכשיר Shelly לשעון שבת</h1>
-<div>מכשיר: <span class="mac" id="uid"></span></div>
+<div>מכשיר: <span class="mac" id="uid">—</span></div>
 <div class="box" id="httpsWarn" style="display:none;color:#b3372f;font-weight:600">
  הדף נפתח דרך אתר (https) ולכן הדפדפן יחסום את הגישה למכשיר.
  יש להוריד את הקובץ ולפתוח אותו מתיקיית ההורדות של הטלפון.
 </div>
 <div class="box">
  <b>לפני שמתחילים:</b> הטלפון חייב להיות מחובר לאותו Wi-Fi שאליו מחובר המכשיר.
- מכשיר חדש לגמרי? התחברו לרשת שהוא משדר (ShellyPro2-...) והשאירו את השדה ריק.
+ מכשיר חדש לגמרי? התחברו לרשת שהוא משדר (ShellyPro2-...) והשאירו את שדה הכתובת ריק.
  <div style="margin-top:10px">
+  <input id="mac" class="hidden" placeholder="MAC של המכשיר (12 תווים, מהמדבקה שעל המכשיר)" style="margin-bottom:8px">
   <input id="ip" placeholder="כתובת IP של המכשיר (ריק = ניסיון אוטומטי)">
   <button id="go">התחל התקנה</button>
  </div>
 </div>
 <div class="box hidden" id="progress"><div id="log"></div><div id="verdict"></div><div id="actions"></div></div>
 <script>
-const UID=${inject.uid}, STATUS_URL=${inject.statusUrl};
-const B={putCa:${inject.putCa},mqtt:${inject.mqtt},noVerify:${inject.noVerify},reboot:${inject.reboot},sntp:${inject.sntp}};
+let UID=${inject.uid}, STATUS_URL=${inject.statusUrl}, B=${inject.bodies};
+const PREPARE_URL=${inject.prepareUrl};
 let IP='', sntpIdx=0;
 const $=(id)=>document.getElementById(id);
-$('uid').textContent=UID;
+if(UID)$('uid').textContent=UID;
+if(PREPARE_URL)$('mac').classList.remove('hidden');
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
 const log=(t,cls)=>{const d=document.createElement('div');d.textContent=t;if(cls)d.className=cls;$('log').appendChild(d);d.scrollIntoView()};
 const verdict=(t,cls)=>{$('verdict').innerHTML='<div class="verdict '+cls+'">'+t+'</div>'};
@@ -335,6 +340,17 @@ async function finish(){
 }
 $('go').onclick=async()=>{
  $('go').disabled=true;$('progress').classList.remove('hidden');$('log').innerHTML='';$('verdict').innerHTML='';$('actions').innerHTML='';
+ if(PREPARE_URL){
+  const mac=$('mac').value.toLowerCase().replace(/[^0-9a-f]/g,'');
+  if(mac.length!==12){verdict('כתובת MAC לא תקינה — צריך 12 תווים (אותיות a-f וספרות), מהמדבקה שעל המכשיר.','bad');$('go').disabled=false;return}
+  log('יוצר פרטי חיבור למכשיר בשרת... (דורש אינטרנט)');
+  try{
+   const r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'});
+   if(!r.ok){const e=await r.json().catch(()=>null);throw new Error((e&&e.error&&e.error.message)||('HTTP '+r.status))}
+   const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
+   log('פרטי חיבור נוצרו.','ok');
+  }catch(e){verdict('יצירת פרטי החיבור נכשלה: '+e.message+' — ודאו שיש אינטרנט (אם אתם על רשת ShellyPro2 — עברו רגע ל-Wi-Fi רגיל, לחצו שוב, ורק אז חזרו לרשת המכשיר). אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');$('go').disabled=false;return}
+ }
  const manual=$('ip').value.trim();
  const candidates=manual?[manual]:['shellypro2-'+UID+'.local','192.168.33.1'];
  IP='';
@@ -355,8 +371,9 @@ $('go').onclick=async()=>{
 </script></body></html>`;
 }
 
-export async function onboardShelly({ mac, statusBase = '' }) {
-  const { appVersion } = await import('../config/version.js');
+// Validate + mint broker credentials for one device and return its RPC bodies.
+// Shared by the admin onboard flow and the universal installer's prepare endpoint.
+function mintDeviceCreds(mac) {
   const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה — 12 תווים הקסדצימליים', { mac: 'invalid' });
   if (!env.deviceBroker.host) {
@@ -368,18 +385,22 @@ export async function onboardShelly({ mac, statusBase = '' }) {
   } catch {
     throw errors.validation('תעודת ה-CA של המכשירים לא נמצאה בשרת (DEVICE_CA_FILE)');
   }
-
   const password = generatePassword();
   writeBrokerPasswdEntry(`shelly-${uid}`, mosquittoPasswdHash(password));
   ensureAclEntry(uid);
   reloadBroker();
+  return { uid, bodies: rpcBodies({ uid, password, ca }) };
+}
 
-  const bodies = rpcBodies({ uid, password, ca });
+// The phone page polls this public endpoint for its verdict; the token only grants
+// "is device <uid> connected to the broker" for 48h — nothing else.
+const statusUrlFor = (uid, statusBase) =>
+  `${statusBase}/api/v1/shelly-onboard/status?token=${jwt.sign({ p: 'shelly-onboard', uid }, env.jwtSecret, { expiresIn: '48h' })}`;
+
+export async function onboardShelly({ mac, statusBase = '' }) {
+  const { appVersion } = await import('../config/version.js');
+  const { uid, bodies } = mintDeviceCreds(mac);
   const stamp = `# script version ${appVersion.commit} — generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC\n`;
-  // The phone page polls this public endpoint for its verdict; the token only grants
-  // "is device <uid> connected to the broker" for 48h — nothing else.
-  const statusToken = jwt.sign({ p: 'shelly-onboard', uid }, env.jwtSecret, { expiresIn: '48h' });
-  const statusUrl = `${statusBase}/api/v1/shelly-onboard/status?token=${statusToken}`;
   return {
     mac: uid,
     broker: `${env.deviceBroker.host}:${env.deviceBroker.port}`,
@@ -387,6 +408,32 @@ export async function onboardShelly({ mac, statusBase = '' }) {
     script_ps: stamp + powershellScript(uid, bodies),
     // keep the shebang as line 1 — the stamp goes right after it
     script_sh: bashScript(uid, bodies).replace('\n', `\n${stamp}`),
-    script_html: htmlPage(uid, bodies, statusUrl),
+    script_html: htmlPage(uid, bodies, statusUrlFor(uid, statusBase)),
+  };
+}
+
+// Universal installer: one downloadable page valid INSTALLER_TTL for any device — the
+// helper types the MAC and the page mints that device's credentials at install time.
+// The embedded token is the authorization: whoever holds the file can create broker
+// credentials (not app access) until it expires, so it's shared privately like the
+// per-device scripts. adm (the generating admin) is carried into the audit log.
+const INSTALLER_TTL = '30d';
+
+export function universalInstaller({ statusBase, adminId }) {
+  if (!env.deviceBroker.host) {
+    throw errors.validation('חיבור מכשירים מרחוק אינו מוגדר בשרת זה (DEVICE_MQTT_HOST)');
+  }
+  const token = jwt.sign({ p: 'shelly-onboard-any', adm: adminId }, env.jwtSecret, { expiresIn: INSTALLER_TTL });
+  const prepareUrl = `${statusBase}/api/v1/shelly-onboard/prepare?token=${token}`;
+  return { script_html: htmlPage(null, null, null, prepareUrl), valid_days: 30 };
+}
+
+// Called by the public prepare endpoint once the installer token is verified.
+export function prepareDevice({ mac, statusBase }) {
+  const { uid, bodies } = mintDeviceCreds(mac);
+  return {
+    mac: uid,
+    bodies: { putCa: bodies.putCa, mqtt: bodies.mqtt, noVerify: bodies.mqttNoVerify, reboot: bodies.reboot, sntp: bodies.sntp },
+    status_url: statusUrlFor(uid, statusBase),
   };
 }
