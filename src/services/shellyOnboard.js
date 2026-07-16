@@ -304,7 +304,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
 </div>
 <div class="box">
  <b>לפני שמתחילים:</b> הטלפון חייב להיות מחובר לאותו Wi-Fi שאליו מחובר המכשיר.
- מכשיר חדש לגמרי? התחברו לרשת שהוא משדר (ShellyPro2-...) והשאירו את שדה הכתובת ריק.
+ מכשיר חדש לגמרי? התחברו לרשת שהוא משדר (ShellyPro2-...).
  <div style="margin-top:10px">
   <div id="macHelp" class="hidden" style="font-size:14px;margin-bottom:6px">
    קוד המכשיר (MAC) מופיע בשם הרשת שהוא משדר — למשל ברשת
@@ -312,7 +312,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
    אפשר להקליד את שם הרשת המלא, את הקוד בלבד, או את ה-MAC מהמדבקה שעל המכשיר.
   </div>
   <input id="mac" class="hidden" placeholder="שם הרשת ShellyPro2-... או קוד המכשיר (MAC)" style="margin-bottom:8px">
-  <input id="ip" placeholder="כתובת IP של המכשיר (ריק = ניסיון אוטומטי)">
+  <input id="ip" class="hidden" placeholder="כתובת IP של המכשיר">
   <button id="go">התחל התקנה</button>
  </div>
 </div>
@@ -363,7 +363,10 @@ $('go').onclick=async()=>{
  const candidates=manual?[manual]:['shellypro2-'+UID+'.local','192.168.33.1'];
  IP='';
  for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
- if(!IP){verdict('המכשיר לא נמצא. ודאו שהטלפון באותו Wi-Fi, מצאו את כתובת ה-IP באפליקציית Shelly (תחת Device Information) והזינו אותה למעלה.','bad');$('go').disabled=false;return}
+ if(!IP){
+  $('ip').classList.remove('hidden');
+  verdict('המכשיר לא נמצא אוטומטית. אפשרויות: (1) התחברו לרשת שהמכשיר משדר (ShellyPro2-...) ולחצו שוב; (2) מצאו את כתובת ה-IP שלו באפליקציית Shelly (תחת Device Information) או ברשימת המכשירים בנתב, הזינו אותה בשדה שנפתח למעלה ולחצו שוב.','warn');
+  $('go').disabled=false;return}
  log('המכשיר נמצא ('+IP+'). שולח הגדרות...','ok');
  try{
   log('מתקין תעודת שרת...');await rpc(B.putCa);
