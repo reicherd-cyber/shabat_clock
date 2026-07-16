@@ -77,12 +77,3 @@ export const adminLoginLimiter = limited({ windowMs: 15 * 60_000, limit: 5 });
 export const onboardStatusLimiter = limited({ windowMs: 60_000, limit: 30 });
 // Credential minting writes broker passwd/ACL entries — keep it slow.
 export const onboardPrepareLimiter = limited({ windowMs: 10 * 60_000, limit: 10 });
-// NL command interpreting costs a Claude call each — cap per user (authenticated
-// route, so key on userId, not IP: the customer base shares CGNAT egress IPs).
-export const nluLimiter = limited({
-  windowMs: 60 * 60_000, limit: 15,
-  keyGenerator: (req) => String(req.auth?.userId || req.ip),
-  handler: (req, res) => res.status(429).json({
-    error: { code: 'RATE_LIMITED', message: 'הגעתם למכסת הפקודות לשעה (15). נסו שוב מאוחר יותר.' },
-  }),
-});

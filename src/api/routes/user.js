@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
-import { requireUser, nluLimiter } from '../middleware.js';
+import { requireUser } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { getUser, verifyPin, setPin } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
@@ -12,8 +12,6 @@ import { sendImmediateCommand } from '../../services/commands.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { getHistory } from '../../services/history.js';
 import { auditLog } from '../../services/audit.js';
-import { interpretCommand } from '../../services/nlu.js';
-import { env } from '../../config/env.js';
 
 export const userRouter = Router();
 userRouter.use(requireUser);
@@ -30,7 +28,7 @@ userRouter.get('/me', async (req, res, next) => {
       'SELECT id, phone, label, is_primary, verified_at FROM user_phones WHERE user_id = ? AND deleted_at IS NULL',
       [req.auth.userId],
     );
-    res.json({ user, phones, nlu_enabled: Boolean(env.anthropic.apiKey) });
+    res.json({ user, phones });
   } catch (e) { next(e); }
 });
 
@@ -233,16 +231,6 @@ userRouter.delete('/schedules/:id', async (req, res, next) => {
     await deleteSchedule({ userId: req.auth.userId, scheduleId: Number(req.params.id) }); // soft [D37]
     await auditImp(req, 'delete', 'schedule', Number(req.params.id));
     res.json({ ok: true });
-  } catch (e) { next(e); }
-});
-
-// Natural-language command → structured interpretation for the user to CONFIRM.
-// This does NOT execute anything; the client replays confirmed actions through
-// /relays/:id/command and /schedules (the normal, validated paths).
-userRouter.post('/nlu/interpret', nluLimiter, async (req, res, next) => {
-  try {
-    const result = await interpretCommand({ userId: req.auth.userId, text: req.body?.text });
-    res.json(result);
   } catch (e) { next(e); }
 });
 
