@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
-import { requireUser } from '../middleware.js';
+import { requireUser, nluLimiter } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { getUser, verifyPin, setPin } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
@@ -239,7 +239,7 @@ userRouter.delete('/schedules/:id', async (req, res, next) => {
 // Natural-language command → structured interpretation for the user to CONFIRM.
 // This does NOT execute anything; the client replays confirmed actions through
 // /relays/:id/command and /schedules (the normal, validated paths).
-userRouter.post('/nlu/interpret', async (req, res, next) => {
+userRouter.post('/nlu/interpret', nluLimiter, async (req, res, next) => {
   try {
     const result = await interpretCommand({ userId: req.auth.userId, text: req.body?.text });
     res.json(result);
