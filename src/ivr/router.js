@@ -11,8 +11,38 @@ import { createSchedule, validateScheduleRules } from '../services/schedules.js'
 import { startCall, setCallUser, appendPath, finishCall } from '../services/callLogs.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, createSession, endSession } from './session.js';
-import { ask, sayAndHangup } from './responses.js';
+import { ask, askVoice, sayAndHangup } from './responses.js';
 import { DAY_NAMES_HE } from '../config/constants.js';
+import { interpretCommand } from '../services/nlu.js';
+import { localParts, shiftDate } from '../services/time.js';
+
+// today/tomorrow (device-local) → YYYY-MM-DD, for once-schedules created by voice.
+function ymdForDay(day, tz) {
+  const p = localParts(new Date(), tz || 'Asia/Jerusalem');
+  const t = day === 'tomorrow' ? shiftDate({ y: p.y, mo: p.mo, d: p.d }, 1) : { y: p.y, mo: p.mo, d: p.d };
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${t.y}-${pad(t.mo)}-${pad(t.d)}`;
+}
+
+// Execute the interpreted actions (relay ids already scoped to the user by the
+// interpreter — this runs the same service calls as the digit menu / web).
+async function runNluActions(session) {
+  const tz = session.data.nluTz;
+  for (const a of session.data.nluActions) {
+    if (a.kind === 'immediate') {
+      await sendImmediateCommand({ relayId: a.relay_id, action: a.action, source: 'ivr', callId: session.callLogId });
+    } else {
+      const date = ymdForDay(a.day, tz);
+      const fields = a.action === 'off'
+        ? { off_time: a.time, off_date: date }
+        : { on_time: a.time, on_date: date };
+      await createSchedule({
+        userId: session.userId, actingUserId: session.userId,
+        relayId: a.relay_id, createdVia: 'ivr', repeat_type: 'once', ...fields,
+      });
+    }
+  }
+}
 
 export const ivrRouter = Router();
 
@@ -33,6 +63,9 @@ async function mainMenu(session, message = null) {
   const items = audio
     ? [...(session.userName ? [{ t: `שלום ${session.userName},` }] : []), { f: audio }]
     : [{ t: await getText('ivr.main_menu', { name: session.userName || '' }) }];
+  // The recorded/base menu predates voice commands — append the option 5 hint by TTS
+  // when the natural-language feature is configured, so it's always in sync.
+  if (env.anthropic.apiKey) items.push({ t: 'או הקישו 5 כדי לומר בקשה בקול' });
   return ask(items, { message });
 }
 
@@ -211,7 +244,50 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           return res.send(await relayMenu(session, 'sched'));
         }
         if (input === '4') return res.send(await runStatus(session));
+        if (input === '5' && env.anthropic.apiKey) {
+          await appendPath(session.callLogId, 'nlu');
+          session.state = 'NLU_LISTEN';
+          return res.send(askVoice([{ t: 'אמרו את הבקשה לאחר הצפצוף, למשל: כבה את הסלון בעוד חמש דקות' }]));
+        }
         return res.send(await invalidInput(session));
+      }
+
+      // ── natural-language voice command: transcribe → interpret → confirm → run ──
+      case 'NLU_LISTEN': {
+        // TEMP TRACE [feedback-ivr-debugging]: real calls reveal the true field name
+        // and shape Yemot returns speech in — remove once confirmed from a live call.
+        console.log('IVR NLU_LISTEN query:', JSON.stringify(req.query));
+        const rawNlu = req.query.nlu;
+        const spoken = String(Array.isArray(rawNlu) ? rawNlu[rawNlu.length - 1] : (rawNlu ?? '')).trim();
+        if (!spoken) return res.send(await invalidInput(session));
+        let interp;
+        try {
+          interp = await interpretCommand({ userId: session.userId, text: spoken });
+        } catch {
+          return res.send(await mainMenu(session, [{ t: 'אירעה שגיאה בפירוש הבקשה, נסו שוב' }]));
+        }
+        if (!interp.understood) {
+          await appendPath(session.callLogId, 'nlu_fail');
+          return res.send(await mainMenu(session, [{ t: interp.clarification }]));
+        }
+        session.data.nluActions = interp.actions;
+        session.data.nluTz = interp.tz;
+        session.state = 'NLU_CONFIRM';
+        // Drop the quotes the shared summary wraps relay names in — plain TTS reads cleaner.
+        const summary = interp.actions.map((a) => a.summary.replace(/"/g, '')).join(', ');
+        return res.send(ask([{ t: `${summary}, להקיש 1 לאישור, 2 לביטול` }]));
+      }
+      case 'NLU_CONFIRM': {
+        if (input === '2') return res.send(await mainMenu(session));
+        if (input !== '1') return res.send(await invalidInput(session));
+        try {
+          await runNluActions(session);
+        } catch {
+          return res.send(await mainMenu(session, [{ t: 'אירעה שגיאה בביצוע הבקשה' }]));
+        }
+        await appendPath(session.callLogId, 'nlu_done');
+        await finishCall(session.callLogId, 'command');
+        return res.send(await mainMenu(session, [{ t: 'הבקשה בוצעה' }]));
       }
 
       // ── dynamic relay menu (immediate + schedule contexts) ──

@@ -123,5 +123,6 @@ export async function interpretCommand({ userId, text }) {
     understood,
     clarification: understood ? null : (parsed.clarification || 'לא הבנתי את הבקשה. נסו לנסח אחרת.'),
     actions,
+    tz, // device-local zone, so callers (e.g. the IVR) can resolve today/tomorrow dates
   };
 }
