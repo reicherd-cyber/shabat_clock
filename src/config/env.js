@@ -71,4 +71,10 @@ export const env = {
     pass: process.env.SMTP_PASS || '',
     from: process.env.SMTP_FROM || 'שעון שבת <no-reply@shabat-clock.local>',
   },
+  // Natural-language command interpreter (Anthropic). Empty key = feature disabled
+  // (the "speak to the system" box is hidden). ANTHROPIC_API_KEY is read by the SDK.
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
+  },
 };

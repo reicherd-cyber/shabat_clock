@@ -30,6 +30,11 @@ export default function Dashboard() {
   // Quick "turn off at…" — a one-sided once-schedule (OFF only) on a lit relay.
   const [quickOff, setQuickOff] = useState(null); // { relayId, time }
   const [notices, setNotices] = useState({}); // relayId -> confirmation text
+  // Natural-language command box: interpret → preview → confirm → execute.
+  const [nlText, setNlText] = useState('');
+  const [nlBusy, setNlBusy] = useState(false);
+  const [nlResult, setNlResult] = useState(null); // { understood, clarification, actions }
+  const [nlDone, setNlDone] = useState(null); // success message after execution
 
   useInterval(async () => {
     try {
@@ -79,6 +84,40 @@ export default function Dashboard() {
     }
   };
 
+  const nlInterpret = async () => {
+    if (!nlText.trim()) return;
+    setNlBusy(true); setNlResult(null); setNlDone(null); setError(null);
+    try {
+      setNlResult(await api.post('/nlu/interpret', { text: nlText }));
+    } catch (e) { setError(e); }
+    finally { setNlBusy(false); }
+  };
+
+  // Replay confirmed actions through the normal, validated endpoints — the LLM
+  // never executes; the user's confirmation here is what acts.
+  const nlConfirm = async () => {
+    setNlBusy(true); setError(null);
+    try {
+      const now = new Date();
+      for (const a of nlResult.actions) {
+        if (a.kind === 'immediate') {
+          await api.post(`/relays/${a.relay_id}/command`, { action: a.action });
+        } else {
+          const date = a.day === 'tomorrow' ? localYmd(new Date(now.getTime() + 86400000)) : localYmd(now);
+          const body = a.action === 'off'
+            ? { relay_id: a.relay_id, repeat_type: 'once', off_time: a.time, off_date: date }
+            : { relay_id: a.relay_id, repeat_type: 'once', on_time: a.time, on_date: date };
+          await api.post('/schedules', body);
+        }
+      }
+      const count = nlResult.actions.length;
+      setNlDone(`✓ בוצעו ${count === 1 ? 'פעולה אחת' : `${count} פעולות`}`);
+      setNlResult(null); setNlText('');
+      setDevices(await api.get('/devices'));
+    } catch (e) { setError(e); }
+    finally { setNlBusy(false); }
+  };
+
   if (!devices) return <p className="text-muted">טוען…</p>;
   // Removed devices (is_enabled=false) never appear on the dashboard — Settings is
   // where they're restored.
@@ -99,6 +138,45 @@ export default function Dashboard() {
         </p>
       </div>
       <ErrorNote error={error} />
+
+      {me?.nlu_enabled && visibleDevices.length > 0 && (
+        <Card className="mb-4">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-lg">💬</span>
+            <Input
+              className="flex-1 min-w-[180px]"
+              placeholder='דברו אל המערכת — למשל "כבה את הסלון בעוד 5 דקות"'
+              value={nlText}
+              disabled={nlBusy}
+              onChange={(e) => { setNlText(e.target.value); setNlDone(null); }}
+              onKeyDown={(e) => e.key === 'Enter' && !nlResult && nlInterpret()}
+            />
+            {!nlResult && <Button disabled={nlBusy || !nlText.trim()} onClick={nlInterpret}>{nlBusy ? '…' : 'שלח'}</Button>}
+          </div>
+          {nlDone && <div className="mt-2 text-[13px] font-medium text-on">{nlDone}</div>}
+          {nlResult && !nlResult.understood && (
+            <div className="mt-3">
+              <p className="text-[13px] text-off">{nlResult.clarification}</p>
+              <Button variant="ghost" className="mt-2" onClick={() => setNlResult(null)}>סגור</Button>
+            </div>
+          )}
+          {nlResult?.understood && (
+            <div className="mt-3">
+              <p className="text-[13px] text-muted mb-1.5">האם לבצע?</p>
+              <ul className="space-y-1 mb-3">
+                {nlResult.actions.map((a, i) => (
+                  <li key={i} className="text-[14px] font-medium">• {a.summary}</li>
+                ))}
+              </ul>
+              <div className="flex gap-2">
+                <Button disabled={nlBusy} onClick={nlConfirm}>{nlBusy ? 'מבצע…' : 'אישור וביצוע'}</Button>
+                <Button variant="ghost" disabled={nlBusy} onClick={() => setNlResult(null)}>ביטול</Button>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
       {visibleDevices.length === 0 && <Card>אין מכשירים משויכים לחשבון. פנו למנהל המערכת.</Card>}
 
       <div className="grid gap-[18px]" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 340px), 1fr))' }}>
