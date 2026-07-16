@@ -1,5 +1,5 @@
 {
-  "voice": "he-IL-HilaNeural",
+  "voice": "he-IL-AvriNeural",
   "texts": {
     "main_menu": "להדלקה מיידית הַקֵּשׁ 1, לכיבוי מיידי הַקֵּשׁ 2, לתזמון עתידי הַקֵּשׁ 3, למצב נוכחי הַקֵּשׁ 4",
     "pin_prompt": "הַקֵּשׁ קוד סודי בן 4 ספרות",
@@ -20,7 +20,19 @@
     "state_unknown": "מצב לא ידוע",
     "invalid_input": "בחירה לא תקינה",
     "goodbye": "להתראות",
-    "unknown_caller": "המספר אינו קיים במערכת, שלום ולהתראות"
+    "unknown_caller": "המספר אינו קיים במערכת, שלום ולהתראות",
+    "main_menu_voice": "לומר בקשה בְּקוֹל, הַקֵּשׁ 1, להדלקה מיידית הַקֵּשׁ 2, לכיבוי מיידי הַקֵּשׁ 3, לתזמון עתידי הַקֵּשׁ 4, למצב נוכחי הַקֵּשׁ 5",
+    "nlu_listen": "אמרו את הבקשה לאחר הצפצוף, למשל, כבה את הסלון בעוד חמש דקות",
+    "nlu_confirm": "הַקֵּשׁ 1 לאישור, 2 לביטול",
+    "nlu_on_now": "הדלקה מיידית של",
+    "nlu_off_now": "כיבוי מיידי של",
+    "nlu_on_at": "הדלקה של",
+    "nlu_off_at": "כיבוי של",
+    "nlu_today_at": "היום בשעה",
+    "nlu_tomorrow_at": "מחר בשעה",
+    "nlu_done": "הבקשה בוצעה",
+    "nlu_parse_error": "אירעה שגיאה בהבנת הבקשה, נסו שוב",
+    "nlu_exec_error": "אירעה שגיאה בביצוע הבקשה"
   },
   "files": {
     "main_menu": "99/100",
@@ -42,6 +54,18 @@
     "state_unknown": "99/116",
     "invalid_input": "99/117",
     "goodbye": "99/118",
-    "unknown_caller": "99/119"
+    "unknown_caller": "99/119",
+    "main_menu_voice": "99/120",
+    "nlu_listen": "99/121",
+    "nlu_confirm": "99/122",
+    "nlu_on_now": "99/123",
+    "nlu_off_now": "99/124",
+    "nlu_on_at": "99/125",
+    "nlu_off_at": "99/126",
+    "nlu_today_at": "99/127",
+    "nlu_tomorrow_at": "99/128",
+    "nlu_done": "99/129",
+    "nlu_parse_error": "99/130",
+    "nlu_exec_error": "99/131"
   }
 }

@@ -31,7 +31,9 @@ const SCHEMA = {
           // timed only: 24h wall-clock HH:MM and which local day, computed by Claude
           // from the current time we provide. Ignored for immediate actions.
           time: { type: ['string', 'null'] },
-          day: { type: ['string', 'null'], enum: ['today', 'tomorrow', null] },
+          // anyOf, not type+enum union — the API schema validator rejects an enum
+          // whose values must satisfy a multi-type declaration.
+          day: { anyOf: [{ type: 'string', enum: ['today', 'tomorrow'] }, { type: 'null' }] },
         },
         required: ['relay_id', 'kind', 'action', 'time', 'day'],
       },
@@ -51,11 +53,14 @@ function buildSystemPrompt(relays, tz, nowParts) {
 הממסרים הזמינים למשתמש זה:
 ${list}
 
+הטקסט מגיע מזיהוי דיבור טלפוני באיכות ירודה — מילים עשויות להגיע משובשות אך דומות פונטית לבקשה האמיתית (למשל "אבל זה כלום עכשיו" הוא שיבוש של "כבה את הסלון עכשיו"). לפני שאתה מוותר, נסה לשחזר את הבקשה הסבירה ביותר לפי דמיון צלילי לשמות הממסרים ולפעולות הדלקה/כיבוי/תזמון. אם השחזור ברור מספיק — פרש אותו כרגיל.
+
 המר את בקשת המשתמש לפעולות מובנות:
 - "immediate" = הדלקה/כיבוי מיד (action: on/off).
 - "timed" = הדלקה/כיבוי בשעה עתידית. חשב את השעה בפורמט HH:MM (24 שעות) ואת היום (today/tomorrow) לפי השעה הנוכחית. "בעוד N דקות/שעות" = הוסף לשעה הנוכחית; אם התוצאה אחרי חצות, day=tomorrow.
 - בחר relay_id רק מהרשימה למעלה. התאם לפי שם הממסר (למשל "סלון", "מטבח") גם אם הניסוח חלקי.
-- אם הבקשה אינה ברורה, אינה מתייחסת לאף ממסר, או אינה קשורה לשליטה בממסרים — קבע understood=false ותן clarification קצר בעברית. אחרת understood=true ו-clarification=null.
+- המשתמש תמיד מאשר את הפעולה לפני ביצוע, לכן עדיף ניחוש סביר שיוצג לאישור מאשר שאלה. אם יש פירוש סביר אחד — החזר אותו כפעולה עם understood=true. לעולם אל תשאל "האם התכוונת ל..." ב-clarification.
+- קבע understood=false רק כשאין שום פירוש סביר; ה-clarification צריך רק לבקש לנסח מחדש בקצרה (המערכת תקשיב שוב מיד).
 - לפעולה immediate השאר time ו-day כ-null.`;
 }
 
@@ -91,8 +96,10 @@ export async function interpretCommand({ userId, text }) {
     messages: [{ role: 'user', content: clean }],
   });
 
+  // The API's refusal classifier sometimes fires on garbled speech-to-text noise;
+  // treat it as "not understood" so the caller is asked to repeat, not shown an error.
   if (response.stop_reason === 'refusal') {
-    throw errors.validation('הבקשה נדחתה. נסחו מחדש.');
+    return { understood: false, clarification: 'לא הבנתי את הבקשה, נסו שוב', actions: [], tz };
   }
   const block = response.content.find((b) => b.type === 'text');
   let parsed;

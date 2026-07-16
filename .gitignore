@@ -4,3 +4,4 @@ env
 npm-debug.log*
 src/web/dist/
 firmware/.pio/
+.claude/settings.local.json

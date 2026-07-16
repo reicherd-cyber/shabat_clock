@@ -46,6 +46,20 @@ const PROMPTS = {
   goodbye: 'להתראות',
   // Append new prompts at the END — file numbers derive from key order (100 + index).
   unknown_caller: 'המספר אינו קיים במערכת, שלום ולהתראות',
+  // — voice-command (NLU) flow. Verb/day keys are fragments juxtaposed with TTS
+  //   relay names and times in the confirmation readback. —
+  main_menu_voice: 'לומר בקשה בְּקוֹל, הַקֵּשׁ 1, להדלקה מיידית הַקֵּשׁ 2, לכיבוי מיידי הַקֵּשׁ 3, לתזמון עתידי הַקֵּשׁ 4, למצב נוכחי הַקֵּשׁ 5',
+  nlu_listen: 'אמרו את הבקשה לאחר הצפצוף, למשל, כבה את הסלון בעוד חמש דקות',
+  nlu_confirm: 'הַקֵּשׁ 1 לאישור, 2 לביטול',
+  nlu_on_now: 'הדלקה מיידית של',
+  nlu_off_now: 'כיבוי מיידי של',
+  nlu_on_at: 'הדלקה של',
+  nlu_off_at: 'כיבוי של',
+  nlu_today_at: 'היום בשעה',
+  nlu_tomorrow_at: 'מחר בשעה',
+  nlu_done: 'הבקשה בוצעה',
+  nlu_parse_error: 'אירעה שגיאה בהבנת הבקשה, נסו שוב',
+  nlu_exec_error: 'אירעה שגיאה בביצוע הבקשה',
 };
 
 async function synthToMp3(text, outFile) {
