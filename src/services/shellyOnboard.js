@@ -306,7 +306,12 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
  <b>לפני שמתחילים:</b> הטלפון חייב להיות מחובר לאותו Wi-Fi שאליו מחובר המכשיר.
  מכשיר חדש לגמרי? התחברו לרשת שהוא משדר (ShellyPro2-...) והשאירו את שדה הכתובת ריק.
  <div style="margin-top:10px">
-  <input id="mac" class="hidden" placeholder="MAC של המכשיר (12 תווים, מהמדבקה שעל המכשיר)" style="margin-bottom:8px">
+  <div id="macHelp" class="hidden" style="font-size:14px;margin-bottom:6px">
+   קוד המכשיר (MAC) מופיע בשם הרשת שהוא משדר — למשל ברשת
+   <b dir="ltr">ShellyPro2-80F3DAC8DCA8</b> הקוד הוא <b dir="ltr">80F3DAC8DCA8</b>.
+   אפשר להקליד את שם הרשת המלא, את הקוד בלבד, או את ה-MAC מהמדבקה שעל המכשיר.
+  </div>
+  <input id="mac" class="hidden" placeholder="שם הרשת ShellyPro2-... או קוד המכשיר (MAC)" style="margin-bottom:8px">
   <input id="ip" placeholder="כתובת IP של המכשיר (ריק = ניסיון אוטומטי)">
   <button id="go">התחל התקנה</button>
  </div>
@@ -318,7 +323,10 @@ const PREPARE_URL=${inject.prepareUrl};
 let IP='', sntpIdx=0;
 const $=(id)=>document.getElementById(id);
 if(UID)$('uid').textContent=UID;
-if(PREPARE_URL)$('mac').classList.remove('hidden');
+if(PREPARE_URL){$('mac').classList.remove('hidden');$('macHelp').classList.remove('hidden')}
+// Accepts "ShellyPro2-80F3DAC8DCA8", "80F3DAC8DCA8", or a colon-separated MAC —
+// the part after the last dash wins so the letters of "shellypro" don't pollute it.
+function parseMac(v){const s=v.trim().toLowerCase();const tail=s.includes('-')?s.slice(s.lastIndexOf('-')+1):s;const hex=tail.replace(/[^0-9a-f]/g,'');return hex.length===12?hex:s.replace(/[^0-9a-f]/g,'')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
 const log=(t,cls)=>{const d=document.createElement('div');d.textContent=t;if(cls)d.className=cls;$('log').appendChild(d);d.scrollIntoView()};
 const verdict=(t,cls)=>{$('verdict').innerHTML='<div class="verdict '+cls+'">'+t+'</div>'};
@@ -341,8 +349,8 @@ async function finish(){
 $('go').onclick=async()=>{
  $('go').disabled=true;$('progress').classList.remove('hidden');$('log').innerHTML='';$('verdict').innerHTML='';$('actions').innerHTML='';
  if(PREPARE_URL){
-  const mac=$('mac').value.toLowerCase().replace(/[^0-9a-f]/g,'');
-  if(mac.length!==12){verdict('כתובת MAC לא תקינה — צריך 12 תווים (אותיות a-f וספרות), מהמדבקה שעל המכשיר.','bad');$('go').disabled=false;return}
+  const mac=parseMac($('mac').value);
+  if(mac.length!==12){verdict('קוד המכשיר לא תקין — הקלידו את שם הרשת המלא (ShellyPro2-...) או 12 תווים מהמדבקה.','bad');$('go').disabled=false;return}
   log('יוצר פרטי חיבור למכשיר בשרת... (דורש אינטרנט)');
   try{
    const r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'});
