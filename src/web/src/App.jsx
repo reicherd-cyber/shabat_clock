@@ -43,9 +43,9 @@ function UserLayout() {
   const impersonating = !!tokenPayload(tokens.user).imp;
 
   const deskCls = ({ isActive }) =>
-    `px-3 py-1.5 rounded-[10px] text-sm font-medium ${isActive ? 'bg-[#F6EBE5] text-accent-dk font-bold' : 'text-muted hover:text-ink'}`;
+    `px-3 py-1.5 rounded-[10px] text-sm font-medium ${isActive ? 'bg-[#E4EFFE] text-accent-dk font-bold' : 'text-muted hover:text-ink'}`;
   const tabCls = ({ isActive }) =>
-    `flex-1 text-center text-xs no-underline py-1.5 rounded-[10px] ${isActive ? 'text-accent-dk bg-[#F6EBE5] font-bold' : 'text-muted'}`;
+    `flex-1 text-center text-xs no-underline py-1.5 rounded-[10px] ${isActive ? 'text-accent-dk bg-[#E4EFFE] font-bold' : 'text-muted'}`;
 
   return (
     <div className="min-h-screen pb-[84px] md:pb-10">
@@ -185,7 +185,7 @@ function AdminLayout() {
   const brand = (
     <div className="font-serif font-bold text-[19px] flex items-center gap-2 cursor-pointer select-none"
       onClick={() => { setMenuOpen(false); nav('/admin'); }} role="button" title="לדף הבית">
-      <span className="w-[30px] h-[30px] rounded-[9px] bg-ink text-white grid place-items-center text-base shrink-0">✦</span>
+      <span className="w-[30px] h-[30px] rounded-[9px] bg-accent text-white grid place-items-center text-base shrink-0">✦</span>
       ניהול — שעון שבת
     </div>
   );
@@ -196,7 +196,7 @@ function AdminLayout() {
       {/* Desktop sidebar (RTL: first flex child = right side); collapses to a slim rail */}
       <aside className={`hidden md:flex flex-col shrink-0 border-l border-line bg-surface sticky top-0 h-screen overflow-y-auto py-4 gap-5 transition-all duration-200 ${collapsed ? 'w-14 px-2 items-center' : 'w-56 px-3'}`}>
         {collapsed ? (
-          <span className="w-[30px] h-[30px] rounded-[9px] bg-ink text-white grid place-items-center text-base cursor-pointer select-none"
+          <span className="w-[30px] h-[30px] rounded-[9px] bg-accent text-white grid place-items-center text-base cursor-pointer select-none"
             onClick={() => nav('/admin')} role="button" title="ניהול — שעון שבת">✦</span>
         ) : brand}
         <button

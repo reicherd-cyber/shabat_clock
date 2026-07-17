@@ -27,7 +27,7 @@ export const CardHead = ({ children }) => (
 export const Button = ({ children, variant = 'primary', className = '', ...props }) => {
   const styles = {
     primary: 'bg-accent border-accent text-white hover:bg-accent-dk',
-    ghost: 'bg-surface border-line text-ink hover:border-[#CFC9BB]',
+    ghost: 'bg-surface border-line text-ink hover:border-[#B9CBE8]',
     danger: 'bg-off border-off text-white hover:opacity-90',
   }[variant];
   return (
@@ -72,7 +72,7 @@ export const OnlineDot = ({ online }) => (
   <span className={`inline-block w-2.5 h-2.5 rounded-full ${online ? 'bg-on' : 'bg-off'}`} title={online ? 'מחובר' : 'מנותק'} />
 );
 
-// mockup .toggle — terracotta when on; pulses while a command is in flight
+// mockup .toggle — accent blue when on; pulses while a command is in flight
 export function Toggle({ checked, disabled, busy, onChange }) {
   return (
     <label className={`toggle ${busy ? 'busy' : ''}`}>

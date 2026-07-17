@@ -23,7 +23,7 @@ function Row({ item, first }) {
   const isCmd = item.type === 'cmd';
   const ok = isCmd ? d.status === 'acked' : !['auth_fail', 'abandoned'].includes(d.outcome);
   const icon = isCmd ? (ok ? '💡' : '✕') : '📞';
-  const iconBg = isCmd ? (ok ? 'bg-on-bg' : 'bg-off-bg') : 'bg-[#EFEAF7]';
+  const iconBg = isCmd ? (ok ? 'bg-on-bg' : 'bg-off-bg') : 'bg-[#E8F1FE]';
   return (
     <div className={`flex items-center gap-3 px-5 py-[13px] text-sm ${first ? '' : 'border-t border-line'}`}>
       <span className={`w-[30px] h-[30px] rounded-[9px] grid place-items-center text-sm shrink-0 ${iconBg}`}>{icon}</span>

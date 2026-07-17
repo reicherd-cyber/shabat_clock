@@ -13,7 +13,7 @@ import { Button, Modal, ErrorNote, useAsync } from '../ui.jsx';
 // menu (accent), action (green), error (brick), end (ink).
 const KIND_STYLE = {
   entry: 'border-[#B9A8D8] bg-[#F4F0FA]',
-  menu: 'border-accent bg-[#FBF1EC]',
+  menu: 'border-accent bg-[#EAF2FE]',
   step: 'border-line bg-surface',
   ok: 'border-on bg-on-bg',
   err: 'border-off bg-off-bg',
@@ -73,12 +73,12 @@ function Node({ k, title, kind = 'step', hint, map, onSave, onRevertAudio, busy,
 function Arrow({ chip, label }) {
   return (
     <div className="flex flex-col items-center gap-0.5 py-1 select-none">
-      <span className="w-px h-3 bg-[#C9C3B6]" />
+      <span className="w-px h-3 bg-[#C3CFE4]" />
       <span className="flex items-center gap-1.5">
         {chip && <span className="min-w-6 h-6 px-1.5 grid place-items-center rounded-lg bg-ink text-white text-xs font-bold">{chip}</span>}
         {label && <span className="text-muted text-[11px]">{label}</span>}
       </span>
-      <span className="text-[#C9C3B6] text-sm leading-none">▼</span>
+      <span className="text-[#C3CFE4] text-sm leading-none">▼</span>
     </div>
   );
 }

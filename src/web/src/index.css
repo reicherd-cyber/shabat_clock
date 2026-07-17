@@ -1,23 +1,24 @@
 @import "tailwindcss";
 
-/* Claude design tokens — 1:1 with design/mockup-user-dashboard.html [D27] */
+/* Blue & white theme (replaced the warm terracotta scheme, 2026-07). Accent
+   matches the validated chart blue so data and UI share one hue family. */
 @theme {
-  --color-bg: #F0EEE6;        /* warm cream — never pure white */
+  --color-bg: #EFF4FC;        /* airy blue-tinted white — page plane, never pure white */
   --color-surface: #FFFFFF;
-  --color-surface2: #FAF9F5;
-  --color-ink: #29261B;       /* warm near-black */
-  --color-muted: #87867F;
-  --color-accent: #D97757;    /* terracotta */
-  --color-accent-dk: #C4633F;
-  --color-line: #E5E1D8;      /* hairline borders */
-  --color-on: #6A8A5E;        /* olive green — success/online */
-  --color-on-bg: #EDF2EA;
-  --color-off: #BF4D43;       /* brick — error/offline */
-  --color-off-bg: #F7ECEA;
+  --color-surface2: #F6F9FE;
+  --color-ink: #1B2140;       /* deep navy ink (Leumi headline navy) */
+  --color-muted: #64708D;
+  --color-accent: #1877F2;    /* vivid azure — primary actions */
+  --color-accent-dk: #1E2C93; /* deep indigo — hovers, active text */
+  --color-line: #DFE6F2;      /* hairline borders */
+  --color-on: #2F8F5B;        /* green — success/online */
+  --color-on-bg: #E8F4EC;
+  --color-off: #E11D48;       /* vivid crimson — error/offline/danger */
+  --color-off-bg: #FDECF0;
   --font-sans: "Heebo", system-ui, sans-serif;
   --font-serif: "Frank Ruhl Libre", Georgia, serif;
   --radius-card: 14px;
-  --shadow-card: 0 1px 3px rgba(41, 38, 27, .06), 0 4px 16px rgba(41, 38, 27, .05);
+  --shadow-card: 0 1px 3px rgba(27, 33, 64, .06), 0 4px 16px rgba(27, 33, 64, .05);
 }
 
 body {
@@ -32,7 +33,7 @@ body {
 /* toggle — mockup .toggle: 46×26, terracotta track when on */
 .toggle { position: relative; width: 46px; height: 26px; flex-shrink: 0; cursor: pointer; display: inline-block; }
 .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
-.toggle .track { position: absolute; inset: 0; border-radius: 99px; background: #DDD8CC; transition: .2s; }
+.toggle .track { position: absolute; inset: 0; border-radius: 99px; background: #D3DFF0; transition: .2s; }
 .toggle .track::after {
   content: ""; position: absolute; top: 3px; right: 3px; width: 20px; height: 20px;
   border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); transition: .2s;
@@ -47,7 +48,7 @@ body {
 .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; padding: 3px 10px; border-radius: 99px; white-space: nowrap; }
 .badge .dot { width: 7px; height: 7px; border-radius: 50%; }
 .badge.online { background: var(--color-on-bg); color: var(--color-on); }
-.badge.online .dot { background: var(--color-on); box-shadow: 0 0 0 3px rgba(106, 138, 94, .18); }
+.badge.online .dot { background: var(--color-on); box-shadow: 0 0 0 3px rgba(47, 143, 91, .18); }
 .badge.offline { background: var(--color-off-bg); color: var(--color-off); }
 .badge.offline .dot { background: var(--color-off); }
 
@@ -60,5 +61,5 @@ body {
 
 /* schedule pills — mockup .pill */
 .pill { border-radius: 9px; padding: 5px 12px; font-size: 13.5px; font-weight: 500; border: 1px solid var(--color-line); background: var(--color-surface2); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.pill.on-p { border-color: rgba(106, 138, 94, .4); color: var(--color-on); background: var(--color-on-bg); }
-.pill.off-p { border-color: rgba(191, 77, 67, .35); color: var(--color-off); background: var(--color-off-bg); }
+.pill.on-p { border-color: rgba(47, 143, 91, .4); color: var(--color-on); background: var(--color-on-bg); }
+.pill.off-p { border-color: rgba(225, 29, 72, .35); color: var(--color-off); background: var(--color-off-bg); }

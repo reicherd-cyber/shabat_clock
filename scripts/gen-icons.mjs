@@ -9,7 +9,7 @@ import path from 'node:path';
 const OUT_DIR = new URL('../src/web/public/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 mkdirSync(OUT_DIR, { recursive: true });
 
-const ACCENT = [0xd9, 0x77, 0x57]; // brand terracotta, matches --color-accent
+const ACCENT = [0x18, 0x77, 0xf2]; // brand azure, matches --color-accent
 const WHITE = [0xff, 0xff, 0xff];
 const SS = 4; // supersample factor for anti-aliasing
 
