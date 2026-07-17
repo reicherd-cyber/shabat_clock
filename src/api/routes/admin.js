@@ -9,6 +9,7 @@ import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
+import { getAdminHistory } from '../../services/history.js';
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
 import { brokerConnected } from '../../mqtt/client.js';
@@ -310,6 +311,15 @@ adminRouter.get('/commands', async (req, res, next) => {
        ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''}
        ORDER BY c.id DESC LIMIT 200`,
     ));
+  } catch (e) { next(e); }
+});
+
+// Merged commands + call_logs across all users; every query param optional —
+// user_id, device_id, type (cmd|call), source, action, status, outcome, phone,
+// from, to, limit, cursor. See getAdminHistory for the narrowing rules.
+adminRouter.get('/history', async (req, res, next) => {
+  try {
+    res.json(await getAdminHistory(req.query));
   } catch (e) { next(e); }
 });
 

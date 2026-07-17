@@ -70,7 +70,7 @@ const OUTCOME_LABELS = {
 };
 
 // Hour dropdown for the call-log filters: empty = the whole day.
-function HourSelect({ value, onChange }) {
+export function HourSelect({ value, onChange }) {
   return (
     <Select className="py-2 text-sm" value={value} onChange={(e) => onChange(e.target.value)}>
       <option value="">כל היום</option>
@@ -88,7 +88,7 @@ function stepChip(step) {
 }
 
 // The call's route through the IVR as a breadcrumb of chips (RTL: flows right→left).
-function MenuPath({ path }) {
+export function MenuPath({ path }) {
   if (!path) return <span className="text-muted">—</span>;
   const steps = path.split('>').map(stepChip);
   const toneCls = {
