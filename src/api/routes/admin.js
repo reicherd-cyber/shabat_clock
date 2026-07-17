@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { query } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireAdmin, requireWrite, requireSuperadmin, signUserToken } from '../middleware.js';
-import { createUser, getUser, setPin, bcryptHash } from '../../services/users.js';
+import { createUser, getUser, setPin, bcryptHash, normalizeEmail } from '../../services/users.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, releaseDeviceIdentity } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
@@ -72,7 +72,7 @@ adminRouter.post('/2fa/disable', async (req, res, next) => {
 adminRouter.get('/users', async (req, res, next) => {
   try {
     res.json(await query(
-      `SELECT u.id, u.full_name, u.ivr_code, u.require_pin, u.status, u.max_devices, u.notes, u.created_at,
+      `SELECT u.id, u.full_name, u.ivr_code, u.require_pin, u.status, u.max_devices, u.notes, u.email, u.created_at,
               (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id) AS device_count
        FROM users u ORDER BY u.id DESC`,
     ));
@@ -94,6 +94,7 @@ adminRouter.post('/users', requireWrite, async (req, res, next) => {
     const user = await createUser({
       full_name: b.full_name, pin: b.pin,
       require_pin: Boolean(b.require_pin), max_devices: b.max_devices ?? 3, notes: b.notes ?? null,
+      email: b.email ?? null,
     });
     // Admin-created phones are verified immediately — audit-logged (§3.2 [D34]).
     for (const p of b.phones || []) {
@@ -117,6 +118,7 @@ adminRouter.patch('/users/:id', requireWrite, async (req, res, next) => {
     for (const k of ['full_name', 'require_pin', 'status', 'max_devices', 'notes']) {
       if (req.body?.[k] !== undefined) fields[k] = req.body[k];
     }
+    if (req.body?.email !== undefined) fields.email = normalizeEmail(req.body.email);
     if (Object.keys(fields).length) {
       const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
       await query(`UPDATE users SET ${sets} WHERE id = ?`, [...Object.values(fields), req.params.id]);
@@ -277,14 +279,15 @@ adminRouter.delete('/relays/:id', requireWrite, async (req, res, next) => {
 // ── monitoring ──
 adminRouter.get('/monitoring', async (req, res, next) => {
   try {
+    // Disabled/removed devices are expected to be offline — only enabled ones count.
     const [[online], [total], [pending], [failed24]] = await Promise.all([
-      query('SELECT COUNT(*) AS n FROM devices WHERE is_online = TRUE'),
-      query('SELECT COUNT(*) AS n FROM devices'),
+      query('SELECT COUNT(*) AS n FROM devices WHERE is_online = TRUE AND is_enabled = TRUE'),
+      query('SELECT COUNT(*) AS n FROM devices WHERE is_enabled = TRUE'),
       query("SELECT COUNT(*) AS n FROM commands WHERE status IN ('pending','sent')"),
       query("SELECT COUNT(*) AS n FROM commands WHERE status = 'failed' AND requested_at > UTC_TIMESTAMP() - INTERVAL 24 HOUR"),
     ]);
     const syncErrors = await query(
-      "SELECT id, name, device_uid, sync_error, schedule_version, device_ack_version FROM devices WHERE sync_status = 'error'",
+      "SELECT id, name, device_uid, sync_error, schedule_version, device_ack_version FROM devices WHERE sync_status = 'error' AND is_enabled = TRUE",
     );
     res.json({
       devices_online: online.n, devices_total: total.n,
