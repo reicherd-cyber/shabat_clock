@@ -1,14 +1,16 @@
 // Finance ledger: incomes & expenses (one-time / monthly / yearly) with stats.
-// Chart palette validated (CVD + contrast) against the white card surface:
-// income #2a78d6 (blue), expense #eb6834 (orange).
+// Money-color convention: incomes GREEN, expenses RED — everywhere (charts, chips,
+// tiles). Pair validated (CVD + contrast) against the white card surface; the ΔE
+// sits at the 8.0 target and the charts carry secondary encoding (legend, gaps,
+// tooltips) as the validator requires.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
 
-const C_INCOME = '#2a78d6';
-const C_EXPENSE = '#eb6834';
-const C_GRID = '#E5E1D8';
-const C_MUTED = '#87867F';
+const C_INCOME = '#006e00';
+const C_EXPENSE = '#e11d48';
+const C_GRID = '#DFE6F2';
+const C_MUTED = '#64708D';
 
 const KIND_HE = { income: 'הכנסה', expense: 'הוצאה' };
 const REC_HE = { once: 'חד־פעמי', monthly: 'חודשי', yearly: 'שנתי' };
@@ -80,7 +82,7 @@ function MonthlyChart({ monthly }) {
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 280 }} role="img" aria-label="הכנסות והוצאות לפי חודש">
         {ticks.map((t) => (
           <g key={t}>
-            <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke={t === 0 ? '#C9C4B8' : C_GRID} strokeWidth="1" />
+            <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke={t === 0 ? '#BAC8E0' : C_GRID} strokeWidth="1" />
             <text x={W - padR + 6} y={y(t) + 3.5} fontSize="10" fill={C_MUTED} style={{ fontVariantNumeric: 'tabular-nums' }}>
               {t >= 1000 ? `${(t / 1000).toLocaleString()}K` : t.toLocaleString()}
             </text>
@@ -94,7 +96,7 @@ function MonthlyChart({ monthly }) {
               onMouseLeave={() => setTip(null)}>
               {/* invisible full-band hit target — bigger than the marks */}
               <rect x={padL + i * band} y={padT} width={band} height={plotH} fill="transparent" />
-              {tip?.i === i && <rect x={padL + i * band} y={padT} width={band} height={plotH} fill="#29261B" opacity="0.04" />}
+              {tip?.i === i && <rect x={padL + i * band} y={padT} width={band} height={plotH} fill="#1B2140" opacity="0.04" />}
               {bar(x0, m.income, C_INCOME, 'in')}
               {bar(x0 + barW + 2, m.expense, C_EXPENSE, 'ex')}
               <text x={padL + i * band + band / 2} y={H - 8} fontSize="10" fill={C_MUTED} textAnchor="middle">{monthLabel(m.month)}</text>
@@ -138,6 +140,12 @@ function CategoryBars({ items, color, total }) {
   );
 }
 
+// Suggested categories, tailored to this business (still free-text — pick or type).
+const PRESET_CATEGORIES = {
+  expense: ['טלפוניה — ימות המשיח', 'בינה מלאכותית — Anthropic', 'תשתית וענן', 'חומרה — ממסרים ומכשירים', 'דומיין ואתר', 'שיווק ופרסום', 'נסיעות והתקנות', 'אחר'],
+  income: ['מנוי חודשי', 'התקנה חד־פעמית', 'מכירת חומרה', 'אחר'],
+};
+
 const EMPTY_FORM = { kind: 'expense', title: '', category: '', amount: '', recurrence: 'once', entry_date: dstr(new Date()), end_date: '', note: '' };
 
 export default function Finance() {
@@ -176,7 +184,7 @@ export default function Finance() {
   const categories = data?.categories || [];
 
   const save = () => run(async () => {
-    const body = { ...form, amount: Number(form.amount), category: form.category || null, end_date: form.end_date || null, note: form.note || null };
+    const body = { ...form, amount: Number(form.amount), category: form.category.trim(), end_date: form.end_date || null, note: form.note || null };
     if (form.id) await adminApi.patch(`/finance/${form.id}`, body);
     else await adminApi.post('/finance', body);
     setForm(null);
@@ -338,18 +346,19 @@ export default function Finance() {
             <div className="flex gap-2">
               {['expense', 'income'].map((k) => (
                 <button key={k}
-                  className={`flex-1 py-2 rounded-[10px] border text-sm font-medium cursor-pointer ${form.kind === k ? 'text-white' : 'bg-surface border-line text-ink'}`}
-                  style={form.kind === k ? { background: k === 'income' ? C_INCOME : C_EXPENSE, borderColor: 'transparent' } : {}}
+                  className={`flex-1 py-2 rounded-[10px] border text-sm font-medium cursor-pointer ${form.kind === k ? 'bg-accent border-accent text-white' : 'bg-surface border-line text-ink'}`}
                   onClick={() => setForm((f) => ({ ...f, kind: k }))}>
                   {KIND_HE[k]}
                 </button>
               ))}
             </div>
-            <Input placeholder="שם (למשל: יחידות ימות המשיח)" value={form.title} onChange={set('title')} />
+            <Input placeholder="שם * (למשל: יחידות ימות המשיח)" value={form.title} onChange={set('title')} />
             <div className="flex gap-2">
-              <Input dir="ltr" type="number" min="0" step="0.01" placeholder="סכום ב-₪" value={form.amount} onChange={set('amount')} />
-              <Input placeholder="קטגוריה" list="finance-cats" value={form.category} onChange={set('category')} />
-              <datalist id="finance-cats">{categories.map((c) => <option key={c} value={c} />)}</datalist>
+              <Input dir="ltr" type="number" min="0" step="0.01" placeholder="סכום ב-₪ *" value={form.amount} onChange={set('amount')} />
+              <Input placeholder="קטגוריה *" list="finance-cats" value={form.category} onChange={set('category')} />
+              <datalist id="finance-cats">
+                {[...new Set([...PRESET_CATEGORIES[form.kind], ...categories])].map((c) => <option key={c} value={c} />)}
+              </datalist>
             </div>
             <div className="flex gap-2 items-center">
               <Select className="w-40" value={form.recurrence} onChange={set('recurrence')}>
@@ -368,7 +377,7 @@ export default function Finance() {
             <Input placeholder="הערה (רשות)" value={form.note} onChange={set('note')} />
             <div className="flex gap-2 justify-end">
               <Button variant="ghost" onClick={() => setForm(null)}>ביטול</Button>
-              <Button disabled={busy || !form.title || !Number(form.amount)} onClick={save}>{form.id ? 'שמירה' : 'הוספה'}</Button>
+              <Button disabled={busy || !form.title.trim() || !form.category.trim() || !Number(form.amount)} onClick={save}>{form.id ? 'שמירה' : 'הוספה'}</Button>
             </div>
           </div>
         )}

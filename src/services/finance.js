@@ -36,7 +36,11 @@ function validate(b, partial = false) {
     if (b.end_date !== null && b.end_date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(b.end_date))) throw errors.validation('תאריך סיום לא תקין');
     out.end_date = b.end_date || null;
   }
-  if (b.category !== undefined) out.category = String(b.category || '').trim().slice(0, 60) || null;
+  if (!partial || b.category !== undefined) {
+    const category = String(b.category || '').trim().slice(0, 60);
+    if (!category) throw errors.validation('נדרשת קטגוריה');
+    out.category = category;
+  }
   if (b.note !== undefined) out.note = String(b.note || '').trim().slice(0, 255) || null;
   return out;
 }
