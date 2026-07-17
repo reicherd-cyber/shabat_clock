@@ -312,7 +312,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         if (!spoken) return res.send(await invalidInput(session));
         let interp;
         try {
-          interp = await interpretCommand({ userId: session.userId, text: spoken });
+          interp = await interpretCommand({ userId: session.userId, text: spoken, phone: session.phone });
         } catch (e) {
           console.error('IVR NLU interpret error:', e);
           return res.send(await mainMenu(session, await speak('ivr.nlu_parse_error', {}, 'אירעה שגיאה בפירוש הבקשה, נסו שוב')));

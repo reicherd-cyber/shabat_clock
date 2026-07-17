@@ -42,6 +42,23 @@ const SCHEMA = {
   required: ['understood', 'clarification', 'actions'],
 };
 
+// $/MTok [input, output] per model — used to stamp each interpretation's cost at
+// the price in effect when it ran (price changes never rewrite history).
+const PRICE_PER_MTOK = {
+  'claude-opus-4-8': [5, 25],
+  'claude-sonnet-5': [3, 15],
+  'claude-haiku-4-5': [1, 5],
+};
+
+async function logUsage({ userId, phone, text, model, usage }) {
+  const [inP, outP] = PRICE_PER_MTOK[model] || [5, 25];
+  const cost = (usage.input_tokens * inP + usage.output_tokens * outP) / 1e6;
+  await query(
+    'INSERT INTO nlu_usage (user_id, phone, text, model, input_tokens, output_tokens, cost_usd) VALUES (?,?,?,?,?,?,?)',
+    [userId ?? null, phone ?? null, text, model, usage.input_tokens, usage.output_tokens, cost],
+  );
+}
+
 function buildSystemPrompt(relays, tz, nowParts) {
   const list = relays
     .map((r) => `- relay_id ${r.id}: "${r.name}" (מכשיר: "${r.device_name}", מצב נוכחי: ${r.current_state === 'on' ? 'דולק' : 'כבוי'})`)
@@ -67,7 +84,7 @@ ${list}
 // Returns { understood, clarification, actions: [{ relay_id, relay_name, kind,
 // action, time, day, summary }] } — enriched with the relay name and a Hebrew
 // summary line for the confirmation UI. Throws if the feature isn't configured.
-export async function interpretCommand({ userId, text }) {
+export async function interpretCommand({ userId, text, phone = null }) {
   if (!env.anthropic.apiKey) {
     throw errors.validation('פירוש פקודות קוליות אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
   }
@@ -95,6 +112,10 @@ export async function interpretCommand({ userId, text }) {
     system: buildSystemPrompt(relays, tz, nowParts),
     messages: [{ role: 'user', content: clean }],
   });
+
+  // Cost log for the admin voice-costs table; a logging hiccup must never fail the call.
+  logUsage({ userId, phone, text: clean, model: env.anthropic.model, usage: response.usage })
+    .catch((e) => console.error('nlu_usage log failed:', e.message));
 
   // The API's refusal classifier sometimes fires on garbled speech-to-text noise;
   // treat it as "not understood" so the caller is asked to repeat, not shown an error.
