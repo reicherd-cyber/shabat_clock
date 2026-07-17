@@ -10,6 +10,8 @@ import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/r
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
 import { getAdminHistory } from '../../services/history.js';
+import { getVoiceCosts } from '../../services/voiceCosts.js';
+import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEntry, restoreFinanceEntry } from '../../services/finance.js';
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
 import { brokerConnected } from '../../mqtt/client.js';
@@ -320,6 +322,61 @@ adminRouter.get('/commands', async (req, res, next) => {
 adminRouter.get('/history', async (req, res, next) => {
   try {
     res.json(await getAdminHistory(req.query));
+  } catch (e) { next(e); }
+});
+
+// ── finance ledger (incomes/expenses, one-time or recurring) ──
+adminRouter.get('/finance', async (req, res, next) => {
+  try {
+    res.json(await getFinance({
+      from: req.query.from, to: req.query.to,
+      kind: req.query.kind, category: req.query.category,
+      recurrence: req.query.recurrence, q: req.query.q,
+    }));
+  } catch (e) { next(e); }
+});
+
+adminRouter.post('/finance', requireWrite, async (req, res, next) => {
+  try {
+    const r = await createFinanceEntry(req.body || {});
+    await audit(req, 'finance.create', 'finance_entry', r.id, req.body);
+    res.status(201).json(r);
+  } catch (e) { next(e); }
+});
+
+adminRouter.patch('/finance/:id', requireWrite, async (req, res, next) => {
+  try {
+    await updateFinanceEntry(req.params.id, req.body || {});
+    await audit(req, 'finance.update', 'finance_entry', Number(req.params.id), req.body);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Soft delete + restore — removals must stay restorable [see remove-disable convention].
+adminRouter.delete('/finance/:id', requireWrite, async (req, res, next) => {
+  try {
+    await softDeleteFinanceEntry(req.params.id);
+    await audit(req, 'finance.delete', 'finance_entry', Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+adminRouter.post('/finance/:id/restore', requireWrite, async (req, res, next) => {
+  try {
+    await restoreFinanceEntry(req.params.id);
+    await audit(req, 'finance.restore', 'finance_entry', Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Per-voice-order cost table: Yemot STT charges (live from their API) matched to
+// Anthropic usage rows. from/to are optional UTC bounds, same as /call-logs.
+adminRouter.get('/voice-costs', async (req, res, next) => {
+  try {
+    res.json(await getVoiceCosts({
+      from: req.query.from, to: req.query.to,
+      userId: req.query.user_id, phone: req.query.phone, q: req.query.q,
+    }));
   } catch (e) { next(e); }
 });
 

@@ -12,6 +12,8 @@ import Devices from './admin/Devices.jsx';
 import { Monitoring, CallLogs, Commands, AdminSchedules, SystemSettings, Admins, Audit } from './admin/Misc.jsx';
 import { CallFlow } from './admin/CallFlow.jsx';
 import AdminHistory from './admin/History.jsx';
+import VoiceCosts from './admin/VoiceCosts.jsx';
+import Finance from './admin/Finance.jsx';
 
 // Decode a JWT payload client-side (base64url) — used only to detect impersonation.
 function tokenPayload(t) {
@@ -85,45 +87,156 @@ function UserLayout() {
   );
 }
 
+// Admin nav grouped into sections — a flat top bar stopped scaling past ~10 pages.
+// Section-less first group = top-level links. (The commands page is intentionally
+// absent: it's a drill-down from the monitoring tiles.)
+const ADMIN_NAV = [
+  { items: [{ to: '/admin', label: 'ניטור', end: true }] },
+  {
+    title: 'ניהול',
+    items: [
+      { to: '/admin/users', label: 'משתמשים' },
+      { to: '/admin/devices', label: 'מכשירים' },
+      { to: '/admin/schedules', label: 'תזמונים' },
+    ],
+  },
+  {
+    title: 'פעילות',
+    items: [
+      { to: '/admin/history', label: 'היסטוריה' },
+      { to: '/admin/call-logs', label: 'שיחות' },
+      { to: '/admin/call-flow', label: 'תרשים שיחה' },
+    ],
+  },
+  {
+    title: 'כספים',
+    items: [
+      { to: '/admin/finance', label: 'הכנסות והוצאות' },
+      { to: '/admin/voice-costs', label: 'עלויות קול' },
+    ],
+  },
+  {
+    title: 'מערכת',
+    items: [
+      { to: '/admin/settings', label: 'הגדרות' },
+      { to: '/admin/admins', label: 'מנהלים' },
+      { to: '/admin/audit', label: 'ביקורת' },
+    ],
+  },
+];
+
+function AdminNav({ onNavigate }) {
+  // Folded/unfolded state per section title, remembered across reloads (default: all open).
+  const [folded, setFolded] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('adminNavFolded')) || {}; } catch { return {}; }
+  });
+  const toggle = (title) => {
+    setFolded((f) => {
+      const next = { ...f, [title]: !f[title] };
+      localStorage.setItem('adminNavFolded', JSON.stringify(next));
+      return next;
+    });
+  };
+  const linkCls = ({ isActive }) =>
+    `block px-3 py-1.5 rounded-[10px] text-sm font-medium ${isActive ? 'bg-accent text-white' : 'text-ink hover:bg-line/50'}`;
+  return (
+    <nav className="space-y-4">
+      {ADMIN_NAV.map((sec, i) => (
+        <div key={i}>
+          {sec.title && (
+            <button
+              className="w-full flex items-center justify-between text-muted hover:text-ink text-[11px] font-bold tracking-wide px-3 mb-1 cursor-pointer select-none"
+              onClick={() => toggle(sec.title)}
+            >
+              <span>{sec.title}</span>
+              <span className={`transition-transform duration-150 ${folded[sec.title] ? '-rotate-90' : ''}`}>▾</span>
+            </button>
+          )}
+          {!(sec.title && folded[sec.title]) && (
+            <div className="space-y-0.5">
+              {sec.items.map((it) => (
+                <NavLink key={it.to} to={it.to} end={it.end} className={linkCls} onClick={onNavigate}>{it.label}</NavLink>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </nav>
+  );
+}
+
 function AdminLayout() {
   const nav = useNavigate();
   const [ver, setVer] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Collapsible sidebar; the choice survives reloads.
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('adminNavCollapsed') === '1');
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      localStorage.setItem('adminNavCollapsed', c ? '0' : '1');
+      return !c;
+    });
+  };
   useEffect(() => {
     fetch('/healthz').then((r) => r.json()).then(setVer).catch(() => {});
   }, []);
   if (!tokens.admin) return <Navigate to="/admin/login" replace />;
-  const navCls = ({ isActive }) =>
-    `px-3 py-1.5 rounded-[10px] font-medium text-sm whitespace-nowrap ${isActive ? 'bg-accent text-white' : 'text-ink hover:bg-line/50'}`;
+
+  const brand = (
+    <div className="font-serif font-bold text-[19px] flex items-center gap-2 cursor-pointer select-none"
+      onClick={() => { setMenuOpen(false); nav('/admin'); }} role="button" title="לדף הבית">
+      <span className="w-[30px] h-[30px] rounded-[9px] bg-ink text-white grid place-items-center text-base shrink-0">✦</span>
+      ניהול — שעון שבת
+    </div>
+  );
+  const logout = () => { tokens.admin = null; nav('/admin/login'); };
+
   return (
-    <div className="min-h-screen">
-      <header className="flex items-center justify-between px-6 py-3.5 border-b border-line bg-bg sticky top-0 z-10 flex-wrap gap-2">
-        <div className="font-serif font-bold text-[21px] flex items-center gap-2 cursor-pointer select-none"
-          onClick={() => nav('/admin')} role="button" title="לדף הבית">
-          <span className="w-[30px] h-[30px] rounded-[9px] bg-ink text-white grid place-items-center text-base">✦</span>
-          ניהול — שעון שבת
-        </div>
-        <nav className="flex gap-1 overflow-x-auto">
-          <NavLink to="/admin" end className={navCls}>ניטור</NavLink>
-          <NavLink to="/admin/users" className={navCls}>משתמשים</NavLink>
-          <NavLink to="/admin/devices" className={navCls}>מכשירים</NavLink>
-          <NavLink to="/admin/schedules" className={navCls}>תזמונים</NavLink>
-          <NavLink to="/admin/call-logs" className={navCls}>שיחות</NavLink>
-          <NavLink to="/admin/history" className={navCls}>היסטוריה</NavLink>
-          <NavLink to="/admin/call-flow" className={navCls}>תרשים שיחה</NavLink>
-          <NavLink to="/admin/settings" className={navCls}>הגדרות</NavLink>
-          <NavLink to="/admin/admins" className={navCls}>מנהלים</NavLink>
-          <NavLink to="/admin/audit" className={navCls}>ביקורת</NavLink>
-          <button className="px-3 py-1.5 text-sm text-muted cursor-pointer" onClick={() => { tokens.admin = null; nav('/admin/login'); }}>יציאה</button>
-        </nav>
+    <div className="min-h-screen md:flex">
+      {/* Desktop sidebar (RTL: first flex child = right side); collapses to a slim rail */}
+      <aside className={`hidden md:flex flex-col shrink-0 border-l border-line bg-surface sticky top-0 h-screen overflow-y-auto py-4 gap-5 transition-all duration-200 ${collapsed ? 'w-14 px-2 items-center' : 'w-56 px-3'}`}>
+        {collapsed ? (
+          <span className="w-[30px] h-[30px] rounded-[9px] bg-ink text-white grid place-items-center text-base cursor-pointer select-none"
+            onClick={() => nav('/admin')} role="button" title="ניהול — שעון שבת">✦</span>
+        ) : brand}
+        <button
+          className="text-muted hover:text-ink cursor-pointer text-lg leading-none self-start px-1"
+          title={collapsed ? 'הרחב תפריט' : 'צמצם תפריט'}
+          onClick={toggleCollapsed}
+        >{collapsed ? '«' : '»'}</button>
+        {!collapsed && <AdminNav />}
+        {!collapsed && (
+          <div className="mt-auto space-y-2">
+            <button className="block w-full text-right px-3 py-1.5 text-sm text-muted cursor-pointer hover:text-ink" onClick={logout}>יציאה</button>
+            {ver?.version && (
+              <div className="px-3 text-muted text-xs" dir="ltr">v {ver.version}{ver.version_date ? ` · ${ver.version_date}` : ''}</div>
+            )}
+          </div>
+        )}
+      </aside>
+
+      {/* Mobile: top bar + drawer */}
+      <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-line bg-bg sticky top-0 z-20">
+        {brand}
+        <button className="text-2xl px-2 cursor-pointer" aria-label="תפריט" onClick={() => setMenuOpen(true)}>☰</button>
       </header>
-      <main className="max-w-5xl mx-auto px-6 py-8">
-        <Outlet />
-      </main>
-      {ver?.version && (
-        <footer className="max-w-5xl mx-auto px-6 pb-4 text-muted text-xs" dir="ltr">
-          v {ver.version}{ver.version_date ? ` · ${ver.version_date}` : ''}
-        </footer>
+      {menuOpen && (
+        <div className="md:hidden fixed inset-0 z-30" onClick={() => setMenuOpen(false)}>
+          <div className="absolute inset-0 bg-black/30" />
+          <div className="absolute top-0 bottom-0 right-0 w-64 bg-surface shadow-xl px-3 py-4 flex flex-col gap-5 overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}>
+            {brand}
+            <AdminNav onNavigate={() => setMenuOpen(false)} />
+            <button className="mt-auto block w-full text-right px-3 py-1.5 text-sm text-muted cursor-pointer" onClick={logout}>יציאה</button>
+          </div>
+        </div>
       )}
+
+      <main className="flex-1 min-w-0 px-6 py-8">
+        <div className="max-w-5xl mx-auto">
+          <Outlet />
+        </div>
+      </main>
     </div>
   );
 }
@@ -147,6 +260,8 @@ export default function App() {
           <Route path="schedules" element={<AdminSchedules />} />
           <Route path="call-logs" element={<CallLogs />} />
           <Route path="history" element={<AdminHistory />} />
+          <Route path="voice-costs" element={<VoiceCosts />} />
+          <Route path="finance" element={<Finance />} />
           <Route path="call-flow" element={<CallFlow />} />
           <Route path="commands" element={<Commands />} />
           <Route path="settings" element={<SystemSettings />} />
