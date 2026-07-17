@@ -293,11 +293,14 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     );
     if (taken.length) throw errors.conflict('IVR_DIGIT_TAKEN', `קוד IVR כבר תפוס אצל משתמש זה: ${taken.map((t) => t.ivr_digit).join(', ')}`);
 
+    // sync_status='synced' from birth: Shellys hold no schedule store (the server
+    // executes their schedules), so the push/ack handshake never runs — the column
+    // default 'pending' would stick forever on a schedule-less device.
     const [d] = await conn.query(
       `INSERT INTO devices
          (user_id, device_uid, device_type, transport, ip_address, name,
-          mqtt_secret_hash, mqtt_passwd_hash, relay_count, is_online, fw_version)
-       VALUES (?,?, 'shelly', ?,?,?, '', '', ?, TRUE, ?)`,
+          mqtt_secret_hash, mqtt_passwd_hash, relay_count, is_online, fw_version, sync_status)
+       VALUES (?,?, 'shelly', ?,?,?, '', '', ?, TRUE, ?, 'synced')`,
       [userId, probe.mac, transport, transport === 'lan' ? ip : null,
         name || `Shelly (${probe.model})`, probe.channels.length, probe.fw_version],
     );
