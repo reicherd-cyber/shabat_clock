@@ -42,14 +42,14 @@ export default function Users() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h2 className="font-bold text-xl">משתמשים</h2>
-        <Button onClick={() => setCreateForm({ full_name: '', pin: '', phone: '', require_pin: false, max_devices: 3 })}>+ משתמש חדש</Button>
+        <Button onClick={() => setCreateForm({ full_name: '', pin: '', phone: '', email: '', require_pin: false, max_devices: 3 })}>+ משתמש חדש</Button>
       </div>
       <ErrorNote error={error} />
       <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-3">שם</th><th className="p-3">קוד IVR</th><th className="p-3">מכשירים</th>
+              <th className="p-3">שם</th><th className="p-3">אימייל</th><th className="p-3">קוד IVR</th><th className="p-3">מכשירים</th>
               <th className="p-3">סטטוס</th><th className="p-3">PIN בכניסה</th><th className="p-3">פעולות</th>
             </tr>
           </thead>
@@ -57,6 +57,7 @@ export default function Users() {
             {users.map((u) => (
               <tr key={u.id} className="border-b border-line last:border-0">
                 <td className="p-3 font-semibold">{u.full_name}</td>
+                <td className="p-3" dir="ltr">{u.email || <span className="text-muted">—</span>}</td>
                 <td className="p-3" dir="ltr">{u.ivr_code}</td>
                 <td className="p-3">{u.device_count}/{u.max_devices}</td>
                 <td className="p-3"><Badge ok={u.status === 'active'}>{u.status === 'active' ? 'פעיל' : 'מושעה'}</Badge></td>
@@ -80,6 +81,7 @@ export default function Users() {
             <Input placeholder="שם מלא" value={createForm.full_name} onChange={(e) => setCreateForm({ ...createForm, full_name: e.target.value })} />
             <Input dir="ltr" placeholder="PIN (4 ספרות)" value={createForm.pin} onChange={(e) => setCreateForm({ ...createForm, pin: e.target.value })} />
             <Input dir="ltr" type="tel" placeholder="טלפון ראשי (יאומת מיידית)" value={createForm.phone} onChange={(e) => setCreateForm({ ...createForm, phone: e.target.value })} />
+            <Input dir="ltr" type="email" placeholder="אימייל (רשות — לקבלת קוד כניסה בדוא״ל)" value={createForm.email} onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })} />
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={createForm.require_pin} onChange={(e) => setCreateForm({ ...createForm, require_pin: e.target.checked })} />
               לדרוש PIN גם ממספר מזוהה

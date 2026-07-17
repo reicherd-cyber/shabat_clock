@@ -11,6 +11,7 @@ export default function Settings() {
   const [phoneForm, setPhoneForm] = useState(null); // {mode:'add'|'edit', id?, phone, pin}
   const [pinForm, setPinForm] = useState(null);
   const [nameEdit, setNameEdit] = useState(null); // null = display mode; string = editing value
+  const [emailEdit, setEmailEdit] = useState(null); // null = display mode; string = editing value
   const [deleting, setDeleting] = useState(null); // relay pending removal confirmation
   const [disablingDevice, setDisablingDevice] = useState(null); // device pending "disable all" confirmation
   const [removingDevice, setRemovingDevice] = useState(null); // device pending removal confirmation
@@ -52,6 +53,14 @@ export default function Settings() {
     const full_name = nameEdit.trim();
     if (full_name && full_name !== me.user.full_name) await api.patch('/me', { full_name });
     setNameEdit(null);
+    await refresh();
+  });
+
+  // Email works like the name: pencil → input; empty = remove the address.
+  const saveEmail = () => run(async () => {
+    const email = emailEdit.trim();
+    if (email !== (me.user.email || '')) await api.patch('/me', { email });
+    setEmailEdit(null);
     await refresh();
   });
 
@@ -118,6 +127,30 @@ export default function Settings() {
           <span className="text-muted text-sm">· קוד משתמש לטלפון: <b dir="ltr">{me.user.ivr_code}</b></span>
         </div>
         <p className="text-muted text-xs mt-1">השם נשמע בברכת הפתיחה בשיחות הטלפון.</p>
+        <div className="flex items-center gap-2 flex-wrap mt-3">
+          <span className="text-sm">אימייל:</span>
+          {emailEdit == null ? (
+            <>
+              {me.user.email
+                ? <span dir="ltr" className="text-sm">{me.user.email}</span>
+                : <span className="text-muted text-sm">לא הוגדר</span>}
+              <button title="עריכת אימייל" className="text-muted hover:text-ink cursor-pointer"
+                onClick={() => setEmailEdit(me.user.email || '')}>✏️</button>
+            </>
+          ) : (
+            <>
+              <Input autoFocus dir="ltr" type="email" className="w-64" placeholder="name@example.com"
+                value={emailEdit} onChange={(e) => setEmailEdit(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveEmail();
+                  if (e.key === 'Escape') setEmailEdit(null);
+                }} />
+              <Button disabled={busy} onClick={saveEmail}>שמור</Button>
+              <Button variant="ghost" onClick={() => setEmailEdit(null)}>ביטול</Button>
+            </>
+          )}
+        </div>
+        <p className="text-muted text-xs mt-1">אימייל מאפשר לקבל קוד כניסה גם בדוא״ל, לא רק בשיחת טלפון. השאירו ריק להסרה.</p>
         <Button variant="ghost" className="mt-2" onClick={() => setPinForm({ old_pin: '', new_pin: '' })}>שינוי קוד סודי</Button>
       </Card>
 

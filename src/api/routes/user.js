@@ -4,7 +4,7 @@ import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireUser } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { getUser, verifyPin, setPin } from '../../services/users.js';
+import { getUser, verifyPin, setPin, normalizeEmail } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { patchDevice } from '../../services/devices.js';
@@ -32,16 +32,25 @@ userRouter.get('/me', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// Display name only — heard in the IVR greeting and shown on the dashboard.
-// The login session suffices; unlike phones, no PIN gate (no auth surface change).
+// Display name (heard in the IVR greeting) and/or email (enables login codes by
+// email). The login session suffices; unlike phones, no PIN gate.
 userRouter.patch('/me', async (req, res, next) => {
   try {
-    const full_name = String(req.body?.full_name ?? '').trim();
-    if (!full_name || full_name.length > 100) {
-      throw errors.validation('full_name required, up to 100 chars', { full_name: '1-100' });
+    const fields = {};
+    if (req.body?.full_name !== undefined) {
+      const full_name = String(req.body.full_name).trim();
+      if (!full_name || full_name.length > 100) {
+        throw errors.validation('full_name required, up to 100 chars', { full_name: '1-100' });
+      }
+      fields.full_name = full_name;
     }
-    await query('UPDATE users SET full_name = ? WHERE id = ?', [full_name, req.auth.userId]);
-    await auditImp(req, 'update', 'user', req.auth.userId, { after: { full_name } });
+    if (req.body?.email !== undefined) fields.email = normalizeEmail(req.body.email);
+    if (!Object.keys(fields).length) throw errors.validation('nothing to update');
+    await query(
+      `UPDATE users SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+      [...Object.values(fields), req.auth.userId],
+    );
+    await auditImp(req, 'update', 'user', req.auth.userId, { after: fields });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
