@@ -146,7 +146,7 @@ const PRESET_CATEGORIES = {
   income: ['מנוי חודשי', 'התקנה חד־פעמית', 'מכירת חומרה', 'אחר'],
 };
 
-const EMPTY_FORM = { kind: 'expense', title: '', category: '', amount: '', recurrence: 'once', entry_date: dstr(new Date()), end_date: '', note: '' };
+const EMPTY_FORM = { kind: 'expense', title: '', category: '', amount: '', recurrence: 'once', entry_date: dstr(new Date()), end_date: '', note: '', admin_id: '' };
 
 export default function Finance() {
   const [period, setPeriod] = useState('12m');
@@ -155,6 +155,7 @@ export default function Finance() {
   const [fKind, setFKind] = useState('');
   const [fCategory, setFCategory] = useState('');
   const [fRecurrence, setFRecurrence] = useState('');
+  const [fAdmin, setFAdmin] = useState('');
   const [search, setSearch] = useState('');
   const [data, setData] = useState(null);
   const [form, setForm] = useState(null);       // null | {…, id?} — add/edit modal
@@ -170,21 +171,23 @@ export default function Finance() {
     if (fKind) q.set('kind', fKind);
     if (fCategory) q.set('category', fCategory);
     if (fRecurrence) q.set('recurrence', fRecurrence);
+    if (fAdmin) q.set('admin_id', fAdmin);
     if (search) q.set('q', search);
     setData(await adminApi.get(`/finance${q.size ? `?${q}` : ''}`));
   };
   useEffect(() => {
     const t = setTimeout(() => { run(refresh).catch(setError); }, search ? 400 : 0);
     return () => clearTimeout(t);
-  }, [period, fromDate, toDate, fKind, fCategory, fRecurrence, search]);
+  }, [period, fromDate, toDate, fKind, fCategory, fRecurrence, fAdmin, search]);
 
-  const filtering = fKind || fCategory || fRecurrence || search || period !== '12m';
+  const filtering = fKind || fCategory || fRecurrence || fAdmin || search || period !== '12m';
+  const admins = data?.admins || [];
   const s = data?.stats;
   const entries = (data?.entries || []).filter((e) => (showDeleted ? true : !e.deleted_at));
   const categories = data?.categories || [];
 
   const save = () => run(async () => {
-    const body = { ...form, amount: Number(form.amount), category: form.category.trim(), end_date: form.end_date || null, note: form.note || null };
+    const body = { ...form, amount: Number(form.amount), category: form.category.trim(), end_date: form.end_date || null, note: form.note || null, admin_id: form.admin_id || null };
     if (form.id) await adminApi.patch(`/finance/${form.id}`, body);
     else await adminApi.post('/finance', body);
     setForm(null);
@@ -203,7 +206,7 @@ export default function Finance() {
     <div className="space-y-4">
       <div className="flex justify-between items-center gap-2 flex-wrap">
         <h2 className="font-bold text-xl">הכנסות והוצאות</h2>
-        <Button onClick={() => setForm({ ...EMPTY_FORM })}>+ הוספה</Button>
+        <Button onClick={() => setForm({ ...EMPTY_FORM, admin_id: data?.me ?? '' })}>+ הוספה</Button>
       </div>
       <div className="flex gap-2 items-center flex-wrap">
         <Select className="py-2 text-sm w-44" value={period} onChange={(e) => setPeriod(e.target.value)}>
@@ -232,9 +235,13 @@ export default function Finance() {
           <option value="">כל התדירויות</option>
           {Object.entries(REC_HE).map(([v, he]) => <option key={v} value={v}>{he}</option>)}
         </Select>
+        <Select className="py-2 text-sm w-36" value={fAdmin} onChange={(e) => setFAdmin(e.target.value)}>
+          <option value="">כל המשתמשים</option>
+          {admins.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </Select>
         <Input className="w-44 py-2 text-sm" placeholder="חיפוש בשם / הערה" value={search} onChange={(e) => setSearch(e.target.value)} />
         {filtering && (
-          <Button variant="ghost" onClick={() => { setPeriod('12m'); setFromDate(''); setToDate(''); setFKind(''); setFCategory(''); setFRecurrence(''); setSearch(''); }}>נקה סינון</Button>
+          <Button variant="ghost" onClick={() => { setPeriod('12m'); setFromDate(''); setToDate(''); setFKind(''); setFCategory(''); setFRecurrence(''); setFAdmin(''); setSearch(''); }}>נקה סינון</Button>
         )}
       </div>
       <ErrorNote error={error} />
@@ -276,7 +283,7 @@ export default function Finance() {
           <thead>
             <tr className="text-right text-muted border-b border-line">
               <th className="p-2">תאריך</th><th className="p-2">סוג</th><th className="p-2">שם</th>
-              <th className="p-2">קטגוריה</th><th className="p-2">סכום</th><th className="p-2">תדירות</th><th className="p-2"></th>
+              <th className="p-2">משתמש</th><th className="p-2">קטגוריה</th><th className="p-2">סכום</th><th className="p-2">תדירות</th><th className="p-2"></th>
             </tr>
           </thead>
           <tbody>
@@ -285,6 +292,7 @@ export default function Finance() {
                 <td className="p-2 whitespace-nowrap">{String(e.entry_date).slice(0, 10)}</td>
                 <td className="p-2"><Badge ok={e.kind === 'income'}>{KIND_HE[e.kind]}</Badge></td>
                 <td className="p-2">{e.title}{e.note && <span className="block text-muted text-xs">{e.note}</span>}</td>
+                <td className="p-2">{e.admin_name || <span className="text-muted">—</span>}</td>
                 <td className="p-2">{e.category || '—'}</td>
                 <td className="p-2 whitespace-nowrap" dir="ltr" style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtNis(e.amount, 2)}</td>
                 <td className="p-2">
@@ -297,7 +305,7 @@ export default function Finance() {
                   ) : (
                     <span className="flex gap-1.5">
                       <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
-                        onClick={() => setForm({ ...EMPTY_FORM, ...e, entry_date: String(e.entry_date).slice(0, 10), end_date: e.end_date ? String(e.end_date).slice(0, 10) : '', category: e.category || '', note: e.note || '' })}>
+                        onClick={() => setForm({ ...EMPTY_FORM, ...e, entry_date: String(e.entry_date).slice(0, 10), end_date: e.end_date ? String(e.end_date).slice(0, 10) : '', category: e.category || '', note: e.note || '', admin_id: e.admin_id ?? '' })}>
                         עריכה
                       </Button>
                       <Button variant="danger" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setConfirmDel(e)}>מחיקה</Button>
@@ -307,7 +315,7 @@ export default function Finance() {
               </tr>
             ))}
             {data && entries.length === 0 && (
-              <tr><td colSpan={7} className="p-6 text-center text-muted">אין רשומות עדיין — לחצו «+ הוספה»</td></tr>
+              <tr><td colSpan={8} className="p-6 text-center text-muted">אין רשומות עדיין — לחצו «+ הוספה»</td></tr>
             )}
           </tbody>
         </table>
@@ -360,6 +368,10 @@ export default function Finance() {
                 {[...new Set([...PRESET_CATEGORIES[form.kind], ...categories])].map((c) => <option key={c} value={c} />)}
               </datalist>
             </div>
+            <Select className="w-full" value={form.admin_id ?? ''} onChange={set('admin_id')}>
+              <option value="">ללא משתמש (כלל־עסקי)</option>
+              {admins.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </Select>
             <div className="flex gap-2 items-center">
               <Select className="w-40" value={form.recurrence} onChange={set('recurrence')}>
                 {Object.entries(REC_HE).map(([v, he]) => <option key={v} value={v}>{he}</option>)}

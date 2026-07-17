@@ -42,14 +42,19 @@ function validate(b, partial = false) {
     out.category = category;
   }
   if (b.note !== undefined) out.note = String(b.note || '').trim().slice(0, 255) || null;
+  if (b.admin_id !== undefined) {
+    const aid = b.admin_id === null || b.admin_id === '' ? null : Number(b.admin_id);
+    if (aid !== null && !Number.isInteger(aid)) throw errors.validation('משתמש לא תקין');
+    out.admin_id = aid;
+  }
   return out;
 }
 
 export async function createFinanceEntry(body) {
   const v = validate(body);
   const r = await query(
-    'INSERT INTO finance_entries (kind, title, category, amount, recurrence, entry_date, end_date, note) VALUES (?,?,?,?,?,?,?,?)',
-    [v.kind, v.title, v.category ?? null, v.amount, v.recurrence, v.entry_date, v.end_date ?? null, v.note ?? null],
+    'INSERT INTO finance_entries (kind, title, category, amount, recurrence, entry_date, end_date, note, admin_id) VALUES (?,?,?,?,?,?,?,?,?)',
+    [v.kind, v.title, v.category ?? null, v.amount, v.recurrence, v.entry_date, v.end_date ?? null, v.note ?? null, v.admin_id ?? null],
   );
   return { id: r.insertId };
 }
@@ -103,20 +108,28 @@ function occurrences(entry, from, to) {
 
 // Everything the finance page needs in one call. All filters optional and they
 // drive the WHOLE page — tiles, charts, and table alike: from/to ('YYYY-MM-DD'
-// stats window), kind, category, recurrence, q (substring of title/note).
-export async function getFinance({ from, to, kind, category, recurrence, q } = {}) {
+// stats window), kind, category, recurrence, adminId (owner), q (title/note substring).
+export async function getFinance({ from, to, kind, category, recurrence, adminId, q } = {}) {
   const today = dateStr(new Date());
   const lo = from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? from : '2000-01-01';
   const hi = to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? to : today;
 
   const all = await query(
-    'SELECT id, kind, title, category, amount, recurrence, entry_date, end_date, note, created_at, deleted_at FROM finance_entries ORDER BY entry_date DESC, id DESC',
+    `SELECT f.id, f.kind, f.title, f.category, f.amount, f.recurrence, f.entry_date, f.end_date,
+            f.note, f.admin_id, a.name AS admin_name, f.created_at, f.deleted_at
+     FROM finance_entries f LEFT JOIN admins a ON a.id = f.admin_id
+     ORDER BY f.entry_date DESC, f.id DESC`,
+  );
+  // Ownership options for the UI: active superadmins only.
+  const admins = await query(
+    "SELECT id, name FROM admins WHERE role = 'superadmin' AND is_active = TRUE ORDER BY name",
   );
   const needle = q ? String(q).trim() : '';
   const entries = all.filter((e) => {
     if (kind && KINDS.includes(kind) && e.kind !== kind) return false;
     if (category && (e.category || 'ללא קטגוריה') !== category) return false;
     if (recurrence && RECURRENCES.includes(recurrence) && e.recurrence !== recurrence) return false;
+    if (adminId && Number(e.admin_id) !== Number(adminId)) return false;
     if (needle && !`${e.title} ${e.note || ''}`.includes(needle)) return false;
     return true;
   });
@@ -170,6 +183,7 @@ export async function getFinance({ from, to, kind, category, recurrence, q } = {
   return {
     entries,
     categories,
+    admins,
     stats: {
       from: lo, to: hi,
       totals: { ...totals, net: totals.income - totals.expense },

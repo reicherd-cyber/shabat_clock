@@ -331,11 +331,12 @@ adminRouter.get('/history', async (req, res, next) => {
 // ── finance ledger (incomes/expenses, one-time or recurring) ──
 adminRouter.get('/finance', async (req, res, next) => {
   try {
-    res.json(await getFinance({
+    const data = await getFinance({
       from: req.query.from, to: req.query.to,
       kind: req.query.kind, category: req.query.category,
-      recurrence: req.query.recurrence, q: req.query.q,
-    }));
+      recurrence: req.query.recurrence, adminId: req.query.admin_id, q: req.query.q,
+    });
+    res.json({ ...data, me: req.auth.adminId });
   } catch (e) { next(e); }
 });
 

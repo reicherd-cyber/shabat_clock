@@ -13,6 +13,8 @@ import { migrate12 } from './migrate12.js';
 import { migrate13 } from './migrate13.js';
 import { migrate14 } from './migrate14.js';
 import { migrate15 } from './migrate15.js';
+import { migrate16 } from './migrate16.js';
+import { migrate17 } from './migrate17.js';
 
 export const migrations = [
   { version: 1, up: migrate1 },
@@ -30,4 +32,6 @@ export const migrations = [
   { version: 13, up: migrate13 },
   { version: 14, up: migrate14 },
   { version: 15, up: migrate15 },
+  { version: 16, up: migrate16 },
+  { version: 17, up: migrate17 },
 ];
