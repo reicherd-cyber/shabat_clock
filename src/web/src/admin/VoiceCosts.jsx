@@ -159,6 +159,9 @@ export default function VoiceCosts() {
             onChange={(e) => setIlsDraft(e.target.value)}
           />
           <span>₪</span>
+          {data?.rate_since && (
+            <span className="text-muted">בתוקף מ־{new Date(data.rate_since).toLocaleDateString('he-IL')}</span>
+          )}
           {rateEdited && rateValid && (
             <Button className="py-1" onClick={saveRate} disabled={busy}>שמור</Button>
           )}

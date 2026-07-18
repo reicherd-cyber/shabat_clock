@@ -5,22 +5,31 @@
 import { query } from '../db/pool.js';
 import { env } from '../config/env.js';
 import { errors } from '../config/errors.js';
-import { getSetting } from './settings.js';
 
-// Yemot units → ILS. Admin-editable on the voice-costs page as "X units = Y
-// shekels" — both sides editable (bundle prices come in any quantity).
-export const RATE_UNITS_KEY = 'voice.rate_units';
-export const RATE_ILS_KEY = 'voice.rate_ils';
+// Yemot units → ILS, effective-dated (voice_rates): a change reprices only
+// orders from its moment onward; the epoch seed row covers everything earlier.
+async function loadRates() {
+  const rows = await query(
+    'SELECT units, ils, effective_from FROM voice_rates ORDER BY effective_from ASC, id ASC',
+  );
+  return rows.map((r) => ({
+    units: Number(r.units),
+    ils: Number(r.ils),
+    from: new Date(r.effective_from).getTime(),
+  }));
+}
 
-export async function getUnitsRate() {
-  // voice.ils_per_100_units predates the editable-units form; honor it as Y once.
-  const legacy = Number(await getSetting('voice.ils_per_100_units', ''));
-  const units = Number(await getSetting(RATE_UNITS_KEY, '100'));
-  const ils = Number(await getSetting(RATE_ILS_KEY, String(legacy > 0 ? legacy : 27)));
-  return {
-    units: Number.isFinite(units) && units > 0 ? units : 100,
-    ils: Number.isFinite(ils) && ils > 0 ? ils : 27,
-  };
+// Latest rate whose effective_from <= when; the seed row guarantees a match.
+const rateAt = (rates, whenMs) => {
+  let hit = rates[0];
+  for (const r of rates) {
+    if (r.from <= whenMs) hit = r; else break;
+  }
+  return hit;
+};
+
+export async function addRate({ units, ils }) {
+  await query('INSERT INTO voice_rates (units, ils, effective_from) VALUES (?,?, UTC_TIMESTAMP())', [units, ils]);
 }
 
 // Average measured cost of one interpretation — used only for orders made before
@@ -79,8 +88,8 @@ async function fetchYemotSttTransactions() {
 // All filters optional: from/to (UTC 'YYYY-MM-DD HH:MM:SS', same convention as
 // /call-logs), userId, phone (partial digits), q (substring of the spoken text).
 export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
-  const [rate, stt, usage, users] = await Promise.all([
-    getUnitsRate(),
+  const [rates, stt, usage, users] = await Promise.all([
+    loadRates(),
     fetchYemotSttTransactions(),
     query('SELECT id, user_id, phone, text, model, input_tokens, output_tokens, cost_usd, created_at FROM nlu_usage ORDER BY id DESC LIMIT 2000'),
     query('SELECT up.phone, up.user_id, u.full_name FROM user_phones up JOIN users u ON u.id = up.user_id'),
@@ -146,16 +155,26 @@ export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
     return true;
   });
 
-  const toIls = (units) => (units * rate.ils) / rate.units;
-  for (const r of filtered) r.yemot_ils = toIls(r.yemot_units);
+  // Each row priced by the rate in force at ITS time — a change never reprices
+  // the past. The totals tile is therefore a sum, not one conversion.
+  for (const r of filtered) {
+    const rr = rateAt(rates, new Date(r.when).getTime());
+    r.yemot_ils = (r.yemot_units * rr.ils) / rr.units;
+  }
   const totals = filtered.reduce(
     (acc, r) => ({
       orders: acc.orders + 1,
       yemot_units: acc.yemot_units + r.yemot_units,
+      yemot_ils: acc.yemot_ils + r.yemot_ils,
       anthropic_usd: acc.anthropic_usd + r.anthropic_usd,
     }),
-    { orders: 0, yemot_units: 0, anthropic_usd: 0 },
+    { orders: 0, yemot_units: 0, yemot_ils: 0, anthropic_usd: 0 },
   );
-  totals.yemot_ils = toIls(totals.yemot_units);
-  return { rows: filtered, totals, rate };
+  const current = rates[rates.length - 1];
+  return {
+    rows: filtered,
+    totals,
+    rate: { units: current.units, ils: current.ils },
+    rate_since: current.from > 0 ? new Date(current.from).toISOString() : null,
+  };
 }

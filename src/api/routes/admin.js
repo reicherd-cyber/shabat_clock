@@ -8,9 +8,9 @@ import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, releaseDeviceIdentity } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
-import { listSettings, putSettings, setSetting } from '../../services/settings.js';
+import { listSettings, putSettings } from '../../services/settings.js';
 import { getAdminHistory } from '../../services/history.js';
-import { getVoiceCosts, RATE_UNITS_KEY, RATE_ILS_KEY } from '../../services/voiceCosts.js';
+import { getVoiceCosts, addRate } from '../../services/voiceCosts.js';
 import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEntry, restoreFinanceEntry } from '../../services/finance.js';
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
@@ -387,7 +387,8 @@ adminRouter.get('/voice-costs', async (req, res, next) => {
 });
 
 // Units→ILS conversion rate ("X Yemot units = Y shekels", both sides editable)
-// from the voice-costs page; every ILS figure derives from it on the next read.
+// from the voice-costs page. Effective-dated: the change prices orders from now
+// on; rows before it keep the rate that was in force at their time.
 adminRouter.put('/voice-costs/rate', requireWrite, async (req, res, next) => {
   try {
     const units = Number(req.body?.units);
@@ -396,8 +397,7 @@ adminRouter.put('/voice-costs/rate', requireWrite, async (req, res, next) => {
       || !Number.isFinite(ils) || ils <= 0 || ils > 1e6) {
       throw errors.validation('תעריף לא תקין — כמות יחידות ומחיר בש״ח חייבים להיות מספרים חיוביים', { rate: 'invalid' });
     }
-    await setSetting(RATE_UNITS_KEY, units, 'כמות יחידות ימות המשיח בהגדרת התעריף (עמוד עלויות קוליות)');
-    await setSetting(RATE_ILS_KEY, ils, 'מחיר כמות היחידות שלמעלה בש״ח (עמוד עלויות קוליות)');
+    await addRate({ units, ils });
     await audit(req, 'update', 'voice_costs_rate', null, { after: { units, ils } });
     res.json({ ok: true, rate: { units, ils } });
   } catch (e) { next(e); }
