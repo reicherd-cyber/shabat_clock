@@ -175,9 +175,10 @@ export async function getFinance({ from, to, kind, category, recurrence, adminId
           if (category && category !== cat) continue;
           const amount = v[key];
           if (!amount) continue;
+          // Chart months and category bars include voice; the הוצאות TILE stays
+          // manual-entries-only — voice shows in its own tile and the balance.
           if (!months.has(mk)) months.set(mk, { income: 0, expense: 0 });
           months.get(mk).expense += amount;
-          totals.expense += amount;
           byCategory.expense.set(cat, (byCategory.expense.get(cat) || 0) + amount);
           autoVoice[key] += amount;
         }
@@ -218,13 +219,14 @@ export async function getFinance({ from, to, kind, category, recurrence, adminId
     .map(([category, amount]) => ({ category, amount }))
     .sort((a, b) => b.amount - a.amount);
 
+  const voiceSum = autoVoice ? autoVoice.yemot_ils + autoVoice.anthropic_ils : 0;
   return {
     entries,
     categories,
     admins,
     stats: {
       from: lo, to: hi,
-      totals: { ...totals, net: totals.income - totals.expense },
+      totals: { ...totals, net: totals.income - totals.expense - voiceSum },
       monthly,
       by_category: { income: catList('income'), expense: catList('expense') },
       monthly_commitment: commitment,
