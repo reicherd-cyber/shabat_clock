@@ -3,14 +3,6 @@
 // "₪40 חודשי" row contributes ₪40 to every month it was active in the window.
 import { query } from '../db/pool.js';
 import { errors } from '../config/errors.js';
-import { getVoiceMonthlyExpenses } from './voiceCosts.js';
-
-// Voice USAGE joins the expense side automatically, in ₪ at the dated rates —
-// distinct category names so manual unit-purchase entries never mix with it.
-const AUTO_VOICE_CATS = {
-  yemot_ils: 'ימות המשיח — שימוש קולי (אוטומטי)',
-  anthropic_ils: 'Anthropic — שימוש קולי (אוטומטי)',
-};
 
 const KINDS = ['income', 'expense'];
 const RECURRENCES = ['once', 'monthly', 'yearly'];
@@ -161,37 +153,6 @@ export async function getFinance({ from, to, kind, category, recurrence, adminId
     }
   }
 
-  // Auto voice usage: only when no filter excludes it (it's an expense with no
-  // owner, no recurrence rule, and no searchable title). Yemot API down → the
-  // ledger still loads, just without the auto rows.
-  let autoVoice = null;
-  if ((!kind || kind === 'expense') && !recurrence && !adminId && !needle) {
-    try {
-      const vm = await getVoiceMonthlyExpenses(lo, hi);
-      autoVoice = { yemot_ils: 0, anthropic_ils: 0 };
-      for (const [mk, v] of vm) {
-        for (const key of Object.keys(AUTO_VOICE_CATS)) {
-          const cat = AUTO_VOICE_CATS[key];
-          if (category && category !== cat) continue;
-          const amount = v[key];
-          if (!amount) continue;
-          // Chart months and category bars include voice; the הוצאות TILE stays
-          // manual-entries-only — voice shows in its own tile and the balance.
-          if (!months.has(mk)) months.set(mk, { income: 0, expense: 0 });
-          months.get(mk).expense += amount;
-          byCategory.expense.set(cat, (byCategory.expense.get(cat) || 0) + amount);
-          autoVoice[key] += amount;
-        }
-      }
-      for (const cat of Object.values(AUTO_VOICE_CATS)) {
-        if (!categories.includes(cat)) categories.push(cat);
-      }
-      categories.sort();
-    } catch {
-      autoVoice = null;
-    }
-  }
-
   // Fill gaps so the chart shows empty months too (bounded to 36 columns).
   const monthly = [];
   if (months.size > 0) {
@@ -219,18 +180,16 @@ export async function getFinance({ from, to, kind, category, recurrence, adminId
     .map(([category, amount]) => ({ category, amount }))
     .sort((a, b) => b.amount - a.amount);
 
-  const voiceSum = autoVoice ? autoVoice.yemot_ils + autoVoice.anthropic_ils : 0;
   return {
     entries,
     categories,
     admins,
     stats: {
       from: lo, to: hi,
-      totals: { ...totals, net: totals.income - totals.expense - voiceSum },
+      totals: { ...totals, net: totals.income - totals.expense },
       monthly,
       by_category: { income: catList('income'), expense: catList('expense') },
       monthly_commitment: commitment,
-      auto_voice: autoVoice,
     },
   };
 }

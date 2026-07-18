@@ -9,6 +9,7 @@ import { errors } from '../config/errors.js';
 // Effective-dated conversion rates (voice_rates): 'yemot_units' = X units cost
 // Y shekels; 'usd' = 1$ costs Y shekels (Anthropic bills in dollars). A change
 // reprices only orders from its moment onward; epoch seed rows cover history.
+// Both rates are set manually in the voice-costs page (no automatic FX refresh).
 export const RATE_KINDS = ['yemot_units', 'usd'];
 const RATE_FALLBACK = {
   yemot_units: { units: 100, ils: 27, from: 0 },
@@ -45,38 +46,6 @@ export async function addRate({ kind, units, ils }) {
     'INSERT INTO voice_rates (kind, units, ils, effective_from) VALUES (?,?,?, UTC_TIMESTAMP())',
     [kind, units, ils],
   );
-}
-
-// Real USD→ILS, refreshed at most daily from the exchange-rate API: a changed
-// rate lands as a new dated 'usd' row, so each day's orders get that day's
-// actual rate and history stays stable. A manual override simply becomes the
-// rate until the next refresh finds a different market value. Failure keeps
-// the last stored rate and retries within the hour.
-let usdRefreshAt = 0;
-let usdRefreshing = null;
-const USD_REFRESH_MS = 24 * 3600_000;
-
-function refreshUsdRate(rates) {
-  if (Date.now() - usdRefreshAt < USD_REFRESH_MS) return Promise.resolve();
-  usdRefreshing ??= (async () => {
-    try {
-      const res = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(8000) });
-      const ils = Math.round(Number((await res.json())?.rates?.ILS) * 10000) / 10000;
-      if (!Number.isFinite(ils) || ils <= 0) throw new Error('no ILS rate in response');
-      const cur = rates.usd[rates.usd.length - 1];
-      if (Math.abs(ils - cur.ils / cur.units) >= 0.0001) {
-        await addRate({ kind: 'usd', units: 1, ils });
-        rates.usd.push({ units: 1, ils, from: Date.now() });
-      }
-      usdRefreshAt = Date.now();
-    } catch (e) {
-      usdRefreshAt = Date.now() - USD_REFRESH_MS + 3600_000; // retry in an hour
-      console.error('[voice-costs] usd rate refresh:', e.message);
-    } finally {
-      usdRefreshing = null;
-    }
-  })();
-  return usdRefreshing;
 }
 
 // Average measured cost of one interpretation — used only for orders made before
@@ -146,7 +115,6 @@ async function fetchYemotSttTransactions() {
 // /call-logs), userId, phone (partial digits), q (substring of the spoken text).
 export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
   const rates = await loadRates();
-  await refreshUsdRate(rates);
   const [stt, usage, users] = await Promise.all([
     fetchYemotSttTransactions(),
     query('SELECT id, user_id, phone, text, model, input_tokens, output_tokens, cost_usd, created_at FROM nlu_usage ORDER BY id DESC LIMIT 2000'),
