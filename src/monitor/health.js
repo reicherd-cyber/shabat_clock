@@ -63,10 +63,12 @@ async function alertAdmins(key, subject, text) {
   }
 }
 
-const deviceEvent = (deviceId, event, payload) => query(
+// Passive mode (a dev server on the shared prod DB) must not leave marks — its
+// observations go through the wrong broker and would be false alarms.
+const deviceEvent = (deviceId, event, payload) => (!active() ? Promise.resolve() : query(
   'INSERT INTO device_events (device_id, event, payload) VALUES (?,?,?)',
   [deviceId, event, JSON.stringify(payload)],
-).catch((e) => console.error('[health] device_events insert:', e.message));
+).catch((e) => console.error('[health] device_events insert:', e.message)));
 
 // ── per-Shelly probe ────────────────────────────────────────
 
@@ -194,6 +196,12 @@ export async function healthTick() {
   const deviceHealth = [];
   for (const d of devices) {
     if (!brokerOk && d.transport === 'mqtt') continue;
+    // Dev servers connect to a LOCAL broker the devices never dial — an mqtt
+    // probe from here can only time out. Don't fake a verdict; label it.
+    if (!active() && d.transport === 'mqtt') {
+      deviceHealth.push({ id: d.id, name: d.name, prod_only: true });
+      continue;
+    }
     deviceHealth.push(await checkShelly(d));
   }
 

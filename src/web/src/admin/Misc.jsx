@@ -52,7 +52,9 @@ function HealthSection({ h }) {
           {h.devices.map((d) => (
             <div key={d.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm border-b border-line last:border-0 py-1.5">
               <b>{d.name}</b>
-              <Badge ok={d.reachable}>{d.reachable ? 'מגיב' : `לא מגיב (${d.failures || 0})`}</Badge>
+              {d.prod_only
+                ? <span className="text-muted text-xs">מנוטר בפרודקשן בלבד (שרת פיתוח מחובר לברוקר מקומי)</span>
+                : <Badge ok={d.reachable}>{d.reachable ? 'מגיב' : `לא מגיב (${d.failures || 0})`}</Badge>}
               {d.reachable && <>
                 <span className="text-muted">פעיל {fmtUptime(d.uptime_s)}</span>
                 <span className="text-muted" dir="ltr">RAM {Math.round((d.ram_free || 0) / 1024)}KB</span>
