@@ -10,7 +10,7 @@ import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/r
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
 import { getAdminHistory } from '../../services/history.js';
-import { getVoiceCosts, addRate } from '../../services/voiceCosts.js';
+import { getVoiceCosts, addRate, RATE_KINDS } from '../../services/voiceCosts.js';
 import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEntry, restoreFinanceEntry } from '../../services/finance.js';
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
@@ -391,15 +391,16 @@ adminRouter.get('/voice-costs', async (req, res, next) => {
 // on; rows before it keep the rate that was in force at their time.
 adminRouter.put('/voice-costs/rate', requireWrite, async (req, res, next) => {
   try {
-    const units = Number(req.body?.units);
+    const kind = RATE_KINDS.includes(req.body?.kind) ? req.body.kind : 'yemot_units';
+    const units = kind === 'usd' ? 1 : Number(req.body?.units);
     const ils = Number(req.body?.ils);
     if (!Number.isFinite(units) || units <= 0 || units > 1e6
       || !Number.isFinite(ils) || ils <= 0 || ils > 1e6) {
       throw errors.validation('תעריף לא תקין — כמות יחידות ומחיר בש״ח חייבים להיות מספרים חיוביים', { rate: 'invalid' });
     }
-    await addRate({ units, ils });
-    await audit(req, 'update', 'voice_costs_rate', null, { after: { units, ils } });
-    res.json({ ok: true, rate: { units, ils } });
+    await addRate({ kind, units, ils });
+    await audit(req, 'update', 'voice_costs_rate', null, { after: { kind, units, ils } });
+    res.json({ ok: true, rate: { kind, units, ils } });
   } catch (e) { next(e); }
 });
 

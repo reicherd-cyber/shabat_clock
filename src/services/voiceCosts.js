@@ -6,17 +6,29 @@ import { query } from '../db/pool.js';
 import { env } from '../config/env.js';
 import { errors } from '../config/errors.js';
 
-// Yemot units → ILS, effective-dated (voice_rates): a change reprices only
-// orders from its moment onward; the epoch seed row covers everything earlier.
+// Effective-dated conversion rates (voice_rates): 'yemot_units' = X units cost
+// Y shekels; 'usd' = 1$ costs Y shekels (Anthropic bills in dollars). A change
+// reprices only orders from its moment onward; epoch seed rows cover history.
+export const RATE_KINDS = ['yemot_units', 'usd'];
+const RATE_FALLBACK = {
+  yemot_units: { units: 100, ils: 27, from: 0 },
+  usd: { units: 1, ils: 3.5, from: 0 },
+};
+
 async function loadRates() {
   const rows = await query(
-    'SELECT units, ils, effective_from FROM voice_rates ORDER BY effective_from ASC, id ASC',
+    'SELECT kind, units, ils, effective_from FROM voice_rates ORDER BY effective_from ASC, id ASC',
   );
-  return rows.map((r) => ({
-    units: Number(r.units),
-    ils: Number(r.ils),
-    from: new Date(r.effective_from).getTime(),
-  }));
+  const byKind = { yemot_units: [], usd: [] };
+  for (const r of rows) {
+    (byKind[r.kind] ?? byKind.yemot_units).push({
+      units: Number(r.units),
+      ils: Number(r.ils),
+      from: new Date(r.effective_from).getTime(),
+    });
+  }
+  for (const k of RATE_KINDS) if (!byKind[k].length) byKind[k].push(RATE_FALLBACK[k]);
+  return byKind;
 }
 
 // Latest rate whose effective_from <= when; the seed row guarantees a match.
@@ -28,8 +40,11 @@ const rateAt = (rates, whenMs) => {
   return hit;
 };
 
-export async function addRate({ units, ils }) {
-  await query('INSERT INTO voice_rates (units, ils, effective_from) VALUES (?,?, UTC_TIMESTAMP())', [units, ils]);
+export async function addRate({ kind, units, ils }) {
+  await query(
+    'INSERT INTO voice_rates (kind, units, ils, effective_from) VALUES (?,?,?, UTC_TIMESTAMP())',
+    [kind, units, ils],
+  );
 }
 
 // Average measured cost of one interpretation — used only for orders made before
@@ -58,7 +73,15 @@ function jerusalemToUtc(s) {
   return new Date(guess);
 }
 
+// Yemot's transaction list changes slowly and is fetched by the voice-costs
+// page on every filter change AND by the finance ledger — a short cache keeps
+// both snappy without going stale.
+let sttCache = null;
+let sttCacheAt = 0;
+const STT_CACHE_TTL_MS = 5 * 60_000;
+
 async function fetchYemotSttTransactions() {
+  if (sttCache && Date.now() - sttCacheAt < STT_CACHE_TTL_MS) return sttCache;
   if (!env.otpYemot.token) throw errors.validation('OTP_YEMOT_TOKEN אינו מוגדר בשרת');
   const body = new URLSearchParams({ token: env.otpYemot.token });
   const res = await fetch('https://www.call2all.co.il/ym/api/GetTransactions', {
@@ -82,6 +105,8 @@ async function fetchYemotSttTransactions() {
       yemot_units: Math.abs(Number(t.amount) || 0),
     });
   }
+  sttCache = rows;
+  sttCacheAt = Date.now();
   return rows;
 }
 
@@ -155,11 +180,14 @@ export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
     return true;
   });
 
-  // Each row priced by the rate in force at ITS time — a change never reprices
-  // the past. The totals tile is therefore a sum, not one conversion.
+  // Each row priced by the rates in force at ITS time — a change never reprices
+  // the past. The totals tiles are therefore sums, not one conversion.
   for (const r of filtered) {
-    const rr = rateAt(rates, new Date(r.when).getTime());
-    r.yemot_ils = (r.yemot_units * rr.ils) / rr.units;
+    const t = new Date(r.when).getTime();
+    const ry = rateAt(rates.yemot_units, t);
+    const ru = rateAt(rates.usd, t);
+    r.yemot_ils = (r.yemot_units * ry.ils) / ry.units;
+    r.anthropic_ils = (r.anthropic_usd * ru.ils) / ru.units;
   }
   const totals = filtered.reduce(
     (acc, r) => ({
@@ -167,14 +195,35 @@ export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
       yemot_units: acc.yemot_units + r.yemot_units,
       yemot_ils: acc.yemot_ils + r.yemot_ils,
       anthropic_usd: acc.anthropic_usd + r.anthropic_usd,
+      anthropic_ils: acc.anthropic_ils + r.anthropic_ils,
     }),
-    { orders: 0, yemot_units: 0, yemot_ils: 0, anthropic_usd: 0 },
+    { orders: 0, yemot_units: 0, yemot_ils: 0, anthropic_usd: 0, anthropic_ils: 0 },
   );
-  const current = rates[rates.length - 1];
+  const curY = rates.yemot_units[rates.yemot_units.length - 1];
+  const curU = rates.usd[rates.usd.length - 1];
   return {
     rows: filtered,
     totals,
-    rate: { units: current.units, ils: current.ils },
-    rate_since: current.from > 0 ? new Date(current.from).toISOString() : null,
+    rate: { units: curY.units, ils: curY.ils },
+    rate_since: curY.from > 0 ? new Date(curY.from).toISOString() : null,
+    usd_rate: curU.ils / curU.units,
+    usd_since: curU.from > 0 ? new Date(curU.from).toISOString() : null,
   };
+}
+
+// Monthly ₪ usage buckets (Israel-local months) for the finance ledger —
+// Yemot units and Anthropic separately, both priced by their dated rates.
+export async function getVoiceMonthlyExpenses(fromDate = '2000-01-01', toDate = '2999-12-31') {
+  const { rows } = await getVoiceCosts({});
+  const months = new Map(); // 'YYYY-MM' → { yemot_ils, anthropic_ils }
+  for (const r of rows) {
+    const local = new Date(r.when).toLocaleString('sv-SE', { timeZone: 'Asia/Jerusalem' }).slice(0, 10);
+    if (local < fromDate || local > toDate) continue;
+    const mk = local.slice(0, 7);
+    const m = months.get(mk) || { yemot_ils: 0, anthropic_ils: 0 };
+    m.yemot_ils += r.yemot_ils;
+    m.anthropic_ils += r.anthropic_ils;
+    months.set(mk, m);
+  }
+  return months;
 }

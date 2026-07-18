@@ -50,6 +50,7 @@ export default function VoiceCosts() {
   const [data, setData] = useState(null);
   const [unitsDraft, setUnitsDraft] = useState(null); // null = not editing, string while typing
   const [ilsDraft, setIlsDraft] = useState(null);
+  const [usdDraft, setUsdDraft] = useState(null);
   const [refresh, setRefresh] = useState(0);
   const { busy, error, run, setError } = useAsync();
 
@@ -81,15 +82,21 @@ export default function VoiceCosts() {
 
   const draftUnits = Number(unitsDraft ?? rate?.units);
   const draftIls = Number(ilsDraft ?? rate?.ils);
-  const rateEdited = rate && (unitsDraft != null || ilsDraft != null)
+  const draftUsd = Number(usdDraft ?? data?.usd_rate);
+  const yemotEdited = rate && (unitsDraft != null || ilsDraft != null)
     && (draftUnits !== rate.units || draftIls !== rate.ils);
-  const rateValid = draftUnits > 0 && draftIls > 0;
+  const usdEdited = usdDraft != null && draftUsd !== data?.usd_rate;
+  const rateEdited = yemotEdited || usdEdited;
+  const rateValid = draftUnits > 0 && draftIls > 0 && draftUsd > 0;
+  const clearDrafts = () => { setUnitsDraft(null); setIlsDraft(null); setUsdDraft(null); };
 
   const saveRate = () => run(async () => {
-    await adminApi.put('/voice-costs/rate', { units: draftUnits, ils: draftIls });
-    setUnitsDraft(null);
-    setIlsDraft(null);
-    setRefresh((n) => n + 1); // re-read → every ₪ figure recalculates at the new rate
+    // Only the changed rate gets a new dated entry (each change reprices
+    // rows from its moment onward, so no-op writes would still stamp a date).
+    if (yemotEdited) await adminApi.put('/voice-costs/rate', { kind: 'yemot_units', units: draftUnits, ils: draftIls });
+    if (usdEdited) await adminApi.put('/voice-costs/rate', { kind: 'usd', ils: draftUsd });
+    clearDrafts();
+    setRefresh((n) => n + 1); // re-read → ₪ figures from now on use the new rate
   }).catch(setError);
 
   return (
@@ -138,8 +145,8 @@ export default function VoiceCosts() {
             <div className="text-muted text-sm">עלות ימות בש״ח</div>
           </Card>
           <Card className="text-center">
-            <div className="text-3xl font-bold" dir="ltr" style={{ color: C_EXPENSE }}>${t.anthropic_usd.toFixed(4)}</div>
-            <div className="text-muted text-sm">Anthropic</div>
+            <div className="text-3xl font-bold" style={{ color: C_EXPENSE }}>₪{t.anthropic_ils.toFixed(2)}</div>
+            <div className="text-muted text-sm">Anthropic בש״ח <span dir="ltr">(${t.anthropic_usd.toFixed(4)})</span></div>
           </Card>
         </div>
       )}
@@ -162,11 +169,23 @@ export default function VoiceCosts() {
           {data?.rate_since && (
             <span className="text-muted">בתוקף מ־{new Date(data.rate_since).toLocaleDateString('he-IL')}</span>
           )}
+          <span className="text-line">|</span>
+          <span dir="ltr">1 $</span>
+          <span>=</span>
+          <Input
+            type="number" min="0.01" step="0.01" dir="ltr" className="w-20 py-1 text-sm"
+            value={usdDraft ?? String(data.usd_rate)}
+            onChange={(e) => setUsdDraft(e.target.value)}
+          />
+          <span>₪</span>
+          {data?.usd_since && (
+            <span className="text-muted">בתוקף מ־{new Date(data.usd_since).toLocaleDateString('he-IL')}</span>
+          )}
           {rateEdited && rateValid && (
             <Button className="py-1" onClick={saveRate} disabled={busy}>שמור</Button>
           )}
-          {(unitsDraft != null || ilsDraft != null) && (
-            <Button className="py-1" variant="ghost" onClick={() => { setUnitsDraft(null); setIlsDraft(null); }}>ביטול</Button>
+          {(unitsDraft != null || ilsDraft != null || usdDraft != null) && (
+            <Button className="py-1" variant="ghost" onClick={clearDrafts}>ביטול</Button>
           )}
         </div>
       )}
@@ -176,7 +195,7 @@ export default function VoiceCosts() {
           <thead>
             <tr className="text-right text-muted border-b border-line">
               <th className="p-2">מתי</th><th className="p-2">משתמש</th><th className="p-2">מה נאמר</th>
-              <th className="p-2">אורך (שנ׳)</th><th className="p-2">ימות (יחידות)</th><th className="p-2">ימות (₪)</th><th className="p-2">Anthropic ($)</th>
+              <th className="p-2">אורך (שנ׳)</th><th className="p-2">ימות (יחידות)</th><th className="p-2">ימות (₪)</th><th className="p-2">Anthropic (₪)</th>
             </tr>
           </thead>
           <tbody>
@@ -188,8 +207,8 @@ export default function VoiceCosts() {
                 <td className="p-2" dir="ltr">{r.seconds != null ? r.seconds.toFixed(1) : '—'}</td>
                 <td className="p-2" dir="ltr">{r.yemot_units.toFixed(3)}</td>
                 <td className="p-2" dir="ltr" style={{ color: C_EXPENSE }}>₪{r.yemot_ils.toFixed(2)}</td>
-                <td className="p-2" dir="ltr" style={{ color: C_EXPENSE }}>
-                  ${r.anthropic_usd.toFixed(4)}{r.anthropic_estimated && <span className="text-muted" title="הערכה — פקודה מלפני רישום השימוש">*</span>}
+                <td className="p-2" dir="ltr" style={{ color: C_EXPENSE }} title={`$${r.anthropic_usd.toFixed(4)}`}>
+                  ₪{r.anthropic_ils.toFixed(3)}{r.anthropic_estimated && <span className="text-muted" title="הערכה — פקודה מלפני רישום השימוש">*</span>}
                 </td>
               </tr>
             ))}

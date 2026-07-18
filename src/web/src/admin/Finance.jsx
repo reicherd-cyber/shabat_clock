@@ -270,6 +270,12 @@ export default function Finance() {
           </Card>
         </div>
       )}
+      {s?.auto_voice && (s.auto_voice.yemot_ils > 0 || s.auto_voice.anthropic_ils > 0) && (
+        <p className="text-muted text-xs">
+          ההוצאות כוללות אוטומטית שימוש קולי בתקופה: ימות המשיח {fmtNis(s.auto_voice.yemot_ils)} · Anthropic {fmtNis(s.auto_voice.anthropic_ils)}
+          {' '}(מחושב לפי התעריפים בעמוד עלויות קוליות; מופיע בפירוט הקטגוריות)
+        </p>
+      )}
 
       <div className="flex items-center justify-between">
         <h3 className="font-bold">כל הרשומות</h3>
