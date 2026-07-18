@@ -9,7 +9,7 @@ import Settings from './user/Settings.jsx';
 import AdminLogin from './admin/AdminLogin.jsx';
 import Users from './admin/Users.jsx';
 import Devices from './admin/Devices.jsx';
-import { Monitoring, CallLogs, Commands, AdminSchedules, SystemSettings, Admins, Audit } from './admin/Misc.jsx';
+import { Monitoring, DeviceHealth, CallLogs, Commands, AdminSchedules, SystemSettings, Admins, Audit } from './admin/Misc.jsx';
 import { CallFlow } from './admin/CallFlow.jsx';
 import AdminHistory from './admin/History.jsx';
 import VoiceCosts from './admin/VoiceCosts.jsx';
@@ -264,6 +264,7 @@ export default function App() {
           <Route path="finance" element={<Finance />} />
           <Route path="call-flow" element={<CallFlow />} />
           <Route path="commands" element={<Commands />} />
+          <Route path="health" element={<DeviceHealth />} />
           <Route path="settings" element={<SystemSettings />} />
           <Route path="admins" element={<Admins />} />
           <Route path="audit" element={<Audit />} />

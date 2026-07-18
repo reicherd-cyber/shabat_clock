@@ -34,50 +34,116 @@ const INCIDENT_LABELS = {
   broker_down: 'ברוקר מנותק', server_heap: 'זיכרון שרת גבוה',
 };
 
-// Deep-health section fed by the server-side monitor (src/monitor/health.js):
-// per-Shelly uptime/RAM/temperature, DB latency, server process, incident trail.
+// Deep-health tiles fed by the server-side monitor (src/monitor/health.js).
+// The devices tile is numbers-only — the full per-device detail, incident trail
+// and filters live in the drill-down page (/admin/health).
 function HealthSection({ h }) {
   if (!h) return null;
+  const monitored = h.devices.filter((d) => !d.prod_only);
+  const reachable = monitored.filter((d) => d.reachable).length;
   return (
-    <>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="מסד נתונים" value={h.db.ok ? `${h.db.latency_ms}ms` : 'לא מגיב'} ok={h.db.ok} />
-        <Stat label="שרת פעיל" value={fmtUptime(h.server.uptime_s)} ok />
-        <Stat label="זיכרון שרת" value={`${Math.round(h.server.heap_used / 1048576)}MB`} ok={h.server.heap_used < 512 * 1048576} />
-        <Stat label="השהיית לולאה" value={`${h.server.loop_delay_ms}ms`} ok={h.server.loop_delay_ms < 100} />
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <Stat label="מסד נתונים" value={h.db.ok ? `${h.db.latency_ms}ms` : 'לא מגיב'} ok={h.db.ok} />
+      <Stat label="שרת פעיל" value={fmtUptime(h.server.uptime_s)} ok />
+      <Stat label="זיכרון שרת" value={`${Math.round(h.server.heap_used / 1048576)}MB`} ok={h.server.heap_used < 512 * 1048576} />
+      <Stat label="השהיית לולאה" value={`${h.server.loop_delay_ms}ms`} ok={h.server.loop_delay_ms < 100} />
+      <Stat
+        label="מכשירים מגיבים"
+        value={monitored.length ? `${reachable}/${monitored.length}` : '—'}
+        ok={monitored.length ? reachable === monitored.length : undefined}
+        to="/admin/health"
+      />
+    </div>
+  );
+}
+
+// Drill-down from the "מכשירים מגיבים" tile: every device's deep health plus the
+// incident trail, with filters on all fields driving the summary tiles.
+export function DeviceHealth() {
+  const [m, setM] = useState(null);
+  const [error, setError] = useState(null);
+  const [q, setQ] = useState('');
+  const [status, setStatus] = useState('');
+  const [kind, setKind] = useState('');
+  useInterval(() => adminApi.get('/monitoring').then(setM).catch(setError), 10_000);
+  if (!m) return <p className="text-muted">טוען…</p>;
+  const h = m.health;
+  if (!h) return <p className="text-muted">אין עדיין נתוני בריאות (המוניטור טרם השלים בדיקה).</p>;
+
+  const text = q.trim();
+  const devStatus = (d) => (d.prod_only ? 'prod_only' : d.reachable ? 'reachable' : 'unreachable');
+  const devices = h.devices.filter((d) => (!text || d.name.includes(text)) && (!status || devStatus(d) === status));
+  const incidents = h.incidents.filter((i) => (!kind || i.kind === kind)
+    && (!text || i.subject.includes(text) || (INCIDENT_LABELS[i.kind] || i.kind).includes(text)));
+  // Dev servers talk to a local broker, so mqtt devices can't be probed from here —
+  // say it once instead of repeating the note on every row.
+  const allProdOnly = h.devices.length > 0 && h.devices.every((d) => d.prod_only);
+  const filtering = text || status || kind;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center gap-2 flex-wrap">
+        <h2 className="font-bold text-xl">בריאות מכשירים</h2>
+        <div className="flex gap-2 items-center flex-wrap">
+          <Input className="w-40" placeholder="חיפוש לפי שם" value={q} onChange={(e) => setQ(e.target.value)} />
+          <Select className="py-2 text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="">כל הסטטוסים</option>
+            <option value="reachable">מגיב</option>
+            <option value="unreachable">לא מגיב</option>
+            <option value="prod_only">מנוטר בפרודקשן</option>
+          </Select>
+          <Select className="py-2 text-sm" value={kind} onChange={(e) => setKind(e.target.value)}>
+            <option value="">כל סוגי האירועים</option>
+            {Object.entries(INCIDENT_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+          </Select>
+          {filtering && (
+            <Button variant="ghost" onClick={() => { setQ(''); setStatus(''); setKind(''); }}>נקה סינון</Button>
+          )}
+        </div>
       </div>
-      {h.devices.length > 0 && (
-        <Card>
-          <h3 className="font-bold mb-2">בריאות מכשירים</h3>
-          {h.devices.map((d) => (
-            <div key={d.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm border-b border-line last:border-0 py-1.5">
-              <b>{d.name}</b>
-              {d.prod_only
-                ? <span className="text-muted text-xs">מנוטר בפרודקשן בלבד (שרת פיתוח מחובר לברוקר מקומי)</span>
-                : <Badge ok={d.reachable}>{d.reachable ? 'מגיב' : `לא מגיב (${d.failures || 0})`}</Badge>}
-              {d.reachable && <>
-                <span className="text-muted">פעיל {fmtUptime(d.uptime_s)}</span>
-                <span className="text-muted" dir="ltr">RAM {Math.round((d.ram_free || 0) / 1024)}KB</span>
-                {d.temps?.length > 0 && <span className="text-muted" dir="ltr">{d.temps.map((t) => `${Math.round(t)}°C`).join(' / ')}</span>}
-                {d.fw_update && <Badge ok={false}>עדכון קושחה {d.fw_update}</Badge>}
-                {d.auto_rebooted && <Badge ok={false}>אותחל יזומות</Badge>}
-              </>}
-            </div>
-          ))}
-        </Card>
-      )}
-      {h.incidents.length > 0 && (
-        <Card>
-          <h3 className="font-bold mb-2">אירועי בריאות אחרונים</h3>
-          {h.incidents.slice(0, 10).map((i, idx) => (
-            <div key={idx} className="text-sm border-b border-line last:border-0 py-1">
-              <span className="text-muted" dir="ltr">{new Date(i.at).toLocaleString('he-IL')}</span>{' '}
-              <b>{INCIDENT_LABELS[i.kind] || i.kind}</b> — {i.subject} <span className="text-muted">({i.detail})</span>
-            </div>
-          ))}
-        </Card>
-      )}
-    </>
+      <ErrorNote error={error} />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Stat label="מגיבים" value={devices.filter((d) => !d.prod_only && d.reachable).length} ok />
+        <Stat label="לא מגיבים" value={devices.filter((d) => !d.prod_only && !d.reachable).length} ok={devices.every((d) => d.prod_only || d.reachable)} />
+        <Stat label="מנוטרים בפרודקשן בלבד" value={devices.filter((d) => d.prod_only).length} />
+        <Stat label="אירועים (מסונן)" value={incidents.length} />
+      </div>
+      <Card>
+        <h3 className="font-bold mb-2">מכשירים</h3>
+        {allProdOnly && (
+          <p className="text-muted text-sm mb-2">שרת פיתוח מחובר לברוקר מקומי — הבדיקה העמוקה רצה בפרודקשן בלבד.</p>
+        )}
+        {devices.map((d) => (
+          <div key={d.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm border-b border-line last:border-0 py-1.5">
+            <b>{d.name}</b>
+            {d.prod_only
+              ? (!allProdOnly && <span className="text-muted text-xs">מנוטר בפרודקשן בלבד</span>)
+              : <Badge ok={d.reachable}>{d.reachable ? 'מגיב' : `לא מגיב (${d.failures || 0})`}</Badge>}
+            {d.reachable && <>
+              <span className="text-muted">פעיל {fmtUptime(d.uptime_s)}</span>
+              <span className="text-muted" dir="ltr">RAM {Math.round((d.ram_free || 0) / 1024)}KB</span>
+              {d.temps?.length > 0 && <span className="text-muted" dir="ltr">{d.temps.map((t) => `${Math.round(t)}°C`).join(' / ')}</span>}
+              {d.fw_update && <Badge ok={false}>עדכון קושחה {d.fw_update}</Badge>}
+              {d.auto_rebooted && <Badge ok={false}>אותחל יזומות</Badge>}
+            </>}
+          </div>
+        ))}
+        {devices.length === 0 && <p className="text-muted text-sm">לא נמצאו מכשירים</p>}
+      </Card>
+      <Card>
+        <div className="flex justify-between items-baseline mb-2">
+          <h3 className="font-bold">אירועי בריאות</h3>
+          <span className="text-muted text-xs">נשמרים {h.incidents.length ? `${h.incidents.length} ` : ''}האירועים האחרונים מאז עליית השרת · נבדק {new Date(h.checked_at).toLocaleTimeString('he-IL')}</span>
+        </div>
+        {incidents.map((i, idx) => (
+          <div key={idx} className="text-sm border-b border-line last:border-0 py-1">
+            <span className="text-muted" dir="ltr">{new Date(i.at).toLocaleString('he-IL')}</span>{' '}
+            <b>{INCIDENT_LABELS[i.kind] || i.kind}</b> — {i.subject} <span className="text-muted">({i.detail})</span>
+          </div>
+        ))}
+        {incidents.length === 0 && <p className="text-muted text-sm">אין אירועים{filtering ? ' (מסונן)' : ''}</p>}
+      </Card>
+    </div>
   );
 }
 
