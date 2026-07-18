@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- TelTech — Star Home: house with tsel-hakochavim star cut out (evolution of the ✦ app glyph) -->
+  <path fill="#1877F2" fill-rule="evenodd"
+    d="M12 27 L32 11 L52 27 V50 Q52 54 48 54 H16 Q12 54 12 50 Z
+       M32 24 Q33.8 34.2 44 36 Q33.8 37.8 32 48 Q30.2 37.8 20 36 Q30.2 34.2 32 24 Z"/>
+</svg>

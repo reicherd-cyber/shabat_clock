@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- TelTech — House Dial: the Shabbat clock inside the home -->
+  <path fill="none" stroke="#1B2140" stroke-width="5" stroke-linejoin="round"
+    d="M13 27.5 L32 12 L51 27.5 V49 Q51 53 47 53 H17 Q13 53 13 49 Z"/>
+  <circle cx="32" cy="37" r="10.5" fill="none" stroke="#1877F2" stroke-width="4"/>
+  <path fill="none" stroke="#1877F2" stroke-width="3" stroke-linecap="round"
+    d="M32 37 V30.5 M32 37 L36.5 40"/>
+</svg>

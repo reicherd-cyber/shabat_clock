@@ -14,6 +14,12 @@ import { CallFlow } from './admin/CallFlow.jsx';
 import AdminHistory from './admin/History.jsx';
 import VoiceCosts from './admin/VoiceCosts.jsx';
 import Finance from './admin/Finance.jsx';
+import { Logo } from './ui.jsx';
+import {
+  LayoutGrid, CalendarClock, History as HistoryIcon, Settings as SettingsIcon,
+  Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
+  ShieldCheck, ScrollText, ChevronDown,
+} from 'lucide-react';
 
 // Decode a JWT payload client-side (base64url) — used only to detect impersonation.
 function tokenPayload(t) {
@@ -25,10 +31,10 @@ function tokenPayload(t) {
 // ── user panel shell per the mockup: sticky topbar (brand ✦ + user chip),
 //    desktop inline nav, mobile bottom tab bar ──
 const TABS = [
-  { to: '/', label: 'דשבורד', icon: '▦', end: true },
-  { to: '/schedules', label: 'תזמונים', icon: '🕐' },
-  { to: '/history', label: 'היסטוריה', icon: '≡' },
-  { to: '/settings', label: 'הגדרות', icon: '⚙' },
+  { to: '/', label: 'דשבורד', Icon: LayoutGrid, end: true },
+  { to: '/schedules', label: 'תזמונים', Icon: CalendarClock },
+  { to: '/history', label: 'היסטוריה', Icon: HistoryIcon },
+  { to: '/settings', label: 'הגדרות', Icon: SettingsIcon },
 ];
 
 function UserLayout() {
@@ -59,11 +65,15 @@ function UserLayout() {
       <header className="flex items-center justify-between px-6 py-3.5 border-b border-line bg-bg sticky top-0 z-10">
         <div className="font-serif font-bold text-[21px] flex items-center gap-2 cursor-pointer select-none"
           onClick={() => nav('/')} role="button" title="לדף הבית">
-          <span className="w-[30px] h-[30px] rounded-[9px] bg-accent text-white grid place-items-center text-base">✦</span>
+          <span className="text-accent shrink-0"><Logo size={34} /></span>
           שעון שבת
         </div>
         <nav className="hidden md:flex gap-1 items-center">
-          {TABS.map((t) => <NavLink key={t.to} to={t.to} end={t.end} className={deskCls}>{t.label}</NavLink>)}
+          {TABS.map((t) => (
+            <NavLink key={t.to} to={t.to} end={t.end} className={deskCls}>
+              <span className="flex items-center gap-1.5"><t.Icon size={15} strokeWidth={2} />{t.label}</span>
+            </NavLink>
+          ))}
         </nav>
         <div className="flex items-center gap-2.5 font-medium text-muted">
           <span className="hidden sm:inline">{name}</span>
@@ -79,7 +89,7 @@ function UserLayout() {
       <nav className="fixed bottom-0 inset-x-0 z-20 flex bg-surface border-t border-line px-2.5 pt-2 pb-[calc(8px+env(safe-area-inset-bottom))] md:hidden">
         {TABS.map((t) => (
           <NavLink key={t.to} to={t.to} end={t.end} className={tabCls}>
-            <span className="block text-[19px] mb-0.5">{t.icon}</span>{t.label}
+            <t.Icon size={20} strokeWidth={1.9} className="mx-auto mb-0.5" />{t.label}
           </NavLink>
         ))}
       </nav>
@@ -91,36 +101,36 @@ function UserLayout() {
 // Section-less first group = top-level links. (The commands page is intentionally
 // absent: it's a drill-down from the monitoring tiles.)
 const ADMIN_NAV = [
-  { items: [{ to: '/admin', label: 'ניטור', end: true }] },
+  { items: [{ to: '/admin', label: 'ניטור', Icon: Activity, end: true }] },
   {
     title: 'ניהול',
     items: [
-      { to: '/admin/users', label: 'משתמשים' },
-      { to: '/admin/devices', label: 'מכשירים' },
-      { to: '/admin/schedules', label: 'תזמונים' },
+      { to: '/admin/users', label: 'משתמשים', Icon: UsersIcon },
+      { to: '/admin/devices', label: 'מכשירים', Icon: Plug },
+      { to: '/admin/schedules', label: 'תזמונים', Icon: CalendarClock },
     ],
   },
   {
     title: 'פעילות',
     items: [
-      { to: '/admin/history', label: 'היסטוריה' },
-      { to: '/admin/call-logs', label: 'שיחות' },
-      { to: '/admin/call-flow', label: 'תרשים שיחה' },
+      { to: '/admin/history', label: 'היסטוריה', Icon: HistoryIcon },
+      { to: '/admin/call-logs', label: 'שיחות', Icon: PhoneCall },
+      { to: '/admin/call-flow', label: 'תרשים שיחה', Icon: GitBranch },
     ],
   },
   {
     title: 'כספים',
     items: [
-      { to: '/admin/finance', label: 'הכנסות והוצאות' },
-      { to: '/admin/voice-costs', label: 'עלויות קול' },
+      { to: '/admin/finance', label: 'הכנסות והוצאות', Icon: Wallet },
+      { to: '/admin/voice-costs', label: 'עלויות קול', Icon: Mic },
     ],
   },
   {
     title: 'מערכת',
     items: [
-      { to: '/admin/settings', label: 'הגדרות' },
-      { to: '/admin/admins', label: 'מנהלים' },
-      { to: '/admin/audit', label: 'ביקורת' },
+      { to: '/admin/settings', label: 'הגדרות', Icon: SettingsIcon },
+      { to: '/admin/admins', label: 'מנהלים', Icon: ShieldCheck },
+      { to: '/admin/audit', label: 'ביקורת', Icon: ScrollText },
     ],
   },
 ];
@@ -149,13 +159,18 @@ function AdminNav({ onNavigate }) {
               onClick={() => toggle(sec.title)}
             >
               <span>{sec.title}</span>
-              <span className={`transition-transform duration-150 ${folded[sec.title] ? '-rotate-90' : ''}`}>▾</span>
+              <ChevronDown size={13} className={`transition-transform duration-150 ${folded[sec.title] ? '-rotate-90' : ''}`} />
             </button>
           )}
           {!(sec.title && folded[sec.title]) && (
             <div className="space-y-0.5">
               {sec.items.map((it) => (
-                <NavLink key={it.to} to={it.to} end={it.end} className={linkCls} onClick={onNavigate}>{it.label}</NavLink>
+                <NavLink key={it.to} to={it.to} end={it.end} className={linkCls} onClick={onNavigate}>
+                  <span className="flex items-center gap-2">
+                    {it.Icon && <it.Icon size={15} strokeWidth={1.9} className="shrink-0 opacity-80" />}
+                    {it.label}
+                  </span>
+                </NavLink>
               ))}
             </div>
           )}
@@ -185,7 +200,7 @@ function AdminLayout() {
   const brand = (
     <div className="font-serif font-bold text-[19px] flex items-center gap-2 cursor-pointer select-none"
       onClick={() => { setMenuOpen(false); nav('/admin'); }} role="button" title="לדף הבית">
-      <span className="w-[30px] h-[30px] rounded-[9px] bg-accent text-white grid place-items-center text-base shrink-0">✦</span>
+      <span className="text-accent shrink-0"><Logo size={30} /></span>
       ניהול — שעון שבת
     </div>
   );
@@ -196,8 +211,8 @@ function AdminLayout() {
       {/* Desktop sidebar (RTL: first flex child = right side); collapses to a slim rail */}
       <aside className={`hidden md:flex flex-col shrink-0 border-l border-line bg-surface sticky top-0 h-screen overflow-y-auto py-4 gap-5 transition-all duration-200 ${collapsed ? 'w-14 px-2 items-center' : 'w-56 px-3'}`}>
         {collapsed ? (
-          <span className="w-[30px] h-[30px] rounded-[9px] bg-accent text-white grid place-items-center text-base cursor-pointer select-none"
-            onClick={() => nav('/admin')} role="button" title="ניהול — שעון שבת">✦</span>
+          <span className="text-accent cursor-pointer select-none"
+            onClick={() => nav('/admin')} role="button" title="ניהול — שעון שבת"><Logo size={30} /></span>
         ) : brand}
         <button
           className="text-muted hover:text-ink cursor-pointer text-lg leading-none self-start px-1"

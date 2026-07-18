@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api.js';
 import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, Input, useInterval } from '../ui.jsx';
+import { House, Timer, TriangleAlert } from 'lucide-react';
 
 const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
 
@@ -105,7 +106,9 @@ export default function Dashboard() {
         {visibleDevices.map((d) => (
           <Card key={d.id} flush>
             <CardHead>
-              <span className="font-serif font-bold text-[17px]">🏠 {d.name}</span>
+              <span className="font-serif font-bold text-[17px] flex items-center gap-2">
+                <House size={17} className="text-accent shrink-0" />{d.name}
+              </span>
               <StatusBadge online={d.is_online}>{d.is_online ? 'מחובר' : 'מנותק'}</StatusBadge>
             </CardHead>
             {d.relays.filter((r) => r.is_enabled).map((r, i) => (
@@ -116,9 +119,9 @@ export default function Dashboard() {
                   {r.current_state === 'on' && (
                     <button
                       title="כיבוי בשעה…"
-                      className="text-lg text-muted hover:text-off cursor-pointer"
+                      className="text-muted hover:text-off cursor-pointer"
                       onClick={() => setQuickOff(quickOff?.relayId === r.id ? null : { relayId: r.id, time: hhmmOf(new Date(Date.now() + 3600000)) })}
-                    >⏱</button>
+                    ><Timer size={18} /></button>
                   )}
                   <span className={`text-[12.5px] font-medium min-w-11 ${r.current_state === 'on' ? 'text-on' : 'text-muted'}`}>
                     {STATE_HE[r.current_state] || STATE_HE.unknown}
@@ -145,8 +148,9 @@ export default function Dashboard() {
               </div>
             ))}
             {!d.is_online && (
-              <div className="px-5 py-3 text-[13px] text-off bg-off-bg border-t border-line">
-                ⚠ המכשיר לא מחובר{d.last_seen_at ? ` — דווח לאחרונה ${relativeHe(d.last_seen_at)}` : ''} — התזמונים ממשיכים לפעול מקומית.
+              <div className="px-5 py-3 text-[13px] text-off bg-off-bg border-t border-line flex items-center gap-1.5">
+                <TriangleAlert size={14} className="shrink-0" />
+                <span>המכשיר לא מחובר{d.last_seen_at ? ` — דווח לאחרונה ${relativeHe(d.last_seen_at)}` : ''} — התזמונים ממשיכים לפעול מקומית.</span>
               </div>
             )}
           </Card>

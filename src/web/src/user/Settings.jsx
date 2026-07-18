@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
+import { UserRound, Phone, Plug, Pencil, Plus, KeyRound } from 'lucide-react';
 
 // Phones (caller-ID) + PIN + relay management — relay names/codes drive the IVR
 // prompts directly (PLAN §3).
@@ -105,13 +106,13 @@ export default function Settings() {
   return (
     <div className="space-y-5">
       <Card>
-        <h3 className="font-bold mb-1">פרטי חשבון</h3>
+        <h3 className="font-bold mb-1 flex items-center gap-1.5"><UserRound size={16} className="text-accent" />פרטי חשבון</h3>
         <div className="flex items-center gap-2 flex-wrap">
           {nameEdit == null ? (
             <>
               <span>{me.user.full_name}</span>
               <button title="עריכת שם" className="text-muted hover:text-ink cursor-pointer"
-                onClick={() => setNameEdit(me.user.full_name)}>✏️</button>
+                onClick={() => setNameEdit(me.user.full_name)}><Pencil size={14} /></button>
             </>
           ) : (
             <>
@@ -135,7 +136,7 @@ export default function Settings() {
                 ? <span dir="ltr" className="text-sm">{me.user.email}</span>
                 : <span className="text-muted text-sm">לא הוגדר</span>}
               <button title="עריכת אימייל" className="text-muted hover:text-ink cursor-pointer"
-                onClick={() => setEmailEdit(me.user.email || '')}>✏️</button>
+                onClick={() => setEmailEdit(me.user.email || '')}><Pencil size={14} /></button>
             </>
           ) : (
             <>
@@ -151,11 +152,13 @@ export default function Settings() {
           )}
         </div>
         <p className="text-muted text-xs mt-1">אימייל מאפשר לקבל קוד כניסה גם בדוא״ל, לא רק בשיחת טלפון. השאירו ריק להסרה.</p>
-        <Button variant="ghost" className="mt-2" onClick={() => setPinForm({ old_pin: '', new_pin: '' })}>שינוי קוד סודי</Button>
+        <Button variant="ghost" className="mt-2" onClick={() => setPinForm({ old_pin: '', new_pin: '' })}>
+          <span className="inline-flex items-center gap-1"><KeyRound size={14} />שינוי קוד סודי</span>
+        </Button>
       </Card>
 
       <Card>
-        <h3 className="font-bold mb-2">מספרי טלפון (זיהוי שיחה)</h3>
+        <h3 className="font-bold mb-2 flex items-center gap-1.5"><Phone size={16} className="text-accent" />מספרי טלפון (זיהוי שיחה)</h3>
         <ErrorNote error={error} />
         <div className="space-y-2">
           {me.phones.map((p) => (
@@ -174,14 +177,16 @@ export default function Settings() {
             </div>
           ))}
         </div>
-        <Button variant="ghost" className="mt-3" onClick={() => setPhoneForm({ mode: 'add', phone: '', pin: '' })}>+ הוסף מספר</Button>
+        <Button variant="ghost" className="mt-3" onClick={() => setPhoneForm({ mode: 'add', phone: '', pin: '' })}>
+          <span className="inline-flex items-center gap-1"><Plus size={15} />הוסף מספר</span>
+        </Button>
         <p className="text-muted text-xs mt-2">הוספה או עריכה דורשות את הקוד הסודי, והמספר החדש מאומת בשיחת טלפון.</p>
       </Card>
 
       {devices.filter((d) => d.is_enabled).map((d) => (
         <Card key={d.id}>
           <div className="flex items-center gap-2 mb-2">
-            <span className="font-bold">ממסרים —</span>
+            <span className="font-bold flex items-center gap-1.5"><Plug size={16} className="text-accent" />ממסרים —</span>
             <Input defaultValue={d.name} onBlur={(e) => e.target.value !== d.name && renameDevice(d, e.target.value)} />
             {d.relays.length > 0 && d.relays.every((r) => !r.is_enabled) && <Badge ok={false}>מושבת</Badge>}
             <Button variant="ghost" className="shrink-0" onClick={() => setDisablingDevice(d)}>השבת הכל</Button>

@@ -68,6 +68,18 @@ export const Badge = ({ ok, children }) => (
 
 export const CodeChip = ({ children }) => <span className="code-chip">{children}</span>;
 
+// The TelTech brand mark ("flame power"): a power-button ring whose stem is a
+// Shabbat-candle flame. The ring follows currentColor — white inside the azure
+// header tile, azure via text-accent on light surfaces; the flame is brand gold
+// with a punched-out core (evenodd) so the background shows through.
+export const Logo = ({ size = 20 }) => (
+  <svg viewBox="0 0 64 64" width={size} height={size} aria-hidden="true">
+    <path fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round" d="M22.25 22.1 A17 17 0 1 0 41.75 22.1" />
+    <path fill="#E9A13B" fillRule="evenodd"
+      d="M32 6 C36.5 12 40 15.5 40 21 A8 8 0 0 1 24 21 C24 15.5 27.5 12 32 6 Z M32 14 C34.5 17 36 18.5 36 21 A4 4 0 0 1 28 21 C28 18.5 29.5 17 32 14 Z" />
+  </svg>
+);
+
 export const OnlineDot = ({ online }) => (
   <span className={`inline-block w-2.5 h-2.5 rounded-full ${online ? 'bg-on' : 'bg-off'}`} title={online ? 'מחובר' : 'מנותק'} />
 );

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, Input, Select, Toggle, SyncNote, SectionHead, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
+import { House, Trash2, Plus, Check, RefreshCw } from 'lucide-react';
 
 const emptyForm = {
   relay_id: '', repeat_type: 'weekly',
@@ -104,7 +105,9 @@ export default function Schedules() {
   return (
     <>
       <SectionHead title="תזמונים">
-        <Button onClick={() => setForm({ ...emptyForm, relay_id: relays[0]?.id || '' })} disabled={!relays.length}>+ תזמון חדש</Button>
+        <Button onClick={() => setForm({ ...emptyForm, relay_id: relays[0]?.id || '' })} disabled={!relays.length}>
+          <span className="inline-flex items-center gap-1"><Plus size={16} />תזמון חדש</span>
+        </Button>
       </SectionHead>
       <ErrorNote error={error} />
       {schedules.length === 0 && <Card>אין תזמונים עדיין.</Card>}
@@ -114,7 +117,7 @@ export default function Schedules() {
             <div key={s.id} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''}`}>
               <div className="min-w-[120px] font-bold">
                 {s.relay_name}
-                <small className="block font-normal text-muted text-[12.5px]">🏠 {s.device_name}</small>
+                <small className="flex items-center gap-1 font-normal text-muted text-[12.5px]"><House size={11} />{s.device_name}</small>
               </div>
               <div className="flex-1 flex items-center gap-2.5 flex-wrap">
                 {onLabel(s) && <span className="pill on-p">{onLabel(s)}</span>}
@@ -122,10 +125,12 @@ export default function Schedules() {
                 {offLabel(s) && <span className="pill off-p">{offLabel(s)}</span>}
               </div>
               <SyncNote ok={s.sync_status === 'synced'}>
-                {s.sync_status === 'synced' ? '✓ מסונכרן' : '⟳ ממתין לסנכרון'}
+                {s.sync_status === 'synced'
+                  ? <span className="inline-flex items-center gap-1"><Check size={13} />מסונכרן</span>
+                  : <span className="inline-flex items-center gap-1"><RefreshCw size={13} />ממתין לסנכרון</span>}
               </SyncNote>
               <Toggle checked={!!s.is_enabled} busy={busy} onChange={() => toggleEnabled(s)} />
-              <button disabled={busy} className={`text-muted text-lg ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`} title="מחק" onClick={() => remove(s)}>🗑</button>
+              <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`} title="מחק" onClick={() => remove(s)}><Trash2 size={17} /></button>
             </div>
           ))}
         </Card>

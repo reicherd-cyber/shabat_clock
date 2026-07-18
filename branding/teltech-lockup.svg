@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 96" width="340" height="96">
+  <!-- TelTech horizontal lockup — Star Home mark + wordmark + slogan.
+       Note: text uses Heebo/Arial; convert to outlines before print/production use. -->
+  <path fill="#1877F2" fill-rule="evenodd" transform="translate(262,16)"
+    d="M12 27 L32 11 L52 27 V50 Q52 54 48 54 H16 Q12 54 12 50 Z
+       M32 24 Q33.8 34.2 44 36 Q33.8 37.8 32 48 Q30.2 37.8 20 36 Q30.2 34.2 32 24 Z"/>
+  <text x="252" y="52" text-anchor="end" font-family="Heebo, 'Segoe UI', Arial, sans-serif"
+    font-size="38" font-weight="800" letter-spacing="-0.5">
+    <tspan fill="#1B2140">Tel</tspan><tspan fill="#1877F2">Tech</tspan>
+  </text>
+  <text x="252" y="78" text-anchor="end" font-family="Heebo, 'Segoe UI', Arial, sans-serif"
+    font-size="17" font-weight="500" fill="#64708D" direction="rtl">בית כשר חכם</text>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- TelTech — Flame Power: power-button ring, its stem replaced by a Shabbat candle flame -->
+  <path fill="none" stroke="#1877F2" stroke-width="6" stroke-linecap="round"
+    d="M22.25 22.1 A17 17 0 1 0 41.75 22.1"/>
+  <path fill="#E9A13B"
+    d="M32 6 C36.5 12 40 15.5 40 21 A8 8 0 0 1 24 21 C24 15.5 27.5 12 32 6 Z"/>
+  <path fill="#FFFFFF"
+    d="M32 14 C34.5 17 36 18.5 36 21 A4 4 0 0 1 28 21 C28 18.5 29.5 17 32 14 Z"/>
+</svg>

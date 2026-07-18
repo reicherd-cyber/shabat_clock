@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, SectionHead, ErrorNote, useAsync } from '../ui.jsx';
+import { Lightbulb, X, PhoneCall } from 'lucide-react';
 
 // Mockup .hist rows: icon square · sentence · time at the far edge.
 const SOURCE_HE = { ivr: 'דרך הטלפון', web: 'דרך האתר', schedule: 'לפי תזמון', admin: 'על ידי מנהל' };
@@ -22,11 +23,13 @@ function Row({ item, first }) {
   const d = item.data;
   const isCmd = item.type === 'cmd';
   const ok = isCmd ? d.status === 'acked' : !['auth_fail', 'abandoned'].includes(d.outcome);
-  const icon = isCmd ? (ok ? '💡' : '✕') : '📞';
+  const icon = isCmd
+    ? (ok ? <Lightbulb size={16} className="text-on" /> : <X size={16} className="text-off" />)
+    : <PhoneCall size={15} className="text-accent" />;
   const iconBg = isCmd ? (ok ? 'bg-on-bg' : 'bg-off-bg') : 'bg-[#E8F1FE]';
   return (
     <div className={`flex items-center gap-3 px-5 py-[13px] text-sm ${first ? '' : 'border-t border-line'}`}>
-      <span className={`w-[30px] h-[30px] rounded-[9px] grid place-items-center text-sm shrink-0 ${iconBg}`}>{icon}</span>
+      <span className={`w-[30px] h-[30px] rounded-[9px] grid place-items-center shrink-0 ${iconBg}`}>{icon}</span>
       <span className="min-w-0">
         {isCmd ? (
           <>
