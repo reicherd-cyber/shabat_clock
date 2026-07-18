@@ -40,7 +40,7 @@ function periodBounds(period, fromDate, toDate) {
 }
 
 export default function VoiceCosts() {
-  const [period, setPeriod] = useState('today');
+  const [period, setPeriod] = useState('month');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [userId, setUserId] = useState('');
@@ -48,7 +48,8 @@ export default function VoiceCosts() {
   const [search, setSearch] = useState('');
   const [users, setUsers] = useState([]);
   const [data, setData] = useState(null);
-  const [rateDraft, setRateDraft] = useState(null); // null = not editing, string while typing
+  const [unitsDraft, setUnitsDraft] = useState(null); // null = not editing, string while typing
+  const [ilsDraft, setIlsDraft] = useState(null);
   const [refresh, setRefresh] = useState(0);
   const { busy, error, run, setError } = useAsync();
 
@@ -71,16 +72,23 @@ export default function VoiceCosts() {
     return () => clearTimeout(t);
   }, [period, fromDate, toDate, userId, phone, search, refresh]);
 
-  const filtering = userId || phone || search || period !== 'today';
+  const filtering = userId || phone || search || period !== 'month';
 
   const rows = data?.rows || [];
   const t = data?.totals;
   const hasEstimates = rows.some((r) => r.anthropic_estimated);
-  const rate = data?.ils_per_100_units;
+  const rate = data?.rate;
+
+  const draftUnits = Number(unitsDraft ?? rate?.units);
+  const draftIls = Number(ilsDraft ?? rate?.ils);
+  const rateEdited = rate && (unitsDraft != null || ilsDraft != null)
+    && (draftUnits !== rate.units || draftIls !== rate.ils);
+  const rateValid = draftUnits > 0 && draftIls > 0;
 
   const saveRate = () => run(async () => {
-    await adminApi.put('/voice-costs/rate', { ils_per_100_units: Number(rateDraft) });
-    setRateDraft(null);
+    await adminApi.put('/voice-costs/rate', { units: draftUnits, ils: draftIls });
+    setUnitsDraft(null);
+    setIlsDraft(null);
     setRefresh((n) => n + 1); // re-read → every ₪ figure recalculates at the new rate
   }).catch(setError);
 
@@ -136,21 +144,26 @@ export default function VoiceCosts() {
         </div>
       )}
 
-      {rate != null && (
+      {rate && (
         <Card className="flex items-center gap-3 flex-wrap text-sm">
           <span className="font-bold">תעריף המרה:</span>
-          <span>100 יחידות =</span>
+          <Input
+            type="number" min="1" step="1" dir="ltr" className="w-24 py-1.5 text-sm"
+            value={unitsDraft ?? String(rate.units)}
+            onChange={(e) => setUnitsDraft(e.target.value)}
+          />
+          <span>יחידות =</span>
           <Input
             type="number" min="0.01" step="0.01" dir="ltr" className="w-24 py-1.5 text-sm"
-            value={rateDraft ?? String(rate)}
-            onChange={(e) => setRateDraft(e.target.value)}
+            value={ilsDraft ?? String(rate.ils)}
+            onChange={(e) => setIlsDraft(e.target.value)}
           />
           <span>₪</span>
-          {rateDraft != null && Number(rateDraft) !== rate && Number(rateDraft) > 0 && (
+          {rateEdited && rateValid && (
             <Button onClick={saveRate} disabled={busy}>שמור וחשב מחדש</Button>
           )}
-          {rateDraft != null && (
-            <Button variant="ghost" onClick={() => setRateDraft(null)}>ביטול</Button>
+          {(unitsDraft != null || ilsDraft != null) && (
+            <Button variant="ghost" onClick={() => { setUnitsDraft(null); setIlsDraft(null); }}>ביטול</Button>
           )}
           <span className="text-muted">כל הסכומים בש״ח בעמוד מחושבים לפי תעריף זה</span>
         </Card>

@@ -7,14 +7,20 @@ import { env } from '../config/env.js';
 import { errors } from '../config/errors.js';
 import { getSetting } from './settings.js';
 
-// Yemot units → ILS. Admin-editable on the voice-costs page; stored as the
-// price of 100 units in shekels.
-export const RATE_SETTING_KEY = 'voice.ils_per_100_units';
-export const RATE_DEFAULT = 27;
+// Yemot units → ILS. Admin-editable on the voice-costs page as "X units = Y
+// shekels" — both sides editable (bundle prices come in any quantity).
+export const RATE_UNITS_KEY = 'voice.rate_units';
+export const RATE_ILS_KEY = 'voice.rate_ils';
 
 export async function getUnitsRate() {
-  const v = Number(await getSetting(RATE_SETTING_KEY, String(RATE_DEFAULT)));
-  return Number.isFinite(v) && v > 0 ? v : RATE_DEFAULT;
+  // voice.ils_per_100_units predates the editable-units form; honor it as Y once.
+  const legacy = Number(await getSetting('voice.ils_per_100_units', ''));
+  const units = Number(await getSetting(RATE_UNITS_KEY, '100'));
+  const ils = Number(await getSetting(RATE_ILS_KEY, String(legacy > 0 ? legacy : 27)));
+  return {
+    units: Number.isFinite(units) && units > 0 ? units : 100,
+    ils: Number.isFinite(ils) && ils > 0 ? ils : 27,
+  };
 }
 
 // Average measured cost of one interpretation — used only for orders made before
@@ -140,7 +146,7 @@ export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
     return true;
   });
 
-  const toIls = (units) => (units * rate) / 100;
+  const toIls = (units) => (units * rate.ils) / rate.units;
   for (const r of filtered) r.yemot_ils = toIls(r.yemot_units);
   const totals = filtered.reduce(
     (acc, r) => ({
@@ -151,5 +157,5 @@ export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
     { orders: 0, yemot_units: 0, anthropic_usd: 0 },
   );
   totals.yemot_ils = toIls(totals.yemot_units);
-  return { rows: filtered, totals, ils_per_100_units: rate };
+  return { rows: filtered, totals, rate };
 }

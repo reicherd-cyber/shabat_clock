@@ -10,7 +10,7 @@ import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/r
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings, setSetting } from '../../services/settings.js';
 import { getAdminHistory } from '../../services/history.js';
-import { getVoiceCosts, RATE_SETTING_KEY } from '../../services/voiceCosts.js';
+import { getVoiceCosts, RATE_UNITS_KEY, RATE_ILS_KEY } from '../../services/voiceCosts.js';
 import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEntry, restoreFinanceEntry } from '../../services/finance.js';
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
@@ -386,17 +386,20 @@ adminRouter.get('/voice-costs', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// Units→ILS conversion rate (price of 100 Yemot units in shekels), editable
+// Units→ILS conversion rate ("X Yemot units = Y shekels", both sides editable)
 // from the voice-costs page; every ILS figure derives from it on the next read.
 adminRouter.put('/voice-costs/rate', requireWrite, async (req, res, next) => {
   try {
-    const rate = Number(req.body?.ils_per_100_units);
-    if (!Number.isFinite(rate) || rate <= 0 || rate > 10000) {
-      throw errors.validation('תעריף לא תקין — מספר שקלים ל-100 יחידות', { ils_per_100_units: 'invalid' });
+    const units = Number(req.body?.units);
+    const ils = Number(req.body?.ils);
+    if (!Number.isFinite(units) || units <= 0 || units > 1e6
+      || !Number.isFinite(ils) || ils <= 0 || ils > 1e6) {
+      throw errors.validation('תעריף לא תקין — כמות יחידות ומחיר בש״ח חייבים להיות מספרים חיוביים', { rate: 'invalid' });
     }
-    await setSetting(RATE_SETTING_KEY, rate, 'עלות 100 יחידות ימות המשיח בש״ח (עמוד עלויות קוליות)');
-    await audit(req, 'update', 'voice_costs_rate', null, { after: { ils_per_100_units: rate } });
-    res.json({ ok: true, ils_per_100_units: rate });
+    await setSetting(RATE_UNITS_KEY, units, 'כמות יחידות ימות המשיח בהגדרת התעריף (עמוד עלויות קוליות)');
+    await setSetting(RATE_ILS_KEY, ils, 'מחיר כמות היחידות שלמעלה בש״ח (עמוד עלויות קוליות)');
+    await audit(req, 'update', 'voice_costs_rate', null, { after: { units, ils } });
+    res.json({ ok: true, rate: { units, ils } });
   } catch (e) { next(e); }
 });
 
