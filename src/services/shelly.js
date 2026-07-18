@@ -19,36 +19,40 @@ export async function shellySet(ip, relayNo, on) {
   return rpc(ip, 'Switch.Set', { id: channelFor(relayNo), on: on ? 'true' : 'false' });
 }
 
-// Absolute on/off over whichever transport the device uses — 'mqtt': Switch.Set
-// RPC through the broker (device connects out to us, works from anywhere);
-// 'lan': direct HTTP (same network only). Throws on failure; single source for
-// both immediate commands and the scheduler.
-export async function shellyDispatch({ device_uid, transport, ip_address }, relayNo, on) {
+// Any RPC over whichever transport the device uses — 'mqtt': through the broker
+// (device connects out to us, works from anywhere); 'lan': direct HTTP (same
+// network only; nested params ride the query string as JSON). Throws on failure.
+export async function shellyCall({ device_uid, transport, ip_address }, method, params = undefined) {
   if (transport === 'mqtt') {
     const { shellyMqttRpc } = await import('../mqtt/client.js');
-    const reply = await shellyMqttRpc(device_uid, 'Switch.Set', { id: channelFor(relayNo), on });
+    const reply = await shellyMqttRpc(device_uid, method, params);
     if (!reply) throw new Error('mqtt rpc timeout');
     if (reply.error) throw new Error(reply.error.message || 'shelly rpc error');
     return reply.result;
   }
-  return shellySet(ip_address, relayNo, on);
+  const qs = params && Object.fromEntries(Object.entries(params).map(
+    ([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : v],
+  ));
+  return rpc(ip_address, method, qs);
+}
+
+// Absolute on/off — single source for both immediate commands and the scheduler.
+export async function shellyDispatch(device, relayNo, on) {
+  if (device.transport === 'mqtt') {
+    return shellyCall(device, 'Switch.Set', { id: channelFor(relayNo), on });
+  }
+  return shellySet(device.ip_address, relayNo, on);
 }
 
 // Power-on behavior: restore the last output state after any reboot/power cut.
 // The factory default (match_input + follow, with the wall switch sitting off)
 // turned relays off after a firmware crash with no trace in the log — every
 // registered channel gets restore_last (2026-07-18).
-export async function shellySetRestoreLast({ transport, ip_address, device_uid }, relayNo) {
-  const config = { initial_state: 'restore_last' };
-  if (transport === 'mqtt') {
-    const { shellyMqttRpc } = await import('../mqtt/client.js');
-    const reply = await shellyMqttRpc(device_uid, 'Switch.SetConfig', { id: channelFor(relayNo), config });
-    if (!reply) throw new Error('mqtt rpc timeout');
-    if (reply.error) throw new Error(reply.error.message || 'shelly rpc error');
-    return reply.result;
-  }
-  // HTTP GET carries nested params as JSON in the query string.
-  return rpc(ip_address, 'Switch.SetConfig', { id: channelFor(relayNo), config: JSON.stringify(config) });
+export async function shellySetRestoreLast(device, relayNo) {
+  return shellyCall(device, 'Switch.SetConfig', {
+    id: channelFor(relayNo),
+    config: { initial_state: 'restore_last' },
+  });
 }
 
 // Current output state of one channel → boolean.

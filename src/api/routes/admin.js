@@ -15,6 +15,7 @@ import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEn
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
 import { brokerConnected } from '../../mqtt/client.js';
+import { healthSnapshot } from '../../monitor/health.js';
 import { generateSecret, otpauthUri, verifyTotp } from '../../services/totp.js';
 import QRCode from 'qrcode';
 
@@ -295,6 +296,7 @@ adminRouter.get('/monitoring', async (req, res, next) => {
       sync_errors: syncErrors,
       auth_failures_24h: await recentFailureCount(24),
       broker_ok: brokerConnected(),
+      health: healthSnapshot(),
     });
   } catch (e) { next(e); }
 });

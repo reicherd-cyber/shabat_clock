@@ -20,6 +20,65 @@ const Stat = ({ label, value, ok, to }) => {
   );
 };
 
+// Seconds → compact Hebrew duration ("3 ימים", "5 שע׳", "12 דק׳").
+const fmtUptime = (s) => {
+  if (s == null) return '—';
+  if (s >= 172800) return `${Math.floor(s / 86400)} ימים`;
+  if (s >= 3600) return `${Math.floor(s / 3600)} שע׳`;
+  return `${Math.floor(s / 60)} דק׳`;
+};
+
+const INCIDENT_LABELS = {
+  unreachable: 'מכשיר לא מגיב', unexpected_reboot: 'אתחול לא צפוי', auto_reboot: 'אתחול יזום (זיכרון נמוך)',
+  high_temperature: 'חום גבוה', online_flag_healed: 'תוקן דגל מנותק', db_down: 'מסד נתונים לא מגיב',
+  broker_down: 'ברוקר מנותק', server_heap: 'זיכרון שרת גבוה',
+};
+
+// Deep-health section fed by the server-side monitor (src/monitor/health.js):
+// per-Shelly uptime/RAM/temperature, DB latency, server process, incident trail.
+function HealthSection({ h }) {
+  if (!h) return null;
+  return (
+    <>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Stat label="מסד נתונים" value={h.db.ok ? `${h.db.latency_ms}ms` : 'לא מגיב'} ok={h.db.ok} />
+        <Stat label="שרת פעיל" value={fmtUptime(h.server.uptime_s)} ok />
+        <Stat label="זיכרון שרת" value={`${Math.round(h.server.heap_used / 1048576)}MB`} ok={h.server.heap_used < 512 * 1048576} />
+        <Stat label="השהיית לולאה" value={`${h.server.loop_delay_ms}ms`} ok={h.server.loop_delay_ms < 100} />
+      </div>
+      {h.devices.length > 0 && (
+        <Card>
+          <h3 className="font-bold mb-2">בריאות מכשירים</h3>
+          {h.devices.map((d) => (
+            <div key={d.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm border-b border-line last:border-0 py-1.5">
+              <b>{d.name}</b>
+              <Badge ok={d.reachable}>{d.reachable ? 'מגיב' : `לא מגיב (${d.failures || 0})`}</Badge>
+              {d.reachable && <>
+                <span className="text-muted">פעיל {fmtUptime(d.uptime_s)}</span>
+                <span className="text-muted" dir="ltr">RAM {Math.round((d.ram_free || 0) / 1024)}KB</span>
+                {d.temps?.length > 0 && <span className="text-muted" dir="ltr">{d.temps.map((t) => `${Math.round(t)}°C`).join(' / ')}</span>}
+                {d.fw_update && <Badge ok={false}>עדכון קושחה {d.fw_update}</Badge>}
+                {d.auto_rebooted && <Badge ok={false}>אותחל יזומות</Badge>}
+              </>}
+            </div>
+          ))}
+        </Card>
+      )}
+      {h.incidents.length > 0 && (
+        <Card>
+          <h3 className="font-bold mb-2">אירועי בריאות אחרונים</h3>
+          {h.incidents.slice(0, 10).map((i, idx) => (
+            <div key={idx} className="text-sm border-b border-line last:border-0 py-1">
+              <span className="text-muted" dir="ltr">{new Date(i.at).toLocaleString('he-IL')}</span>{' '}
+              <b>{INCIDENT_LABELS[i.kind] || i.kind}</b> — {i.subject} <span className="text-muted">({i.detail})</span>
+            </div>
+          ))}
+        </Card>
+      )}
+    </>
+  );
+}
+
 export function Monitoring() {
   const [m, setM] = useState(null);
   const [error, setError] = useState(null);
@@ -36,6 +95,7 @@ export function Monitoring() {
         <Stat label="כשלי זיהוי (24ש)" value={m.auth_failures_24h} ok={m.auth_failures_24h < 5} to="/admin/call-logs" />
         <Stat label="ברוקר MQTT" value={m.broker_ok ? 'תקין' : 'מנותק'} ok={m.broker_ok} />
       </div>
+      <HealthSection h={m.health} />
       {m.sync_errors.length > 0 && (
         <Card>
           <h3 className="font-bold text-off mb-2">שגיאות סנכרון</h3>
