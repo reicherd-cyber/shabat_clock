@@ -357,19 +357,47 @@ export function Commands() {
 
 export function AdminSchedules() {
   const [schedules, setSchedules] = useState(null);
+  const [fUser, setFUser] = useState('');
+  const [fDevice, setFDevice] = useState('');
   const { busy, error, run, setError } = useAsync();
   const refresh = async () => setSchedules(await adminApi.get('/schedules'));
   useEffect(() => { refresh().catch(setError); }, []);
   const toggle = (s) => run(async () => { await adminApi.patch(`/schedules/${s.id}`, { is_enabled: !s.is_enabled }); await refresh(); });
   const remove = (s) => run(async () => { await adminApi.del(`/schedules/${s.id}`); await refresh(); });
+
+  // Dropdown options come from the full list; the rows filter client-side.
+  const all = schedules || [];
+  const users = [...new Map(all.filter((s) => s.user_id != null).map((s) => [s.user_id, s.user_name || `#${s.user_id}`])).entries()];
+  const devices = [...new Map(all.map((s) => [s.device_id, s.device_name])).entries()];
+  const shown = all.filter((s) =>
+    (!fUser || String(s.user_id) === fUser) && (!fDevice || String(s.device_id) === fDevice));
+  const filtering = fUser || fDevice;
+
   return (
     <div className="space-y-4">
-      <h2 className="font-bold text-xl">תזמונים (כל המשתמשים)</h2>
+      <div className="flex justify-between items-center gap-2 flex-wrap">
+        <h2 className="font-bold text-xl">תזמונים (כל המשתמשים)</h2>
+        <div className="flex gap-2 items-center flex-wrap">
+          <Select className="py-2 text-sm w-40" value={fUser} onChange={(e) => setFUser(e.target.value)}>
+            <option value="">כל המשתמשים</option>
+            {users.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          </Select>
+          <Select className="py-2 text-sm w-40" value={fDevice} onChange={(e) => setFDevice(e.target.value)}>
+            <option value="">כל המכשירים</option>
+            {devices.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          </Select>
+          {filtering && (
+            <Button variant="ghost" onClick={() => { setFUser(''); setFDevice(''); }}>נקה סינון</Button>
+          )}
+        </div>
+      </div>
       <ErrorNote error={error} />
-      {(schedules || []).map((s) => (
+      {schedules && <p className="text-muted text-sm">{shown.length} תזמונים{filtering ? ' (מסונן)' : ''}</p>}
+      {shown.length === 0 && schedules && <Card className="text-muted">לא נמצאו תזמונים</Card>}
+      {shown.map((s) => (
         <Card key={s.id} className="flex items-center justify-between flex-wrap gap-2 py-3">
           <div className="text-sm">
-            <b>{s.relay_name}</b> <span className="text-muted">({s.device_name})</span>
+            <b>{s.relay_name}</b> <span className="text-muted">({s.device_name}{s.user_name ? ` · ${s.user_name}` : ''})</span>
             {' — '}
             {/* Both repeat types may be one-sided (e.g. dashboard quick "turn off at…",
                 or a weekly "every night off" with no ON) — render only present sides. */}

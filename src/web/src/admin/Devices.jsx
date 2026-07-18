@@ -13,6 +13,8 @@ export default function Devices() {
   const [uidForm, setUidForm] = useState(null);       // {device, uid}
   const [shelly, setShelly] = useState(null);         // wizard: {step, ip, user_id, name, probe, relays}
   const [showRemoved, setShowRemoved] = useState(false);
+  const [fUser, setFUser] = useState('');
+  const [fDevice, setFDevice] = useState('');
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -124,12 +126,28 @@ export default function Devices() {
   // Removed devices (is_enabled=false) are hidden by default — a toggle reveals
   // them for inspection/restore.
   const removedCount = devices.filter((d) => !d.is_enabled).length;
-  const visibleDevices = devices.filter((d) => d.is_enabled || showRemoved);
+  const visibleDevices = devices.filter((d) => (d.is_enabled || showRemoved)
+    && (!fUser || String(d.user_id) === fUser)
+    && (!fDevice || String(d.id) === fDevice));
+  const filtering = fUser || fDevice;
+  // Device options track the user filter, so the two dropdowns stay consistent.
+  const deviceOptions = devices.filter((d) => !fUser || String(d.user_id) === fUser);
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center flex-wrap gap-2">
         <h2 className="font-bold text-xl">מכשירים</h2>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center flex-wrap">
+          <Select className="py-2 text-sm w-40" value={fUser} onChange={(e) => { setFUser(e.target.value); setFDevice(''); }}>
+            <option value="">כל המשתמשים</option>
+            {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+          </Select>
+          <Select className="py-2 text-sm w-40" value={fDevice} onChange={(e) => setFDevice(e.target.value)}>
+            <option value="">כל המכשירים</option>
+            {deviceOptions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </Select>
+          {filtering && (
+            <Button variant="ghost" onClick={() => { setFUser(''); setFDevice(''); }}>נקה סינון</Button>
+          )}
           {removedCount > 0 && (
             <Button variant="ghost" onClick={() => setShowRemoved(!showRemoved)}>
               {showRemoved ? 'הסתר מכשירים שהוסרו' : `הצג מכשירים שהוסרו (${removedCount})`}
@@ -140,6 +158,8 @@ export default function Devices() {
         </div>
       </div>
       <ErrorNote error={error} />
+      <p className="text-muted text-sm">{visibleDevices.length} מכשירים{filtering ? ' (מסונן)' : ''}</p>
+      {visibleDevices.length === 0 && <Card className="text-muted">לא נמצאו מכשירים</Card>}
       {visibleDevices.map((d) => (
         <Card key={d.id}>
           <div className="flex items-center justify-between flex-wrap gap-2">

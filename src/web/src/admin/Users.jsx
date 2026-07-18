@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
-import { Card, Button, Input, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
 
 export default function Users() {
   const [users, setUsers] = useState(null);
   const [createForm, setCreateForm] = useState(null);
   const [pinReset, setPinReset] = useState(null);
+  const [q, setQ] = useState('');
+  const [fStatus, setFStatus] = useState('');
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => setUsers(await adminApi.get('/users'));
@@ -38,13 +40,31 @@ export default function Users() {
   });
 
   if (!users) return <p className="text-muted">טוען…</p>;
+  // Search matches name / email / IVR code / notes; status narrows further.
+  const needle = q.trim().toLowerCase();
+  const shown = users.filter((u) =>
+    (!needle || `${u.full_name} ${u.email || ''} ${u.ivr_code || ''} ${u.notes || ''}`.toLowerCase().includes(needle))
+    && (!fStatus || u.status === fStatus));
+  const filtering = needle || fStatus;
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center flex-wrap gap-2">
         <h2 className="font-bold text-xl">משתמשים</h2>
-        <Button onClick={() => setCreateForm({ full_name: '', pin: '', phone: '', email: '', require_pin: false, max_devices: 3 })}>+ משתמש חדש</Button>
+        <div className="flex gap-2 items-center flex-wrap">
+          <Input className="w-48 py-2 text-sm" placeholder="חיפוש שם / אימייל / קוד" value={q} onChange={(e) => setQ(e.target.value)} />
+          <Select className="py-2 text-sm" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+            <option value="">כל הסטטוסים</option>
+            <option value="active">פעיל</option>
+            <option value="suspended">מושעה</option>
+          </Select>
+          {filtering && (
+            <Button variant="ghost" onClick={() => { setQ(''); setFStatus(''); }}>נקה סינון</Button>
+          )}
+          <Button onClick={() => setCreateForm({ full_name: '', pin: '', phone: '', email: '', require_pin: false, max_devices: 3 })}>+ משתמש חדש</Button>
+        </div>
       </div>
       <ErrorNote error={error} />
+      <p className="text-muted text-sm">{shown.length} משתמשים{filtering ? ' (מסונן)' : ''}</p>
       <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -54,7 +74,7 @@ export default function Users() {
             </tr>
           </thead>
           <tbody>
-            {users.map((u) => (
+            {shown.map((u) => (
               <tr key={u.id} className="border-b border-line last:border-0">
                 <td className="p-3 font-semibold">{u.full_name}</td>
                 <td className="p-3" dir="ltr">{u.email || <span className="text-muted">—</span>}</td>
@@ -71,6 +91,9 @@ export default function Users() {
                 </td>
               </tr>
             ))}
+            {shown.length === 0 && (
+              <tr><td colSpan={7} className="p-6 text-center text-muted">לא נמצאו משתמשים</td></tr>
+            )}
           </tbody>
         </table>
       </Card>

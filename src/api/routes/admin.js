@@ -9,6 +9,7 @@ import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
+import { listRecordings, regenerateRecording, fetchRecordingAudio } from '../../services/ivrAudio.js';
 import { getAdminHistory } from '../../services/history.js';
 import { getVoiceCosts, addRate, RATE_KINDS } from '../../services/voiceCosts.js';
 import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEntry, restoreFinanceEntry } from '../../services/finance.js';
@@ -455,6 +456,28 @@ adminRouter.delete('/schedules/:id', requireWrite, async (req, res, next) => {
     await deleteSchedule({ userId: null, scheduleId: Number(req.params.id) });
     await audit(req, 'delete', 'schedule', Number(req.params.id));
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ── IVR recordings (Yemot prompt audio) — list, re-record from edited text, play ──
+adminRouter.get('/recordings', async (req, res, next) => {
+  try { res.json(await listRecordings()); } catch (e) { next(e); }
+});
+
+adminRouter.post('/recordings/:key/regenerate', requireSuperadmin, async (req, res, next) => {
+  try {
+    const out = await regenerateRecording(req.params.key, req.body || {});
+    await audit(req, 'regenerate', 'ivr_recording', null, { key: out.key, text: out.text, voice: out.voice });
+    res.json(out);
+  } catch (e) { next(e); }
+});
+
+adminRouter.get('/recordings/:key/audio', async (req, res, next) => {
+  try {
+    const buf = await fetchRecordingAudio(req.params.key);
+    res.set('Content-Type', 'audio/wav');
+    res.set('Cache-Control', 'no-store');
+    res.send(buf);
   } catch (e) { next(e); }
 });
 

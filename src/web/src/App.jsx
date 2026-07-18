@@ -11,6 +11,7 @@ import Users from './admin/Users.jsx';
 import Devices from './admin/Devices.jsx';
 import { Monitoring, DeviceHealth, CallLogs, Commands, AdminSchedules, SystemSettings, Admins, Audit } from './admin/Misc.jsx';
 import { CallFlow } from './admin/CallFlow.jsx';
+import { Recordings } from './admin/Recordings.jsx';
 import AdminHistory from './admin/History.jsx';
 import VoiceCosts from './admin/VoiceCosts.jsx';
 import Finance from './admin/Finance.jsx';
@@ -18,7 +19,7 @@ import { Logo } from './ui.jsx';
 import {
   LayoutGrid, CalendarClock, History as HistoryIcon, Settings as SettingsIcon,
   Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
-  ShieldCheck, ScrollText, ChevronDown,
+  ShieldCheck, ScrollText, ChevronDown, AudioLines,
 } from 'lucide-react';
 
 // Decode a JWT payload client-side (base64url) — used only to detect impersonation.
@@ -116,6 +117,7 @@ const ADMIN_NAV = [
       { to: '/admin/history', label: 'היסטוריה', Icon: HistoryIcon },
       { to: '/admin/call-logs', label: 'שיחות', Icon: PhoneCall },
       { to: '/admin/call-flow', label: 'תרשים שיחה', Icon: GitBranch },
+      { to: '/admin/recordings', label: 'הקלטות מענה', Icon: AudioLines },
     ],
   },
   {
@@ -278,6 +280,7 @@ export default function App() {
           <Route path="voice-costs" element={<VoiceCosts />} />
           <Route path="finance" element={<Finance />} />
           <Route path="call-flow" element={<CallFlow />} />
+          <Route path="recordings" element={<Recordings />} />
           <Route path="commands" element={<Commands />} />
           <Route path="health" element={<DeviceHealth />} />
           <Route path="settings" element={<SystemSettings />} />

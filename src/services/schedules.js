@@ -199,13 +199,15 @@ export async function deleteSchedule({ userId, scheduleId }) {
 
 export async function listSchedules({ userId }) {
   return query(
-    `SELECT s.id, s.relay_id, r.name AS relay_name, d.name AS device_name, d.sync_status,
+    `SELECT s.id, s.relay_id, r.name AS relay_name, d.id AS device_id, d.name AS device_name, d.sync_status,
+            s.user_id, u.full_name AS user_name,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time,
             s.repeat_type, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
      JOIN devices d ON d.id = r.device_id
+     LEFT JOIN users u ON u.id = s.user_id
      WHERE s.deleted_at IS NULL ${userId != null ? 'AND s.user_id = ?' : ''}
      ORDER BY s.id DESC`,
     userId != null ? [userId] : [],
