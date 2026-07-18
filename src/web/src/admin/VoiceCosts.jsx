@@ -145,28 +145,27 @@ export default function VoiceCosts() {
       )}
 
       {rate && (
-        <Card className="flex items-center gap-3 flex-wrap text-sm">
-          <span className="font-bold">תעריף המרה:</span>
+        <div className="flex items-center gap-2 text-sm whitespace-nowrap" title="כל הסכומים בש״ח בעמוד מחושבים לפי תעריף זה">
+          <span className="font-bold">תעריף:</span>
           <Input
-            type="number" min="1" step="1" dir="ltr" className="w-24 py-1.5 text-sm"
+            type="number" min="1" step="1" dir="ltr" className="w-20 py-1 text-sm"
             value={unitsDraft ?? String(rate.units)}
             onChange={(e) => setUnitsDraft(e.target.value)}
           />
           <span>יחידות =</span>
           <Input
-            type="number" min="0.01" step="0.01" dir="ltr" className="w-24 py-1.5 text-sm"
+            type="number" min="0.01" step="0.01" dir="ltr" className="w-20 py-1 text-sm"
             value={ilsDraft ?? String(rate.ils)}
             onChange={(e) => setIlsDraft(e.target.value)}
           />
           <span>₪</span>
           {rateEdited && rateValid && (
-            <Button onClick={saveRate} disabled={busy}>שמור וחשב מחדש</Button>
+            <Button className="py-1" onClick={saveRate} disabled={busy}>שמור</Button>
           )}
           {(unitsDraft != null || ilsDraft != null) && (
-            <Button variant="ghost" onClick={() => { setUnitsDraft(null); setIlsDraft(null); }}>ביטול</Button>
+            <Button className="py-1" variant="ghost" onClick={() => { setUnitsDraft(null); setIlsDraft(null); }}>ביטול</Button>
           )}
-          <span className="text-muted">כל הסכומים בש״ח בעמוד מחושבים לפי תעריף זה</span>
-        </Card>
+        </div>
       )}
 
       <Card flush className="overflow-x-auto">
