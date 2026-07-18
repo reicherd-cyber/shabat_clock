@@ -170,10 +170,11 @@ export default function VoiceCosts() {
             <span className="text-muted">בתוקף מ־{new Date(data.rate_since).toLocaleDateString('he-IL')}</span>
           )}
           <span className="text-line">|</span>
-          <span dir="ltr">1 $</span>
+          <span dir="ltr" title="שער אמיתי — מתעדכן אוטומטית פעם ביום; אפשר לדרוס ידנית עד העדכון הבא">1 $</span>
           <span>=</span>
           <Input
-            type="number" min="0.01" step="0.01" dir="ltr" className="w-20 py-1 text-sm"
+            type="number" min="0.01" step="0.01" dir="ltr" className="w-24 py-1 text-sm"
+            title="שער אמיתי — מתעדכן אוטומטית פעם ביום; אפשר לדרוס ידנית עד העדכון הבא"
             value={usdDraft ?? String(data.usd_rate)}
             onChange={(e) => setUsdDraft(e.target.value)}
           />

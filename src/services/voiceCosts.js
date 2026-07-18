@@ -47,6 +47,38 @@ export async function addRate({ kind, units, ils }) {
   );
 }
 
+// Real USD→ILS, refreshed at most daily from the exchange-rate API: a changed
+// rate lands as a new dated 'usd' row, so each day's orders get that day's
+// actual rate and history stays stable. A manual override simply becomes the
+// rate until the next refresh finds a different market value. Failure keeps
+// the last stored rate and retries within the hour.
+let usdRefreshAt = 0;
+let usdRefreshing = null;
+const USD_REFRESH_MS = 24 * 3600_000;
+
+function refreshUsdRate(rates) {
+  if (Date.now() - usdRefreshAt < USD_REFRESH_MS) return Promise.resolve();
+  usdRefreshing ??= (async () => {
+    try {
+      const res = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(8000) });
+      const ils = Math.round(Number((await res.json())?.rates?.ILS) * 10000) / 10000;
+      if (!Number.isFinite(ils) || ils <= 0) throw new Error('no ILS rate in response');
+      const cur = rates.usd[rates.usd.length - 1];
+      if (Math.abs(ils - cur.ils / cur.units) >= 0.0001) {
+        await addRate({ kind: 'usd', units: 1, ils });
+        rates.usd.push({ units: 1, ils, from: Date.now() });
+      }
+      usdRefreshAt = Date.now();
+    } catch (e) {
+      usdRefreshAt = Date.now() - USD_REFRESH_MS + 3600_000; // retry in an hour
+      console.error('[voice-costs] usd rate refresh:', e.message);
+    } finally {
+      usdRefreshing = null;
+    }
+  })();
+  return usdRefreshing;
+}
+
 // Average measured cost of one interpretation — used only for orders made before
 // usage logging existed (marked estimated in the response).
 const EST_ANTHROPIC_USD = 0.0086;
@@ -113,8 +145,9 @@ async function fetchYemotSttTransactions() {
 // All filters optional: from/to (UTC 'YYYY-MM-DD HH:MM:SS', same convention as
 // /call-logs), userId, phone (partial digits), q (substring of the spoken text).
 export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
-  const [rates, stt, usage, users] = await Promise.all([
-    loadRates(),
+  const rates = await loadRates();
+  await refreshUsdRate(rates);
+  const [stt, usage, users] = await Promise.all([
     fetchYemotSttTransactions(),
     query('SELECT id, user_id, phone, text, model, input_tokens, output_tokens, cost_usd, created_at FROM nlu_usage ORDER BY id DESC LIMIT 2000'),
     query('SELECT up.phone, up.user_id, u.full_name FROM user_phones up JOIN users u ON u.id = up.user_id'),

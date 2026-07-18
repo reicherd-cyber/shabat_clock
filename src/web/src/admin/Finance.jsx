@@ -4,6 +4,7 @@
 // sits at the 8.0 target and the charts carry secondary encoding (legend, gaps,
 // tooltips) as the validator requires.
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
 
@@ -180,6 +181,7 @@ export default function Finance() {
     return () => clearTimeout(t);
   }, [period, fromDate, toDate, fKind, fCategory, fRecurrence, fAdmin, search]);
 
+  const nav = useNavigate();
   const filtering = fKind || fCategory || fRecurrence || fAdmin || search || period !== '12m';
   const admins = data?.admins || [];
   const s = data?.stats;
@@ -247,7 +249,7 @@ export default function Finance() {
       <ErrorNote error={error} />
 
       {s && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <Card className="text-center">
             <div className="text-2xl font-bold" style={{ fontVariantNumeric: 'normal' }}>{fmtNis(s.totals.income)}</div>
             <div className="text-muted text-sm flex items-center justify-center gap-1.5">
@@ -268,13 +270,18 @@ export default function Finance() {
             <div className="text-2xl font-bold">{fmtNis(s.monthly_commitment.expense - s.monthly_commitment.income)}</div>
             <div className="text-muted text-sm">מחויבות חודשית נטו</div>
           </Card>
+          {s.auto_voice && (
+            <Card
+              className="text-center cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition"
+              onClick={() => nav('/admin/voice-costs')} role="button"
+              title="שימוש קולי בתקופה — נכלל אוטומטית בהוצאות (ימות המשיח + Anthropic); לחיצה לפירוט"
+            >
+              <div className="text-2xl font-bold" style={{ color: C_EXPENSE }}>{fmtNis(s.auto_voice.yemot_ils + s.auto_voice.anthropic_ils, 2)}</div>
+              <div className="text-muted text-sm">הוצאות קוליות</div>
+              <div className="text-muted text-xs mt-0.5">ימות {fmtNis(s.auto_voice.yemot_ils, 2)} · Anthropic {fmtNis(s.auto_voice.anthropic_ils, 2)}</div>
+            </Card>
+          )}
         </div>
-      )}
-      {s?.auto_voice && (s.auto_voice.yemot_ils > 0 || s.auto_voice.anthropic_ils > 0) && (
-        <p className="text-muted text-xs">
-          ההוצאות כוללות אוטומטית שימוש קולי בתקופה: ימות המשיח {fmtNis(s.auto_voice.yemot_ils)} · Anthropic {fmtNis(s.auto_voice.anthropic_ils)}
-          {' '}(מחושב לפי התעריפים בעמוד עלויות קוליות; מופיע בפירוט הקטגוריות)
-        </p>
       )}
 
       <div className="flex items-center justify-between">
