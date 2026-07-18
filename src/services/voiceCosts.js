@@ -5,6 +5,17 @@
 import { query } from '../db/pool.js';
 import { env } from '../config/env.js';
 import { errors } from '../config/errors.js';
+import { getSetting } from './settings.js';
+
+// Yemot units → ILS. Admin-editable on the voice-costs page; stored as the
+// price of 100 units in shekels.
+export const RATE_SETTING_KEY = 'voice.ils_per_100_units';
+export const RATE_DEFAULT = 27;
+
+export async function getUnitsRate() {
+  const v = Number(await getSetting(RATE_SETTING_KEY, String(RATE_DEFAULT)));
+  return Number.isFinite(v) && v > 0 ? v : RATE_DEFAULT;
+}
 
 // Average measured cost of one interpretation — used only for orders made before
 // usage logging existed (marked estimated in the response).
@@ -62,7 +73,8 @@ async function fetchYemotSttTransactions() {
 // All filters optional: from/to (UTC 'YYYY-MM-DD HH:MM:SS', same convention as
 // /call-logs), userId, phone (partial digits), q (substring of the spoken text).
 export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
-  const [stt, usage, users] = await Promise.all([
+  const [rate, stt, usage, users] = await Promise.all([
+    getUnitsRate(),
     fetchYemotSttTransactions(),
     query('SELECT id, user_id, phone, text, model, input_tokens, output_tokens, cost_usd, created_at FROM nlu_usage ORDER BY id DESC LIMIT 2000'),
     query('SELECT up.phone, up.user_id, u.full_name FROM user_phones up JOIN users u ON u.id = up.user_id'),
@@ -128,6 +140,8 @@ export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
     return true;
   });
 
+  const toIls = (units) => (units * rate) / 100;
+  for (const r of filtered) r.yemot_ils = toIls(r.yemot_units);
   const totals = filtered.reduce(
     (acc, r) => ({
       orders: acc.orders + 1,
@@ -136,5 +150,6 @@ export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
     }),
     { orders: 0, yemot_units: 0, anthropic_usd: 0 },
   );
-  return { rows: filtered, totals };
+  totals.yemot_ils = toIls(totals.yemot_units);
+  return { rows: filtered, totals, ils_per_100_units: rate };
 }

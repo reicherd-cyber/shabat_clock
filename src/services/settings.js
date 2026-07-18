@@ -29,6 +29,18 @@ export async function listSettings() {
   return rows;
 }
 
+// Single-key upsert that can seed a description on first write (putSettings
+// leaves description untouched — it serves the settings-page bulk save).
+export async function setSetting(key, value, description = null) {
+  await query(
+    `INSERT INTO settings (setting_key, setting_value, description) VALUES (?,?,?)
+     ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+       description = COALESCE(settings.description, VALUES(description))`,
+    [key, String(value), description],
+  );
+  cache = null; // invalidate
+}
+
 export async function putSettings(entries) {
   for (const { setting_key, setting_value } of entries) {
     await query(

@@ -8,9 +8,9 @@ import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, releaseDeviceIdentity } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
-import { listSettings, putSettings } from '../../services/settings.js';
+import { listSettings, putSettings, setSetting } from '../../services/settings.js';
 import { getAdminHistory } from '../../services/history.js';
-import { getVoiceCosts } from '../../services/voiceCosts.js';
+import { getVoiceCosts, RATE_SETTING_KEY } from '../../services/voiceCosts.js';
 import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEntry, restoreFinanceEntry } from '../../services/finance.js';
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
@@ -383,6 +383,20 @@ adminRouter.get('/voice-costs', async (req, res, next) => {
       from: req.query.from, to: req.query.to,
       userId: req.query.user_id, phone: req.query.phone, q: req.query.q,
     }));
+  } catch (e) { next(e); }
+});
+
+// Units→ILS conversion rate (price of 100 Yemot units in shekels), editable
+// from the voice-costs page; every ILS figure derives from it on the next read.
+adminRouter.put('/voice-costs/rate', requireWrite, async (req, res, next) => {
+  try {
+    const rate = Number(req.body?.ils_per_100_units);
+    if (!Number.isFinite(rate) || rate <= 0 || rate > 10000) {
+      throw errors.validation('תעריף לא תקין — מספר שקלים ל-100 יחידות', { ils_per_100_units: 'invalid' });
+    }
+    await setSetting(RATE_SETTING_KEY, rate, 'עלות 100 יחידות ימות המשיח בש״ח (עמוד עלויות קוליות)');
+    await audit(req, 'update', 'voice_costs_rate', null, { after: { ils_per_100_units: rate } });
+    res.json({ ok: true, ils_per_100_units: rate });
   } catch (e) { next(e); }
 });
 

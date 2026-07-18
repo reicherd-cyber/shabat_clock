@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, ErrorNote, useAsync } from '../ui.jsx';
 
+const C_EXPENSE = '#e11d48'; // money-color convention: costs are red
+
 const PERIODS = [
   { key: 'today', label: 'היום' },
   { key: 'yesterday', label: 'אתמול' },
@@ -46,6 +48,8 @@ export default function VoiceCosts() {
   const [search, setSearch] = useState('');
   const [users, setUsers] = useState([]);
   const [data, setData] = useState(null);
+  const [rateDraft, setRateDraft] = useState(null); // null = not editing, string while typing
+  const [refresh, setRefresh] = useState(0);
   const { busy, error, run, setError } = useAsync();
 
   useEffect(() => { adminApi.get('/users').then(setUsers).catch(setError); }, []);
@@ -65,13 +69,20 @@ export default function VoiceCosts() {
       }).catch(setError);
     }, phone || search ? 400 : 0);
     return () => clearTimeout(t);
-  }, [period, fromDate, toDate, userId, phone, search]);
+  }, [period, fromDate, toDate, userId, phone, search, refresh]);
 
   const filtering = userId || phone || search || period !== 'today';
 
   const rows = data?.rows || [];
   const t = data?.totals;
   const hasEstimates = rows.some((r) => r.anthropic_estimated);
+  const rate = data?.ils_per_100_units;
+
+  const saveRate = () => run(async () => {
+    await adminApi.put('/voice-costs/rate', { ils_per_100_units: Number(rateDraft) });
+    setRateDraft(null);
+    setRefresh((n) => n + 1); // re-read → every ₪ figure recalculates at the new rate
+  }).catch(setError);
 
   return (
     <div className="space-y-4">
@@ -105,7 +116,7 @@ export default function VoiceCosts() {
       <ErrorNote error={error} />
 
       {t && (
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card className="text-center">
             <div className="text-3xl font-bold">{t.orders}</div>
             <div className="text-muted text-sm">פקודות קוליות</div>
@@ -115,10 +126,34 @@ export default function VoiceCosts() {
             <div className="text-muted text-sm">יחידות ימות המשיח</div>
           </Card>
           <Card className="text-center">
-            <div className="text-3xl font-bold" dir="ltr">${t.anthropic_usd.toFixed(4)}</div>
+            <div className="text-3xl font-bold" style={{ color: C_EXPENSE }}>₪{t.yemot_ils.toFixed(2)}</div>
+            <div className="text-muted text-sm">עלות ימות בש״ח</div>
+          </Card>
+          <Card className="text-center">
+            <div className="text-3xl font-bold" dir="ltr" style={{ color: C_EXPENSE }}>${t.anthropic_usd.toFixed(4)}</div>
             <div className="text-muted text-sm">Anthropic</div>
           </Card>
         </div>
+      )}
+
+      {rate != null && (
+        <Card className="flex items-center gap-3 flex-wrap text-sm">
+          <span className="font-bold">תעריף המרה:</span>
+          <span>100 יחידות =</span>
+          <Input
+            type="number" min="0.01" step="0.01" dir="ltr" className="w-24 py-1.5 text-sm"
+            value={rateDraft ?? String(rate)}
+            onChange={(e) => setRateDraft(e.target.value)}
+          />
+          <span>₪</span>
+          {rateDraft != null && Number(rateDraft) !== rate && Number(rateDraft) > 0 && (
+            <Button onClick={saveRate} disabled={busy}>שמור וחשב מחדש</Button>
+          )}
+          {rateDraft != null && (
+            <Button variant="ghost" onClick={() => setRateDraft(null)}>ביטול</Button>
+          )}
+          <span className="text-muted">כל הסכומים בש״ח בעמוד מחושבים לפי תעריף זה</span>
+        </Card>
       )}
 
       <Card flush className="overflow-x-auto">
@@ -126,7 +161,7 @@ export default function VoiceCosts() {
           <thead>
             <tr className="text-right text-muted border-b border-line">
               <th className="p-2">מתי</th><th className="p-2">משתמש</th><th className="p-2">מה נאמר</th>
-              <th className="p-2">אורך (שנ׳)</th><th className="p-2">ימות (יחידות)</th><th className="p-2">Anthropic ($)</th>
+              <th className="p-2">אורך (שנ׳)</th><th className="p-2">ימות (יחידות)</th><th className="p-2">ימות (₪)</th><th className="p-2">Anthropic ($)</th>
             </tr>
           </thead>
           <tbody>
@@ -137,13 +172,14 @@ export default function VoiceCosts() {
                 <td className="p-2">{r.text || <span className="text-muted">(לא זוהה דיבור)</span>}</td>
                 <td className="p-2" dir="ltr">{r.seconds != null ? r.seconds.toFixed(1) : '—'}</td>
                 <td className="p-2" dir="ltr">{r.yemot_units.toFixed(3)}</td>
-                <td className="p-2" dir="ltr">
+                <td className="p-2" dir="ltr" style={{ color: C_EXPENSE }}>₪{r.yemot_ils.toFixed(2)}</td>
+                <td className="p-2" dir="ltr" style={{ color: C_EXPENSE }}>
                   ${r.anthropic_usd.toFixed(4)}{r.anthropic_estimated && <span className="text-muted" title="הערכה — פקודה מלפני רישום השימוש">*</span>}
                 </td>
               </tr>
             ))}
             {data && rows.length === 0 && (
-              <tr><td colSpan={6} className="p-6 text-center text-muted">אין פקודות קוליות בתקופה שנבחרה</td></tr>
+              <tr><td colSpan={7} className="p-6 text-center text-muted">אין פקודות קוליות בתקופה שנבחרה</td></tr>
             )}
           </tbody>
         </table>
