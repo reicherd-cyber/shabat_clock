@@ -8,7 +8,7 @@ import { query, withTransaction } from '../db/pool.js';
 import { errors } from '../config/errors.js';
 import { env } from '../config/env.js';
 import { bcryptHash } from './users.js';
-import { shellyInfo, shellyGetState } from './shelly.js';
+import { shellyInfo, shellyGetState, shellySetRestoreLast } from './shelly.js';
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -313,6 +313,15 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
       );
     }
     return { id: d.insertId, relays: wanted.length };
+  }).then(async (result) => {
+    // Every channel (selected or not) gets restore_last so a reboot/power cut
+    // never silently flips outputs. Best-effort — the device answered the probe
+    // moments ago; a failure logs but doesn't undo the registration.
+    for (const c of probe.channels) {
+      await shellySetRestoreLast({ transport, ip_address: ip, device_uid: probe.mac }, c.relay_no)
+        .catch((e) => console.error(`restore_last relay ${c.relay_no} of shelly ${probe.mac}:`, e.message));
+    }
+    return result;
   });
 }
 

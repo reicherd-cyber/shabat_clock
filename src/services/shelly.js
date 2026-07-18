@@ -34,6 +34,23 @@ export async function shellyDispatch({ device_uid, transport, ip_address }, rela
   return shellySet(ip_address, relayNo, on);
 }
 
+// Power-on behavior: restore the last output state after any reboot/power cut.
+// The factory default (match_input + follow, with the wall switch sitting off)
+// turned relays off after a firmware crash with no trace in the log — every
+// registered channel gets restore_last (2026-07-18).
+export async function shellySetRestoreLast({ transport, ip_address, device_uid }, relayNo) {
+  const config = { initial_state: 'restore_last' };
+  if (transport === 'mqtt') {
+    const { shellyMqttRpc } = await import('../mqtt/client.js');
+    const reply = await shellyMqttRpc(device_uid, 'Switch.SetConfig', { id: channelFor(relayNo), config });
+    if (!reply) throw new Error('mqtt rpc timeout');
+    if (reply.error) throw new Error(reply.error.message || 'shelly rpc error');
+    return reply.result;
+  }
+  // HTTP GET carries nested params as JSON in the query string.
+  return rpc(ip_address, 'Switch.SetConfig', { id: channelFor(relayNo), config: JSON.stringify(config) });
+}
+
 // Current output state of one channel → boolean.
 export async function shellyGetState(ip, relayNo) {
   const s = await rpc(ip, 'Switch.GetStatus', { id: channelFor(relayNo) });
