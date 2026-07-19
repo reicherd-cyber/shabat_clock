@@ -31,18 +31,29 @@ const localPort = process.env.DB_TUNNEL_LOCAL_PORT || '3307';
 console.log(`Tunneling localhost:${localPort} -> ${remote} via ${sshTarget}`);
 console.log('DEV USES THE PRODUCTION DB. Keep this window open while developing. Ctrl+C to close.');
 
-const ssh = spawn(
-  'ssh',
-  [
-    '-N',
-    '-i', key,
-    '-o', 'ExitOnForwardFailure=yes',
-    '-o', 'ServerAliveInterval=30',
-    '-o', 'ServerAliveCountMax=3',
-    '-L', `${localPort}:${remote}`,
-    sshTarget,
-  ],
-  { stdio: 'inherit' }
-);
+// The connection occasionally resets (ISP/CGNAT); without a reconnect the dev
+// backend silently loses its DB mid-session. Respawn until Ctrl+C.
+let stopping = false;
+process.on('SIGINT', () => { stopping = true; process.exit(0); });
 
-ssh.on('exit', (code) => process.exit(code ?? 0));
+const start = () => {
+  const ssh = spawn(
+    'ssh',
+    [
+      '-N',
+      '-i', key,
+      '-o', 'ExitOnForwardFailure=yes',
+      '-o', 'ServerAliveInterval=30',
+      '-o', 'ServerAliveCountMax=3',
+      '-L', `${localPort}:${remote}`,
+      sshTarget,
+    ],
+    { stdio: 'inherit' }
+  );
+  ssh.on('exit', (code) => {
+    if (stopping) process.exit(code ?? 0);
+    console.error(`Tunnel dropped (ssh exit ${code}) — reconnecting in 3s...`);
+    setTimeout(start, 3000);
+  });
+};
+start();
