@@ -8,6 +8,16 @@ export const tokens = {
   set admin(v) { v ? localStorage.setItem('admin_token', v) : localStorage.removeItem('admin_token'); },
 };
 
+// localStorage is shared across same-origin tabs, so logging in as someone else in
+// another tab silently swaps the token under this one — periodic refreshes then mix
+// the old identity's page with the new identity's data. The storage event fires only
+// in the OTHER tabs (never the writer), so reload this tab whenever its panel's token
+// slot changes and let the app re-mount as the current login.
+window.addEventListener('storage', (e) => {
+  const slot = window.location.pathname.startsWith('/admin') ? 'admin_token' : 'token';
+  if (e.key === null /* localStorage.clear() */ || e.key === slot) window.location.reload();
+});
+
 async function call(method, path, body, token, scope = null) {
   const res = await fetch(BASE + path, {
     method,
