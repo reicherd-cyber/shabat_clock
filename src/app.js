@@ -34,6 +34,19 @@ export function createApp() {
     res.json({ ok: true, version: appVersion.commit, version_date: appVersion.date });
   });
 
+  // Digital Asset Links — ties the Play-Store Android app (a TWA wrapper around this
+  // site) to this origin, so Chrome renders it full-screen without its own UI. The
+  // fingerprint is the public cert of the local signing keystore (shabat_clock-android/
+  // android.keystore, kept OUTSIDE this public repo); rotate here if the key rotates.
+  app.get('/.well-known/assetlinks.json', (req, res) => res.json([{
+    relation: ['delegate_permission/common.handle_all_urls'],
+    target: {
+      namespace: 'android_app',
+      package_name: 'com.kosherteltech.shabatclock',
+      sha256_cert_fingerprints: ['E5:1C:63:A2:78:89:B6:30:BC:35:02:C4:A5:98:E9:2E:B8:2D:B4:4D:BD:4D:0D:B0:AB:BA:5B:B3:F9:20:45:34'],
+    },
+  }]));
+
   app.use(ivrLimiter, ivrRouter); // GET /ivr — Yemot webhook (30 req/min/phone)
   app.use('/api/v1', authRouter);
   // adminRouter's specific /api/v1/admin prefix MUST be mounted before the catch-all
