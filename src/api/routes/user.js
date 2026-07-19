@@ -162,16 +162,18 @@ userRouter.get('/devices', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// Rename + remove/restore (is_enabled) only — other device fields (relay_count,
-// uid, owner) are admin-only. "Remove" is a soft is_enabled=false, never deleted.
+// Rename + remove/recover (is_enabled) only — other device fields (relay_count,
+// uid, owner) are admin-only. "Remove" is a soft is_enabled=false, never deleted;
+// recovery returns which stashed identity bits (UID / IVR digits) another device
+// claimed meanwhile and could not be restored.
 userRouter.patch('/devices/:id', async (req, res, next) => {
   try {
     const patch = {};
     if (req.body?.name !== undefined) patch.name = req.body.name;
     if (req.body?.is_enabled !== undefined) patch.is_enabled = req.body.is_enabled;
-    await patchDevice(Number(req.params.id), patch, { userId: req.auth.userId });
+    const recovery = await patchDevice(Number(req.params.id), patch, { userId: req.auth.userId });
     await auditImp(req, 'update', 'device', Number(req.params.id), { after: patch });
-    res.json({ ok: true });
+    res.json({ ok: true, recovery });
   } catch (e) { next(e); }
 });
 

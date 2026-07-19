@@ -5,7 +5,7 @@ import { errors } from '../../config/errors.js';
 import { requireAdmin, requireWrite, requireSuperadmin, signUserToken } from '../middleware.js';
 import { createUser, getUser, setPin, bcryptHash, normalizeEmail } from '../../services/users.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, releaseDeviceIdentity } from '../../services/devices.js';
+import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
@@ -230,22 +230,14 @@ adminRouter.post('/devices/:id/rotate-secret', requireWrite, async (req, res, ne
   } catch (e) { next(e); }
 });
 
+// recovery: present when the patch re-enabled a removed device — reports which
+// stashed identity bits (UID / IVR digits) could not be restored because another
+// device claimed them meanwhile.
 adminRouter.patch('/devices/:id', requireWrite, async (req, res, next) => {
   try {
-    await patchDevice(Number(req.params.id), req.body || {});
+    const recovery = await patchDevice(Number(req.params.id), req.body || {});
     await audit(req, 'update', 'device', Number(req.params.id), { after: req.body });
-    res.json({ ok: true });
-  } catch (e) { next(e); }
-});
-
-// Frees a disabled device's device_uid/ip_address so the same hardware can be
-// re-registered from scratch (e.g. via the Shelly wizard) instead of conflicting
-// with a stale/mistyped registration.
-adminRouter.post('/devices/:id/release-identity', requireWrite, async (req, res, next) => {
-  try {
-    await releaseDeviceIdentity(Number(req.params.id));
-    await audit(req, 'release_identity', 'device', Number(req.params.id));
-    res.json({ ok: true });
+    res.json({ ok: true, recovery });
   } catch (e) { next(e); }
 });
 

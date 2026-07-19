@@ -39,21 +39,6 @@ export function writeBrokerPasswdEntry(deviceUid, passwdHash) {
   fs.writeFileSync(env.mosquittoPasswdFile, lines.join('\n') + '\n', { mode: 0o600 });
 }
 
-// Drop a device's broker credential once its identity is released — otherwise a
-// stale entry for a UID no row claims anymore lingers in the passwd file.
-function removeBrokerPasswdEntry(deviceUid) {
-  if (!env.mosquittoPasswdFile || !deviceUid) return;
-  let lines = [];
-  try {
-    lines = fs.readFileSync(env.mosquittoPasswdFile, 'utf8').split('\n').filter(Boolean);
-  } catch { return; }
-  fs.writeFileSync(
-    env.mosquittoPasswdFile,
-    lines.filter((l) => !l.startsWith(`${deviceUid}:`)).join('\n') + '\n',
-    { mode: 0o600 },
-  );
-}
-
 function normalizeUid(uid) {
   const u = String(uid).toLowerCase().replace(/[^0-9a-f]/g, '');
   if (u.length !== 12) throw errors.validation('device_uid must be a 12-hex-char MAC', { device_uid: '12 hex chars' });
@@ -78,7 +63,8 @@ export async function provisionDevice({ user_id, name, relay_count, device_uid =
   const device = await withTransaction(async (conn) => {
     const [uRows] = await conn.query('SELECT id, max_devices FROM users WHERE id = ? FOR UPDATE', [user_id]);
     if (!uRows[0]) throw errors.notFound('NOT_FOUND', 'User not found');
-    const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ?', [user_id]);
+    // Removed devices are transparent to the quota — only active ones count.
+    const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_enabled = TRUE', [user_id]);
     if (dCount[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'User device limit reached');
     const [res] = await conn.query(
       `INSERT INTO devices (user_id, device_uid, name, mqtt_secret_hash, mqtt_passwd_hash, timezone, relay_count)
@@ -124,11 +110,80 @@ export async function rotateSecret(deviceId, { relay_count } = {}) {
   return { mqtt_secret: secret, qr_png_base64 };
 }
 
+// Removing a device (is_enabled=false) keeps every row but makes it transparent to
+// the rest of the system: its UID and its relays' IVR digits move to stash columns
+// (removed_uid / removed_ivr_digit) so the same hardware can be re-registered and the
+// digits reused. Runs inside the patch transaction.
+async function stashRemovedDevice(conn, deviceId) {
+  await conn.query(
+    `UPDATE relays SET removed_ivr_digit = ivr_digit, ivr_digit = NULL
+     WHERE device_id = ? AND deleted_at IS NULL AND ivr_digit IS NOT NULL`,
+    [deviceId],
+  );
+  await conn.query(
+    'UPDATE devices SET removed_uid = device_uid, device_uid = NULL WHERE id = ? AND device_uid IS NOT NULL',
+    [deviceId],
+  );
+}
+
+// Recovery mirror of stashRemovedDevice: quota re-check, then UID and IVR digits come
+// back from the stash — unless another device claimed them meanwhile, in which case
+// they are reported as lost (and dropped from the stash) rather than failing the whole
+// recovery. Returns {restored_uid, lost_uid, lost_digits} plus the broker passwd entry
+// to rewrite after commit (clock devices only — Shelly broker creds live elsewhere).
+async function recoverRemovedDevice(conn, device) {
+  const recovery = { restored_uid: null, lost_uid: null, lost_digits: [] };
+  let passwdEntry = null;
+
+  const [uRows] = await conn.query('SELECT max_devices FROM users WHERE id = ?', [device.user_id]);
+  const [cnt] = await conn.query(
+    'SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_enabled = TRUE AND id <> ?',
+    [device.user_id, device.id],
+  );
+  if (cnt[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'המשתמש הגיע למכסת המכשירים — לא ניתן לשחזר');
+
+  if (device.removed_uid) {
+    const [taken] = await conn.query('SELECT id FROM devices WHERE device_uid = ?', [device.removed_uid]);
+    // device_uid IS NULL guard: don't clobber a UID the same patch just set explicitly.
+    const [res] = taken.length === 0
+      ? await conn.query('UPDATE devices SET device_uid = removed_uid, removed_uid = NULL WHERE id = ? AND device_uid IS NULL', [device.id])
+      : [{ affectedRows: 0 }];
+    if (res.affectedRows) {
+      recovery.restored_uid = device.removed_uid;
+      if (device.mqtt_passwd_hash) passwdEntry = { uid: device.removed_uid, hash: device.mqtt_passwd_hash };
+    } else {
+      await conn.query('UPDATE devices SET removed_uid = NULL WHERE id = ?', [device.id]);
+      recovery.lost_uid = device.removed_uid;
+    }
+  }
+
+  const [stashed] = await conn.query(
+    'SELECT id, name, removed_ivr_digit FROM relays WHERE device_id = ? AND deleted_at IS NULL AND removed_ivr_digit IS NOT NULL',
+    [device.id],
+  );
+  for (const r of stashed) {
+    const [dTaken] = await conn.query(
+      'SELECT 1 FROM relays WHERE user_id = ? AND ivr_digit = ?', [device.user_id, r.removed_ivr_digit],
+    );
+    if (dTaken.length === 0) {
+      await conn.query('UPDATE relays SET ivr_digit = removed_ivr_digit, removed_ivr_digit = NULL WHERE id = ?', [r.id]);
+    } else {
+      await conn.query('UPDATE relays SET removed_ivr_digit = NULL WHERE id = ?', [r.id]);
+      recovery.lost_digits.push({ relay: r.name, digit: r.removed_ivr_digit });
+    }
+  }
+  return { recovery, passwdEntry };
+}
+
 // PATCH per §3.3: rename/timezone always; relay_count & uid-set only while unflashed;
 // reassign owner in one transaction with uq_ivr + max_devices pre-checks.
 // userId scopes to the owner's own device and restricts the patch to name/is_enabled
 // (the user panel's rename + remove/restore use case) — admin callers omit it for full access.
+// is_enabled transitions stash/recover the device's identity (see stashRemovedDevice);
+// returns the recovery report when a device was recovered, undefined otherwise.
 export async function patchDevice(deviceId, patch, { userId = null } = {}) {
+  let recovery;
+  let passwdEntry = null;
   await withTransaction(async (conn) => {
     const [rows] = await conn.query(
       `SELECT * FROM devices WHERE id = ? ${userId != null ? 'AND user_id = ?' : ''} FOR UPDATE`,
@@ -139,16 +194,23 @@ export async function patchDevice(deviceId, patch, { userId = null } = {}) {
     const fields = {};
 
     if (patch.name !== undefined) fields.name = patch.name;
+    if (patch.is_enabled !== undefined) fields.is_enabled = Boolean(patch.is_enabled);
+    const removing = fields.is_enabled === false && device.is_enabled;
+    const recovering = fields.is_enabled === true && !device.is_enabled;
+    const applyEnabledTransition = async () => {
+      if (removing) await stashRemovedDevice(conn, deviceId);
+      if (recovering) ({ recovery, passwdEntry } = await recoverRemovedDevice(conn, device));
+    };
+
     if (userId != null) {
-      if (patch.is_enabled !== undefined) fields.is_enabled = Boolean(patch.is_enabled);
       if (Object.keys(fields).length) {
         const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
         await conn.query(`UPDATE devices SET ${sets} WHERE id = ?`, [...Object.values(fields), deviceId]);
       }
+      await applyEnabledTransition();
       return;
     }
     if (patch.timezone !== undefined) fields.timezone = patch.timezone;
-    if (patch.is_enabled !== undefined) fields.is_enabled = Boolean(patch.is_enabled);
 
     if (patch.relay_count !== undefined) {
       if (device.device_uid) throw errors.conflict('DEVICE_FLASHED', 'relay_count is pinned once flashed; use rotate-secret');
@@ -168,7 +230,7 @@ export async function patchDevice(deviceId, patch, { userId = null } = {}) {
       const target = Number(patch.user_id);
       const [uRows] = await conn.query('SELECT id, max_devices FROM users WHERE id = ? FOR UPDATE', [target]);
       if (!uRows[0]) throw errors.notFound('NOT_FOUND', 'Target user not found');
-      const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ?', [target]);
+      const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_enabled = TRUE', [target]);
       if (dCount[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'Target user device limit reached');
       const [digitConflicts] = await conn.query(
         `SELECT r.ivr_digit FROM relays r
@@ -185,39 +247,12 @@ export async function patchDevice(deviceId, patch, { userId = null } = {}) {
       const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
       await conn.query(`UPDATE devices SET ${sets} WHERE id = ?`, [...Object.values(fields), deviceId]);
     }
+    await applyEnabledTransition();
     // Setting the UID creates the broker passwd entry [D31].
     if (fields.device_uid) writeBrokerPasswdEntry(fields.device_uid, device.mqtt_passwd_hash);
   });
-}
-
-// Frees a disabled device's identity (device_uid, ip_address) so the same physical
-// hardware can be re-registered from scratch — e.g. a device set up under the wrong
-// device_type, which will never come online, and just needs to be redone via the
-// Shelly wizard. The row, its name, and history stay put (restorable); only the
-// relays are soft-deleted (freeing their ivr_digit slots) since a fresh registration
-// creates its own. Admin-only; requires the device to already be disabled.
-export async function releaseDeviceIdentity(deviceId) {
-  let uid;
-  await withTransaction(async (conn) => {
-    const [rows] = await conn.query('SELECT * FROM devices WHERE id = ? FOR UPDATE', [deviceId]);
-    const device = rows[0];
-    if (!device) throw errors.notFound('NOT_FOUND', 'Device not found');
-    if (device.is_enabled) throw errors.conflict('CONFLICT', 'יש להשבית את המכשיר לפני שחרור הזיהוי שלו');
-    if (!device.device_uid) throw errors.conflict('CONFLICT', 'למכשיר זה אין זיהוי לשחרר');
-    uid = device.device_uid;
-    await conn.query(
-      `UPDATE relays SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE, ivr_digit = NULL
-       WHERE device_id = ? AND deleted_at IS NULL`,
-      [deviceId],
-    );
-    await conn.query(
-      `UPDATE schedules SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE
-       WHERE relay_id IN (SELECT id FROM relays WHERE device_id = ?) AND deleted_at IS NULL`,
-      [deviceId],
-    );
-    await conn.query('UPDATE devices SET device_uid = NULL, ip_address = NULL WHERE id = ?', [deviceId]);
-  });
-  removeBrokerPasswdEntry(uid);
+  if (passwdEntry) writeBrokerPasswdEntry(passwdEntry.uid, passwdEntry.hash);
+  return recovery;
 }
 
 // ── Shelly wizard (admin panel) ──
@@ -258,8 +293,10 @@ export async function probeShelly({ transport = 'lan', ip, mac }) {
     channels.push({ relay_no: relayNo, state: state ? 'on' : 'off' });
   }
   if (channels.length === 0) throw errors.validation('המכשיר נמצא אך לא נמצאו ערוצי מיתוג (Switch).', { ip: 'no_channels' });
+  // Removed devices (is_enabled=false) are transparent here — their UID sits in the
+  // removed_uid stash, so the same hardware can be registered anew.
   const [existing] = await query(
-    'SELECT id FROM devices WHERE device_uid = ? OR (ip_address IS NOT NULL AND ip_address = ?)',
+    'SELECT id FROM devices WHERE is_enabled = TRUE AND (device_uid = ? OR (ip_address IS NOT NULL AND ip_address = ?))',
     [uid, ip || ''],
   );
   return {
@@ -285,7 +322,7 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
   return withTransaction(async (conn) => {
     const [uRows] = await conn.query('SELECT id, max_devices FROM users WHERE id = ? FOR UPDATE', [userId]);
     if (!uRows[0]) throw errors.notFound('NOT_FOUND', 'User not found');
-    const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ?', [userId]);
+    const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_enabled = TRUE', [userId]);
     if (dCount[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'המשתמש הגיע למכסת המכשירים');
     const [taken] = await conn.query(
       'SELECT ivr_digit FROM relays WHERE user_id = ? AND ivr_digit IN (?)',
@@ -327,7 +364,7 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
 
 export async function listAllDevices() {
   return query(
-    `SELECT d.id, d.user_id, u.full_name AS owner_name, d.device_uid, d.name, d.fw_version, d.timezone,
+    `SELECT d.id, d.user_id, u.full_name AS owner_name, d.device_uid, d.removed_uid, d.name, d.fw_version, d.timezone,
             d.relay_count, d.is_online, d.last_seen_at, d.schedule_version, d.device_ack_version,
             d.sync_status, d.sync_error, d.created_at, d.is_enabled
      FROM devices d JOIN users u ON u.id = d.user_id ORDER BY d.id`,

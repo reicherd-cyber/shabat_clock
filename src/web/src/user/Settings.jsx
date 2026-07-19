@@ -16,6 +16,7 @@ export default function Settings() {
   const [deleting, setDeleting] = useState(null); // relay pending removal confirmation
   const [disablingDevice, setDisablingDevice] = useState(null); // device pending "disable all" confirmation
   const [removingDevice, setRemovingDevice] = useState(null); // device pending removal confirmation
+  const [showRemoved, setShowRemoved] = useState(false);
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -94,11 +95,22 @@ export default function Settings() {
     await refresh();
   });
 
-  // Device-level soft remove (is_enabled=false) — never deleted. Once removed it
-  // disappears from this page entirely; only a super-admin can restore it.
+  // Device-level soft remove (is_enabled=false) — never deleted. Everything is kept;
+  // removed devices move to a collapsed section at the bottom, where the owner can
+  // recover them in full. While removed, the device's identity and IVR digits are
+  // stashed server-side; recovery reports anything claimed meanwhile by another device.
   const removeDevice = () => run(async () => {
     await api.patch(`/devices/${removingDevice.id}`, { is_enabled: false });
     setRemovingDevice(null);
+    await refresh();
+  });
+
+  const restoreDevice = (device) => run(async () => {
+    const { recovery } = await api.patch(`/devices/${device.id}`, { is_enabled: true });
+    if (recovery?.lost_digits?.length) {
+      alert('המכשיר שוחזר, אך קודי טלפון אלה נתפסו בינתיים ויש לקבוע חדשים: '
+        + recovery.lost_digits.map((x) => `${x.digit} (${x.relay})`).join(', '));
+    }
     await refresh();
   });
 
@@ -190,7 +202,7 @@ export default function Settings() {
             <Input defaultValue={d.name} onBlur={(e) => e.target.value !== d.name && renameDevice(d, e.target.value)} />
             {d.relays.length > 0 && d.relays.every((r) => !r.is_enabled) && <Badge ok={false}>מושבת</Badge>}
             <Button variant="ghost" className="shrink-0" onClick={() => setDisablingDevice(d)}>השבת הכל</Button>
-            <Button variant="danger" className="shrink-0" onClick={() => setRemovingDevice(d)}>הסר מכשיר</Button>
+            <Button variant="danger" className="shrink-0" onClick={() => setRemovingDevice(d)}>השהה מכשיר</Button>
           </div>
           <div className="space-y-2">
             {d.relays.map((r) => (
@@ -217,6 +229,30 @@ export default function Settings() {
           </div>
         </Card>
       ))}
+
+      {devices.some((d) => !d.is_enabled) && (
+        <Card>
+          <button className="text-sm text-muted underline cursor-pointer" onClick={() => setShowRemoved(!showRemoved)}>
+            {showRemoved ? 'הסתר מכשירים מושהים' : `הצג מכשירים מושהים (${devices.filter((d) => !d.is_enabled).length}) ›`}
+          </button>
+          {showRemoved && (
+            <div className="space-y-2 mt-3">
+              {devices.filter((d) => !d.is_enabled).map((d) => (
+                <div key={d.id} className="flex items-center justify-between gap-2 border border-line rounded-xl px-3 py-2">
+                  <div>
+                    <b>{d.name}</b>
+                    {d.relays.length > 0 && (
+                      <span className="text-muted text-xs mr-2">{d.relays.map((r) => r.name).join(', ')}</span>
+                    )}
+                  </div>
+                  <Button variant="ghost" className="shrink-0" disabled={busy} onClick={() => restoreDevice(d)}>שחזר מכשיר</Button>
+                </div>
+              ))}
+              <p className="text-muted text-xs">שחזור מחזיר את המכשיר במלואו — ממסרים, תזמונים וקודי טלפון.</p>
+            </div>
+          )}
+        </Card>
+      )}
 
       <Modal open={!!phoneForm} onClose={() => setPhoneForm(null)} title={phoneForm?.mode === 'edit' ? 'עריכת מספר טלפון' : 'הוספת מספר טלפון'}>
         {phoneForm && (
@@ -276,16 +312,17 @@ export default function Settings() {
         )}
       </Modal>
 
-      <Modal open={!!removingDevice} onClose={() => setRemovingDevice(null)} title="הסרת מכשיר">
+      <Modal open={!!removingDevice} onClose={() => setRemovingDevice(null)} title="השהיית מכשיר">
         {removingDevice && (
           <div className="space-y-3">
+            <p className="text-off text-sm font-semibold">⚠ אזהרה</p>
             <p className="text-sm">
-              להסיר את המכשיר <b>{removingDevice.name}</b>? המכשיר ייעלם מהעמוד הזה והממסרים שלו לא יגיבו בשיחות טלפון. שחזור המכשיר אפשרי רק על ידי מנהל המערכת.
+              להשהות את המכשיר <b>{removingDevice.name}</b>? המכשיר לא יופיע יותר בלוח הבקרה, התזמונים שלו לא ירוצו והממסרים שלו לא יגיבו בשיחות טלפון. כל ההגדרות נשמרות — ניתן לשחזר את המכשיר במלואו מתחתית עמוד זה בכל עת.
             </p>
             <ErrorNote error={error} />
             <div className="flex gap-2">
               <Button variant="ghost" className="flex-1" onClick={() => setRemovingDevice(null)}>ביטול</Button>
-              <Button variant="danger" className="flex-1" disabled={busy} onClick={removeDevice}>הסר מכשיר</Button>
+              <Button variant="danger" className="flex-1" disabled={busy} onClick={removeDevice}>השהה מכשיר</Button>
             </div>
           </div>
         )}

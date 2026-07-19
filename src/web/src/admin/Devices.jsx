@@ -12,6 +12,7 @@ export default function Devices() {
   const [relayForm, setRelayForm] = useState(null);   // {device, relay_no, name, ivr_digit}
   const [uidForm, setUidForm] = useState(null);       // {device, uid}
   const [shelly, setShelly] = useState(null);         // wizard: {step, ip, user_id, name, probe, relays}
+  const [suspending, setSuspending] = useState(null); // device pending suspension confirmation
   const [showRemoved, setShowRemoved] = useState(false);
   const [fUser, setFUser] = useState('');
   const [fDevice, setFDevice] = useState('');
@@ -46,18 +47,19 @@ export default function Devices() {
     await refresh();
   });
 
-  // Only super-admin can restore a device the owner removed from their own page (requireWrite-gated).
-  const toggleEnabled = (d) => run(async () => {
-    await adminApi.patch(`/devices/${d.id}`, { is_enabled: !d.is_enabled });
-    await refresh();
-  });
-
-  // Frees device_uid/ip_address (and soft-deletes the relays) on a disabled device so
-  // the same physical hardware can be re-registered from scratch — e.g. a device that
-  // was set up under the wrong type and will never come online.
-  const releaseIdentity = (d) => run(async () => {
-    if (!confirm(`לשחרר את הזיהוי של ${d.name} (${d.device_uid})? הממסרים שלו יימחקו-רכות והמכשיר ניתן יהיה לרישום מחדש. הפעולה הפיכה חלקית — המכשיר עצמו נשאר, אך הזיהוי לא יחזור אוטומטית.`)) return;
-    await adminApi.post(`/devices/${d.id}/release-identity`, {});
+  // Suspension is a total-recovery soft flip: everything is kept, but the UID and the
+  // relays' IVR digits move to a stash so the hardware/digits are free for reuse.
+  // Recovery restores them — unless another device claimed them meanwhile, which the
+  // server reports back and we surface here. Suspending goes through a warning modal
+  // (setSuspending); recovery is direct.
+  const setEnabled = (d, is_enabled) => run(async () => {
+    const { recovery } = await adminApi.patch(`/devices/${d.id}`, { is_enabled });
+    if (recovery?.lost_uid || recovery?.lost_digits?.length) {
+      alert(`המכשיר שוחזר, אך חלק מהזיהוי נתפס בינתיים על ידי מכשיר אחר ולא שוחזר:\n`
+        + (recovery.lost_uid ? `• UID: ${recovery.lost_uid}\n` : '')
+        + recovery.lost_digits.map((x) => `• קוד IVR ${x.digit} (${x.relay})`).join('\n'));
+    }
+    setSuspending(null);
     await refresh();
   });
 
@@ -150,7 +152,7 @@ export default function Devices() {
           )}
           {removedCount > 0 && (
             <Button variant="ghost" onClick={() => setShowRemoved(!showRemoved)}>
-              {showRemoved ? 'הסתר מכשירים שהוסרו' : `הצג מכשירים שהוסרו (${removedCount})`}
+              {showRemoved ? 'הסתר מכשירים מושהים' : `הצג מכשירים מושהים (${removedCount})`}
             </Button>
           )}
           <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: users[0]?.id || '', name: '' })}>+ Shelly</Button>
@@ -169,8 +171,10 @@ export default function Devices() {
               <span className="text-muted text-sm">של {d.owner_name}</span>
               {d.device_uid
                 ? <span className="text-muted text-xs" dir="ltr">{d.device_uid}</span>
-                : <Badge ok={false}>ללא UID</Badge>}
-              {!d.is_enabled && <Badge ok={false}>הוסר על ידי המשתמש</Badge>}
+                : d.removed_uid
+                  ? <span className="text-muted text-xs line-through opacity-60" dir="ltr" title="UID שמור בצד — ישוחזר עם המכשיר">{d.removed_uid}</span>
+                  : <Badge ok={false}>ללא UID</Badge>}
+              {!d.is_enabled && <Badge ok={false}>מושהה</Badge>}
             </div>
             <div className="flex items-center gap-2">
               <Badge ok={d.sync_status === 'synced'}>{d.sync_status}</Badge>
@@ -180,14 +184,12 @@ export default function Devices() {
           </div>
           {d.sync_error && <div className="text-off text-sm mt-1">{d.sync_error}</div>}
           <div className="flex gap-2 mt-3 flex-wrap">
-            {!d.device_uid && <Button variant="ghost" onClick={() => setUidForm({ device: d, uid: '' })}>קביעת UID</Button>}
+            {d.is_enabled && !d.device_uid && <Button variant="ghost" onClick={() => setUidForm({ device: d, uid: '' })}>קביעת UID</Button>}
             <Button variant="ghost" onClick={() => setRelayForm({ device: d, relay_no: 1, name: '', ivr_digit: 1 })}>+ ממסר</Button>
             <Button variant="ghost" disabled={busy} onClick={() => rotate(d)}>החלפת סוד</Button>
             {d.is_enabled
-              ? <Button variant="danger" disabled={busy} onClick={() => toggleEnabled(d)}>השבתת מכשיר</Button>
-              : <Button variant="ghost" disabled={busy} onClick={() => toggleEnabled(d)}>שחזר מכשיר</Button>}
-            {!d.is_enabled && d.device_uid &&
-              <Button variant="danger" disabled={busy} onClick={() => releaseIdentity(d)}>שחרור זיהוי (לרישום מחדש)</Button>}
+              ? <Button variant="danger" disabled={busy} onClick={() => setSuspending(d)}>השהיית מכשיר</Button>
+              : <Button variant="ghost" disabled={busy} onClick={() => setEnabled(d, true)}>שחזר מכשיר</Button>}
           </div>
         </Card>
       ))}
@@ -329,6 +331,27 @@ export default function Devices() {
             <p><b>{shelly.name}</b> נוסף בהצלחה (מכשיר מספר {shelly.result.id}, {shelly.result.relays} ממסרים).</p>
             <p className="text-sm text-muted">הממסרים זמינים עכשיו בלוח הבקרה של המשתמש ובתפריט הטלפוני.</p>
             <Button className="w-full" onClick={() => setShelly(null)}>סגור</Button>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!suspending} onClose={() => setSuspending(null)} title="השהיית מכשיר">
+        {suspending && (
+          <div className="space-y-3">
+            <p className="text-off text-sm font-semibold">⚠ אזהרה</p>
+            <p className="text-sm">
+              להשהות את המכשיר <b>{suspending.name}</b>? המכשיר יפסיק להגיב לחלוטין —
+              בלוח הבקרה, בתזמונים ובשיחות טלפון. כל הנתונים נשמרים וניתן לשחזרו מכאן בכל עת.
+            </p>
+            <p className="text-sm text-muted">
+              שימו לב: בזמן ההשהיה הזיהוי (MAC) וקודי הטלפון של הממסרים משתחררים לשימוש חוזר.
+              אם מכשיר אחר יתפוס אותם, הם לא יחזרו בשחזור.
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setSuspending(null)}>ביטול</Button>
+              <Button variant="danger" className="flex-1" disabled={busy} onClick={() => setEnabled(suspending, false)}>השהה מכשיר</Button>
+            </div>
           </div>
         )}
       </Modal>
