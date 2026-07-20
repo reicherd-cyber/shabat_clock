@@ -16,7 +16,7 @@ import { Recordings } from './admin/Recordings.jsx';
 import AdminHistory from './admin/History.jsx';
 import VoiceCosts from './admin/VoiceCosts.jsx';
 import Finance from './admin/Finance.jsx';
-import { Logo } from './ui.jsx';
+import { Logo, Wordmark } from './ui.jsx';
 import {
   LayoutGrid, CalendarClock, CalendarDays, History as HistoryIcon, Settings as SettingsIcon,
   Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
@@ -66,10 +66,10 @@ function UserLayout() {
         </div>
       )}
       <header className="flex items-center justify-between px-6 py-3.5 border-b border-line bg-bg sticky top-0 z-10">
-        <div className="font-serif font-bold text-[21px] flex items-center gap-2 cursor-pointer select-none"
+        <div className="flex items-center gap-2 cursor-pointer select-none"
           onClick={() => nav('/')} role="button" title="לדף הבית">
           <span className="text-accent shrink-0"><Logo size={34} /></span>
-          שעון שבת
+          <Wordmark size={21} tagline />
         </div>
         <nav className="hidden md:flex gap-1 items-center">
           {TABS.map((t) => (
@@ -202,10 +202,10 @@ function AdminLayout() {
   if (!tokens.admin) return <Navigate to="/admin/login" replace />;
 
   const brand = (
-    <div className="font-serif font-bold text-[19px] flex items-center gap-2 cursor-pointer select-none"
+    <div className="font-bold text-[19px] flex items-center gap-2 cursor-pointer select-none"
       onClick={() => { setMenuOpen(false); nav('/admin'); }} role="button" title="לדף הבית">
       <span className="text-accent shrink-0"><Logo size={30} /></span>
-      ניהול — שעון שבת
+      <span className="flex items-center gap-1.5">ניהול · <Wordmark size={19} /></span>
     </div>
   );
   const logout = () => { tokens.admin = null; nav('/admin/login'); };
@@ -216,7 +216,7 @@ function AdminLayout() {
       <aside className={`hidden md:flex flex-col shrink-0 border-l border-line bg-surface sticky top-0 h-screen overflow-y-auto py-4 gap-5 transition-all duration-200 ${collapsed ? 'w-14 px-2 items-center' : 'w-56 px-3'}`}>
         {collapsed ? (
           <span className="text-accent cursor-pointer select-none"
-            onClick={() => nav('/admin')} role="button" title="ניהול — שעון שבת"><Logo size={30} /></span>
+            onClick={() => nav('/admin')} role="button" title="ניהול — TelTech"><Logo size={30} /></span>
         ) : brand}
         <button
           className="text-muted hover:text-ink cursor-pointer text-lg leading-none self-start px-1"

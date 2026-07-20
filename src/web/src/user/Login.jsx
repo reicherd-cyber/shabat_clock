@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { publicApi, tokens } from '../api.js';
-import { Card, Button, Input, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, Input, ErrorNote, useAsync, Logo, Wordmark } from '../ui.jsx';
 import GoogleButton from '../GoogleButton.jsx';
 
 // Phone → OTP (Yemot outbound call reads the code) — no passwords to forget (PLAN §3).
@@ -35,18 +35,18 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <Card className="max-w-sm w-full">
-        <h1 className="text-2xl font-bold mb-1">שעון שבת</h1>
-        <p className="text-muted mb-4">כניסה לאזור האישי</p>
+        <h1 className="mb-1 flex items-center gap-2.5">
+          <span className="text-accent"><Logo size={34} /></span>
+          <Wordmark size={26} tagline />
+        </h1>
+        <p className="text-muted mb-4 mt-2">כניסה לאזור האישי</p>
         <ErrorNote error={error} />
         {stage === 'phone' ? (
           <div className="space-y-3">
             <Input type="tel" dir="ltr" placeholder="מספר טלפון" value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && requestCode('call')} />
-            <Button className="w-full" disabled={busy || phone.length < 9} onClick={() => requestCode('call')}>
-              שלחו לי קוד בשיחה
-            </Button>
-            <Button variant="ghost" className="w-full" disabled={busy || phone.length < 9} onClick={() => requestCode('email')}>
+              onKeyDown={(e) => e.key === 'Enter' && requestCode('email')} />
+            <Button className="w-full" disabled={busy || phone.length < 9} onClick={() => requestCode('email')}>
               שלחו קוד לאימייל
             </Button>
             <div className={busy ? 'opacity-50 pointer-events-none' : ''}>

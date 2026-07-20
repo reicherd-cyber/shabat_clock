@@ -80,6 +80,18 @@ export const Logo = ({ size = 20 }) => (
   </svg>
 );
 
+// The TelTech wordmark from the brand lockup: "Tel" in brand ink, "Tech" in
+// accent blue, optional "בית כשר חכם" tagline beneath.
+export const Wordmark = ({ size = 21, tagline = false }) => (
+  <span className="inline-flex flex-col leading-none font-sans">
+    <b dir="ltr" style={{ fontSize: size }}>
+      <span style={{ color: '#1B2140' }}>Tel</span>
+      <span style={{ color: '#1877F2' }}>Tech</span>
+    </b>
+    {tagline && <span className="text-muted font-normal text-[11px] mt-1">בית כשר חכם</span>}
+  </span>
+);
+
 export const OnlineDot = ({ online }) => (
   <span className={`inline-block w-2.5 h-2.5 rounded-full ${online ? 'bg-on' : 'bg-off'}`} title={online ? 'מחובר' : 'מנותק'} />
 );

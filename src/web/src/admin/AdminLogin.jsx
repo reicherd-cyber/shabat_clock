@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { publicApi, tokens } from '../api.js';
-import { Card, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, ErrorNote, useAsync, Wordmark } from '../ui.jsx';
 import GoogleButton from '../GoogleButton.jsx';
 
 // Google-only admin login — Google's own 2-Step Verification is the second factor,
@@ -19,7 +19,7 @@ export default function AdminLogin() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <Card className="max-w-sm w-full">
-        <h1 className="text-2xl font-bold mb-1">ניהול — שעון שבת</h1>
+        <h1 className="text-2xl font-bold mb-1 flex items-center gap-2">ניהול · <Wordmark size={24} /></h1>
         <p className="text-muted mb-4">כניסה עם חשבון Google מורשה בלבד</p>
         <ErrorNote error={error} />
         <div className={busy ? 'opacity-50 pointer-events-none' : ''}>
