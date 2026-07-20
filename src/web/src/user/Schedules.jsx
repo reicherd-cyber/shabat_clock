@@ -24,7 +24,7 @@ const ANCHOR_NAMES = {
 // Shabbatot server-side so a חג touching שבת becomes one ON→OFF block.
 const HOLIDAY_NAMES = {
   shabbat: 'כל שבת', rosh_hashana: 'ראש השנה', yom_kippur: 'יום כיפור',
-  sukkot: 'סוכות', shemini_atzeret: 'שמיני עצרת',
+  sukkot: 'סוכות (חג ראשון)', shemini_atzeret: 'שמיני עצרת',
   pesach_1: 'פסח (יו״ט ראשון)', pesach_7: 'שביעי של פסח', shavuot: 'שבועות',
 };
 const ALL_HOLIDAYS = Object.keys(HOLIDAY_NAMES);
@@ -266,8 +266,8 @@ export default function Schedules() {
           <div className="space-y-3">
             <p>
               התזמון של <b>{convert.relay_name}</b> יהפוך לתזמון <b>שבת וחגים</b>: אותם זמני
-              הדלקה וכיבוי יחולו גם בערבי חג ובמוצאי חג (ראש השנה, יום כיפור, סוכות, שמיני
-              עצרת, פסח, שביעי של פסח ושבועות).
+              הדלקה וכיבוי יחולו גם בערבי חג ובמוצאי חג (ראש השנה, יום כיפור, חג ראשון של
+              סוכות, שמיני עצרת, פסח, שביעי של פסח ושבועות).
             </p>
             <p className="text-muted text-sm">
               חג שצמוד לשבת ממוזג לרצף אחד — הדלקה בכניסה וכיבוי רק ביציאה הסופית, בלי כיבוי באמצע.
