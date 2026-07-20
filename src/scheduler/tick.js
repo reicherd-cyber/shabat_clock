@@ -8,6 +8,8 @@ import { bumpDevices } from '../services/schedules.js';
 import { withTransaction } from '../db/pool.js';
 import { publishCommand, waitForAck, pushScheduleToDevice } from '../mqtt/client.js';
 import { ACK_TIMEOUT_MS, BACKUP_GRACE_MIN, RETRY_WINDOW_MIN, RECONCILE_WINDOW_H } from '../config/constants.js';
+import { freshTimesFor } from '../services/zmanim.js';
+import { freshHolidayFor } from '../services/holidays.js';
 
 const floorMinute = (d) => new Date(Math.floor(d.getTime() / 60000) * 60000);
 
@@ -268,12 +270,63 @@ export async function startupScan(now = new Date()) {
   }
 }
 
+// Halachic anchors + holiday blocks: stored on_time/off_time (and for holiday
+// schedules on_date/off_date) hold the resolved NEXT occurrence; re-resolve once
+// per local day and re-push devices whose values moved. Zmanim events can never
+// land near midnight (offsets are capped), so a post-00:05 refresh cannot
+// collide with the backup windows above.
+async function refreshAnchoredTimes(now = new Date()) {
+  const rows = await query(
+    `SELECT s.id, s.repeat_type, s.holidays,
+            DATE_FORMAT(s.on_date,'%Y-%m-%d') AS on_date, DATE_FORMAT(s.off_date,'%Y-%m-%d') AS off_date,
+            s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
+            s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,
+            r.device_id, d.timezone, u.zmanim_region
+     FROM schedules s
+     JOIN relays r ON r.id = s.relay_id
+     JOIN devices d ON d.id = r.device_id
+     LEFT JOIN users u ON u.id = s.user_id
+     WHERE s.is_enabled = TRUE AND s.deleted_at IS NULL
+       AND (s.on_anchor <> 'clock' OR s.off_anchor <> 'clock' OR s.repeat_type = 'holiday')`,
+  );
+  const deviceIds = new Set();
+  for (const row of rows) {
+    if (row.repeat_type === 'holiday') {
+      const fresh = freshHolidayFor(row, now);
+      if ((fresh.on_time ?? null) === (row.on_time ?? null) && (fresh.off_time ?? null) === (row.off_time ?? null)
+        && (fresh.on_date ?? null) === (row.on_date ?? null) && (fresh.off_date ?? null) === (row.off_date ?? null)) continue;
+      await query('UPDATE schedules SET on_date = ?, on_time = ?, off_date = ?, off_time = ? WHERE id = ?',
+        [fresh.on_date, fresh.on_time, fresh.off_date, fresh.off_time, row.id]);
+    } else {
+      const fresh = freshTimesFor(row, now);
+      if ((fresh.on_time ?? null) === (row.on_time ?? null) && (fresh.off_time ?? null) === (row.off_time ?? null)) continue;
+      await query('UPDATE schedules SET on_time = ?, off_time = ? WHERE id = ?', [fresh.on_time, fresh.off_time, row.id]);
+    }
+    deviceIds.add(Number(row.device_id));
+  }
+  if (!deviceIds.size) return;
+  const ids = [...deviceIds];
+  await withTransaction(async (conn) => { await bumpDevices(conn, ids); });
+  for (const id of ids) pushScheduleToDevice(id).catch(() => {});
+}
+
 let timer = null;
+let lastZmanimDay = null;
 export function startScheduler() {
   if (timer) return;
   startupScan().catch((e) => console.error('startup scan:', e));
   const loop = async () => {
     try { await tick(); } catch (e) { console.error('scheduler tick:', e); }
+    try {
+      const p = localParts(new Date(), 'Asia/Jerusalem');
+      const day = `${p.y}-${p.mo}-${p.d}`;
+      // Wait out the first minutes after midnight so the pre-midnight backup
+      // windows close against the old times before we move them.
+      if (day !== lastZmanimDay && !(p.hh === 0 && p.mm < 5)) {
+        await refreshAnchoredTimes();
+        lastZmanimDay = day;
+      }
+    } catch (e) { console.error('zmanim refresh:', e); }
   };
   // Align to the minute boundary, then every 60s.
   const msToMinute = 60000 - (Date.now() % 60000);

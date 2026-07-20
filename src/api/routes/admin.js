@@ -425,9 +425,11 @@ adminRouter.post('/schedules', requireWrite, async (req, res, next) => {
     const result = await createSchedule({
       userId: null, actingUserId: null,
       relayId: Number(b.relay_id), createdVia: 'admin',
-      repeat_type: b.repeat_type || 'weekly',
+      repeat_type: b.repeat_type || 'weekly', holidays: b.holidays ?? null,
       on_day_of_week: b.on_day_of_week ?? null, on_time: b.on_time,
+      on_anchor: b.on_anchor ?? 'clock', on_offset_min: b.on_offset_min ?? 0,
       off_day_of_week: b.off_day_of_week ?? null, off_time: b.off_time,
+      off_anchor: b.off_anchor ?? 'clock', off_offset_min: b.off_offset_min ?? 0,
       on_date: b.on_date ?? null, off_date: b.off_date ?? null,
     });
     await audit(req, 'create', 'schedule', result.id, { after: b });

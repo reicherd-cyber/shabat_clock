@@ -4,6 +4,14 @@ import { ApiError, errors } from '../config/errors.js';
 import { query, withTransaction } from '../db/pool.js';
 import { MINUTES_PER_WEEK, MINUTES_PER_DAY } from '../config/constants.js';
 import { timeToMinutes, localParts, wallToUtc } from './time.js';
+import { resolveScheduleAnchors, DEFAULT_REGION } from './zmanim.js';
+import { resolveHolidaySchedule } from './holidays.js';
+
+// Holiday schedules resolve their next-block dates+times; other types resolve
+// anchored sides only. Both mutate in place and validate anchor fields.
+function resolveSchedule(s, opts) {
+  return s.repeat_type === 'holiday' ? resolveHolidaySchedule(s, opts) : resolveScheduleAnchors(s, opts);
+}
 
 const mod = (n, m) => ((n % m) + m) % m;
 
@@ -45,6 +53,24 @@ export function validateScheduleRules(schedule, { tz = 'Asia/Jerusalem', now = n
     if (firstKey <= nowLocalKey) {
       throw new ApiError(400, 'ALREADY_PAST', `${hasOn ? 'ON' : 'OFF'} time is in the past`);
     }
+  } else if (s.repeat_type === 'holiday') {
+    // Sides arrive with the resolved next-block dates+times from the holiday
+    // resolver (entry is always strictly before exit — no ordering to check).
+    const hasOn = Boolean(s.on_time);
+    const hasOff = Boolean(s.off_time);
+    if (!hasOn && !hasOff) {
+      throw errors.validation('holiday needs an ON and/or OFF side', { on_time: 'required', off_time: 'required' });
+    }
+    if (hasOn && (onMin == null || onMin >= MINUTES_PER_DAY || !s.on_date)) {
+      throw errors.validation('ON side needs on_date and on_time HH:MM', { on_date: 'required', on_time: 'HH:MM' });
+    }
+    if (hasOff && (offMin == null || offMin >= MINUTES_PER_DAY || !s.off_date)) {
+      throw errors.validation('OFF side needs off_date and off_time HH:MM', { off_date: 'required', off_time: 'HH:MM' });
+    }
+    s.on_day_of_week = null;
+    s.off_day_of_week = null;
+    if (!hasOn) { s.on_time = null; s.on_date = null; }
+    if (!hasOff) { s.off_time = null; s.off_date = null; }
   } else {
     s.repeat_type = 'weekly';
     if (s.on_date || s.off_date) {
@@ -123,17 +149,28 @@ async function pushAfterCommit(deviceIds) {
   }
 }
 
+async function regionOf(conn, userId) {
+  const [rows] = await conn.query('SELECT zmanim_region FROM users WHERE id = ?', [userId]);
+  return rows[0]?.zmanim_region || DEFAULT_REGION;
+}
+
 export async function createSchedule({ userId, relayId, createdVia, actingUserId = userId, ...fields }) {
   const deviceIds = [];
   const result = await withTransaction(async (conn) => {
     const relay = await requireRelay(conn, relayId, actingUserId);
+    // Anchored sides (sunset±offset…) and holiday blocks resolve to concrete wall
+    // times/dates first, so the clock-time rules below apply unchanged.
+    resolveSchedule(fields, { region: await regionOf(conn, relay.user_id), tz: relay.timezone });
     const s = validateScheduleRules(fields, { tz: relay.timezone });
     const res = await conn.query(
-      `INSERT INTO schedules (user_id, relay_id, on_day_of_week, on_time, off_day_of_week, off_time,
-        repeat_type, on_date, off_date, is_enabled, created_via)
-       VALUES (?,?,?,?,?,?,?,?,?,TRUE,?)`,
-      [relay.user_id, relayId, s.on_day_of_week, s.on_time, s.off_day_of_week, s.off_time,
-        s.repeat_type, s.on_date ?? null, s.off_date ?? null, createdVia],
+      `INSERT INTO schedules (user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
+        off_day_of_week, off_time, off_anchor, off_offset_min,
+        repeat_type, holidays, on_date, off_date, is_enabled, created_via)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?)`,
+      [relay.user_id, relayId, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
+        s.off_day_of_week, s.off_time, s.off_anchor, s.off_offset_min,
+        s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
+        s.on_date ?? null, s.off_date ?? null, createdVia],
     );
     deviceIds.push(relay.device_id);
     await bumpDevices(conn, deviceIds);
@@ -158,20 +195,31 @@ export async function updateSchedule({ userId, scheduleId, patch }) {
     const merged = {
       on_day_of_week: patch.on_day_of_week !== undefined ? patch.on_day_of_week : existing.on_day_of_week,
       on_time: patch.on_time !== undefined ? patch.on_time : (existing.on_time != null ? String(existing.on_time) : null),
+      on_anchor: patch.on_anchor !== undefined ? patch.on_anchor : existing.on_anchor,
+      on_offset_min: patch.on_offset_min !== undefined ? patch.on_offset_min : existing.on_offset_min,
       off_day_of_week: patch.off_day_of_week !== undefined ? patch.off_day_of_week : existing.off_day_of_week,
       off_time: patch.off_time !== undefined ? patch.off_time : (existing.off_time != null ? String(existing.off_time) : null),
+      off_anchor: patch.off_anchor !== undefined ? patch.off_anchor : existing.off_anchor,
+      off_offset_min: patch.off_offset_min !== undefined ? patch.off_offset_min : existing.off_offset_min,
       repeat_type: patch.repeat_type !== undefined ? patch.repeat_type : existing.repeat_type,
+      holidays: patch.holidays !== undefined ? patch.holidays : existing.holidays,
       on_date: patch.on_date !== undefined ? patch.on_date : (existing.on_date ? ymdOf(existing.on_date) : null),
       off_date: patch.off_date !== undefined ? patch.off_date : (existing.off_date ? ymdOf(existing.off_date) : null),
     };
     const onlyToggle = Object.keys(patch).every((k) => k === 'is_enabled');
+    if (!onlyToggle) {
+      resolveSchedule(merged, { region: await regionOf(conn, existing.user_id), tz: existing.timezone });
+    }
     const s = onlyToggle ? merged : validateScheduleRules(merged, { tz: existing.timezone });
     const is_enabled = patch.is_enabled !== undefined ? (patch.is_enabled ? 1 : 0) : existing.is_enabled;
 
     await conn.query(
-      `UPDATE schedules SET on_day_of_week=?, on_time=?, off_day_of_week=?, off_time=?,
-        repeat_type=?, on_date=?, off_date=?, is_enabled=? WHERE id = ?`,
-      [s.on_day_of_week, s.on_time, s.off_day_of_week, s.off_time, s.repeat_type,
+      `UPDATE schedules SET on_day_of_week=?, on_time=?, on_anchor=?, on_offset_min=?,
+        off_day_of_week=?, off_time=?, off_anchor=?, off_offset_min=?,
+        repeat_type=?, holidays=?, on_date=?, off_date=?, is_enabled=? WHERE id = ?`,
+      [s.on_day_of_week, s.on_time, s.on_anchor ?? 'clock', s.on_offset_min ?? 0,
+        s.off_day_of_week, s.off_time, s.off_anchor ?? 'clock', s.off_offset_min ?? 0,
+        s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
         s.on_date ?? null, s.off_date ?? null, is_enabled, scheduleId],
     );
     deviceIds.push(existing.device_id);
@@ -201,9 +249,9 @@ export async function listSchedules({ userId }) {
   return query(
     `SELECT s.id, s.relay_id, r.name AS relay_name, d.id AS device_id, d.name AS device_name, d.sync_status,
             s.user_id, u.full_name AS user_name,
-            s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time,
-            s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time,
-            s.repeat_type, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
+            s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
+            s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,
+            s.repeat_type, s.holidays, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
      JOIN devices d ON d.id = r.device_id

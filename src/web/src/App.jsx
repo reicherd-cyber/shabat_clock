@@ -4,6 +4,7 @@ import { api, tokens } from './api.js';
 import Login from './user/Login.jsx';
 import Dashboard from './user/Dashboard.jsx';
 import Schedules from './user/Schedules.jsx';
+import Calendar from './user/Calendar.jsx';
 import History from './user/History.jsx';
 import Settings from './user/Settings.jsx';
 import AdminLogin from './admin/AdminLogin.jsx';
@@ -17,7 +18,7 @@ import VoiceCosts from './admin/VoiceCosts.jsx';
 import Finance from './admin/Finance.jsx';
 import { Logo } from './ui.jsx';
 import {
-  LayoutGrid, CalendarClock, History as HistoryIcon, Settings as SettingsIcon,
+  LayoutGrid, CalendarClock, CalendarDays, History as HistoryIcon, Settings as SettingsIcon,
   Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
   ShieldCheck, ScrollText, ChevronDown, AudioLines,
 } from 'lucide-react';
@@ -34,6 +35,7 @@ function tokenPayload(t) {
 const TABS = [
   { to: '/', label: 'דשבורד', Icon: LayoutGrid, end: true },
   { to: '/schedules', label: 'תזמונים', Icon: CalendarClock },
+  { to: '/calendar', label: 'לוח', Icon: CalendarDays },
   { to: '/history', label: 'היסטוריה', Icon: HistoryIcon },
   { to: '/settings', label: 'הגדרות', Icon: SettingsIcon },
 ];
@@ -267,6 +269,7 @@ export default function App() {
         <Route element={<UserLayout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/schedules" element={<Schedules />} />
+          <Route path="/calendar" element={<Calendar />} />
           <Route path="/history" element={<History />} />
           <Route path="/settings" element={<Settings />} />
         </Route>

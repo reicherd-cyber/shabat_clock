@@ -40,7 +40,7 @@ export async function createUser({ full_name, pin, require_pin = false, max_devi
 
 export async function getUser(id) {
   const rows = await query(
-    'SELECT id, full_name, ivr_code, require_pin, status, max_devices, language, notes, email, created_at FROM users WHERE id = ?',
+    'SELECT id, full_name, ivr_code, require_pin, status, max_devices, language, zmanim_region, notes, email, created_at FROM users WHERE id = ?',
     [id],
   );
   return rows[0] || null;

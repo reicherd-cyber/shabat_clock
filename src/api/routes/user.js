@@ -12,6 +12,9 @@ import { sendImmediateCommand } from '../../services/commands.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { getHistory } from '../../services/history.js';
 import { auditLog } from '../../services/audit.js';
+import { REGIONS } from '../../services/zmanim.js';
+import { calendarEvents } from '../../services/calendar.js';
+import { localParts } from '../../services/time.js';
 
 export const userRouter = Router();
 userRouter.use(requireUser);
@@ -45,6 +48,11 @@ userRouter.patch('/me', async (req, res, next) => {
       fields.full_name = full_name;
     }
     if (req.body?.email !== undefined) fields.email = normalizeEmail(req.body.email);
+    if (req.body?.zmanim_region !== undefined) {
+      const region = String(req.body.zmanim_region);
+      if (!REGIONS[region]) throw errors.validation('unknown region', { zmanim_region: Object.keys(REGIONS).join('|') });
+      fields.zmanim_region = region;
+    }
     if (!Object.keys(fields).length) throw errors.validation('nothing to update');
     await query(
       `UPDATE users SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
@@ -213,15 +221,28 @@ userRouter.get('/schedules', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// לוח: projected on/off events over a date range (default: 6 weeks from today).
+userRouter.get('/schedules/calendar', async (req, res, next) => {
+  try {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(req.query.from || ''));
+    const p = localParts(new Date(), 'Asia/Jerusalem');
+    const from = m ? { y: +m[1], mo: +m[2], d: +m[3] } : { y: p.y, mo: p.mo, d: p.d };
+    const days = Math.min(Math.max(Number(req.query.days) || 42, 1), 92);
+    res.json({ from, days, events: await calendarEvents({ userId: req.auth.userId, from, days }) });
+  } catch (e) { next(e); }
+});
+
 userRouter.post('/schedules', async (req, res, next) => {
   try {
     const b = req.body || {};
     const result = await createSchedule({
       userId: req.auth.userId, actingUserId: req.auth.userId,
       relayId: Number(b.relay_id), createdVia: 'web',
-      repeat_type: b.repeat_type || 'weekly',
+      repeat_type: b.repeat_type || 'weekly', holidays: b.holidays ?? null,
       on_day_of_week: b.on_day_of_week ?? null, on_time: b.on_time,
+      on_anchor: b.on_anchor ?? 'clock', on_offset_min: b.on_offset_min ?? 0,
       off_day_of_week: b.off_day_of_week ?? null, off_time: b.off_time,
+      off_anchor: b.off_anchor ?? 'clock', off_offset_min: b.off_offset_min ?? 0,
       on_date: b.on_date ?? null, off_date: b.off_date ?? null,
     });
     await auditImp(req, 'create', 'schedule', result.id, { after: b });
