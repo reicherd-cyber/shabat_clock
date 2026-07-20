@@ -53,7 +53,7 @@ async function buildQr({ device_uid, secret, relay_count }) {
   return dataUrl.split(',')[1]; // base64 png
 }
 
-export async function provisionDevice({ user_id, name, relay_count, device_uid = null, timezone = 'Asia/Jerusalem' }) {
+export async function provisionDevice({ user_id, name, relay_count, device_uid = null, timezone = 'Asia/Jerusalem', actor = null }) {
   const rc = Number(relay_count);
   if (!Number.isInteger(rc) || rc < 1 || rc > 20) throw errors.validation('relay_count must be 1–20', { relay_count: '1-20' });
   const uid = device_uid ? normalizeUid(device_uid) : null;
@@ -67,9 +67,9 @@ export async function provisionDevice({ user_id, name, relay_count, device_uid =
     const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_enabled = TRUE', [user_id]);
     if (dCount[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'User device limit reached');
     const [res] = await conn.query(
-      `INSERT INTO devices (user_id, device_uid, name, mqtt_secret_hash, mqtt_passwd_hash, timezone, relay_count)
-       VALUES (?,?,?,?,?,?,?)`,
-      [user_id, uid, name, bcryptHash(secret), passwdHash, timezone, rc],
+      `INSERT INTO devices (user_id, device_uid, name, mqtt_secret_hash, mqtt_passwd_hash, timezone, relay_count, created_by)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [user_id, uid, name, bcryptHash(secret), passwdHash, timezone, rc, actor],
     );
     return { id: res.insertId };
   });
@@ -181,7 +181,7 @@ async function recoverRemovedDevice(conn, device) {
 // (the user panel's rename + remove/restore use case) — admin callers omit it for full access.
 // is_enabled transitions stash/recover the device's identity (see stashRemovedDevice);
 // returns the recovery report when a device was recovered, undefined otherwise.
-export async function patchDevice(deviceId, patch, { userId = null } = {}) {
+export async function patchDevice(deviceId, patch, { userId = null, actor = null } = {}) {
   let recovery;
   let passwdEntry = null;
   await withTransaction(async (conn) => {
@@ -204,8 +204,9 @@ export async function patchDevice(deviceId, patch, { userId = null } = {}) {
 
     if (userId != null) {
       if (Object.keys(fields).length) {
+        fields.updated_by = actor;
         const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
-        await conn.query(`UPDATE devices SET ${sets} WHERE id = ?`, [...Object.values(fields), deviceId]);
+        await conn.query(`UPDATE devices SET ${sets}, updated_at = UTC_TIMESTAMP() WHERE id = ?`, [...Object.values(fields), deviceId]);
       }
       await applyEnabledTransition();
       return;
@@ -244,8 +245,9 @@ export async function patchDevice(deviceId, patch, { userId = null } = {}) {
     }
 
     if (Object.keys(fields).length) {
+      fields.updated_by = actor;
       const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
-      await conn.query(`UPDATE devices SET ${sets} WHERE id = ?`, [...Object.values(fields), deviceId]);
+      await conn.query(`UPDATE devices SET ${sets}, updated_at = UTC_TIMESTAMP() WHERE id = ?`, [...Object.values(fields), deviceId]);
     }
     await applyEnabledTransition();
     // Setting the UID creates the broker passwd entry [D31].
@@ -310,7 +312,7 @@ export async function probeShelly({ transport = 'lan', ip, mac }) {
 }
 
 // Register a probed Shelly as a device + its relays for a user. relays: [{relay_no, name, ivr_digit}].
-export async function registerShellyDevice({ userId, transport = 'lan', ip, mac, name, relays }) {
+export async function registerShellyDevice({ userId, transport = 'lan', ip, mac, name, relays, actor = null }) {
   const probe = await probeShelly({ transport, ip, mac }); // re-verify live + get fresh states
   if (probe.already_registered_as) throw errors.conflict('CONFLICT', `מכשיר זה כבר רשום (מספר ${probe.already_registered_as})`);
   const wanted = (relays || []).filter((r) => probe.channels.some((c) => c.relay_no === Number(r.relay_no)));
@@ -336,17 +338,17 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     const [d] = await conn.query(
       `INSERT INTO devices
          (user_id, device_uid, device_type, transport, ip_address, name,
-          mqtt_secret_hash, mqtt_passwd_hash, relay_count, is_online, fw_version, sync_status)
-       VALUES (?,?, 'shelly', ?,?,?, '', '', ?, TRUE, ?, 'synced')`,
+          mqtt_secret_hash, mqtt_passwd_hash, relay_count, is_online, fw_version, sync_status, created_by)
+       VALUES (?,?, 'shelly', ?,?,?, '', '', ?, TRUE, ?, 'synced', ?)`,
       [userId, probe.mac, transport, transport === 'lan' ? ip : null,
-        name || `Shelly (${probe.model})`, probe.channels.length, probe.fw_version],
+        name || `Shelly (${probe.model})`, probe.channels.length, probe.fw_version, actor ?? null],
     );
     for (const r of wanted) {
       const live = probe.channels.find((c) => c.relay_no === Number(r.relay_no));
       await conn.query(
-        `INSERT INTO relays (device_id, user_id, relay_no, name, ivr_digit, current_state, state_updated_at, sort_order)
-         VALUES (?,?,?,?,?,?, UTC_TIMESTAMP(), ?)`,
-        [d.insertId, userId, Number(r.relay_no), r.name || `ערוץ ${r.relay_no}`, Number(r.ivr_digit), live.state, Number(r.relay_no)],
+        `INSERT INTO relays (device_id, user_id, relay_no, name, ivr_digit, current_state, state_updated_at, sort_order, created_by)
+         VALUES (?,?,?,?,?,?, UTC_TIMESTAMP(), ?, ?)`,
+        [d.insertId, userId, Number(r.relay_no), r.name || `ערוץ ${r.relay_no}`, Number(r.ivr_digit), live.state, Number(r.relay_no), actor ?? null],
       );
     }
     return { id: d.insertId, relays: wanted.length };

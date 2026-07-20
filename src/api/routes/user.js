@@ -11,7 +11,7 @@ import { patchDevice } from '../../services/devices.js';
 import { sendImmediateCommand } from '../../services/commands.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { getHistory } from '../../services/history.js';
-import { auditLog } from '../../services/audit.js';
+import { logAction, actorStr } from '../../services/audit.js';
 import { REGIONS } from '../../services/zmanim.js';
 import { calendarEvents } from '../../services/calendar.js';
 import { localParts } from '../../services/time.js';
@@ -19,10 +19,12 @@ import { localParts } from '../../services/time.js';
 export const userRouter = Router();
 userRouter.use(requireUser);
 
-// Impersonation writes are audit-logged against the admin [D14].
-async function auditImp(req, action, entity, entityId, diff = null) {
-  if (req.auth.imp) await auditLog(req.auth.imp, action, entity, entityId, diff);
-}
+// Every mutation lands in the action log. When an admin impersonates, the action
+// is attributed to the ADMIN [D14]; otherwise to the user themself.
+const actorOf = (req) => (req.auth.imp
+  ? { type: 'admin', id: req.auth.imp }
+  : { type: 'user', id: req.auth.userId });
+const act = (req, action, entity, entityId, diff = null) => logAction(actorOf(req), action, entity, entityId, diff);
 
 userRouter.get('/me', async (req, res, next) => {
   try {
@@ -54,11 +56,12 @@ userRouter.patch('/me', async (req, res, next) => {
       fields.zmanim_region = region;
     }
     if (!Object.keys(fields).length) throw errors.validation('nothing to update');
+    fields.updated_by = actorStr(actorOf(req));
     await query(
       `UPDATE users SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
       [...Object.values(fields), req.auth.userId],
     );
-    await auditImp(req, 'update', 'user', req.auth.userId, { after: fields });
+    await act(req, 'update', 'user', req.auth.userId, { after: fields });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -68,8 +71,8 @@ userRouter.post('/me/pin', async (req, res, next) => {
     const { old_pin, new_pin } = req.body || {};
     const [user] = await query('SELECT * FROM users WHERE id = ?', [req.auth.userId]);
     if (!verifyPin(user, String(old_pin || ''))) throw errors.unauthenticated('Wrong PIN');
-    await setPin(req.auth.userId, new_pin);
-    await auditImp(req, 'pin_reset', 'user', req.auth.userId);
+    await setPin(req.auth.userId, new_pin, actorStr(actorOf(req)));
+    await act(req, 'pin_reset', 'user', req.auth.userId);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -96,12 +99,13 @@ userRouter.post('/me/phones', async (req, res, next) => {
     const phone = normalizePhone(req.body?.phone);
     if (!isValidIsraeliPhone(phone)) throw errors.validation('Invalid phone', { phone: 'invalid' });
     const result = await query(
-      'INSERT INTO user_phones (user_id, phone, label, verified_at) VALUES (?,?,?,NULL)',
-      [req.auth.userId, phone, req.body?.label ?? null],
+      'INSERT INTO user_phones (user_id, phone, label, verified_at, created_by) VALUES (?,?,?,NULL,?)',
+      [req.auth.userId, phone, req.body?.label ?? null, actorStr(actorOf(req))],
     ).catch((e) => {
       if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', 'Phone already registered');
       throw e;
     });
+    await act(req, 'create', 'user_phone', result.insertId, { after: { phone } });
     // OTP call TO THE NEW NUMBER; code bound to this pending row, not just the string.
     await requestOtp({ phone, purpose: 'phone_add', userPhoneId: result.insertId });
     res.json({ id: result.insertId, verified: false });
@@ -121,12 +125,13 @@ userRouter.patch('/me/phones/:id', async (req, res, next) => {
     );
     if (!row) throw errors.notFound();
     await query(
-      'UPDATE user_phones SET phone = ?, verified_at = NULL WHERE id = ?',
-      [phone, row.id],
+      'UPDATE user_phones SET phone = ?, verified_at = NULL, updated_by = ? WHERE id = ?',
+      [phone, actorStr(actorOf(req)), row.id],
     ).catch((e) => {
       if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', 'Phone already registered');
       throw e;
     });
+    await act(req, 'update', 'user_phone', row.id, { before: { phone: row.phone }, after: { phone } });
     await requestOtp({ phone, purpose: 'phone_add', userPhoneId: row.id });
     res.json({ id: row.id, verified: false });
   } catch (e) { next(e); }
@@ -137,7 +142,8 @@ userRouter.post('/me/phones/:id/verify', async (req, res, next) => {
     const [row] = await query('SELECT * FROM user_phones WHERE id = ? AND user_id = ?', [req.params.id, req.auth.userId]);
     if (!row) throw errors.notFound();
     await verifyOtp({ phone: row.phone, code: String(req.body?.code || ''), purpose: 'phone_add', userPhoneId: row.id });
-    await query('UPDATE user_phones SET verified_at = UTC_TIMESTAMP() WHERE id = ?', [row.id]);
+    await query('UPDATE user_phones SET verified_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?', [actorStr(actorOf(req)), row.id]);
+    await act(req, 'verify', 'user_phone', row.id);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -157,8 +163,9 @@ userRouter.delete('/me/phones/:id', async (req, res, next) => {
         [req.auth.userId, req.params.id],
       );
       if (rows[0].verified_at && verified[0].n === 0) throw errors.conflict('LAST_PHONE', 'Cannot remove the last verified phone');
-      await conn.query('UPDATE user_phones SET deleted_at = UTC_TIMESTAMP() WHERE id = ?', [req.params.id]);
+      await conn.query('UPDATE user_phones SET deleted_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?', [actorStr(actorOf(req)), req.params.id]);
     });
+    await act(req, 'delete', 'user_phone', Number(req.params.id));
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -179,8 +186,8 @@ userRouter.patch('/devices/:id', async (req, res, next) => {
     const patch = {};
     if (req.body?.name !== undefined) patch.name = req.body.name;
     if (req.body?.is_enabled !== undefined) patch.is_enabled = req.body.is_enabled;
-    const recovery = await patchDevice(Number(req.params.id), patch, { userId: req.auth.userId });
-    await auditImp(req, 'update', 'device', Number(req.params.id), { after: patch });
+    const recovery = await patchDevice(Number(req.params.id), patch, { userId: req.auth.userId, actor: actorStr(actorOf(req)) });
+    await act(req, 'update', 'device', Number(req.params.id), { after: patch });
     res.json({ ok: true, recovery });
   } catch (e) { next(e); }
 });
@@ -196,7 +203,7 @@ userRouter.post('/relays/:id/command', async (req, res, next) => {
     const action = req.body?.action;
     if (!['on', 'off'].includes(action)) throw errors.validation('action must be on|off', { action: 'on|off' });
     const result = await sendImmediateCommand({ relayId: relay.id, action, source: 'web' });
-    await auditImp(req, 'command', 'relay', relay.id, { after: { action, status: result.status } });
+    await act(req, 'command', 'relay', relay.id, { after: { action, status: result.status } });
     res.json(result);
   } catch (e) { next(e); }
 });
@@ -208,8 +215,9 @@ userRouter.patch('/relays/:id', async (req, res, next) => {
       relayId: Number(req.params.id),
       patch: req.body || {},
       force: req.query.force === 'true',
+      actor: actorStr(actorOf(req)),
     });
-    await auditImp(req, 'update', 'relay', Number(req.params.id), { after: req.body });
+    await act(req, 'update', 'relay', Number(req.params.id), { after: req.body });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -237,6 +245,7 @@ userRouter.post('/schedules', async (req, res, next) => {
     const b = req.body || {};
     const result = await createSchedule({
       userId: req.auth.userId, actingUserId: req.auth.userId,
+      actor: actorStr(actorOf(req)),
       relayId: Number(b.relay_id), createdVia: 'web',
       repeat_type: b.repeat_type || 'weekly', holidays: b.holidays ?? null,
       on_day_of_week: b.on_day_of_week ?? null, on_time: b.on_time,
@@ -245,23 +254,23 @@ userRouter.post('/schedules', async (req, res, next) => {
       off_anchor: b.off_anchor ?? 'clock', off_offset_min: b.off_offset_min ?? 0,
       on_date: b.on_date ?? null, off_date: b.off_date ?? null,
     });
-    await auditImp(req, 'create', 'schedule', result.id, { after: b });
+    await act(req, 'create', 'schedule', result.id, { after: b });
     res.status(201).json(result);
   } catch (e) { next(e); }
 });
 
 userRouter.patch('/schedules/:id', async (req, res, next) => {
   try {
-    await updateSchedule({ userId: req.auth.userId, scheduleId: Number(req.params.id), patch: req.body || {} });
-    await auditImp(req, 'update', 'schedule', Number(req.params.id), { after: req.body });
+    await updateSchedule({ userId: req.auth.userId, scheduleId: Number(req.params.id), patch: req.body || {}, actor: actorStr(actorOf(req)) });
+    await act(req, 'update', 'schedule', Number(req.params.id), { after: req.body });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
 userRouter.delete('/schedules/:id', async (req, res, next) => {
   try {
-    await deleteSchedule({ userId: req.auth.userId, scheduleId: Number(req.params.id) }); // soft [D37]
-    await auditImp(req, 'delete', 'schedule', Number(req.params.id));
+    await deleteSchedule({ userId: req.auth.userId, scheduleId: Number(req.params.id), actor: actorStr(actorOf(req)) }); // soft [D37]
+    await act(req, 'delete', 'schedule', Number(req.params.id));
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

@@ -3,5 +3,6 @@ node_modules/
 env
 npm-debug.log*
 src/web/dist/
+data/
 firmware/.pio/
 .claude/settings.local.json

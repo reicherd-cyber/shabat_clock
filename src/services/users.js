@@ -20,15 +20,15 @@ export function normalizeEmail(v) {
   return email;
 }
 
-export async function createUser({ full_name, pin, require_pin = false, max_devices = 3, notes = null, email = null }) {
+export async function createUser({ full_name, pin, require_pin = false, max_devices = 3, notes = null, email = null, actor = null }) {
   if (!/^\d{4}$/.test(String(pin))) throw errors.validation('PIN must be 4 digits', { pin: 'must be 4 digits' });
   const pin_hash = bcrypt.hashSync(String(pin), BCRYPT_COST);
   const cleanEmail = normalizeEmail(email);
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const res = await query(
-        'INSERT INTO users (full_name, ivr_code, pin_hash, require_pin, max_devices, notes, email) VALUES (?,?,?,?,?,?,?)',
-        [full_name, randomIvrCode(), pin_hash, require_pin ? 1 : 0, max_devices, notes, cleanEmail],
+        'INSERT INTO users (full_name, ivr_code, pin_hash, require_pin, max_devices, notes, email, created_by) VALUES (?,?,?,?,?,?,?,?)',
+        [full_name, randomIvrCode(), pin_hash, require_pin ? 1 : 0, max_devices, notes, cleanEmail, actor],
       );
       return getUser(res.insertId);
     } catch (e) {
@@ -66,9 +66,12 @@ export function verifyPin(user, pin) {
   return bcrypt.compareSync(String(pin), user.pin_hash);
 }
 
-export async function setPin(userId, newPin) {
+export async function setPin(userId, newPin, actor = null) {
   if (!/^\d{4}$/.test(String(newPin))) throw errors.validation('PIN must be 4 digits', { new_pin: 'must be 4 digits' });
-  await query('UPDATE users SET pin_hash = ? WHERE id = ?', [bcrypt.hashSync(String(newPin), BCRYPT_COST), userId]);
+  await query(
+    'UPDATE users SET pin_hash = ?, updated_by = COALESCE(?, updated_by) WHERE id = ?',
+    [bcrypt.hashSync(String(newPin), BCRYPT_COST), actor, userId],
+  );
 }
 
 export const bcryptHash = (v) => bcrypt.hashSync(String(v), BCRYPT_COST);

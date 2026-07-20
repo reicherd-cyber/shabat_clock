@@ -1,5 +1,5 @@
 // §3.3 admin panel. support = read-only [D15]; every write audit-logged.
-import { Router } from 'express';
+import { Router, raw } from 'express';
 import { query } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireAdmin, requireWrite, requireSuperadmin, signUserToken } from '../middleware.js';
@@ -9,7 +9,10 @@ import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
-import { listRecordings, regenerateRecording, fetchRecordingAudio } from '../../services/ivrAudio.js';
+import {
+  listRecordings, generateRecording, savePendingFromUpload, fetchPendingAudio,
+  uploadPendingRecording, uploadAllPending, discardPending, discardAllPending, undoLastUpload, fetchRecordingAudio,
+} from '../../services/ivrAudio.js';
 import { getAdminHistory } from '../../services/history.js';
 import { getVoiceCosts, addRate, RATE_KINDS } from '../../services/voiceCosts.js';
 import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEntry, restoreFinanceEntry } from '../../services/finance.js';
@@ -24,6 +27,8 @@ export const adminRouter = Router();
 adminRouter.use(requireAdmin);
 
 const audit = (req, action, entity, id, diff) => auditLog(req.auth.adminId, action, entity, id, diff);
+// created_by/updated_by stamp value for rows this admin touches.
+const adminActor = (req) => `admin:${req.auth.adminId}`;
 
 // ── 2FA (TOTP) enrollment for the logged-in admin's own account ──
 adminRouter.get('/2fa/status', async (req, res, next) => {
@@ -96,15 +101,15 @@ adminRouter.post('/users', requireWrite, async (req, res, next) => {
     const user = await createUser({
       full_name: b.full_name, pin: b.pin,
       require_pin: Boolean(b.require_pin), max_devices: b.max_devices ?? 3, notes: b.notes ?? null,
-      email: b.email ?? null,
+      email: b.email ?? null, actor: adminActor(req),
     });
     // Admin-created phones are verified immediately — audit-logged (§3.2 [D34]).
     for (const p of b.phones || []) {
       const phone = normalizePhone(p.phone ?? p);
       if (!isValidIsraeliPhone(phone)) throw errors.validation('Invalid phone', { phone });
       await query(
-        'INSERT INTO user_phones (user_id, phone, label, is_primary, verified_at) VALUES (?,?,?,?,UTC_TIMESTAMP())',
-        [user.id, phone, p.label ?? null, p.is_primary ? 1 : 0],
+        'INSERT INTO user_phones (user_id, phone, label, is_primary, verified_at, created_by) VALUES (?,?,?,?,UTC_TIMESTAMP(),?)',
+        [user.id, phone, p.label ?? null, p.is_primary ? 1 : 0, adminActor(req)],
       );
     }
     await audit(req, 'create', 'user', user.id, { after: { full_name: b.full_name, phones: b.phones } });
@@ -122,6 +127,7 @@ adminRouter.patch('/users/:id', requireWrite, async (req, res, next) => {
     }
     if (req.body?.email !== undefined) fields.email = normalizeEmail(req.body.email);
     if (Object.keys(fields).length) {
+      fields.updated_by = adminActor(req);
       const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
       await query(`UPDATE users SET ${sets} WHERE id = ?`, [...Object.values(fields), req.params.id]);
     }
@@ -130,8 +136,8 @@ adminRouter.patch('/users/:id', requireWrite, async (req, res, next) => {
       const phone = normalizePhone(req.body.add_phone);
       if (!isValidIsraeliPhone(phone)) throw errors.validation('Invalid phone', { phone });
       await query(
-        'INSERT INTO user_phones (user_id, phone, verified_at) VALUES (?,?,UTC_TIMESTAMP())',
-        [req.params.id, phone],
+        'INSERT INTO user_phones (user_id, phone, verified_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),?)',
+        [req.params.id, phone, adminActor(req)],
       );
     }
     await audit(req, 'update', 'user', Number(req.params.id), { before, after: fields });
@@ -167,7 +173,7 @@ adminRouter.post('/devices/provision', requireWrite, async (req, res, next) => {
     const b = req.body || {};
     const result = await provisionDevice({
       user_id: Number(b.user_id), name: b.name, relay_count: b.relay_count,
-      device_uid: b.device_uid || null, timezone: b.timezone,
+      device_uid: b.device_uid || null, timezone: b.timezone, actor: adminActor(req),
     });
     await audit(req, 'provision', 'device', result.device.id, { after: { name: b.name, user_id: b.user_id, relay_count: b.relay_count } });
     res.status(201).json(result);
@@ -215,7 +221,7 @@ adminRouter.post('/shelly/register', requireWrite, async (req, res, next) => {
       userId: Number(b.user_id),
       transport: b.transport === 'mqtt' ? 'mqtt' : 'lan',
       ip: String(b.ip || '').trim(), mac: String(b.mac || '').trim(),
-      name: b.name, relays: b.relays,
+      name: b.name, relays: b.relays, actor: adminActor(req),
     });
     await audit(req, 'register_shelly', 'device', result.id, { after: { ip: b.ip, mac: b.mac, transport: b.transport, user_id: b.user_id } });
     res.status(201).json(result);
@@ -235,7 +241,7 @@ adminRouter.post('/devices/:id/rotate-secret', requireWrite, async (req, res, ne
 // device claimed them meanwhile.
 adminRouter.patch('/devices/:id', requireWrite, async (req, res, next) => {
   try {
-    const recovery = await patchDevice(Number(req.params.id), req.body || {});
+    const recovery = await patchDevice(Number(req.params.id), req.body || {}, { actor: adminActor(req) });
     await audit(req, 'update', 'device', Number(req.params.id), { after: req.body });
     res.json({ ok: true, recovery });
   } catch (e) { next(e); }
@@ -248,6 +254,7 @@ adminRouter.post('/devices/:id/relays', requireWrite, async (req, res, next) => 
     const result = await adminCreateRelay({
       deviceId: Number(req.params.id), relay_no: b.relay_no, name: b.name,
       ivr_digit: b.ivr_digit, sort_order: b.sort_order ?? 0, boot_behavior: b.boot_behavior ?? 'schedule',
+      actor: adminActor(req),
     });
     await audit(req, 'create', 'relay', result.id, { after: b });
     res.status(201).json(result);
@@ -256,7 +263,7 @@ adminRouter.post('/devices/:id/relays', requireWrite, async (req, res, next) => 
 
 adminRouter.patch('/relays/:id', requireWrite, async (req, res, next) => {
   try {
-    await patchRelay({ userId: null, relayId: Number(req.params.id), patch: req.body || {}, force: req.query.force === 'true' });
+    await patchRelay({ userId: null, relayId: Number(req.params.id), patch: req.body || {}, force: req.query.force === 'true', actor: adminActor(req) });
     await audit(req, 'update', 'relay', Number(req.params.id), { after: req.body });
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -264,7 +271,7 @@ adminRouter.patch('/relays/:id', requireWrite, async (req, res, next) => {
 
 adminRouter.delete('/relays/:id', requireWrite, async (req, res, next) => {
   try {
-    await adminDeleteRelay(Number(req.params.id)); // soft [D38]
+    await adminDeleteRelay(Number(req.params.id), { actor: adminActor(req) }); // soft [D38]
     await audit(req, 'delete', 'relay', Number(req.params.id));
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -423,7 +430,7 @@ adminRouter.post('/schedules', requireWrite, async (req, res, next) => {
   try {
     const b = req.body || {};
     const result = await createSchedule({
-      userId: null, actingUserId: null,
+      userId: null, actingUserId: null, actor: adminActor(req),
       relayId: Number(b.relay_id), createdVia: 'admin',
       repeat_type: b.repeat_type || 'weekly', holidays: b.holidays ?? null,
       on_day_of_week: b.on_day_of_week ?? null, on_time: b.on_time,
@@ -439,7 +446,7 @@ adminRouter.post('/schedules', requireWrite, async (req, res, next) => {
 
 adminRouter.patch('/schedules/:id', requireWrite, async (req, res, next) => {
   try {
-    await updateSchedule({ userId: null, scheduleId: Number(req.params.id), patch: req.body || {} });
+    await updateSchedule({ userId: null, scheduleId: Number(req.params.id), patch: req.body || {}, actor: adminActor(req) });
     await audit(req, 'update', 'schedule', Number(req.params.id), { after: req.body });
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -447,7 +454,7 @@ adminRouter.patch('/schedules/:id', requireWrite, async (req, res, next) => {
 
 adminRouter.delete('/schedules/:id', requireWrite, async (req, res, next) => {
   try {
-    await deleteSchedule({ userId: null, scheduleId: Number(req.params.id) });
+    await deleteSchedule({ userId: null, scheduleId: Number(req.params.id), actor: adminActor(req) });
     await audit(req, 'delete', 'schedule', Number(req.params.id));
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -458,10 +465,76 @@ adminRouter.get('/recordings', async (req, res, next) => {
   try { res.json(await listRecordings()); } catch (e) { next(e); }
 });
 
-adminRouter.post('/recordings/:key/regenerate', requireSuperadmin, async (req, res, next) => {
+// Step 1: generate a PENDING recording (nothing reaches the live line yet).
+adminRouter.post('/recordings/:key/generate', requireSuperadmin, async (req, res, next) => {
   try {
-    const out = await regenerateRecording(req.params.key, req.body || {});
+    res.json(await generateRecording(req.params.key, req.body || {}));
+  } catch (e) { next(e); }
+});
+
+// Step 1 (alternative): the admin's own microphone recording becomes the pending
+// take — raw browser audio in the body (webm/ogg/mp4), converted server-side.
+adminRouter.post('/recordings/:key/pending-from-upload', requireSuperadmin,
+  raw({ type: () => true, limit: '20mb' }),
+  async (req, res, next) => {
+    try {
+      res.json(savePendingFromUpload(req.params.key, req.body, { text: req.query.text }));
+    } catch (e) { next(e); }
+  });
+
+// Listen to the pending recording before deciding.
+adminRouter.get('/recordings/:key/preview-audio', async (req, res, next) => {
+  try {
+    const buf = fetchPendingAudio(req.params.key);
+    res.set('Content-Type', 'audio/wav');
+    res.send(buf);
+  } catch (e) { next(e); }
+});
+
+// Step 2: approved — push the pending recording to Yemot.
+adminRouter.post('/recordings/:key/upload', requireSuperadmin, async (req, res, next) => {
+  try {
+    const out = await uploadPendingRecording(req.params.key, { text: req.body?.text });
     await audit(req, 'regenerate', 'ivr_recording', null, { key: out.key, text: out.text, voice: out.voice });
+    res.json(out);
+  } catch (e) { next(e); }
+});
+
+// Approve all drafts at once (the UI confirms first).
+adminRouter.post('/recordings/upload-all', requireSuperadmin, async (req, res, next) => {
+  try {
+    const results = await uploadAllPending();
+    await audit(req, 'upload_all', 'ivr_recording', null, {
+      uploaded: results.filter((r) => r.ok).map((r) => r.key),
+      failed: results.filter((r) => !r.ok).map((r) => r.key),
+    });
+    res.json({ results });
+  } catch (e) { next(e); }
+});
+
+// Reject ALL drafts without touching the live line.
+adminRouter.post('/recordings/discard-all', requireSuperadmin, async (req, res, next) => {
+  try {
+    const out = discardAllPending();
+    await audit(req, 'discard_all_drafts', 'ivr_recording', null, { removed: out.removed });
+    res.json(out);
+  } catch (e) { next(e); }
+});
+
+// Reject a draft without touching the live line.
+adminRouter.delete('/recordings/:key/pending', requireSuperadmin, async (req, res, next) => {
+  try {
+    res.json(discardPending(req.params.key));
+    await audit(req, 'discard_draft', 'ivr_recording', null, { key: req.params.key });
+  } catch (e) { next(e); }
+});
+
+// Undo: swap back to the previous live version (the replaced one becomes the
+// new backup, so undo-of-undo toggles between the two).
+adminRouter.post('/recordings/:key/undo', requireSuperadmin, async (req, res, next) => {
+  try {
+    const out = await undoLastUpload(req.params.key);
+    await audit(req, 'undo', 'ivr_recording', null, { key: out.key });
     res.json(out);
   } catch (e) { next(e); }
 });
@@ -521,14 +594,23 @@ adminRouter.patch('/admins/:id', requireSuperadmin, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// System-wide action log: every change by any actor (admin / user / ivr / system).
 adminRouter.get('/audit-log', async (req, res, next) => {
   try {
     const cond = [];
     const params = [];
-    if (req.query.admin_id) { cond.push('admin_id = ?'); params.push(Number(req.query.admin_id)); }
-    if (req.query.entity) { cond.push('entity = ?'); params.push(req.query.entity); }
+    if (req.query.actor_type) { cond.push('a.actor_type = ?'); params.push(req.query.actor_type); }
+    if (req.query.actor_id) { cond.push('a.actor_id = ?'); params.push(Number(req.query.actor_id)); }
+    if (req.query.admin_id) { cond.push("a.actor_type = 'admin' AND a.actor_id = ?"); params.push(Number(req.query.admin_id)); }
+    if (req.query.entity) { cond.push('a.entity = ?'); params.push(req.query.entity); }
     res.json(await query(
-      `SELECT a.*, ad.name AS admin_name FROM audit_log a JOIN admins ad ON ad.id = a.admin_id
+      `SELECT a.*,
+              CASE WHEN a.actor_type = 'admin' THEN ad.name
+                   WHEN a.actor_type IN ('user','ivr') THEN u.full_name
+                   ELSE NULL END AS actor_name
+       FROM audit_log a
+       LEFT JOIN admins ad ON a.actor_type = 'admin' AND ad.id = a.actor_id
+       LEFT JOIN users u ON a.actor_type IN ('user','ivr') AND u.id = a.actor_id
        ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''} ORDER BY a.id DESC LIMIT 500`,
       params,
     ));

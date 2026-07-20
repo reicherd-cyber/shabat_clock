@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom';
 import { api, tokens } from './api.js';
 import Login from './user/Login.jsx';
 import Dashboard from './user/Dashboard.jsx';
 import Schedules from './user/Schedules.jsx';
-import Calendar from './user/Calendar.jsx';
+// Lazy: the calendar pulls in the Hebrew-calendar engine (~60KB gzip) — load it
+// only when the לוח tab is opened.
+const Calendar = lazy(() => import('./user/Calendar.jsx'));
 import History from './user/History.jsx';
 import Settings from './user/Settings.jsx';
 import AdminLogin from './admin/AdminLogin.jsx';
@@ -269,7 +271,7 @@ export default function App() {
         <Route element={<UserLayout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/schedules" element={<Schedules />} />
-          <Route path="/calendar" element={<Calendar />} />
+          <Route path="/calendar" element={<Suspense fallback={<p className="text-muted">טוען…</p>}><Calendar /></Suspense>} />
           <Route path="/history" element={<History />} />
           <Route path="/settings" element={<Settings />} />
         </Route>

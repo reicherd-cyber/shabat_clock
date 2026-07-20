@@ -27,7 +27,7 @@ export async function listDevicesWithRelays(userId) {
 }
 
 // User-editable fields per §3.2; channel mapping (relay_no) is admin-only.
-export async function patchRelay({ userId, relayId, patch, force = false }) {
+export async function patchRelay({ userId, relayId, patch, force = false, actor = null }) {
   const deviceIds = [];
   await withTransaction(async (conn) => {
     const [rows] = await conn.query(
@@ -62,13 +62,17 @@ export async function patchRelay({ userId, relayId, patch, force = false }) {
       );
       if (scheds.length && !force) throw errors.conflict('HAS_SCHEDULES', 'Relay has enabled schedules');
       if (scheds.length) {
-        await conn.query('UPDATE schedules SET is_enabled = FALSE WHERE relay_id = ? AND deleted_at IS NULL', [relayId]);
+        await conn.query(
+          'UPDATE schedules SET is_enabled = FALSE, updated_by = COALESCE(?, updated_by) WHERE relay_id = ? AND deleted_at IS NULL',
+          [actor, relayId],
+        );
       }
     }
 
     if (Object.keys(fields).length === 0) return;
+    fields.updated_by = actor;
     const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
-    await conn.query(`UPDATE relays SET ${sets} WHERE id = ?`, [...Object.values(fields), relayId]);
+    await conn.query(`UPDATE relays SET ${sets}, updated_at = UTC_TIMESTAMP() WHERE id = ?`, [...Object.values(fields), relayId]);
 
     // boot_behavior rides in the schedule payload [D35]; enable/disable changes events.
     if ('boot_behavior' in fields || 'is_enabled' in fields) {
@@ -80,7 +84,7 @@ export async function patchRelay({ userId, relayId, patch, force = false }) {
 }
 
 // Admin: create — or revive a soft-deleted row at the same channel [D38].
-export async function adminCreateRelay({ deviceId, relay_no, name, ivr_digit, sort_order = 0, boot_behavior = 'schedule' }) {
+export async function adminCreateRelay({ deviceId, relay_no, name, ivr_digit, sort_order = 0, boot_behavior = 'schedule', actor = null }) {
   const deviceIds = [];
   const result = await withTransaction(async (conn) => {
     const [dRows] = await conn.query('SELECT id, user_id, relay_count FROM devices WHERE id = ? FOR UPDATE', [deviceId]);
@@ -108,17 +112,18 @@ export async function adminCreateRelay({ deviceId, relay_no, name, ivr_digit, so
       // Revive: clear deleted_at, reset fields — uq_channel never conflicts.
       await conn.query(
         `UPDATE relays SET deleted_at = NULL, name = ?, ivr_digit = ?, is_enabled = TRUE, sort_order = ?,
-          boot_behavior = ?, current_state = 'unknown', state_updated_at = NULL WHERE id = ?`,
-        [name, digit, sort_order, boot_behavior, existing[0].id],
+          boot_behavior = ?, current_state = 'unknown', state_updated_at = NULL,
+          updated_at = UTC_TIMESTAMP(), updated_by = COALESCE(?, updated_by) WHERE id = ?`,
+        [name, digit, sort_order, boot_behavior, actor, existing[0].id],
       );
       deviceIds.push(deviceId);
       await bumpDevices(conn, deviceIds);
       return { id: existing[0].id, revived: true };
     }
     const [res] = await conn.query(
-      `INSERT INTO relays (device_id, user_id, relay_no, name, ivr_digit, sort_order, boot_behavior)
-       VALUES (?,?,?,?,?,?,?)`,
-      [deviceId, device.user_id, no, name, digit, sort_order, boot_behavior],
+      `INSERT INTO relays (device_id, user_id, relay_no, name, ivr_digit, sort_order, boot_behavior, created_by)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [deviceId, device.user_id, no, name, digit, sort_order, boot_behavior, actor],
     );
     deviceIds.push(deviceId);
     await bumpDevices(conn, deviceIds);
@@ -130,19 +135,20 @@ export async function adminCreateRelay({ deviceId, relay_no, name, ivr_digit, so
 
 // Admin soft delete [D38]: frees the IVR digit, disables, soft-deletes the relay's
 // schedules [D37]; commands history keeps its FK.
-export async function adminDeleteRelay(relayId) {
+export async function adminDeleteRelay(relayId, { actor = null } = {}) {
   const deviceIds = [];
   await withTransaction(async (conn) => {
     const [rows] = await conn.query('SELECT * FROM relays WHERE id = ? AND deleted_at IS NULL FOR UPDATE', [relayId]);
     const relay = rows[0];
     if (!relay) throw errors.notFound('NOT_FOUND', 'Relay not found');
     await conn.query(
-      'UPDATE relays SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE, ivr_digit = NULL WHERE id = ?',
-      [relayId],
+      `UPDATE relays SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE, ivr_digit = NULL,
+        updated_at = UTC_TIMESTAMP(), updated_by = COALESCE(?, updated_by) WHERE id = ?`,
+      [actor, relayId],
     );
     await conn.query(
-      'UPDATE schedules SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE WHERE relay_id = ? AND deleted_at IS NULL',
-      [relayId],
+      'UPDATE schedules SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE, updated_by = COALESCE(?, updated_by) WHERE relay_id = ? AND deleted_at IS NULL',
+      [actor, relayId],
     );
     deviceIds.push(relay.device_id);
     await bumpDevices(conn, deviceIds);

@@ -154,7 +154,7 @@ async function regionOf(conn, userId) {
   return rows[0]?.zmanim_region || DEFAULT_REGION;
 }
 
-export async function createSchedule({ userId, relayId, createdVia, actingUserId = userId, ...fields }) {
+export async function createSchedule({ userId, relayId, createdVia, actingUserId = userId, actor = null, ...fields }) {
   const deviceIds = [];
   const result = await withTransaction(async (conn) => {
     const relay = await requireRelay(conn, relayId, actingUserId);
@@ -165,12 +165,12 @@ export async function createSchedule({ userId, relayId, createdVia, actingUserId
     const res = await conn.query(
       `INSERT INTO schedules (user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
         off_day_of_week, off_time, off_anchor, off_offset_min,
-        repeat_type, holidays, on_date, off_date, is_enabled, created_via)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?)`,
+        repeat_type, holidays, on_date, off_date, is_enabled, created_via, created_by, updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
       [relay.user_id, relayId, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
         s.off_day_of_week, s.off_time, s.off_anchor, s.off_offset_min,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
-        s.on_date ?? null, s.off_date ?? null, createdVia],
+        s.on_date ?? null, s.off_date ?? null, createdVia, actor, actor],
     );
     deviceIds.push(relay.device_id);
     await bumpDevices(conn, deviceIds);
@@ -180,7 +180,7 @@ export async function createSchedule({ userId, relayId, createdVia, actingUserId
   return result;
 }
 
-export async function updateSchedule({ userId, scheduleId, patch }) {
+export async function updateSchedule({ userId, scheduleId, patch, actor = null }) {
   const deviceIds = [];
   await withTransaction(async (conn) => {
     const [rows] = await conn.query(
@@ -216,11 +216,12 @@ export async function updateSchedule({ userId, scheduleId, patch }) {
     await conn.query(
       `UPDATE schedules SET on_day_of_week=?, on_time=?, on_anchor=?, on_offset_min=?,
         off_day_of_week=?, off_time=?, off_anchor=?, off_offset_min=?,
-        repeat_type=?, holidays=?, on_date=?, off_date=?, is_enabled=? WHERE id = ?`,
+        repeat_type=?, holidays=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
+       WHERE id = ?`,
       [s.on_day_of_week, s.on_time, s.on_anchor ?? 'clock', s.on_offset_min ?? 0,
         s.off_day_of_week, s.off_time, s.off_anchor ?? 'clock', s.off_offset_min ?? 0,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
-        s.on_date ?? null, s.off_date ?? null, is_enabled, scheduleId],
+        s.on_date ?? null, s.off_date ?? null, is_enabled, actor, scheduleId],
     );
     deviceIds.push(existing.device_id);
     await bumpDevices(conn, deviceIds);
@@ -229,7 +230,7 @@ export async function updateSchedule({ userId, scheduleId, patch }) {
 }
 
 // [D37] Soft delete — physical DELETE is never issued against schedules, by any actor.
-export async function deleteSchedule({ userId, scheduleId }) {
+export async function deleteSchedule({ userId, scheduleId, actor = null }) {
   const deviceIds = [];
   await withTransaction(async (conn) => {
     const [rows] = await conn.query(
@@ -238,7 +239,10 @@ export async function deleteSchedule({ userId, scheduleId }) {
       userId != null ? [scheduleId, userId] : [scheduleId],
     );
     if (!rows[0]) throw errors.notFound('NOT_FOUND', 'Schedule not found');
-    await conn.query('UPDATE schedules SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE WHERE id = ?', [scheduleId]);
+    await conn.query(
+      'UPDATE schedules SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE, updated_by = COALESCE(?, updated_by) WHERE id = ?',
+      [actor, scheduleId],
+    );
     deviceIds.push(rows[0].device_id);
     await bumpDevices(conn, deviceIds);
   });

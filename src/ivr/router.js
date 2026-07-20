@@ -8,6 +8,7 @@ import { isLockedOut, recordFailure } from '../services/authFailures.js';
 import { enabledRelaysForUser } from '../services/relays.js';
 import { sendImmediateCommand } from '../services/commands.js';
 import { createSchedule, validateScheduleRules } from '../services/schedules.js';
+import { logAction } from '../services/audit.js';
 import { startCall, setCallUser, appendPath, finishCall } from '../services/callLogs.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, createSession, endSession } from './session.js';
@@ -34,16 +35,18 @@ async function runNluActions(session) {
   for (const a of session.data.nluActions) {
     if (a.kind === 'immediate') {
       const result = await sendImmediateCommand({ relayId: a.relay_id, action: a.action, source: 'ivr', callId: session.callLogId });
+      await logAction({ type: 'ivr', id: session.userId }, 'command', 'relay', a.relay_id, { after: { action: a.action, status: result.status, via: 'nlu' } });
       if (result.status !== 'acked') unacked += 1;
     } else {
       const date = ymdForDay(a.day, tz);
       const fields = a.action === 'off'
         ? { off_time: a.time, off_date: date }
         : { on_time: a.time, on_date: date };
-      await createSchedule({
-        userId: session.userId, actingUserId: session.userId,
+      const created = await createSchedule({
+        userId: session.userId, actingUserId: session.userId, actor: `ivr:${session.userId}`,
         relayId: a.relay_id, createdVia: 'ivr', repeat_type: 'once', ...fields,
       });
+      await logAction({ type: 'ivr', id: session.userId }, 'create', 'schedule', created.id, { after: { relay_id: a.relay_id, ...fields, via: 'nlu' } });
     }
   }
   return unacked;
@@ -141,6 +144,7 @@ async function runImmediate(session, relay) {
   const result = await sendImmediateCommand({
     relayId: relay.id, action, source: 'ivr', callId: session.callLogId,
   });
+  await logAction({ type: 'ivr', id: session.userId }, 'command', 'relay', relay.id, { after: { action, status: result.status } });
   await appendPath(session.callLogId, result.status === 'acked' ? 'ok' : `fail:${result.fail_reason}`);
   await finishCall(session.callLogId, 'command');
   // [D19] back to MAIN, not hangup — allow another action.
@@ -411,12 +415,19 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         if (input === '2') return res.send(await mainMenu(session));
         if (input !== '1') return res.send(await invalidInput(session));
         try {
-          await createSchedule({
-            userId: session.userId, actingUserId: session.userId,
+          const created = await createSchedule({
+            userId: session.userId, actingUserId: session.userId, actor: `ivr:${session.userId}`,
             relayId: session.data.relay.id, createdVia: 'ivr',
             repeat_type: 'weekly',
             on_day_of_week: session.data.on_day, on_time: session.data.on_time,
             off_day_of_week: session.data.off_day, off_time: session.data.off_time,
+          });
+          await logAction({ type: 'ivr', id: session.userId }, 'create', 'schedule', created.id, {
+            after: {
+              relay_id: session.data.relay.id,
+              on_day_of_week: session.data.on_day, on_time: session.data.on_time,
+              off_day_of_week: session.data.off_day, off_time: session.data.off_time,
+            },
           });
         } catch {
           session.state = 'SCHED_ON_DAY';

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getTimes } from 'suncalc';
+import { HDate, HebrewCalendar, flags, gematriya } from '@hebcal/core';
 import { api } from '../api.js';
 import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
 import { ChevronRight, ChevronLeft, ChevronDown, House, Check } from 'lucide-react';
@@ -26,14 +27,58 @@ const shiftYmd = (dateStr, days) => {
 };
 const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
 
-// Visible day-cells per view: month = 42 (Sundays first — RTL puts ראשון on the
-// right), week = the cursor's Sunday–Saturday, day = the cursor date alone.
-function cellsFor(view, cur) {
-  let start; let n;
-  if (view === 'month') {
+// Hebrew-date info per day, cached: gematriya day, holiday name (Israel scheme),
+// and whether it's a יום טוב (chag) — used for markings in every view.
+const hebCache = new Map();
+function hebInfo(dateStr) {
+  let v = hebCache.get(dateStr);
+  if (!v) {
+    const hd = new HDate(new Date(`${dateStr}T12:00:00`));
+    // Only ימי יום טוב — days when switching on/off is forbidden like on שבת.
+    // Chanukah, Purim, fasts, chol hamoed etc. are deliberately NOT marked.
+    const chagim = (HebrewCalendar.getHolidaysOnDate(hd, true) || [])
+      .filter((e) => e.getFlags() & flags.CHAG);
+    v = {
+      hd,
+      day: gematriya(hd.getDate()),
+      holiday: chagim.length ? stripNikud(chagim[0].render('he').replace(/ \d{4}$/, '')) : null,
+      chag: chagim.length > 0,
+    };
+    hebCache.set(dateStr, v);
+  }
+  return v;
+}
+// Clean Hebrew month names (the library renders with nikud — תִּשְׁרֵי; we want תשרי).
+const HE_MONTHS = {
+  Nisan: 'ניסן', Iyyar: 'אייר', Sivan: 'סיון', Tamuz: 'תמוז', Av: 'אב', Elul: 'אלול',
+  Tishrei: 'תשרי', Cheshvan: 'חשון', Kislev: 'כסלו', Tevet: 'טבת', "Sh'vat": 'שבט',
+  Adar: 'אדר', 'Adar I': 'אדר א׳', 'Adar II': 'אדר ב׳',
+};
+const stripNikud = (s) => String(s).replace(/[֑-ׇ]/g, '');
+const hebYear = (hd) => hd.renderGematriya().split(' ').pop();
+const hebMonthTitle = (hd) => `${HE_MONTHS[hd.getMonthName()] || stripNikud(hd.getMonthName())} ${hebYear(hd)}`;
+const hebFullDate = (hd) => `${gematriya(hd.getDate())} ${HE_MONTHS[hd.getMonthName()] || ''} ${hebYear(hd)}`;
+
+// Visible day-cells per view: month = the civil month (42 cells) or, in Hebrew
+// mode, the HEBREW month; week = the cursor's Sunday–Saturday; day = the cursor
+// date alone. Sundays first — RTL puts ראשון on the right.
+function cellsFor(view, cur, calMode) {
+  let start; let n; let inMonth = () => true;
+  if (view === 'month' && calMode === 'heb') {
+    const hd = new HDate(cur);
+    const first = new HDate(1, hd.getMonth(), hd.getFullYear());
+    const firstG = first.greg();
+    const days = first.daysInMonth();
+    start = new Date(firstG.getFullYear(), firstG.getMonth(), firstG.getDate() - firstG.getDay());
+    n = Math.ceil((firstG.getDay() + days) / 7) * 7;
+    const lo = ymd(firstG);
+    const hi = ymd(new Date(firstG.getFullYear(), firstG.getMonth(), firstG.getDate() + days - 1));
+    inMonth = (ds) => ds >= lo && ds <= hi;
+  } else if (view === 'month') {
     const first = new Date(cur.getFullYear(), cur.getMonth(), 1);
     start = new Date(cur.getFullYear(), cur.getMonth(), 1 - first.getDay());
     n = 42;
+    inMonth = (ds) => Number(ds.slice(5, 7)) === cur.getMonth() + 1;
   } else if (view === 'week') {
     start = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() - cur.getDay());
     n = 7;
@@ -43,7 +88,8 @@ function cellsFor(view, cur) {
   }
   return Array.from({ length: n }, (_, i) => {
     const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
-    return { date: ymd(d), day: d.getDate(), inMonth: view !== 'month' || d.getMonth() === cur.getMonth(), dow: d.getDay() + 1 };
+    const ds = ymd(d);
+    return { date: ds, day: d.getDate(), inMonth: view !== 'month' || inMonth(ds), dow: d.getDay() + 1 };
   });
 }
 
@@ -209,6 +255,7 @@ function ChannelSelect({ relays, hidden, onToggle, onAll, colorOf }) {
 
 export default function Calendar() {
   const [view, setView] = useState('week');
+  const [calMode, setCalMode] = useState('greg'); // 'greg' | 'heb' — לועזי / עברי
   const [cursor, setCursor] = useState(() => { const t = new Date(); return new Date(t.getFullYear(), t.getMonth(), t.getDate()); });
   const [events, setEvents] = useState(null);
   const [relays, setRelays] = useState([]);
@@ -217,7 +264,7 @@ export default function Calendar() {
   const [nowTick, setNowTick] = useState(Date.now());
   const { error, setError } = useAsync();
 
-  const cells = useMemo(() => cellsFor(view, cursor), [view, cursor]);
+  const cells = useMemo(() => cellsFor(view, cursor, calMode), [view, cursor, calMode]);
 
   useEffect(() => {
     api.get('/devices').then((devices) => {
@@ -258,16 +305,32 @@ export default function Calendar() {
   const nowMin = (() => { const d = new Date(nowTick); return d.getHours() * 60 + d.getMinutes(); })();
 
   const move = (n) => {
-    if (view === 'month') setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + n, 1));
+    if (view === 'month' && calMode === 'heb') {
+      const hd = new HDate(cursor);
+      const target = new HDate(1, hd.getMonth(), hd.getFullYear()).add(n, 'month');
+      setCursor(target.greg());
+    } else if (view === 'month') setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + n, 1));
     else setCursor(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + n * (view === 'week' ? 7 : 1)));
   };
   const goToday = () => { const t = new Date(); setCursor(new Date(t.getFullYear(), t.getMonth(), t.getDate())); };
 
   const title = view === 'day'
-    ? `${DAY_NAMES[cursor.getDay() + 1]}, ${cursor.getDate()} ב${MONTHS[cursor.getMonth()]}`
+    ? `${DAY_NAMES[cursor.getDay() + 1]}, ${cursor.getDate()} ב${MONTHS[cursor.getMonth()]} · ${hebFullDate(new HDate(cursor))}`
     : view === 'week'
-      ? `${cells[0].day}.${Number(cells[0].date.slice(5, 7))}–${cells[6].day}.${Number(cells[6].date.slice(5, 7))}`
-      : `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`;
+      ? (calMode === 'heb'
+        ? (() => {
+          const a = hebInfo(cells[0].date).hd;
+          const b = hebInfo(cells[6].date).hd;
+          const ma = HE_MONTHS[a.getMonthName()];
+          const mb = HE_MONTHS[b.getMonthName()];
+          return ma === mb
+            ? `${gematriya(a.getDate())}–${gematriya(b.getDate())} ${ma} ${hebYear(a)}`
+            : `${gematriya(a.getDate())} ${ma} – ${gematriya(b.getDate())} ${mb}`;
+        })()
+        : `${cells[0].day}.${Number(cells[0].date.slice(5, 7))}–${cells[6].day}.${Number(cells[6].date.slice(5, 7))}`)
+      : calMode === 'heb'
+        ? hebMonthTitle(new HDate(cursor))
+        : `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`;
 
   const toggleRelay = (id) => {
     const next = new Set(hiddenRelays);
@@ -288,13 +351,23 @@ export default function Calendar() {
     <Card flush className="overflow-hidden">
       <div className="flex border-b border-line bg-surface2/60">
         <div className="w-14 shrink-0" />
-        {cells.map((c) => (
-          <div key={c.date} className={`flex-1 text-center py-2 border-line border-s ${c.date === todayStr ? 'bg-[#E4EFFE]/60' : ''}`}>
-            <div className="text-[13px] text-muted">{DAY_NAMES[c.dow]}</div>
-            <div className={`mx-auto mt-0.5 w-8 h-8 grid place-items-center rounded-full text-base font-bold
-              ${c.date === todayStr ? 'bg-accent text-white' : ''}`}>{c.day}</div>
-          </div>
-        ))}
+        {cells.map((c) => {
+          const hi = hebInfo(c.date);
+          return (
+            <div key={c.date} className={`flex-1 min-w-0 text-center py-2 border-line border-s
+              ${c.date === todayStr ? 'bg-[#E4EFFE]/60' : hi.chag ? 'bg-[#FBF3DC]/70' : ''}`}>
+              <div className="text-[13px] text-muted">{DAY_NAMES[c.dow]}</div>
+              <div className={`mx-auto mt-0.5 min-w-8 h-8 px-1 grid place-items-center rounded-full text-base font-bold
+                ${c.date === todayStr ? 'bg-accent text-white' : ''}`}>
+                {calMode === 'heb' ? hi.day : c.day}
+              </div>
+              <div className="text-[11px] text-muted truncate px-0.5">
+                {calMode === 'heb' ? `${c.day}.${Number(c.date.slice(5, 7))}` : hi.day}
+                {hi.holiday && <span className="font-medium" style={{ color: '#B45309' }}> · {hi.holiday}</span>}
+              </div>
+            </div>
+          );
+        })}
       </div>
       {events == null ? (
         <p className="text-muted p-8 text-center">טוען…</p>
@@ -379,14 +452,28 @@ export default function Calendar() {
           {cells.map((c, i) => {
             const chips = monthChips.get(c.date) || [];
             const shown = chips.slice(0, 3);
+            const hi = hebInfo(c.date);
             return (
               <div key={c.date}
                 onClick={() => chips.length && setDayModal(c.date)}
                 className={`min-h-[108px] p-1 border-line ${i % 7 !== 6 ? 'border-e' : ''} ${i >= 7 ? 'border-t' : ''}
-                  ${c.inMonth ? '' : 'bg-surface2/40'} ${c.dow === 7 && c.inMonth ? 'bg-surface2/60' : ''}
+                  ${c.inMonth ? '' : 'bg-surface2/60 opacity-40 grayscale'}
+                  ${hi.chag && c.inMonth ? 'bg-[#FBF3DC]/70' : c.dow === 7 && c.inMonth ? 'bg-surface2/60' : ''}
                   ${chips.length ? 'cursor-pointer hover:bg-[#E4EFFE]/40' : ''}`}>
-                <div className={`text-[13px] mb-1 w-7 h-7 grid place-items-center rounded-full
-                  ${c.date === todayStr ? 'bg-accent text-white font-bold' : c.inMonth ? '' : 'text-muted'}`}>{c.day}</div>
+                <div className="flex items-start justify-between gap-1">
+                  <div className={`text-[13px] mb-0.5 min-w-7 h-7 px-1 grid place-items-center rounded-full
+                    ${c.date === todayStr ? 'bg-accent text-white font-bold' : c.inMonth ? '' : 'text-muted'}`}>
+                    {calMode === 'heb' ? hi.day : c.day}
+                  </div>
+                  <span className="text-[10.5px] text-muted mt-1.5">
+                    {calMode === 'heb' ? `${c.day}.${Number(c.date.slice(5, 7))}` : hi.day}
+                  </span>
+                </div>
+                {hi.holiday && (
+                  <div className="text-[10.5px] font-medium leading-tight truncate mb-0.5" style={{ color: '#B45309' }} title={hi.holiday}>
+                    {hi.holiday}
+                  </div>
+                )}
                 <div className="space-y-[3px]">
                   {shown.map((chip, j) => (
                     <div key={j} style={blockStyle(chip.relay_id)} title={`${chip.relay_name} · ${chip.device_name}`}
@@ -412,13 +499,23 @@ export default function Calendar() {
           title · view switcher · nav+date · today · channels (grows) */}
       <div className="flex items-center justify-between gap-3 flex-wrap mt-8 mb-3.5">
         <h2 className="font-serif font-bold text-[22px]">לוח תזמונים</h2>
-        <div className="flex rounded-[10px] border border-line overflow-hidden">
-          {VIEWS.map((o) => (
-            <button key={o.v} onClick={() => setView(o.v)}
-              className={`px-4 py-1.5 text-sm cursor-pointer ${view === o.v ? 'bg-accent text-white font-bold' : 'text-muted hover:text-ink'}`}>
-              {o.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-[10px] border border-line overflow-hidden">
+            {VIEWS.map((o) => (
+              <button key={o.v} onClick={() => setView(o.v)}
+                className={`px-4 py-1.5 text-sm cursor-pointer ${view === o.v ? 'bg-accent text-white font-bold' : 'text-muted hover:text-ink'}`}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex rounded-[10px] border border-line overflow-hidden">
+            {[{ v: 'greg', label: 'לועזי' }, { v: 'heb', label: 'עברי' }].map((o) => (
+              <button key={o.v} onClick={() => setCalMode(o.v)}
+                className={`px-3 py-1.5 text-sm cursor-pointer ${calMode === o.v ? 'bg-accent-dk text-white font-bold' : 'text-muted hover:text-ink'}`}>
+                {o.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex items-center gap-1">
           <Button variant="ghost" className="!px-2" onClick={() => move(1)} title="הבא"><ChevronLeft size={16} /></Button>
@@ -436,7 +533,7 @@ export default function Calendar() {
       {view === 'month' ? <MonthGrid /> : <TimeGrid />}
 
       <Modal open={!!dayModal} onClose={() => setDayModal(null)}
-        title={dayModal ? `${DAY_NAMES[new Date(`${dayModal}T12:00:00`).getDay() + 1]}, ${Number(dayModal.slice(8, 10))} ב${MONTHS[Number(dayModal.slice(5, 7)) - 1]}` : ''}>
+        title={dayModal ? `${DAY_NAMES[new Date(`${dayModal}T12:00:00`).getDay() + 1]}, ${Number(dayModal.slice(8, 10))} ב${MONTHS[Number(dayModal.slice(5, 7)) - 1]} · ${hebFullDate(hebInfo(dayModal).hd)}${hebInfo(dayModal).holiday ? ` · ${hebInfo(dayModal).holiday}` : ''}` : ''}>
         {dayModal && (
           <div className="space-y-2">
             {(monthChips.get(dayModal) || []).map((chip, i) => (

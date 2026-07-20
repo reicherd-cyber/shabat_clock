@@ -541,26 +541,49 @@ export function Admins() {
   );
 }
 
+const ACTOR_TYPES = { admin: 'מנהל', user: 'משתמש', ivr: 'טלפון', system: 'מערכת' };
+
 export function Audit() {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
-  useEffect(() => { adminApi.get('/audit-log').then(setRows).catch(setError); }, []);
+  const [actorType, setActorType] = useState('');
+  const [entity, setEntity] = useState('');
+  useEffect(() => {
+    const qs = new URLSearchParams();
+    if (actorType) qs.set('actor_type', actorType);
+    if (entity) qs.set('entity', entity);
+    adminApi.get(`/audit-log${qs.toString() ? `?${qs}` : ''}`).then(setRows).catch(setError);
+  }, [actorType, entity]);
+  const entities = [...new Set((rows || []).map((r) => r.entity))];
   return (
     <div className="space-y-4">
-      <h2 className="font-bold text-xl">יומן ביקורת</h2>
+      <div className="flex items-center gap-3 flex-wrap">
+        <h2 className="font-bold text-xl">יומן פעולות</h2>
+        <select className="border border-line rounded-lg px-2 py-1 text-sm bg-surface" value={actorType} onChange={(e) => setActorType(e.target.value)}>
+          <option value="">כל הגורמים</option>
+          {Object.entries(ACTOR_TYPES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
+        </select>
+        <select className="border border-line rounded-lg px-2 py-1 text-sm bg-surface" value={entity} onChange={(e) => setEntity(e.target.value)}>
+          <option value="">כל הישויות</option>
+          {entities.map((en) => <option key={en} value={en}>{en}</option>)}
+        </select>
+      </div>
       <ErrorNote error={error} />
       <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-2">מתי</th><th className="p-2">מנהל</th><th className="p-2">פעולה</th><th className="p-2">ישות</th><th className="p-2">שינוי</th>
+              <th className="p-2">מתי</th><th className="p-2">מי</th><th className="p-2">פעולה</th><th className="p-2">ישות</th><th className="p-2">שינוי</th>
             </tr>
           </thead>
           <tbody>
             {(rows || []).map((r) => (
               <tr key={r.id} className="border-b border-line last:border-0 align-top">
                 <td className="p-2 whitespace-nowrap">{new Date(r.created_at).toLocaleString('he-IL')}</td>
-                <td className="p-2">{r.admin_name}</td>
+                <td className="p-2 whitespace-nowrap">
+                  <span className="code-chip me-1">{ACTOR_TYPES[r.actor_type] || r.actor_type}</span>
+                  {r.actor_name || (r.actor_id ? `#${r.actor_id}` : '')}
+                </td>
                 <td className="p-2">{r.action}</td>
                 <td className="p-2">{r.entity}{r.entity_id ? ` #${r.entity_id}` : ''}</td>
                 <td className="p-2 text-xs" dir="ltr"><code>{r.diff ? JSON.stringify(r.diff).slice(0, 120) : ''}</code></td>
