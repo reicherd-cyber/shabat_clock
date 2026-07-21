@@ -174,6 +174,20 @@ export default function Settings() {
           )}
         </div>
         <p className="text-muted text-xs mt-1">אימייל מאפשר לקבל קוד כניסה גם בדוא״ל, לא רק בשיחת טלפון. השאירו ריק להסרה.</p>
+        <div className="flex items-center gap-2 flex-wrap mt-3">
+          <span className="text-sm">אזור לחישוב זמנים:</span>
+          <Select value={me.user.zmanim_region || 'jerusalem'} disabled={busy}
+            onChange={(e) => run(async () => {
+              await api.patch('/me', { zmanim_region: e.target.value });
+              await refresh();
+            })}>
+            <option value="jerusalem">ירושלים</option>
+            <option value="tel_aviv">תל אביב</option>
+            <option value="haifa">חיפה</option>
+            <option value="beer_sheva">באר שבע</option>
+          </Select>
+        </div>
+        <p className="text-muted text-xs mt-1">לפי האזור מחושבים זמני שקיעה, זריחה וצאת הכוכבים בתזמונים ההלכתיים.</p>
         <Button variant="ghost" className="mt-2" onClick={() => setPinForm({ old_pin: '', new_pin: '' })}>
           <span className="inline-flex items-center gap-1"><KeyRound size={14} />שינוי קוד סודי</span>
         </Button>

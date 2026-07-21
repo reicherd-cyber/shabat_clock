@@ -9,7 +9,7 @@ import { withTransaction } from '../db/pool.js';
 import { publishCommand, waitForAck, pushScheduleToDevice } from '../mqtt/client.js';
 import { ACK_TIMEOUT_MS, BACKUP_GRACE_MIN, RETRY_WINDOW_MIN, RECONCILE_WINDOW_H } from '../config/constants.js';
 import { freshTimesFor } from '../services/zmanim.js';
-import { freshHolidayFor } from '../services/holidays.js';
+import { freshHolidayFor, freshYearlyFor } from '../services/holidays.js';
 
 const floorMinute = (d) => new Date(Math.floor(d.getTime() / 60000) * 60000);
 
@@ -278,6 +278,7 @@ export async function startupScan(now = new Date()) {
 async function refreshAnchoredTimes(now = new Date()) {
   const rows = await query(
     `SELECT s.id, s.repeat_type, s.holidays,
+            DATE_FORMAT(s.annual_date,'%Y-%m-%d') AS annual_date, s.annual_calendar,
             DATE_FORMAT(s.on_date,'%Y-%m-%d') AS on_date, DATE_FORMAT(s.off_date,'%Y-%m-%d') AS off_date,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,
@@ -287,12 +288,12 @@ async function refreshAnchoredTimes(now = new Date()) {
      JOIN devices d ON d.id = r.device_id
      LEFT JOIN users u ON u.id = s.user_id
      WHERE s.is_enabled = TRUE AND s.deleted_at IS NULL
-       AND (s.on_anchor <> 'clock' OR s.off_anchor <> 'clock' OR s.repeat_type = 'holiday')`,
+       AND (s.on_anchor <> 'clock' OR s.off_anchor <> 'clock' OR s.repeat_type IN ('holiday','yearly'))`,
   );
   const deviceIds = new Set();
   for (const row of rows) {
-    if (row.repeat_type === 'holiday') {
-      const fresh = freshHolidayFor(row, now);
+    if (row.repeat_type === 'holiday' || row.repeat_type === 'yearly') {
+      const fresh = row.repeat_type === 'holiday' ? freshHolidayFor(row, now) : freshYearlyFor(row, now);
       if ((fresh.on_time ?? null) === (row.on_time ?? null) && (fresh.off_time ?? null) === (row.off_time ?? null)
         && (fresh.on_date ?? null) === (row.on_date ?? null) && (fresh.off_date ?? null) === (row.off_date ?? null)) continue;
       await query('UPDATE schedules SET on_date = ?, on_time = ?, off_date = ?, off_time = ? WHERE id = ?',

@@ -4,9 +4,9 @@
 // holiday schedules expand every שבת/חג block in range — so the calendar shows
 // the real future times, not just the upcoming one.
 import { query } from '../db/pool.js';
-import { shiftDate, dowOfDate } from './time.js';
+import { shiftDate, dowOfDate, timeToMinutes } from './time.js';
 import { resolveForDate, DEFAULT_REGION } from './zmanim.js';
-import { upcomingBlocks, parseHolidayKeys } from './holidays.js';
+import { upcomingBlocks, parseHolidayKeys, yearlyDatesAround } from './holidays.js';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymdStr = (dt) => `${dt.y}-${pad2(dt.mo)}-${pad2(dt.d)}`;
@@ -59,6 +59,22 @@ export function expandSchedules(rows, { from, days }) {
         const d = ymdParts(s[`${side}_date`]);
         if (inRange(ymdStr(d))) push(d, s[`${side}_time`], side);
       }
+    } else if (s.repeat_type === 'yearly' && s.annual_date) {
+      // Every occurrence of the anniversary in/near the range; OFF earlier than
+      // ON crosses midnight to the next day (same rule as the resolver).
+      for (const d of yearlyDatesAround(s.annual_date, s.annual_calendar, from, Math.ceil(days / 365) + 1)) {
+        const onT = s.on_time ? sideTimeFor('on', d) : null;
+        if (onT && inRange(ymdStr(d))) push(d, onT, 'on');
+        if (s.off_time) {
+          let offD = d;
+          let offT = sideTimeFor('off', d);
+          if (onT && offT && timeToMinutes(offT) <= timeToMinutes(onT)) {
+            offD = shiftDate(d, 1);
+            offT = sideTimeFor('off', offD) ?? offT;
+          }
+          if (offT && inRange(ymdStr(offD))) push(offD, offT, 'off');
+        }
+      }
     } else if (s.repeat_type === 'holiday') {
       let keys;
       try { keys = parseHolidayKeys(s.holidays); } catch { continue; }
@@ -88,6 +104,7 @@ export function expandSchedules(rows, { from, days }) {
 export async function calendarEvents({ userId, from, days }) {
   const rows = await query(
     `SELECT s.id, s.repeat_type, s.holidays,
+            DATE_FORMAT(s.annual_date,'%Y-%m-%d') AS annual_date, s.annual_calendar,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             DATE_FORMAT(s.on_date,'%Y-%m-%d') AS on_date,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,

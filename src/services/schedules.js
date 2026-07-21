@@ -5,12 +5,33 @@ import { query, withTransaction } from '../db/pool.js';
 import { MINUTES_PER_WEEK, MINUTES_PER_DAY } from '../config/constants.js';
 import { timeToMinutes, localParts, wallToUtc } from './time.js';
 import { resolveScheduleAnchors, DEFAULT_REGION } from './zmanim.js';
-import { resolveHolidaySchedule } from './holidays.js';
+import { HDate } from '@hebcal/core';
+import { resolveHolidaySchedule, resolveYearlySchedule, hebOnceDate } from './holidays.js';
 
-// Holiday schedules resolve their next-block dates+times; other types resolve
-// anchored sides only. Both mutate in place and validate anchor fields.
+// Holiday/yearly schedules resolve their next-occurrence dates+times; other
+// types resolve anchored sides only. All mutate in place and validate anchors.
+// A 'once' entered by HEBREW date (once_heb_day/month) resolves to the next
+// occurrence; both sides share the date, and an OFF earlier than the ON rolls
+// past midnight to the following day.
 function resolveSchedule(s, opts) {
-  return s.repeat_type === 'holiday' ? resolveHolidaySchedule(s, opts) : resolveScheduleAnchors(s, opts);
+  if (s.repeat_type === 'holiday') return resolveHolidaySchedule(s, opts);
+  if (s.repeat_type === 'yearly') return resolveYearlySchedule(s, opts);
+  const hebOnce = s.repeat_type === 'once' && s.once_heb_day && s.once_heb_month;
+  if (hebOnce) {
+    const d = hebOnceDate(s.once_heb_day, s.once_heb_month, { tz: opts.tz, now: opts.now });
+    s.on_date = d;
+    s.off_date = d;
+  }
+  delete s.once_heb_day;
+  delete s.once_heb_month;
+  resolveScheduleAnchors(s, opts);
+  if (hebOnce && s.on_time && s.off_time && s.on_date === s.off_date
+    && timeToMinutes(s.off_time) <= timeToMinutes(s.on_time)) {
+    const [y, mo, dd] = String(s.off_date).split('-').map(Number);
+    const t = new Date(Date.UTC(y, mo - 1, dd + 1));
+    s.off_date = `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
+  }
+  return s;
 }
 
 const mod = (n, m) => ((n % m) + m) % m;
@@ -53,9 +74,9 @@ export function validateScheduleRules(schedule, { tz = 'Asia/Jerusalem', now = n
     if (firstKey <= nowLocalKey) {
       throw new ApiError(400, 'ALREADY_PAST', `${hasOn ? 'ON' : 'OFF'} time is in the past`);
     }
-  } else if (s.repeat_type === 'holiday') {
-    // Sides arrive with the resolved next-block dates+times from the holiday
-    // resolver (entry is always strictly before exit — no ordering to check).
+  } else if (s.repeat_type === 'holiday' || s.repeat_type === 'yearly') {
+    // Sides arrive with the resolved next-occurrence dates+times from their
+    // resolver (ordering is guaranteed by construction — nothing to check).
     const hasOn = Boolean(s.on_time);
     const hasOff = Boolean(s.off_time);
     if (!hasOn && !hasOff) {
@@ -165,11 +186,13 @@ export async function createSchedule({ userId, relayId, createdVia, actingUserId
     const res = await conn.query(
       `INSERT INTO schedules (user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
         off_day_of_week, off_time, off_anchor, off_offset_min,
-        repeat_type, holidays, on_date, off_date, is_enabled, created_via, created_by, updated_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
+        repeat_type, holidays, annual_date, annual_calendar, on_date, off_date, is_enabled, created_via, created_by, updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
       [relay.user_id, relayId, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
         s.off_day_of_week, s.off_time, s.off_anchor, s.off_offset_min,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
+        s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
+        s.repeat_type === 'yearly' ? (s.annual_calendar ?? null) : null,
         s.on_date ?? null, s.off_date ?? null, createdVia, actor, actor],
     );
     deviceIds.push(relay.device_id);
@@ -203,6 +226,10 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
       off_offset_min: patch.off_offset_min !== undefined ? patch.off_offset_min : existing.off_offset_min,
       repeat_type: patch.repeat_type !== undefined ? patch.repeat_type : existing.repeat_type,
       holidays: patch.holidays !== undefined ? patch.holidays : existing.holidays,
+      annual_date: patch.annual_date !== undefined ? patch.annual_date : (existing.annual_date ? ymdOf(existing.annual_date) : null),
+      annual_calendar: patch.annual_calendar !== undefined ? patch.annual_calendar : existing.annual_calendar,
+      annual_heb_day: patch.annual_heb_day, annual_heb_month: patch.annual_heb_month,
+      once_heb_day: patch.once_heb_day, once_heb_month: patch.once_heb_month,
       on_date: patch.on_date !== undefined ? patch.on_date : (existing.on_date ? ymdOf(existing.on_date) : null),
       off_date: patch.off_date !== undefined ? patch.off_date : (existing.off_date ? ymdOf(existing.off_date) : null),
     };
@@ -216,11 +243,13 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
     await conn.query(
       `UPDATE schedules SET on_day_of_week=?, on_time=?, on_anchor=?, on_offset_min=?,
         off_day_of_week=?, off_time=?, off_anchor=?, off_offset_min=?,
-        repeat_type=?, holidays=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
+        repeat_type=?, holidays=?, annual_date=?, annual_calendar=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
        WHERE id = ?`,
       [s.on_day_of_week, s.on_time, s.on_anchor ?? 'clock', s.on_offset_min ?? 0,
         s.off_day_of_week, s.off_time, s.off_anchor ?? 'clock', s.off_offset_min ?? 0,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
+        s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
+        s.repeat_type === 'yearly' ? (s.annual_calendar ?? null) : null,
         s.on_date ?? null, s.off_date ?? null, is_enabled, actor, scheduleId],
     );
     deviceIds.push(existing.device_id);
@@ -250,12 +279,12 @@ export async function deleteSchedule({ userId, scheduleId, actor = null }) {
 }
 
 export async function listSchedules({ userId }) {
-  return query(
+  const rows = await query(
     `SELECT s.id, s.relay_id, r.name AS relay_name, d.id AS device_id, d.name AS device_name, d.sync_status,
             s.user_id, u.full_name AS user_name,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,
-            s.repeat_type, s.holidays, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
+            s.repeat_type, s.holidays, s.annual_date, s.annual_calendar, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
      JOIN devices d ON d.id = r.device_id
@@ -264,6 +293,15 @@ export async function listSchedules({ userId }) {
      ORDER BY s.id DESC`,
     userId != null ? [userId] : [],
   );
+  // Hebrew-anniversary rows also expose their Hebrew day/month for the UI.
+  for (const r of rows) {
+    if (r.repeat_type === 'yearly' && r.annual_calendar === 'heb' && r.annual_date) {
+      const hd = new HDate(new Date(`${ymdOf(r.annual_date)}T12:00:00`));
+      r.annual_heb_day = hd.getDate();
+      r.annual_heb_month = hd.getMonth();
+    }
+  }
+  return rows;
 }
 
 function ymdOf(v) {

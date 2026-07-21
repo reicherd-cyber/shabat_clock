@@ -89,3 +89,51 @@ test('freshHolidayFor: mid-block keeps the current block (Shabbat afternoon)', (
   assert.equal(fresh.on_date, '2026-07-24');
   assert.equal(fresh.off_date, '2026-07-25');
 });
+
+// ── yearly (anniversary) schedules ──
+import { resolveYearlySchedule, yearlyDatesAround } from '../src/services/holidays.js';
+import { HDate } from '@hebcal/core';
+
+test('yearly greg: next occurrence this year, rolls to next year once passed', () => {
+  const s = { annual_date: '2020-08-10', annual_calendar: 'greg', on_time: '18:00', off_time: '22:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-14T09:00:00Z') });
+  assert.equal(s.on_date, '2026-08-10');
+  const s2 = { annual_date: '2020-08-10', annual_calendar: 'greg', on_time: '18:00', off_time: '22:00' };
+  resolveYearlySchedule(s2, { region: 'jerusalem', tz: TZ, now: new Date('2026-08-11T09:00:00Z') });
+  assert.equal(s2.on_date, '2027-08-10');
+});
+
+test('yearly heb: follows the HEBREW date across years', () => {
+  // 2026-07-14 = 28 Tammuz 5786; the 5787 occurrence must be 28 Tammuz 5787, not 14 July.
+  const s = { annual_date: '2026-07-14', annual_calendar: 'heb', on_time: '19:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-08-01T09:00:00Z') });
+  assert.notEqual(s.on_date, '2027-07-14');
+  const src = new HDate(new Date('2026-07-14T12:00:00'));
+  const next = new HDate(new Date(`${s.on_date}T12:00:00`));
+  assert.equal(next.getDate(), src.getDate());
+  assert.equal(next.getMonthName(), src.getMonthName());
+  assert.equal(next.getFullYear(), src.getFullYear() + 1);
+});
+
+test('yearly: OFF before ON crosses midnight to the next day', () => {
+  const s = { annual_date: '2026-09-01', annual_calendar: 'greg', on_time: '20:00', off_time: '01:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-14T09:00:00Z') });
+  assert.equal(s.on_date, '2026-09-01');
+  assert.equal(s.off_date, '2026-09-02');
+});
+
+test('yearlyDatesAround yields one occurrence per year', () => {
+  const dates = yearlyDatesAround('2024-03-05', 'greg', { y: 2026, mo: 7, d: 1 }, 2);
+  assert.deepEqual(dates.map((d) => d.y), [2025, 2026, 2027]);
+  assert.ok(dates.every((d) => d.mo === 3 && d.d === 5));
+});
+
+test('yearly heb: direct day+month pick (15 Shvat) resolves and recurs on the Hebrew date', () => {
+  const s = { annual_calendar: 'heb', annual_heb_day: 15, annual_heb_month: 11, on_time: '17:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-14T09:00:00Z') });
+  const next = new HDate(new Date(`${s.on_date}T12:00:00`));
+  assert.equal(next.getDate(), 15);
+  assert.equal(next.getMonthName(), "Sh'vat");
+  assert.ok(s.annual_date, 'representative date stored');
+  assert.equal(s.annual_heb_day, undefined); // consumed, not persisted
+});

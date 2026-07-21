@@ -3,7 +3,8 @@ import { getTimes } from 'suncalc';
 import { HDate, HebrewCalendar, flags, gematriya } from '@hebcal/core';
 import { api } from '../api.js';
 import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
-import { ChevronRight, ChevronLeft, ChevronDown, House, Check } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ChevronRight, ChevronLeft, ChevronDown, House, Check, Plus } from 'lucide-react';
 
 // לוח תזמונים — month grid + a scroll-free time-axis week/day view. The 24h day
 // is compressed into four fixed sections (0–6, 6–12, 12–18, 18–24) so the whole
@@ -265,6 +266,7 @@ export default function Calendar() {
   const [dayModal, setDayModal] = useState(null);
   const [nowTick, setNowTick] = useState(Date.now());
   const { error, setError } = useAsync();
+  const nav = useNavigate();
 
   const cells = useMemo(() => cellsFor(view, cursor, calMode), [view, cursor, calMode]);
 
@@ -457,11 +459,11 @@ export default function Calendar() {
             const hi = hebInfo(c.date);
             return (
               <div key={c.date}
-                onClick={() => chips.length && setDayModal(c.date)}
+                onClick={() => setDayModal(c.date)}
                 className={`min-h-[108px] p-1 border-line ${i % 7 !== 6 ? 'border-e' : ''} ${i >= 7 ? 'border-t' : ''}
                   ${c.inMonth ? '' : 'bg-surface2/60 opacity-40 grayscale'}
                   ${hi.chag && c.inMonth ? 'bg-[#FBF3DC]/70' : c.dow === 7 && c.inMonth ? 'bg-surface2/60' : ''}
-                  ${chips.length ? 'cursor-pointer hover:bg-[#E4EFFE]/40' : ''}`}>
+                  cursor-pointer hover:bg-[#E4EFFE]/40`}>
                 <div className="flex items-start justify-between gap-1">
                   <div className={`text-[13px] mb-0.5 min-w-7 h-7 px-1 grid place-items-center rounded-full
                     ${c.date === todayStr ? 'bg-accent text-white font-bold' : c.inMonth ? '' : 'text-muted'}`}>
@@ -545,6 +547,9 @@ export default function Calendar() {
               </div>
             ))}
             {!(monthChips.get(dayModal) || []).length && <p className="text-muted">אין תזמונים ביום זה.</p>}
+            <Button variant="ghost" className="w-full" onClick={() => nav(`/schedules?date=${dayModal}`)}>
+              <span className="inline-flex items-center gap-1.5"><Plus size={15} />תזמון חדש בתאריך זה</span>
+            </Button>
           </div>
         )}
       </Modal>

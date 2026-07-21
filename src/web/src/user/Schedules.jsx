@@ -13,6 +13,8 @@ const emptyForm = {
   off_kind: 'clock', off_offset: 20, off_dir: 'after',
   // holiday mode: which days (default — everything; keep in sync with HOLIDAY_NAMES)
   holidays: ['shabbat', 'rosh_hashana', 'yom_kippur', 'sukkot', 'shemini_atzeret', 'pesach_1', 'pesach_7', 'shavuot'],
+  // לפי תאריך (yearly) + one-time date entry: Hebrew or civil calendar
+  annual_calendar: 'heb', once_calendar: 'greg', heb_day: 1, heb_month: 7,
 };
 
 const ANCHOR_NAMES = {
@@ -39,6 +41,16 @@ const holidaySummary = (csv) => {
   return parts.join(' + ');
 };
 const fmtDate = (d) => (d ? `${Number(String(d).slice(8, 10))}.${Number(String(d).slice(5, 7))}` : '');
+
+// Hebrew date picker parts (hebcal month numbering: Nisan=1 … Tishrei=7 … Adar=12).
+const HEB_DAYS = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ז׳', 'ח׳', 'ט׳', 'י׳', 'י״א', 'י״ב', 'י״ג', 'י״ד', 'ט״ו',
+  'ט״ז', 'י״ז', 'י״ח', 'י״ט', 'כ׳', 'כ״א', 'כ״ב', 'כ״ג', 'כ״ד', 'כ״ה', 'כ״ו', 'כ״ז', 'כ״ח', 'כ״ט', 'ל׳'];
+const HEB_MONTHS = [
+  { v: 7, label: 'תשרי' }, { v: 8, label: 'חשון' }, { v: 9, label: 'כסלו' }, { v: 10, label: 'טבת' },
+  { v: 11, label: 'שבט' }, { v: 12, label: 'אדר' }, { v: 13, label: 'אדר ב׳' }, { v: 1, label: 'ניסן' },
+  { v: 2, label: 'אייר' }, { v: 3, label: 'סיון' }, { v: 4, label: 'תמוז' }, { v: 5, label: 'אב' }, { v: 6, label: 'אלול' },
+];
+const hebMonthLabel = (m) => HEB_MONTHS.find((x) => x.v === Number(m))?.label || '';
 const REGION_NAMES = { jerusalem: 'ירושלים', tel_aviv: 'תל אביב', haifa: 'חיפה', beer_sheva: 'באר שבע' };
 
 // "20 דק׳ לפני שקיעה" (offset 0 → just the zman name)
@@ -132,6 +144,15 @@ export default function Schedules() {
   };
   useEffect(() => { refresh().catch(setError); }, []);
 
+  // Arriving from the calendar with ?date=YYYY-MM-DD — open a prefilled form.
+  useEffect(() => {
+    const d = new URLSearchParams(window.location.search).get('date');
+    if (d && /^\d{4}-\d{2}-\d{2}$/.test(d) && relays.length && !form) {
+      setForm({ ...emptyForm, relay_ids: [relays[0].id], repeat_type: 'once', on_date: d, off_date: d });
+      window.history.replaceState({}, '', '/schedules');
+    }
+  }, [relays]);
+
   const anchored = form && (form.on_kind !== 'clock' || form.off_kind !== 'clock');
 
   // Map an existing schedule row back into the form for editing.
@@ -140,6 +161,10 @@ export default function Schedules() {
     id: s.id,
     relay_id: s.relay_id,
     repeat_type: s.repeat_type,
+    annual_calendar: s.annual_calendar || 'heb',
+    once_calendar: 'greg', // stored once rows always carry concrete dates
+    heb_day: s.annual_heb_day || 1,
+    heb_month: s.annual_heb_month || 7,
     mode: s.on_time && s.off_time ? 'both' : s.on_time ? 'on' : 'off',
     daily: s.repeat_type === 'weekly'
       && (s.on_time ? s.on_day_of_week == null : s.off_day_of_week == null),
@@ -147,7 +172,9 @@ export default function Schedules() {
     off_day_of_week: s.off_day_of_week ?? 7,
     on_time: s.on_time || '18:00',
     off_time: s.off_time || '20:00',
-    on_date: s.on_date ? String(s.on_date).slice(0, 10) : '',
+    on_date: s.repeat_type === 'yearly'
+      ? String(s.annual_date).slice(0, 10)
+      : (s.on_date ? String(s.on_date).slice(0, 10) : ''),
     off_date: s.off_date ? String(s.off_date).slice(0, 10) : '',
     on_kind: s.on_anchor && s.on_anchor !== 'clock' ? s.on_anchor : 'clock',
     on_offset: s.on_anchor && s.on_anchor !== 'clock' ? Math.abs(s.on_offset_min || 0) : 20,
@@ -169,13 +196,24 @@ export default function Schedules() {
     // Both repeat types may be one-sided — send only the side(s) the chosen mode
     // performs. Editing sends explicit nulls first so a dropped side is really
     // dropped on the server (PATCH merges field-by-field).
+    const isAnnual = form.repeat_type === 'yearly';
+    const sentType = form.repeat_type;
     const b = form.id
       ? {
-        repeat_type: form.repeat_type,
+        repeat_type: sentType, annual_date: null, annual_calendar: null,
         on_time: null, on_day_of_week: null, on_date: null, on_anchor: 'clock', on_offset_min: 0,
         off_time: null, off_day_of_week: null, off_date: null, off_anchor: 'clock', off_offset_min: 0,
       }
-      : { relay_id: Number(form.relay_id), repeat_type: form.repeat_type };
+      : { relay_id: Number(form.relay_id), repeat_type: sentType };
+    if (isAnnual) {
+      b.annual_calendar = form.annual_calendar;
+      if (form.annual_calendar === 'heb') {
+        b.annual_heb_day = Number(form.heb_day);
+        b.annual_heb_month = Number(form.heb_month);
+      } else {
+        b.annual_date = form.on_date;
+      }
+    }
     const side = (p) => { // clock → fixed time; anchored → zman + signed offset, server resolves the time
       if (form[`${p}_kind`] === 'clock') { b[`${p}_time`] = form[`${p}_time`]; return; }
       b[`${p}_anchor`] = form[`${p}_kind`];
@@ -186,6 +224,16 @@ export default function Schedules() {
       if (form.mode !== 'on') { side('off'); b.off_day_of_week = form.daily ? null : Number(form.off_day_of_week); }
     } else if (form.repeat_type === 'holiday') {
       b.holidays = form.holidays; // the server computes the next שבת/חג block's dates
+      if (form.mode !== 'off') side('on');
+      if (form.mode !== 'on') side('off');
+    } else if (isAnnual) {
+      // Single anniversary date — the server resolves each year's occurrence.
+      if (form.mode !== 'off') side('on');
+      if (form.mode !== 'on') side('off');
+    } else if (form.once_calendar === 'heb') {
+      // One-time by HEBREW date — the server resolves the next occurrence.
+      b.once_heb_day = Number(form.heb_day);
+      b.once_heb_month = Number(form.heb_month);
       if (form.mode !== 'off') side('on');
       if (form.mode !== 'on') side('off');
     } else {
@@ -265,12 +313,16 @@ export default function Schedules() {
     : s[`${p}_time`]);
   const onLabel = (s) => (s.on_time == null ? null
     : s.repeat_type === 'holiday' ? `בכניסה (${fmtDate(s.on_date)}) · ${sideTime(s, 'on')} · הדלקה`
-      : s.repeat_type === 'once' ? `${String(s.on_date).slice(0, 10)} ${sideTime(s, 'on')} · הדלקה`
-        : `${s.on_day_of_week == null ? 'כל יום' : DAY_NAMES[s.on_day_of_week]} ${sideTime(s, 'on')} · הדלקה`);
+      : s.repeat_type === 'yearly' ? `כל שנה — ${s.annual_calendar === 'heb'
+        ? `${HEB_DAYS[(s.annual_heb_day || 1) - 1]} ${hebMonthLabel(s.annual_heb_month)}`
+        : fmtDate(s.annual_date)} · הקרוב ${fmtDate(s.on_date)} · ${sideTime(s, 'on')} · הדלקה`
+        : s.repeat_type === 'once' ? `${String(s.on_date).slice(0, 10)} ${sideTime(s, 'on')} · הדלקה`
+          : `${s.on_day_of_week == null ? 'כל יום' : DAY_NAMES[s.on_day_of_week]} ${sideTime(s, 'on')} · הדלקה`);
   const offLabel = (s) => (s.off_time == null ? null
     : s.repeat_type === 'holiday' ? `ביציאה (${fmtDate(s.off_date)}) · ${sideTime(s, 'off')} · כיבוי`
-      : s.repeat_type === 'once' ? `${String(s.off_date).slice(0, 10)} ${sideTime(s, 'off')} · כיבוי`
-        : `${s.off_day_of_week == null ? 'כל יום' : DAY_NAMES[s.off_day_of_week]} ${sideTime(s, 'off')} · כיבוי`);
+      : s.repeat_type === 'yearly' ? `${fmtDate(s.off_date)} · ${sideTime(s, 'off')} · כיבוי`
+        : s.repeat_type === 'once' ? `${String(s.off_date).slice(0, 10)} ${sideTime(s, 'off')} · כיבוי`
+          : `${s.off_day_of_week == null ? 'כל יום' : DAY_NAMES[s.off_day_of_week]} ${sideTime(s, 'off')} · כיבוי`);
 
   if (!schedules) return <p className="text-muted">טוען…</p>;
   return (
@@ -360,6 +412,8 @@ export default function Schedules() {
               <Button variant={form.repeat_type === 'weekly' ? 'primary' : 'ghost'} onClick={() => setForm({ ...form, repeat_type: 'weekly' })}>שבועי</Button>
               <Button variant={form.repeat_type === 'once' ? 'primary' : 'ghost'}
                 onClick={() => setForm({ ...form, repeat_type: 'once', on_date: form.on_date || todayYmd(), on_time: form.on_time || nowHm() })}>חד-פעמי</Button>
+              <Button variant={form.repeat_type === 'yearly' ? 'primary' : 'ghost'}
+                onClick={() => setForm({ ...form, repeat_type: 'yearly' })}>לפי תאריך</Button>
               <Button variant={form.repeat_type === 'holiday' ? 'primary' : 'ghost'}
                 onClick={() => setForm({
                   ...form, repeat_type: 'holiday',
@@ -406,6 +460,39 @@ export default function Schedules() {
                   })}>{m.label}</Button>
               ))}
             </div>
+            {(form.repeat_type === 'yearly' || form.repeat_type === 'once') && (() => {
+              const calKey = form.repeat_type === 'yearly' ? 'annual_calendar' : 'once_calendar';
+              const heb = form[calKey] === 'heb';
+              return (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    {form.repeat_type === 'yearly' && <span className="text-sm text-muted">חוזר כל שנה —</span>}
+                    {[{ v: 'heb', label: 'תאריך עברי' }, { v: 'greg', label: 'תאריך לועזי' }].map((o) => (
+                      <label key={o.v} className="flex items-center gap-1 text-sm">
+                        <input type="radio" name={calKey} checked={form[calKey] === o.v}
+                          onChange={() => setForm({ ...form, [calKey]: o.v, on_date: form.on_date || todayYmd() })} />
+                        {o.label}
+                      </label>
+                    ))}
+                  </div>
+                  {heb && (
+                    <div className="flex items-center gap-2">
+                      <Select value={form.heb_day} onChange={(e) => setForm({ ...form, heb_day: e.target.value })}>
+                        {HEB_DAYS.map((n, i) => <option key={i + 1} value={i + 1}>{n}</option>)}
+                      </Select>
+                      <span className="text-sm text-muted">ב</span>
+                      <Select value={form.heb_month} onChange={(e) => setForm({ ...form, heb_month: e.target.value })}>
+                        {HEB_MONTHS.map((m) => <option key={m.v} value={m.v}>{m.label}</option>)}
+                      </Select>
+                      {form.repeat_type === 'once' && <span className="text-xs text-muted">— המופע הקרוב של התאריך</span>}
+                    </div>
+                  )}
+                  {!heb && form.repeat_type === 'yearly' && (
+                    <Input type="date" value={form.on_date} onChange={(e) => setForm({ ...form, on_date: e.target.value })} />
+                  )}
+                </div>
+              );
+            })()}
             <div className="grid grid-cols-2 gap-3">
               {['on', 'off'].map((p) => (form.mode !== (p === 'on' ? 'off' : 'on') && <div key={p} className="space-y-2">
                 <span className={`text-sm font-medium ${p === 'on' ? 'text-on' : 'text-off'}`}>{p === 'on' ? 'הדלקה' : 'כיבוי'}</span>
@@ -414,7 +501,7 @@ export default function Schedules() {
                     {Object.entries(DAY_NAMES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
                   </Select>
                 )}
-                {form.repeat_type === 'once' && (
+                {form.repeat_type === 'once' && form.once_calendar === 'greg' && (
                   <Input type="date" value={form[`${p}_date`]} onChange={(e) => setForm({ ...form, [`${p}_date`]: e.target.value })} />
                 )}
                 <Select className="w-full" value={form[`${p}_kind`]} onChange={(e) => setForm({ ...form, [`${p}_kind`]: e.target.value })}>
@@ -441,7 +528,7 @@ export default function Schedules() {
                 </Select>
               </label>
             )}
-            {form.repeat_type === 'once' && !anchored && (
+            {form.repeat_type === 'once' && !anchored && form.once_calendar === 'greg' && (
               <div className="flex items-center gap-1.5 flex-wrap">
                 <span className="text-sm text-muted shrink-0">
                   {form.mode === 'on' ? 'הדלקה בעוד:' : form.mode === 'off' ? 'כיבוי בעוד:' : 'כיבוי אחרי:'}
@@ -453,7 +540,10 @@ export default function Schedules() {
               </div>
             )}
             <ErrorNote error={error} />
-            <Button className="w-full" disabled={busy || (!form.id && !form.relay_ids.length)} onClick={save}>
+            <Button className="w-full"
+              disabled={busy || (!form.id && !form.relay_ids.length)
+                || (form.repeat_type === 'yearly' && form.annual_calendar === 'greg' && !form.on_date)}
+              onClick={save}>
               {form.id ? 'שמור שינויים'
                 : form.relay_ids.length > 1 ? `שמור תזמון ל־${form.relay_ids.length} ערוצים` : 'שמור תזמון'}
             </Button>
