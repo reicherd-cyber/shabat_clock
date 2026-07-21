@@ -84,7 +84,7 @@ export async function pendingPhoneAddCode(phone) {
 export async function requestOtp({ phone, purpose, userPhoneId = null, channel = 'call', email = null }) {
   let code;
   if (purpose === 'phone_add') {
-    // Reuse the live code (10-min validity) — re-requesting redials the SAME code.
+    // Reuse the live code (10-min validity) — re-requesting keeps the SAME code.
     code = await pendingPhoneAddCode(phone);
     if (!code) {
       const res = await query(
@@ -95,6 +95,11 @@ export async function requestOtp({ phone, purpose, userPhoneId = null, channel =
       code = derivedPhoneAddCode(phone, res.insertId);
       await query('UPDATE otp_codes SET code_hash = ? WHERE id = ?', [bcryptHash(code), res.insertId]);
     }
+    // NO outbound call (saves Yemot units, and campaign calls were getting
+    // filtered anyway): the user dials the line from the new number and the IVR
+    // reads the code back (router.js phone_add_code branch).
+    if (env.nodeEnv !== 'production') console.log(`[dev] phone-add code for ${phone}: ${code}`);
+    return;
   } else {
     code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
     await query(

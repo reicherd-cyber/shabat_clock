@@ -276,12 +276,12 @@ export default function Settings() {
               <Input dir="ltr" type="password" inputMode="numeric" placeholder="הקוד הסודי שלך (4 ספרות)" value={phoneForm.pin}
                 onChange={(e) => setPhoneForm({ ...phoneForm, pin: e.target.value })} />
             )}
-            <p className="text-muted text-xs">תתקבל שיחת אימות למספר; המספר יתווסף רק לאחר הזנת הקוד מהשיחה בחלון הבא.</p>
+            <p className="text-muted text-xs">בשלב הבא תחייגו מהמספר החדש אל המערכת, והיא תקריא לכם קוד אימות. המספר יתווסף רק לאחר הזנת הקוד.</p>
             <ErrorNote error={error} />
             <Button className="w-full"
               disabled={busy || phoneForm.phone.length < 9 || (!!me.user.require_pin && phoneForm.pin.length !== 4)}
               onClick={submitPhone}>
-              {phoneForm.mode === 'edit' ? 'עדכן ושלח קוד אימות' : 'שלח קוד אימות'}
+              {phoneForm.mode === 'edit' ? 'עדכן והמשך לאימות' : 'המשך לאימות'}
             </Button>
           </div>
         )}
@@ -290,10 +290,12 @@ export default function Settings() {
       <Modal open={!!verifying} onClose={() => setVerifying(null)} title="אימות מספר">
         {verifying && (
           <div className="space-y-3">
-            <p className="text-sm">הזינו את הקוד שהוקרא בשיחה.</p>
+            <p className="text-sm">
+              חייגו עכשיו מהמספר החדש אל <b dir="ltr">043131481</b> — המערכת תזהה את המספר ותקריא
+              לכם קוד בן 6 ספרות. הזינו אותו כאן.
+            </p>
             <p className="text-muted text-xs bg-surface2 rounded-xl px-3 py-2">
-              לא קיבלתם שיחה? חייגו <b dir="ltr">043131481</b> מהמספר החדש — המערכת תקריא לכם את
-              הקוד. הקוד תקף ל־10 דקות.
+              הקוד תקף ל־10 דקות; חיוג חוזר ישמיע את אותו הקוד.
             </p>
             <Input dir="ltr" inputMode="numeric" placeholder="קוד בן 6 ספרות" value={verifying.code}
               onChange={(e) => setVerifying({ ...verifying, code: e.target.value })} />
