@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
-import { UserRound, Phone, Plug, Pencil, Plus, KeyRound } from 'lucide-react';
+import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2 } from 'lucide-react';
 
 // Phones (caller-ID) + PIN + relay management — relay names/codes drive the IVR
 // prompts directly (PLAN §3).
 export default function Settings() {
   const [me, setMe] = useState(null);
   const [devices, setDevices] = useState([]);
-  const [verifying, setVerifying] = useState(null); // {id, code}
+  const [verifying, setVerifying] = useState(null); // {id?, phone?, code} — id = legacy pending row, phone = new number not yet saved
   const [phoneForm, setPhoneForm] = useState(null); // {mode:'add'|'edit', id?, phone, pin}
+  const [removingPhone, setRemovingPhone] = useState(null); // phone row pending removal confirmation
   const [pinForm, setPinForm] = useState(null);
   const [nameEdit, setNameEdit] = useState(null); // null = display mode; string = editing value
   const [emailEdit, setEmailEdit] = useState(null); // null = display mode; string = editing value
@@ -27,20 +28,29 @@ export default function Settings() {
   useEffect(() => { refresh().catch(setError); }, []);
 
   const verifyPhone = () => run(async () => {
-    await api.post(`/me/phones/${verifying.id}/verify`, { code: verifying.code });
+    // New numbers are saved only NOW, when the code proves control; legacy pending
+    // rows (and edits) verify in place.
+    if (verifying.id) await api.post(`/me/phones/${verifying.id}/verify`, { code: verifying.code });
+    else await api.post('/me/phones/verify-new', { phone: verifying.phone, code: verifying.code });
     setVerifying(null);
     await refresh();
   });
 
-  // Add/edit a phone: PIN proves the account owner; then an OTP call to the (new)
-  // number proves control of it — the verify modal opens right after.
+  // Add/edit a phone: an OTP call to the (new) number proves control of it — the
+  // verify modal opens right after. The PIN is asked only when the account enforces one.
   const submitPhone = () => run(async () => {
     const { mode, id, phone, pin } = phoneForm;
     const res = mode === 'edit'
       ? await api.patch(`/me/phones/${id}`, { phone, pin })
       : await api.post('/me/phones', { phone, pin });
     setPhoneForm(null);
-    setVerifying({ id: res.id, code: '' });
+    setVerifying(mode === 'edit' ? { id: res.id, code: '' } : { phone: res.phone, code: '' });
+    await refresh();
+  });
+
+  const removePhone = () => run(async () => {
+    await api.del(`/me/phones/${removingPhone.id}`);
+    setRemovingPhone(null);
     await refresh();
   });
 
@@ -180,11 +190,14 @@ export default function Settings() {
                 {p.label && <span className="text-muted text-sm">{p.label}</span>}
                 <Badge ok={!!p.verified_at}>{p.verified_at ? 'מאומת' : 'ממתין לאימות'}</Badge>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
                 {!p.verified_at && (
                   <Button variant="ghost" onClick={() => setVerifying({ id: p.id, code: '' })}>אימות</Button>
                 )}
                 <Button variant="ghost" onClick={() => setPhoneForm({ mode: 'edit', id: p.id, phone: p.phone, pin: '' })}>עריכה</Button>
+                <button disabled={busy} title="הסרת המספר"
+                  className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
+                  onClick={() => setRemovingPhone(p)}><Trash2 size={16} /></button>
               </div>
             </div>
           ))}
@@ -192,7 +205,7 @@ export default function Settings() {
         <Button variant="ghost" className="mt-3" onClick={() => setPhoneForm({ mode: 'add', phone: '', pin: '' })}>
           <span className="inline-flex items-center gap-1"><Plus size={15} />הוסף מספר</span>
         </Button>
-        <p className="text-muted text-xs mt-2">הוספה או עריכה דורשות את הקוד הסודי, והמספר החדש מאומת בשיחת טלפון.</p>
+        <p className="text-muted text-xs mt-2">מספר חדש מאומת בשיחת טלפון, ונוסף לחשבון רק לאחר הזנת הקוד מהשיחה.</p>
       </Card>
 
       {devices.filter((d) => d.is_enabled).map((d) => (
@@ -259,12 +272,16 @@ export default function Settings() {
           <div className="space-y-3">
             <Input dir="ltr" type="tel" placeholder="מספר טלפון" value={phoneForm.phone}
               onChange={(e) => setPhoneForm({ ...phoneForm, phone: e.target.value })} />
-            <Input dir="ltr" type="password" inputMode="numeric" placeholder="הקוד הסודי שלך (4 ספרות)" value={phoneForm.pin}
-              onChange={(e) => setPhoneForm({ ...phoneForm, pin: e.target.value })} />
-            <p className="text-muted text-xs">לאחר האישור תתקבל שיחת אימות למספר. הזינו את הקוד מהשיחה בחלון הבא.</p>
+            {!!me.user.require_pin && (
+              <Input dir="ltr" type="password" inputMode="numeric" placeholder="הקוד הסודי שלך (4 ספרות)" value={phoneForm.pin}
+                onChange={(e) => setPhoneForm({ ...phoneForm, pin: e.target.value })} />
+            )}
+            <p className="text-muted text-xs">תתקבל שיחת אימות למספר; המספר יתווסף רק לאחר הזנת הקוד מהשיחה בחלון הבא.</p>
             <ErrorNote error={error} />
-            <Button className="w-full" disabled={busy || phoneForm.phone.length < 9 || phoneForm.pin.length !== 4} onClick={submitPhone}>
-              {phoneForm.mode === 'edit' ? 'עדכן ושלח קוד אימות' : 'הוסף ושלח קוד אימות'}
+            <Button className="w-full"
+              disabled={busy || phoneForm.phone.length < 9 || (!!me.user.require_pin && phoneForm.pin.length !== 4)}
+              onClick={submitPhone}>
+              {phoneForm.mode === 'edit' ? 'עדכן ושלח קוד אימות' : 'שלח קוד אימות'}
             </Button>
           </div>
         )}
@@ -278,6 +295,21 @@ export default function Settings() {
               onChange={(e) => setVerifying({ ...verifying, code: e.target.value })} />
             <ErrorNote error={error} />
             <Button className="w-full" disabled={busy || verifying.code.length !== 6} onClick={verifyPhone}>אמת</Button>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!removingPhone} onClose={() => setRemovingPhone(null)} title="הסרת מספר טלפון">
+        {removingPhone && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              להסיר את המספר <b dir="ltr">{removingPhone.phone}</b> מהחשבון? לא ניתן יהיה להזדהות איתו יותר בשיחות טלפון ובכניסה לאתר.
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setRemovingPhone(null)}>ביטול</Button>
+              <Button variant="danger" className="flex-1" disabled={busy} onClick={removePhone}>הסר מספר</Button>
+            </div>
           </div>
         )}
       </Modal>

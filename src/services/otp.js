@@ -16,17 +16,22 @@ async function deliverOtp(phone, code) {
   const token = env.otpYemot.token || (env.otpYemot.user ? `${env.otpYemot.user}:${env.otpYemot.pass}` : '');
   if (!token) return;
 
+  // RunCampaign with a template places a REAL voice call that speaks the code;
+  // RunTzintuk (the previous API) is a missed-call ping — it billed and reported
+  // OK but never rang properly (verified against GetCampaignStatus 2026-07-22).
+  const spokenCode = code.split('').join(', ');
   const params = new URLSearchParams({
     token,
+    templateId: env.otpYemot.templateId,
     phones: phone,
-    ttsMessage: `הקוד שלך הוא: ${code.split('').join(', ')}`,
+    ttsMessage: `הקוד שלך הוא: ${spokenCode}. שוב: ${spokenCode}.`,
   });
   if (env.otpYemot.callerId) params.set('callerId', env.otpYemot.callerId);
 
   let ok = false;
   let detail = '';
   try {
-    const res = await fetch(`https://www.call2all.co.il/ym/api/RunTzintuk?${params}`);
+    const res = await fetch(`https://www.call2all.co.il/ym/api/RunCampaign?${params}`);
     // Yemot returns HTTP 200 with a JSON envelope even on logical errors, so check the body.
     const body = await res.json().catch(() => ({}));
     detail = JSON.stringify(body);

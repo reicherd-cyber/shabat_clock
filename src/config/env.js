@@ -48,6 +48,9 @@ export const env = {
     user: process.env.OTP_YEMOT_USER || '',
     pass: process.env.OTP_YEMOT_PASS || '',
     callerId: process.env.OTP_YEMOT_CALLER_ID || '',
+    // Campaign template for spoken OTP calls (RunCampaign). RunTzintuk is a
+    // missed-call ping and never reliably speaks — verified 2026-07-22.
+    templateId: process.env.OTP_YEMOT_TEMPLATE_ID || '70847',
   },
   mosquittoPasswdFile: process.env.MOSQUITTO_PASSWD_FILE || '',
   // Remote-Shelly onboarding: the public broker devices dial into + the broker files

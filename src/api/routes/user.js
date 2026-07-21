@@ -84,31 +84,59 @@ userRouter.get('/me/phones', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// Adding/editing a phone requires the account PIN — proves it's the account owner
-// acting, on top of the OTP call proving control of the number itself.
+// Adding/editing a phone asks for the account PIN only when the account enforces
+// one (require_pin) — otherwise the login session + the OTP call to the new
+// number are the proof.
 async function requirePin(userId, pin) {
   const [user] = await query('SELECT * FROM users WHERE id = ?', [userId]);
-  if (!user || !verifyPin(user, String(pin || ''))) {
-    throw errors.unauthenticated('קוד סודי שגוי');
-  }
+  if (!user) throw errors.unauthenticated();
+  if (!user.require_pin) return;
+  if (!verifyPin(user, String(pin || ''))) throw errors.unauthenticated('קוד סודי שגוי');
 }
 
+// Step 1 of adding a number: nothing is saved yet — we only place the OTP call.
+// The row is created in verify-new below, AFTER the code proves control.
 userRouter.post('/me/phones', async (req, res, next) => {
   try {
     await requirePin(req.auth.userId, req.body?.pin);
     const phone = normalizePhone(req.body?.phone);
     if (!isValidIsraeliPhone(phone)) throw errors.validation('Invalid phone', { phone: 'invalid' });
-    const result = await query(
-      'INSERT INTO user_phones (user_id, phone, label, verified_at, created_by) VALUES (?,?,?,NULL,?)',
-      [req.auth.userId, phone, req.body?.label ?? null, actorStr(actorOf(req))],
-    ).catch((e) => {
-      if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', 'Phone already registered');
-      throw e;
-    });
-    await act(req, 'create', 'user_phone', result.insertId, { after: { phone } });
-    // OTP call TO THE NEW NUMBER; code bound to this pending row, not just the string.
-    await requestOtp({ phone, purpose: 'phone_add', userPhoneId: result.insertId });
-    res.json({ id: result.insertId, verified: false });
+    const [existing] = await query('SELECT id, user_id, deleted_at FROM user_phones WHERE phone = ?', [phone]);
+    // Taken = any live row, or a removed row of ANOTHER user; the user's own
+    // removed number may return (revived at verify).
+    if (existing && (existing.deleted_at == null || Number(existing.user_id) !== req.auth.userId)) {
+      throw errors.conflict('CONFLICT', 'Phone already registered');
+    }
+    await requestOtp({ phone, purpose: 'phone_add' });
+    res.json({ phone, verified: false });
+  } catch (e) { next(e); }
+});
+
+// Step 2: the code from the call — only now the number joins the account (already
+// verified; a soft-removed row of the same user is revived instead of re-created).
+userRouter.post('/me/phones/verify-new', async (req, res, next) => {
+  try {
+    const phone = normalizePhone(req.body?.phone);
+    if (!isValidIsraeliPhone(phone)) throw errors.validation('Invalid phone', { phone: 'invalid' });
+    await verifyOtp({ phone, code: String(req.body?.code || ''), purpose: 'phone_add' });
+    const by = actorStr(actorOf(req));
+    const [existing] = await query('SELECT id, user_id, deleted_at FROM user_phones WHERE phone = ?', [phone]);
+    let id;
+    if (existing) {
+      if (existing.deleted_at == null || Number(existing.user_id) !== req.auth.userId) {
+        throw errors.conflict('CONFLICT', 'Phone already registered');
+      }
+      await query('UPDATE user_phones SET deleted_at = NULL, verified_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?', [by, existing.id]);
+      id = existing.id;
+    } else {
+      const r = await query(
+        'INSERT INTO user_phones (user_id, phone, verified_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),?)',
+        [req.auth.userId, phone, by],
+      );
+      id = r.insertId;
+    }
+    await act(req, 'create', 'user_phone', id, { after: { phone, verified: true } });
+    res.json({ id, verified: true });
   } catch (e) { next(e); }
 });
 

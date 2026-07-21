@@ -40,7 +40,7 @@ function hebInfo(dateStr) {
       .filter((e) => e.getFlags() & flags.CHAG);
     v = {
       hd,
-      day: gematriya(hd.getDate()),
+      day: gem(hd.getDate()),
       holiday: chagim.length ? stripNikud(chagim[0].render('he').replace(/ \d{4}$/, '')) : null,
       chag: chagim.length > 0,
     };
@@ -52,12 +52,14 @@ function hebInfo(dateStr) {
 const HE_MONTHS = {
   Nisan: 'ניסן', Iyyar: 'אייר', Sivan: 'סיון', Tamuz: 'תמוז', Av: 'אב', Elul: 'אלול',
   Tishrei: 'תשרי', Cheshvan: 'חשון', Kislev: 'כסלו', Tevet: 'טבת', "Sh'vat": 'שבט',
-  Adar: 'אדר', 'Adar I': 'אדר א׳', 'Adar II': 'אדר ב׳',
+  Adar: 'אדר', 'Adar I': 'אדר א', 'Adar II': 'אדר ב',
 };
 const stripNikud = (s) => String(s).replace(/[֑-ׇ]/g, '');
-const hebYear = (hd) => hd.renderGematriya().split(' ').pop();
+// Gematriya without geresh/gershayim marks (ט״ו → טו).
+const gem = (n) => gematriya(n).replace(/[׳״]/g, '');
+const hebYear = (hd) => hd.renderGematriya().split(' ').pop().replace(/[׳״]/g, '');
 const hebMonthTitle = (hd) => `${HE_MONTHS[hd.getMonthName()] || stripNikud(hd.getMonthName())} ${hebYear(hd)}`;
-const hebFullDate = (hd) => `${gematriya(hd.getDate())} ${HE_MONTHS[hd.getMonthName()] || ''} ${hebYear(hd)}`;
+const hebFullDate = (hd) => `${gem(hd.getDate())} ${HE_MONTHS[hd.getMonthName()] || ''} ${hebYear(hd)}`;
 
 // Visible day-cells per view: month = the civil month (42 cells) or, in Hebrew
 // mode, the HEBREW month; week = the cursor's Sunday–Saturday; day = the cursor
@@ -324,8 +326,8 @@ export default function Calendar() {
           const ma = HE_MONTHS[a.getMonthName()];
           const mb = HE_MONTHS[b.getMonthName()];
           return ma === mb
-            ? `${gematriya(a.getDate())}–${gematriya(b.getDate())} ${ma} ${hebYear(a)}`
-            : `${gematriya(a.getDate())} ${ma} – ${gematriya(b.getDate())} ${mb}`;
+            ? `${gem(a.getDate())}–${gem(b.getDate())} ${ma} ${hebYear(a)}`
+            : `${gem(a.getDate())} ${ma} – ${gem(b.getDate())} ${mb}`;
         })()
         : `${cells[0].day}.${Number(cells[0].date.slice(5, 7))}–${cells[6].day}.${Number(cells[6].date.slice(5, 7))}`)
       : calMode === 'heb'
@@ -465,7 +467,7 @@ export default function Calendar() {
                     ${c.date === todayStr ? 'bg-accent text-white font-bold' : c.inMonth ? '' : 'text-muted'}`}>
                     {calMode === 'heb' ? hi.day : c.day}
                   </div>
-                  <span className="text-[10.5px] text-muted mt-1.5">
+                  <span className="hidden sm:inline text-[10.5px] text-muted mt-1.5">
                     {calMode === 'heb' ? `${c.day}.${Number(c.date.slice(5, 7))}` : hi.day}
                   </span>
                 </div>
