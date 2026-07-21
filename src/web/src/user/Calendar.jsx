@@ -3,8 +3,8 @@ import { getTimes } from 'suncalc';
 import { HDate, HebrewCalendar, flags, gematriya } from '@hebcal/core';
 import { api } from '../api.js';
 import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
-import { useNavigate } from 'react-router-dom';
 import { ChevronRight, ChevronLeft, ChevronDown, House, Check, Plus } from 'lucide-react';
+import { ScheduleFormModal, emptyForm, plusMinutes, rowToForm } from './ScheduleForm.jsx';
 
 // לוח תזמונים — month grid + a scroll-free time-axis week/day view. The 24h day
 // is compressed into four fixed sections (0–6, 6–12, 12–18, 18–24) so the whole
@@ -132,7 +132,7 @@ function chipsByDay(intervals) {
   };
   for (const iv of intervals) {
     const ev = iv.start || iv.end;
-    const base = { relay_id: ev.relay_id, relay_name: ev.relay_name, device_name: ev.device_name, sort: ev.time };
+    const base = { sid: ev.schedule_id, relay_id: ev.relay_id, relay_name: ev.relay_name, device_name: ev.device_name, sort: ev.time };
     if (!iv.start) { add(iv.end.date, { ...base, text: `כיבוי ${iv.end.time}`, sort: iv.end.time }); continue; }
     if (!iv.end) { add(iv.start.date, { ...base, text: `הדלקה ${iv.start.time}` }); continue; }
     if (iv.start.date === iv.end.date) {
@@ -159,7 +159,7 @@ function segmentsByDay(intervals) {
   };
   for (const iv of intervals) {
     const ev = iv.start || iv.end;
-    const base = { relay_id: ev.relay_id, relay_name: ev.relay_name, device_name: ev.device_name };
+    const base = { sid: ev.schedule_id, relay_id: ev.relay_id, relay_name: ev.relay_name, device_name: ev.device_name };
     if (!iv.start) { const m = toMin(iv.end.time); add(iv.end.date, { ...base, startMin: Math.max(0, m - 45), endMin: m, label: `כיבוי ${iv.end.time}`, openStart: true }); continue; }
     if (!iv.end) { const m = toMin(iv.start.time); add(iv.start.date, { ...base, startMin: m, endMin: Math.min(1440, m + 45), label: `הדלקה ${iv.start.time}`, openEnd: true }); continue; }
     const sM = toMin(iv.start.time); const eM = toMin(iv.end.time);
@@ -265,8 +265,39 @@ export default function Calendar() {
   const [hiddenRelays, setHiddenRelays] = useState(new Set());
   const [dayModal, setDayModal] = useState(null);
   const [nowTick, setNowTick] = useState(Date.now());
+  const [schedForm, setSchedForm] = useState(null); // new-schedule modal, opened IN the calendar
+  const [reload, setReload] = useState(0);
   const { error, setError } = useAsync();
-  const nav = useNavigate();
+
+  // Open the shared schedule form right here — no page hop; the Hebrew-date
+  // fields default to the clicked day's Hebrew date.
+  const openSched = (date, time) => {
+    if (!relays.length) return;
+    const hd = hebInfo(date).hd;
+    setSchedForm({
+      ...emptyForm,
+      relay_ids: [relays[0].id],
+      repeat_type: 'once',
+      on_date: date,
+      off_date: date,
+      ...(time ? { on_time: time, off_time: plusMinutes(time, 60) } : {}),
+      heb_day: hd.getDate(),
+      heb_month: hd.getMonth(),
+    });
+    setDayModal(null);
+  };
+
+  // Click on an existing block/chip → open THAT schedule for editing (the full
+  // row is fetched fresh; delete lives inside the form).
+  const openEdit = async (sid) => {
+    try {
+      const rows = await api.get('/schedules');
+      const row = rows.find((r) => Number(r.id) === Number(sid));
+      if (!row) throw new Error('התזמון לא נמצא');
+      setDayModal(null);
+      setSchedForm(rowToForm(row));
+    } catch (e) { setError(e); }
+  };
 
   const cells = useMemo(() => cellsFor(view, cursor, calMode), [view, cursor, calMode]);
 
@@ -286,7 +317,7 @@ export default function Calendar() {
     api.get(`/schedules/calendar?from=${fetchFrom}&days=${fetchDays}`)
       .then((r) => setEvents(r.events))
       .catch(setError);
-  }, [fetchFrom, fetchDays]);
+  }, [fetchFrom, fetchDays, reload]);
 
   useEffect(() => {
     const t = setInterval(() => setNowTick(Date.now()), 60000);
@@ -392,7 +423,14 @@ export default function Calendar() {
             const sun = sunFor(c.date);
             const segs = gridSegs.get(c.date) || [];
             return (
-              <div key={c.date} className="flex-1 relative border-line border-s min-w-0">
+              <div key={c.date} className="flex-1 relative border-line border-s min-w-0 cursor-pointer"
+                title="לחיצה: תזמון חדש בשעה זו"
+                onClick={(e) => {
+                  // Clicked hour (rounded to the half hour) prefills the new schedule.
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const min = Math.min(1410, Math.max(0, Math.round(((e.clientY - rect.top) / HOUR_PX) * 60 / 30) * 30));
+                  openSched(c.date, `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`);
+                }}>
                 {/* night shading + שקיעה line — the day literally darkens where lights matter */}
                 <div className="absolute inset-x-0 top-0 pointer-events-none" style={{ height: (sun.sunrise / 60) * HOUR_PX, background: NIGHT }} />
                 <div className="absolute inset-x-0 bottom-0 pointer-events-none" style={{ height: ((1440 - sun.sunset) / 60) * HOUR_PX, background: NIGHT }} />
@@ -410,8 +448,9 @@ export default function Calendar() {
                   const h = Math.max(24, ((s.endMin - s.startMin) / 60) * HOUR_PX - 2);
                   return (
                     <div key={j}
-                      className="absolute rounded-md px-2 py-0.5 overflow-hidden text-ink shadow-sm"
-                      title={`${s.label} · ${s.relay_name} · ${s.device_name}`}
+                      className="absolute rounded-md px-2 py-0.5 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50"
+                      onClick={(e) => { e.stopPropagation(); openEdit(s.sid); }}
+                      title={`${s.label} · ${s.relay_name} · ${s.device_name} — לחיצה לעריכה`}
                       style={{
                         top: (s.startMin / 60) * HOUR_PX,
                         height: h,
@@ -480,8 +519,9 @@ export default function Calendar() {
                 )}
                 <div className="space-y-[3px]">
                   {shown.map((chip, j) => (
-                    <div key={j} style={blockStyle(chip.relay_id)} title={`${chip.relay_name} · ${chip.device_name}`}
-                      className="text-[12.5px] font-medium leading-tight rounded px-1.5 py-[3px] truncate text-ink">
+                    <div key={j} style={blockStyle(chip.relay_id)} title={`${chip.relay_name} · ${chip.device_name} — לחיצה לעריכה`}
+                      onClick={(e) => { e.stopPropagation(); openEdit(chip.sid); }}
+                      className="text-[12.5px] font-medium leading-tight rounded px-1.5 py-[3px] truncate text-ink hover:ring-1 hover:ring-accent/50">
                       {chip.text}
                     </div>
                   ))}
@@ -541,18 +581,25 @@ export default function Calendar() {
         {dayModal && (
           <div className="space-y-2">
             {(monthChips.get(dayModal) || []).map((chip, i) => (
-              <div key={i} style={blockStyle(chip.relay_id)} className="rounded-md px-3 py-2 text-sm text-ink">
+              <div key={i} style={blockStyle(chip.relay_id)}
+                onClick={() => openEdit(chip.sid)} title="לחיצה לעריכה"
+                className="rounded-md px-3 py-2 text-sm text-ink cursor-pointer hover:ring-1 hover:ring-accent/50">
                 <b>{chip.text}</b>
                 <span className="text-muted"> — {chip.relay_name} · <House size={11} className="inline" /> {chip.device_name}</span>
               </div>
             ))}
             {!(monthChips.get(dayModal) || []).length && <p className="text-muted">אין תזמונים ביום זה.</p>}
-            <Button variant="ghost" className="w-full" onClick={() => nav(`/schedules?date=${dayModal}`)}>
+            <Button variant="ghost" className="w-full" onClick={() => openSched(dayModal, null)}>
               <span className="inline-flex items-center gap-1.5"><Plus size={15} />תזמון חדש בתאריך זה</span>
             </Button>
           </div>
         )}
       </Modal>
+
+      {/* creating from the calendar stays in the calendar */}
+      <ScheduleFormModal initial={schedForm} relays={relays}
+        onClose={() => setSchedForm(null)}
+        onSaved={async () => { setSchedForm(null); setReload((x) => x + 1); }} />
     </>
   );
 }
