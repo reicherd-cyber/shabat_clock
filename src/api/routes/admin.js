@@ -110,7 +110,10 @@ adminRouter.post('/users', requireWrite, async (req, res, next) => {
       await query(
         'INSERT INTO user_phones (user_id, phone, label, is_primary, verified_at, created_by) VALUES (?,?,?,?,UTC_TIMESTAMP(),?)',
         [user.id, phone, p.label ?? null, p.is_primary ? 1 : 0, adminActor(req)],
-      );
+      ).catch((e) => {
+        if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', `המספר ${phone} כבר משויך לחשבון אחר — מספר טלפון יכול להשתייך לחשבון אחד בלבד`);
+        throw e;
+      });
     }
     await audit(req, 'create', 'user', user.id, { after: { full_name: b.full_name, phones: b.phones } });
     res.status(201).json(user);
@@ -138,7 +141,10 @@ adminRouter.patch('/users/:id', requireWrite, async (req, res, next) => {
       await query(
         'INSERT INTO user_phones (user_id, phone, verified_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),?)',
         [req.params.id, phone, adminActor(req)],
-      );
+      ).catch((e) => {
+        if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', `המספר ${phone} כבר משויך לחשבון אחר — מספר טלפון יכול להשתייך לחשבון אחד בלבד`);
+        throw e;
+      });
     }
     await audit(req, 'update', 'user', Number(req.params.id), { before, after: fields });
     res.json(await getUser(req.params.id));

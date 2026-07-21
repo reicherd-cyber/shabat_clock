@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, Input, Select, Toggle, SyncNote, SectionHead, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
-import { House, Trash2, Plus, Check, RefreshCw, Sparkles, Pencil } from 'lucide-react';
+import { House, Trash2, Plus, Check, RefreshCw, Sparkles, Pencil, ChevronDown } from 'lucide-react';
 
 const emptyForm = {
-  relay_id: '', repeat_type: 'weekly',
+  relay_id: '', relay_ids: [], repeat_type: 'weekly',
   on_day_of_week: 6, on_time: '18:00', off_day_of_week: 7, off_time: '20:00',
   on_date: '', off_date: '', daily: false,
   mode: 'both', // 'both' | 'on' | 'off' — which side(s) the schedule performs (weekly or once)
@@ -63,6 +63,52 @@ const DURATIONS = [
 const pad2 = (n) => String(n).padStart(2, '0');
 const todayYmd = () => { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
 const nowHm = () => { const d = new Date(Date.now() + 60000); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+
+// Multi-select dropdown for the target channels of a new schedule — checkbox
+// semantics with a summary face, same pattern as the calendar's channel filter.
+function RelayMultiSelect({ relays, selected, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+  const toggle = (id) => onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  const one = relays.find((r) => selected.length === 1 && r.id === selected[0]);
+  const summary = selected.length === 0 ? 'בחרו ערוצים'
+    : selected.length === relays.length ? `כל הערוצים (${relays.length})`
+      : one ? `${one.name} — ${one.device}` : `${selected.length} ערוצים`;
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2 bg-surface border border-line rounded-xl px-3 py-2 text-sm cursor-pointer hover:border-accent/50">
+        <span className={`flex-1 text-start ${selected.length ? '' : 'text-muted'}`}>{summary}</span>
+        <ChevronDown size={15} className="text-muted shrink-0" />
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 inset-x-0 bg-surface border border-line rounded-xl shadow-lg py-1 max-h-56 overflow-y-auto">
+          <button type="button"
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-surface2 text-start"
+            onClick={() => onChange(selected.length === relays.length ? [] : relays.map((r) => r.id))}>
+            <span className="w-4 h-4 grid place-items-center">{selected.length === relays.length && <Check size={14} className="text-accent-dk" />}</span>
+            <b>כל הערוצים</b>
+          </button>
+          <div className="border-t border-line my-1" />
+          {relays.map((r) => (
+            <button key={r.id} type="button"
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-surface2 text-start"
+              onClick={() => toggle(r.id)}>
+              <span className="w-4 h-4 grid place-items-center">{selected.includes(r.id) && <Check size={14} className="text-accent-dk" />}</span>
+              <span className="flex-1 truncate">{r.name}</span>
+              <span className="text-muted text-xs">{r.device}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Mockup .sched: one bordered list; each row = relay (+device·code small) →
 // green ON pill ← red OFF pill → sync note → enable toggle.
@@ -146,8 +192,18 @@ export default function Schedules() {
       if (form.mode !== 'off') { side('on'); b.on_date = form.on_date; }
       if (form.mode !== 'on') { side('off'); b.off_date = form.off_date; }
     }
-    if (form.id) await api.patch(`/schedules/${form.id}`, b);
-    else await api.post('/schedules', b);
+    if (form.id) {
+      await api.patch(`/schedules/${form.id}`, b);
+    } else {
+      // One schedule per selected channel — each relay gets its own row.
+      delete b.relay_id;
+      for (const rid of form.relay_ids) {
+        await api.post('/schedules', { ...b, relay_id: Number(rid) }).catch((e) => {
+          const r = relays.find((x) => Number(x.id) === Number(rid));
+          throw new Error(`${r ? `${r.name}: ` : ''}${e.message}`);
+        });
+      }
+    }
     setForm(null);
     await refresh();
   });
@@ -220,7 +276,7 @@ export default function Schedules() {
   return (
     <>
       <SectionHead title="תזמונים">
-        <Button onClick={() => setForm({ ...emptyForm, relay_id: relays[0]?.id || '' })} disabled={!relays.length}>
+        <Button onClick={() => setForm({ ...emptyForm, relay_ids: relays[0] ? [relays[0].id] : [] })} disabled={!relays.length}>
           <span className="inline-flex items-center gap-1"><Plus size={16} />תזמון חדש</span>
         </Button>
       </SectionHead>
@@ -286,13 +342,20 @@ export default function Schedules() {
       <Modal open={!!form} onClose={() => setForm(null)} title={form?.id ? 'עריכת תזמון' : 'תזמון חדש'}>
         {form && (
           <div className="space-y-3">
-            <label className="block">
-              <span className="text-sm text-muted">מכשיר</span>
-              <Select className="w-full" value={form.relay_id} disabled={!!form.id}
-                onChange={(e) => setForm({ ...form, relay_id: e.target.value })}>
-                {relays.map((r) => <option key={r.id} value={r.id}>{r.name} — {r.device}</option>)}
-              </Select>
-            </label>
+            {form.id ? (
+              <label className="block">
+                <span className="text-sm text-muted">מכשיר</span>
+                <Select className="w-full" value={form.relay_id} disabled>
+                  {relays.map((r) => <option key={r.id} value={r.id}>{r.name} — {r.device}</option>)}
+                </Select>
+              </label>
+            ) : (
+              <div className="space-y-1">
+                <span className="text-sm text-muted">ערוצים (אפשר לבחור כמה)</span>
+                <RelayMultiSelect relays={relays} selected={form.relay_ids}
+                  onChange={(relay_ids) => setForm({ ...form, relay_ids })} />
+              </div>
+            )}
             <div className="flex gap-2 items-center">
               <Button variant={form.repeat_type === 'weekly' ? 'primary' : 'ghost'} onClick={() => setForm({ ...form, repeat_type: 'weekly' })}>שבועי</Button>
               <Button variant={form.repeat_type === 'once' ? 'primary' : 'ghost'}
@@ -390,7 +453,10 @@ export default function Schedules() {
               </div>
             )}
             <ErrorNote error={error} />
-            <Button className="w-full" disabled={busy} onClick={save}>{form.id ? 'שמור שינויים' : 'שמור תזמון'}</Button>
+            <Button className="w-full" disabled={busy || (!form.id && !form.relay_ids.length)} onClick={save}>
+              {form.id ? 'שמור שינויים'
+                : form.relay_ids.length > 1 ? `שמור תזמון ל־${form.relay_ids.length} ערוצים` : 'שמור תזמון'}
+            </Button>
           </div>
         )}
       </Modal>

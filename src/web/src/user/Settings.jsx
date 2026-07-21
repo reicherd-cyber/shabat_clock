@@ -184,8 +184,8 @@ export default function Settings() {
         <ErrorNote error={error} />
         <div className="space-y-2">
           {me.phones.map((p) => (
-            <div key={p.id} className="flex items-center justify-between border border-line rounded-xl px-3 py-2">
-              <div className="flex items-center gap-2">
+            <div key={p.id} className="flex items-center justify-between gap-2 flex-wrap border border-line rounded-xl px-3 py-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span dir="ltr">{p.phone}</span>
                 {p.label && <span className="text-muted text-sm">{p.label}</span>}
                 <Badge ok={!!p.verified_at}>{p.verified_at ? 'מאומת' : 'ממתין לאימות'}</Badge>
@@ -210,12 +210,14 @@ export default function Settings() {
 
       {devices.filter((d) => d.is_enabled).map((d) => (
         <Card key={d.id}>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="font-bold flex items-center gap-1.5"><Plug size={16} className="text-accent" />ממסרים —</span>
-            <Input defaultValue={d.name} onBlur={(e) => e.target.value !== d.name && renameDevice(d, e.target.value)} />
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <span className="font-bold flex items-center gap-1.5 shrink-0"><Plug size={16} className="text-accent" />ממסרים —</span>
+            <Input className="flex-1 min-w-[130px]" defaultValue={d.name} onBlur={(e) => e.target.value !== d.name && renameDevice(d, e.target.value)} />
             {d.relays.length > 0 && d.relays.every((r) => !r.is_enabled) && <Badge ok={false}>מושבת</Badge>}
-            <Button variant="ghost" className="shrink-0" onClick={() => setDisablingDevice(d)}>השבת הכל</Button>
-            <Button variant="danger" className="shrink-0" onClick={() => setRemovingDevice(d)}>השהה מכשיר</Button>
+            <span className="flex gap-2 ms-auto">
+              <Button variant="ghost" className="shrink-0" onClick={() => setDisablingDevice(d)}>השבת הכל</Button>
+              <Button variant="danger" className="shrink-0" onClick={() => setRemovingDevice(d)}>השהה מכשיר</Button>
+            </span>
           </div>
           <div className="space-y-2">
             {d.relays.map((r) => (

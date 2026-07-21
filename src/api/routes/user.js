@@ -102,10 +102,13 @@ userRouter.post('/me/phones', async (req, res, next) => {
     const phone = normalizePhone(req.body?.phone);
     if (!isValidIsraeliPhone(phone)) throw errors.validation('Invalid phone', { phone: 'invalid' });
     const [existing] = await query('SELECT id, user_id, deleted_at FROM user_phones WHERE phone = ?', [phone]);
-    // Taken = any live row, or a removed row of ANOTHER user; the user's own
-    // removed number may return (revived at verify).
+    // A phone belongs to exactly ONE account. Taken = any live row, or a removed
+    // row of ANOTHER user; the user's own removed number may return (revived at verify).
+    if (existing && existing.deleted_at == null && Number(existing.user_id) === req.auth.userId) {
+      throw errors.conflict('CONFLICT', 'המספר הזה כבר קיים בחשבון שלך');
+    }
     if (existing && (existing.deleted_at == null || Number(existing.user_id) !== req.auth.userId)) {
-      throw errors.conflict('CONFLICT', 'Phone already registered');
+      throw errors.conflict('CONFLICT', 'המספר הזה כבר משויך לחשבון אחר במערכת — מספר טלפון יכול להשתייך לחשבון אחד בלבד. אם המספר שלכם, הסירו אותו קודם מהחשבון השני.');
     }
     await requestOtp({ phone, purpose: 'phone_add' });
     res.json({ phone, verified: false });
@@ -124,7 +127,7 @@ userRouter.post('/me/phones/verify-new', async (req, res, next) => {
     let id;
     if (existing) {
       if (existing.deleted_at == null || Number(existing.user_id) !== req.auth.userId) {
-        throw errors.conflict('CONFLICT', 'Phone already registered');
+        throw errors.conflict('CONFLICT', 'המספר הזה כבר משויך לחשבון אחר במערכת — מספר טלפון יכול להשתייך לחשבון אחד בלבד.');
       }
       await query('UPDATE user_phones SET deleted_at = NULL, verified_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?', [by, existing.id]);
       id = existing.id;
@@ -156,7 +159,7 @@ userRouter.patch('/me/phones/:id', async (req, res, next) => {
       'UPDATE user_phones SET phone = ?, verified_at = NULL, updated_by = ? WHERE id = ?',
       [phone, actorStr(actorOf(req)), row.id],
     ).catch((e) => {
-      if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', 'Phone already registered');
+      if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', 'המספר הזה כבר משויך לחשבון אחר במערכת — מספר טלפון יכול להשתייך לחשבון אחד בלבד.');
       throw e;
     });
     await act(req, 'update', 'user_phone', row.id, { before: { phone: row.phone }, after: { phone } });
