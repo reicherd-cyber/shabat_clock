@@ -6,7 +6,7 @@ import { errors } from '../config/errors.js';
 import { env } from '../config/env.js';
 import { bcryptHash, bcryptCompare } from './users.js';
 import { recordFailure, isLockedOut } from './authFailures.js';
-import { OTP_TTL_MIN, OTP_MAX_ATTEMPTS } from '../config/constants.js';
+import { OTP_TTL_MIN, OTP_PHONE_ADD_TTL_MIN, OTP_MAX_ATTEMPTS } from '../config/constants.js';
 
 async function deliverOtp(phone, code) {
   // In dev always log the code, so local testing works even when the call fails.
@@ -56,14 +56,53 @@ async function deliverOtpEmail(email, code) {
   });
 }
 
+// phone_add codes are DERIVED (HMAC of row id + phone with the server secret),
+// not random: the plaintext is recoverable server-side, so the IVR can read the
+// code back to a caller whose campaign call never arrived — while the DB still
+// stores only a bcrypt hash and web verification is unchanged.
+function derivedPhoneAddCode(phone, rowId) {
+  const h = crypto.createHmac('sha256', env.jwtSecret).update(`phone_add:${phone}:${rowId}`).digest();
+  return String(h.readUInt32BE(0) % 1000000).padStart(6, '0');
+}
+
+// The live pending phone_add code for a caller-ID (plaintext), or null. The
+// bcrypt check guards against legacy random-code rows.
+export async function pendingPhoneAddCode(phone) {
+  const rows = await query(
+    `SELECT * FROM otp_codes
+     WHERE phone = ? AND purpose = 'phone_add' AND used_at IS NULL
+       AND expires_at > UTC_TIMESTAMP() AND attempts < ?
+     ORDER BY id DESC LIMIT 1`,
+    [phone, OTP_MAX_ATTEMPTS],
+  );
+  if (!rows[0]) return null;
+  const code = derivedPhoneAddCode(phone, rows[0].id);
+  return bcryptCompare(code, rows[0].code_hash) ? code : null;
+}
+
 // channel 'call' (default, Yemot) or 'email' (requires a target email).
 export async function requestOtp({ phone, purpose, userPhoneId = null, channel = 'call', email = null }) {
-  const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-  await query(
-    `INSERT INTO otp_codes (phone, purpose, user_phone_id, code_hash, expires_at)
-     VALUES (?,?,?,?, UTC_TIMESTAMP() + INTERVAL ? MINUTE)`,
-    [phone, purpose, userPhoneId, bcryptHash(code), OTP_TTL_MIN],
-  );
+  let code;
+  if (purpose === 'phone_add') {
+    // Reuse the live code (10-min validity) — re-requesting redials the SAME code.
+    code = await pendingPhoneAddCode(phone);
+    if (!code) {
+      const res = await query(
+        `INSERT INTO otp_codes (phone, purpose, user_phone_id, code_hash, expires_at)
+         VALUES (?,?,?, '', UTC_TIMESTAMP() + INTERVAL ? MINUTE)`,
+        [phone, purpose, userPhoneId, OTP_PHONE_ADD_TTL_MIN],
+      );
+      code = derivedPhoneAddCode(phone, res.insertId);
+      await query('UPDATE otp_codes SET code_hash = ? WHERE id = ?', [bcryptHash(code), res.insertId]);
+    }
+  } else {
+    code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    await query(
+      `INSERT INTO otp_codes (phone, purpose, user_phone_id, code_hash, expires_at)
+       VALUES (?,?,?,?, UTC_TIMESTAMP() + INTERVAL ? MINUTE)`,
+      [phone, purpose, userPhoneId, bcryptHash(code), OTP_TTL_MIN],
+    );
+  }
   if (channel === 'email' && email) await deliverOtpEmail(email, code);
   else await deliverOtp(phone, code);
 }

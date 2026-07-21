@@ -13,6 +13,7 @@ export const RECONCILE_WINDOW_H = 24;        // [D21]
 export const LOCKOUT_MAX_FAILURES = 5;       // [D10]
 export const LOCKOUT_WINDOW_MIN = 15;
 export const OTP_TTL_MIN = 5;                // [D9]
+export const OTP_PHONE_ADD_TTL_MIN = 10;     // phone-add codes live longer — the IVR can read them back
 export const OTP_MAX_ATTEMPTS = 3;
 
 export const IVR_SESSION_TTL_MS = 10 * 60 * 1000; // [D16]

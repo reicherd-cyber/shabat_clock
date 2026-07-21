@@ -291,6 +291,10 @@ export default function Settings() {
         {verifying && (
           <div className="space-y-3">
             <p className="text-sm">הזינו את הקוד שהוקרא בשיחה.</p>
+            <p className="text-muted text-xs bg-surface2 rounded-xl px-3 py-2">
+              לא קיבלתם שיחה? חייגו <b dir="ltr">043131481</b> מהמספר החדש — המערכת תקריא לכם את
+              הקוד. הקוד תקף ל־10 דקות.
+            </p>
             <Input dir="ltr" inputMode="numeric" placeholder="קוד בן 6 ספרות" value={verifying.code}
               onChange={(e) => setVerifying({ ...verifying, code: e.target.value })} />
             <ErrorNote error={error} />

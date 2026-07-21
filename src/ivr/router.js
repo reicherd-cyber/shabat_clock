@@ -5,6 +5,7 @@ import { env } from '../config/env.js';
 import { normalizePhone } from '../services/phone.js';
 import { findUserByPhone, verifyPin } from '../services/users.js';
 import { isLockedOut, recordFailure } from '../services/authFailures.js';
+import { pendingPhoneAddCode } from '../services/otp.js';
 import { enabledRelaysForUser } from '../services/relays.js';
 import { sendImmediateCommand } from '../services/commands.js';
 import { createSchedule, validateScheduleRules } from '../services/schedules.js';
@@ -247,6 +248,18 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         }
         await appendPath(callLogId, 'main');
         return res.send(await mainMenu(session));
+      }
+      // Unknown caller with a pending phone-add verification: the campaign call may
+      // not have reached them (filtered/kosher lines) — calling US from the new
+      // number proves the same ownership, so read the code back instead of refusing.
+      const pendingCode = await pendingPhoneAddCode(phone);
+      if (pendingCode) {
+        const digits = pendingCode.split('').join(', ');
+        await appendPath(callLogId, 'phone_add_code');
+        await finishCall(callLogId, 'status');
+        return res.send(sayAndHangup([{
+          t: `שלום, קוד האימות לצירוף מספר זה הוא: ${digits}, שוב: ${digits}, יש להקליד את הקוד באתר, להתראות`,
+        }]));
       }
       // Unregistered (or suspended) caller-ID → polite refusal + hangup. There is
       // deliberately no code-entry fallback: users must call from a registered number.
