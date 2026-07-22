@@ -15,6 +15,7 @@ import { logAction, actorStr } from '../../services/audit.js';
 import { REGIONS } from '../../services/zmanim.js';
 import { calendarEvents } from '../../services/calendar.js';
 import { localParts } from '../../services/time.js';
+import { answerSupportQuestion } from '../../services/support.js';
 
 export const userRouter = Router();
 userRouter.use(requireUser);
@@ -313,5 +314,36 @@ userRouter.delete('/schedules/:id', async (req, res, next) => {
 userRouter.get('/history', async (req, res, next) => {
   try {
     res.json(await getHistory({ userId: req.auth.userId, limit: req.query.limit, cursor: req.query.cursor || null }));
+  } catch (e) { next(e); }
+});
+
+// ── תמיכה: self-help bot + escalation to a human ──
+
+// Free-text question → bot guide. Stateless: the client counts its own tries.
+userRouter.post('/support/ask', async (req, res, next) => {
+  try {
+    const text = String(req.body?.text || '').trim();
+    if (text.length < 4) throw errors.validation('כתבו שאלה של לפחות 4 תווים');
+    res.json(await answerSupportQuestion({ userId: req.auth.userId, text }));
+  } catch (e) { next(e); }
+});
+
+// Escalation: store the message (+ the failed self-help transcript) for admins.
+userRouter.post('/support/messages', async (req, res, next) => {
+  try {
+    const body = String(req.body?.body || '').trim();
+    if (body.length < 4 || body.length > 2000) throw errors.validation('הודעה באורך 4–2000 תווים', { body: '4-2000' });
+    const topic = req.body?.topic ? String(req.body.topic).slice(0, 40) : null;
+    const transcript = Array.isArray(req.body?.transcript) && req.body.transcript.length
+      ? JSON.stringify(req.body.transcript.slice(0, 6).map((t) => ({
+        q: String(t?.q || '').slice(0, 1000), a: String(t?.a || '').slice(0, 2000),
+      })))
+      : null;
+    const r = await query(
+      'INSERT INTO support_messages (user_id, topic, body, transcript, created_by) VALUES (?,?,?,?,?)',
+      [req.auth.userId, topic, body, transcript, actorStr(actorOf(req))],
+    );
+    await act(req, 'create', 'support_message', r.insertId, { topic });
+    res.status(201).json({ id: r.insertId });
   } catch (e) { next(e); }
 });

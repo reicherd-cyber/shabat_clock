@@ -1,6 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom';
-import { api, tokens } from './api.js';
+import { api, adminApi, tokens } from './api.js';
 import Login from './user/Login.jsx';
 import Dashboard from './user/Dashboard.jsx';
 import Schedules from './user/Schedules.jsx';
@@ -9,6 +9,7 @@ import Schedules from './user/Schedules.jsx';
 const Calendar = lazy(() => import('./user/Calendar.jsx'));
 import History from './user/History.jsx';
 import Settings from './user/Settings.jsx';
+import Help from './user/Help.jsx';
 import AdminLogin from './admin/AdminLogin.jsx';
 import Users from './admin/Users.jsx';
 import Devices from './admin/Devices.jsx';
@@ -18,11 +19,12 @@ import { Recordings } from './admin/Recordings.jsx';
 import AdminHistory from './admin/History.jsx';
 import VoiceCosts from './admin/VoiceCosts.jsx';
 import Finance from './admin/Finance.jsx';
-import { Logo, Wordmark } from './ui.jsx';
+import { SupportInbox } from './admin/Support.jsx';
+import { Logo, Wordmark, useInterval } from './ui.jsx';
 import {
   LayoutGrid, CalendarClock, CalendarDays, History as HistoryIcon, Settings as SettingsIcon,
   Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
-  ShieldCheck, ScrollText, ChevronDown, AudioLines,
+  ShieldCheck, ScrollText, ChevronDown, AudioLines, LifeBuoy, Inbox,
 } from 'lucide-react';
 
 // Decode a JWT payload client-side (base64url) — used only to detect impersonation.
@@ -40,6 +42,7 @@ const TABS = [
   { to: '/calendar', label: 'לוח', Icon: CalendarDays },
   { to: '/history', label: 'היסטוריה', Icon: HistoryIcon },
   { to: '/settings', label: 'הגדרות', Icon: SettingsIcon },
+  { to: '/help', label: 'עזרה', Icon: LifeBuoy },
 ];
 
 function UserLayout() {
@@ -106,7 +109,12 @@ function UserLayout() {
 // Section-less first group = top-level links. (The commands page is intentionally
 // absent: it's a drill-down from the monitoring tiles.)
 const ADMIN_NAV = [
-  { items: [{ to: '/admin', label: 'ניטור', Icon: Activity, end: true }] },
+  {
+    items: [
+      { to: '/admin', label: 'ניטור', Icon: Activity, end: true },
+      { to: '/admin/support', label: 'פניות', Icon: Inbox, badge: 'support' },
+    ],
+  },
   {
     title: 'ניהול',
     items: [
@@ -141,7 +149,7 @@ const ADMIN_NAV = [
   },
 ];
 
-function AdminNav({ onNavigate }) {
+function AdminNav({ onNavigate, badges = {} }) {
   // Folded/unfolded state per section title, remembered across reloads (default: all open).
   const [folded, setFolded] = useState(() => {
     try { return JSON.parse(localStorage.getItem('adminNavFolded')) || {}; } catch { return {}; }
@@ -175,6 +183,12 @@ function AdminNav({ onNavigate }) {
                   <span className="flex items-center gap-2">
                     {it.Icon && <it.Icon size={15} strokeWidth={1.9} className="shrink-0 opacity-80" />}
                     {it.label}
+                    {/* ה"כדור" — מונה פניות חדשות */}
+                    {it.badge && badges[it.badge] > 0 && (
+                      <span className="ms-auto min-w-5 h-5 px-1.5 rounded-full bg-[#e34948] text-white text-[11px] font-bold grid place-items-center leading-none">
+                        {badges[it.badge] > 99 ? '99+' : badges[it.badge]}
+                      </span>
+                    )}
                   </span>
                 </NavLink>
               ))}
@@ -201,6 +215,20 @@ function AdminLayout() {
   useEffect(() => {
     fetch('/healthz').then((r) => r.json()).then(setVer).catch(() => {});
   }, []);
+
+  // מונה פניות חדשות ל"כדור" בתפריט: נטען מיד, מתרענן כל דקה, ומיידית כשעמוד
+  // הפניות משנה סטטוס (אירוע support-count-changed).
+  const [supportCount, setSupportCount] = useState(0);
+  const fetchCount = () => {
+    if (tokens.admin) adminApi.get('/support/count').then((r) => setSupportCount(r.new)).catch(() => {});
+  };
+  useEffect(() => {
+    fetchCount();
+    window.addEventListener('support-count-changed', fetchCount);
+    return () => window.removeEventListener('support-count-changed', fetchCount);
+  }, []);
+  useInterval(fetchCount, 60000);
+
   if (!tokens.admin) return <Navigate to="/admin/login" replace />;
 
   const brand = (
@@ -225,7 +253,7 @@ function AdminLayout() {
           title={collapsed ? 'הרחב תפריט' : 'צמצם תפריט'}
           onClick={toggleCollapsed}
         >{collapsed ? '«' : '»'}</button>
-        {!collapsed && <AdminNav />}
+        {!collapsed && <AdminNav badges={{ support: supportCount }} />}
         {!collapsed && (
           <div className="mt-auto space-y-2">
             <button className="block w-full text-right px-3 py-1.5 text-sm text-muted cursor-pointer hover:text-ink" onClick={logout}>יציאה</button>
@@ -247,7 +275,7 @@ function AdminLayout() {
           <div className="absolute top-0 bottom-0 right-0 w-64 bg-surface shadow-xl px-3 py-4 flex flex-col gap-5 overflow-y-auto"
             onClick={(e) => e.stopPropagation()}>
             {brand}
-            <AdminNav onNavigate={() => setMenuOpen(false)} />
+            <AdminNav onNavigate={() => setMenuOpen(false)} badges={{ support: supportCount }} />
             <button className="mt-auto block w-full text-right px-3 py-1.5 text-sm text-muted cursor-pointer" onClick={logout}>יציאה</button>
           </div>
         </div>
@@ -274,9 +302,11 @@ export default function App() {
           <Route path="/calendar" element={<Suspense fallback={<p className="text-muted">טוען…</p>}><Calendar /></Suspense>} />
           <Route path="/history" element={<History />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/help" element={<Help />} />
         </Route>
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Monitoring />} />
+          <Route path="support" element={<SupportInbox />} />
           <Route path="users" element={<Users />} />
           <Route path="devices" element={<Devices />} />
           <Route path="schedules" element={<AdminSchedules />} />

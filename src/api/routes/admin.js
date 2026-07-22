@@ -626,3 +626,56 @@ adminRouter.get('/audit-log', async (req, res, next) => {
     ));
   } catch (e) { next(e); }
 });
+
+// ── פניות תמיכה (support inbox) ──
+
+// Unread ("new") count for the sidebar badge — polled, so keep it feather-light.
+adminRouter.get('/support/count', async (req, res, next) => {
+  try {
+    const [row] = await query("SELECT COUNT(*) AS n FROM support_messages WHERE status = 'new' AND deleted_at IS NULL");
+    res.json({ new: row.n });
+  } catch (e) { next(e); }
+});
+
+adminRouter.get('/support', async (req, res, next) => {
+  try {
+    const cond = ['m.deleted_at IS NULL'];
+    const params = [];
+    if (req.query.status) { cond.push('m.status = ?'); params.push(String(req.query.status)); }
+    if (req.query.user_id) { cond.push('m.user_id = ?'); params.push(Number(req.query.user_id)); }
+    if (req.query.from) { cond.push('m.created_at >= ?'); params.push(String(req.query.from)); }
+    if (req.query.to) { cond.push('m.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(String(req.query.to)); }
+    if (req.query.q) {
+      cond.push('(m.body LIKE ? OR u.full_name LIKE ? OR EXISTS (SELECT 1 FROM user_phones p WHERE p.user_id = u.id AND p.phone LIKE ?))');
+      const like = `%${String(req.query.q)}%`;
+      params.push(like, like, like);
+    }
+    const rows = await query(
+      `SELECT m.id, m.user_id, m.topic, m.body, m.transcript, m.status, m.created_at, m.updated_at, m.updated_by,
+              u.full_name AS user_name, u.email AS user_email,
+              (SELECT p.phone FROM user_phones p WHERE p.user_id = u.id AND p.deleted_at IS NULL ORDER BY p.is_primary DESC, p.id LIMIT 1) AS user_phone
+         FROM support_messages m JOIN users u ON u.id = m.user_id
+        WHERE ${cond.join(' AND ')} ORDER BY m.id DESC LIMIT 500`,
+      params,
+    );
+    const counts = await query(
+      "SELECT status, COUNT(*) AS n FROM support_messages WHERE deleted_at IS NULL GROUP BY status",
+    );
+    res.json({ rows, counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) });
+  } catch (e) { next(e); }
+});
+
+// Status flips are soft and reversible (new ↔ read ↔ closed) — never a delete.
+adminRouter.patch('/support/:id', requireWrite, async (req, res, next) => {
+  try {
+    const status = String(req.body?.status || '');
+    if (!['new', 'read', 'closed'].includes(status)) throw errors.validation('unknown status', { status: 'new|read|closed' });
+    const r = await query(
+      'UPDATE support_messages SET status = ?, updated_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ? AND deleted_at IS NULL',
+      [status, adminActor(req), Number(req.params.id)],
+    );
+    if (!r.affectedRows) throw errors.notFound();
+    audit(req, `support_${status}`, 'support_message', Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
