@@ -39,34 +39,9 @@ function tokenPayload(t) {
 const TABS = [
   { to: '/', label: 'דשבורד', Icon: LayoutGrid, end: true },
   { to: '/schedules', label: 'תזמונים', Icon: CalendarClock },
+  { to: '/calendar', label: 'לוח', Icon: CalendarDays },
   { to: '/history', label: 'היסטוריה', Icon: HistoryIcon },
   { to: '/settings', label: 'הגדרות', Icon: SettingsIcon },
-];
-
-// Second-level pills inside a merged tab (תזמונים = רשימה/לוח, הגדרות = הגדרות/עזרה)
-// — keeps the top bar at 4 tabs while both pages stay full routes.
-function SectionTabs({ tabs }) {
-  return (
-    <div>
-      <div className="inline-flex bg-surface2 rounded-[10px] p-1 gap-1 mb-5">
-        {tabs.map((t) => (
-          <NavLink key={t.to} to={t.to} end className={({ isActive }) =>
-            `px-3.5 py-1 rounded-[8px] text-sm font-medium flex items-center gap-1.5 ${isActive ? 'bg-surface shadow-sm text-accent-dk font-bold' : 'text-muted hover:text-ink'}`}>
-            <t.Icon size={14} strokeWidth={2} />{t.label}
-          </NavLink>
-        ))}
-      </div>
-      <Outlet />
-    </div>
-  );
-}
-const SCHEDULE_TABS = [
-  { to: '/schedules', label: 'רשימה', Icon: CalendarClock },
-  { to: '/schedules/calendar', label: 'לוח', Icon: CalendarDays },
-];
-const SETTINGS_TABS = [
-  { to: '/settings', label: 'הגדרות', Icon: SettingsIcon },
-  { to: '/settings/help', label: 'עזרה', Icon: LifeBuoy },
 ];
 
 function UserLayout() {
@@ -108,6 +83,11 @@ function UserLayout() {
           ))}
         </nav>
         <div className="flex items-center gap-2.5 font-medium text-muted">
+          {/* עזרה חיה בפינה, לא בניווט — כפתור ? קבוע בכל מסך */}
+          <NavLink to="/help" title="עזרה ותמיכה" className={({ isActive }) =>
+            `w-8 h-8 rounded-full border grid place-items-center transition-colors ${isActive ? 'bg-accent text-white border-accent' : 'border-line text-muted hover:text-accent-dk hover:border-accent'}`}>
+            <LifeBuoy size={17} strokeWidth={2} />
+          </NavLink>
           <span className="hidden sm:inline">{name}</span>
           <span className="w-8 h-8 rounded-full bg-surface2 border border-line grid place-items-center font-bold text-accent-dk">
             {name ? name[0] : '·'}
@@ -322,18 +302,11 @@ export default function App() {
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route element={<UserLayout />}>
           <Route path="/" element={<Dashboard />} />
-          <Route element={<SectionTabs tabs={SCHEDULE_TABS} />}>
-            <Route path="/schedules" element={<Schedules />} />
-            <Route path="/schedules/calendar" element={<Suspense fallback={<p className="text-muted">טוען…</p>}><Calendar /></Suspense>} />
-          </Route>
+          <Route path="/schedules" element={<Schedules />} />
+          <Route path="/calendar" element={<Suspense fallback={<p className="text-muted">טוען…</p>}><Calendar /></Suspense>} />
           <Route path="/history" element={<History />} />
-          <Route element={<SectionTabs tabs={SETTINGS_TABS} />}>
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/settings/help" element={<Help />} />
-          </Route>
-          {/* old direct URLs keep working */}
-          <Route path="/calendar" element={<Navigate to="/schedules/calendar" replace />} />
-          <Route path="/help" element={<Navigate to="/settings/help" replace />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/help" element={<Help />} />
         </Route>
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Monitoring />} />
