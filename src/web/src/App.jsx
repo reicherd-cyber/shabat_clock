@@ -39,10 +39,34 @@ function tokenPayload(t) {
 const TABS = [
   { to: '/', label: 'דשבורד', Icon: LayoutGrid, end: true },
   { to: '/schedules', label: 'תזמונים', Icon: CalendarClock },
-  { to: '/calendar', label: 'לוח', Icon: CalendarDays },
   { to: '/history', label: 'היסטוריה', Icon: HistoryIcon },
   { to: '/settings', label: 'הגדרות', Icon: SettingsIcon },
-  { to: '/help', label: 'עזרה', Icon: LifeBuoy },
+];
+
+// Second-level pills inside a merged tab (תזמונים = רשימה/לוח, הגדרות = הגדרות/עזרה)
+// — keeps the top bar at 4 tabs while both pages stay full routes.
+function SectionTabs({ tabs }) {
+  return (
+    <div>
+      <div className="inline-flex bg-surface2 rounded-[10px] p-1 gap-1 mb-5">
+        {tabs.map((t) => (
+          <NavLink key={t.to} to={t.to} end className={({ isActive }) =>
+            `px-3.5 py-1 rounded-[8px] text-sm font-medium flex items-center gap-1.5 ${isActive ? 'bg-surface shadow-sm text-accent-dk font-bold' : 'text-muted hover:text-ink'}`}>
+            <t.Icon size={14} strokeWidth={2} />{t.label}
+          </NavLink>
+        ))}
+      </div>
+      <Outlet />
+    </div>
+  );
+}
+const SCHEDULE_TABS = [
+  { to: '/schedules', label: 'רשימה', Icon: CalendarClock },
+  { to: '/schedules/calendar', label: 'לוח', Icon: CalendarDays },
+];
+const SETTINGS_TABS = [
+  { to: '/settings', label: 'הגדרות', Icon: SettingsIcon },
+  { to: '/settings/help', label: 'עזרה', Icon: LifeBuoy },
 ];
 
 function UserLayout() {
@@ -298,11 +322,18 @@ export default function App() {
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route element={<UserLayout />}>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/schedules" element={<Schedules />} />
-          <Route path="/calendar" element={<Suspense fallback={<p className="text-muted">טוען…</p>}><Calendar /></Suspense>} />
+          <Route element={<SectionTabs tabs={SCHEDULE_TABS} />}>
+            <Route path="/schedules" element={<Schedules />} />
+            <Route path="/schedules/calendar" element={<Suspense fallback={<p className="text-muted">טוען…</p>}><Calendar /></Suspense>} />
+          </Route>
           <Route path="/history" element={<History />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/help" element={<Help />} />
+          <Route element={<SectionTabs tabs={SETTINGS_TABS} />}>
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/settings/help" element={<Help />} />
+          </Route>
+          {/* old direct URLs keep working */}
+          <Route path="/calendar" element={<Navigate to="/schedules/calendar" replace />} />
+          <Route path="/help" element={<Navigate to="/settings/help" replace />} />
         </Route>
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Monitoring />} />
