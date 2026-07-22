@@ -3,7 +3,7 @@
 // suncalc; tzeit variants are fixed offsets from sunset (18 min / R"T 72 min) —
 // the two definitions the product supports, chosen per the user's region: the
 // four classic Israeli zmanim regions.
-import { getTimes } from 'suncalc';
+import { getTimes, addTime } from 'suncalc';
 import { ApiError, errors } from '../config/errors.js';
 import { localParts, shiftDate, dowOfDate, timeToMinutes, minutesToHHMM } from './time.js';
 import { MINUTES_PER_DAY } from '../config/constants.js';
@@ -16,12 +16,28 @@ export const REGIONS = {
 };
 export const DEFAULT_REGION = 'jerusalem';
 
-// tzeit = base zman + fixed minutes; sunrise/sunset are the astronomical events.
+// misheyakir (זמן ציצית ותפילין) is degrees-based: sun 11.5° below the horizon.
+addTime(-11.5, 'misheyakir', 'misheyakirDusk');
+
+// Anchor shapes: `base`+`plus` = astronomical event + fixed minutes;
+// `deg` = a custom suncalc solar-angle event; `prop` = proportional minutes
+// (דקות זמניות, גר"א: day = הנץ→שקיעה split into 12 hours) from sunrise —
+// negative reaches before הנץ; `night: true` shifts the result 12 hours.
 const ANCHORS = {
+  alot_early: { prop: -120 },     // עלות השחר, לדעה המוקדמת (120 דק׳ זמניות)
+  alot: { prop: -72 },            // עלות השחר, לדעה המאוחרת (72 דק׳ זמניות)
+  misheyakir: { deg: 'misheyakir' },
   sunrise: { base: 'sunrise', plus: 0 },
+  sof_shma: { prop: 180 },        // סוף זמן ק"ש — 3 שעות זמניות
+  sof_tfila: { prop: 240 },       // סוף זמן תפילה — 4 שעות זמניות
+  chatzot: { prop: 360 },
+  mincha_gedola: { prop: 390 },
+  mincha_ketana: { prop: 570 },
+  plag_mincha: { prop: 645 },
   sunset: { base: 'sunset', plus: 0 },
   tzeit: { base: 'sunset', plus: 18 },
   tzeit_rt: { base: 'sunset', plus: 72 },
+  chatzot_layla: { prop: 360, night: true },
 };
 
 export const ANCHOR_KEYS = ['clock', ...Object.keys(ANCHORS)];
@@ -37,8 +53,14 @@ export function anchorMinutes(anchor, date, region, tz) {
   if (!a) throw errors.validation('unknown anchor', { anchor: ANCHOR_KEYS.join('|') });
   const r = REGIONS[region] || REGIONS[DEFAULT_REGION];
   const times = getTimes(new Date(Date.UTC(date.y, date.mo - 1, date.d, 10, 0)), r.lat, r.lng);
-  const p = localParts(times[a.base], tz);
-  return p.hh * 60 + p.mm + a.plus;
+  const minOf = (name) => { const p = localParts(times[name], tz); return p.hh * 60 + p.mm; };
+  if (a.base) return minOf(a.base) + a.plus;
+  if (a.deg) return minOf(a.deg);
+  const sunrise = minOf('sunrise');
+  const sunset = minOf('sunset');
+  let m = Math.round(sunrise + (a.prop * (sunset - sunrise)) / 720);
+  if (a.night) m = (m + 720) % MINUTES_PER_DAY; // חצות הלילה — same civil date (±1 דק׳)
+  return m;
 }
 
 export function validateSide(anchor, offsetMin, side) {

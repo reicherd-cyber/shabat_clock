@@ -205,7 +205,7 @@ export async function tick(now = new Date()) {
   }
 
   await retryFailed(schedules);
-  await autoDisableOnce();
+  await autoCompleteOnce();
 }
 
 // Failed rows < 60 min old retried each tick while the device is online (§5.4).
@@ -226,25 +226,35 @@ async function retryFailed(schedules) {
   }
 }
 
-// §5.4.4 once-schedules auto-disable when their FINAL occurrence resolves (or its
-// retry window is exhausted) — never on a fresh failure. The final action is OFF,
-// except for one-sided ON-only schedules where it's the ON itself.
-async function autoDisableOnce() {
+// §5.4.4 once-schedules auto-COMPLETE when their FINAL occurrence resolves (or
+// its retry window is exhausted) — never on a fresh failure. Completed = soft
+// delete [D37]: disabled AND hidden from every list; execution history stays.
+// The final action is OFF, except for one-sided ON-only schedules where it's
+// the ON itself. A date-based safety net also sweeps stragglers whose final
+// event is long past (e.g. rows disabled by hand before firing) — the local-vs-
+// UTC comparison errs a few hours LATE, never early.
+async function autoCompleteOnce() {
   const rows = await query(
-    `SELECT s.id, r.device_id FROM schedules s
+    `SELECT DISTINCT s.id, r.device_id FROM schedules s
      JOIN relays r ON r.id = s.relay_id
-     JOIN schedule_executions se ON se.schedule_id = s.id
+     LEFT JOIN schedule_executions se ON se.schedule_id = s.id
        AND se.action = (CASE WHEN s.off_time IS NULL THEN 'on' ELSE 'off' END)
-     WHERE s.repeat_type = 'once' AND s.is_enabled = TRUE AND s.deleted_at IS NULL
-       AND (se.status IN ('executed','unverified_offline')
-            OR (se.status = 'failed' AND se.occurrence_utc < UTC_TIMESTAMP() - INTERVAL ? MINUTE))`,
-    [RETRY_WINDOW_MIN],
+     WHERE s.repeat_type = 'once' AND s.deleted_at IS NULL
+       AND (
+         (s.is_enabled = TRUE AND se.id IS NOT NULL
+           AND (se.status IN ('executed','unverified_offline')
+                OR (se.status = 'failed' AND se.occurrence_utc < UTC_TIMESTAMP() - INTERVAL ? MINUTE)))
+         OR CONCAT(COALESCE(s.off_date, s.on_date), ' ', COALESCE(s.off_time, s.on_time)) <
+            DATE_FORMAT(UTC_TIMESTAMP() - INTERVAL ? MINUTE, '%Y-%m-%d %H:%i:%s')
+       )`,
+    [RETRY_WINDOW_MIN, RETRY_WINDOW_MIN],
   );
   if (!rows.length) return;
   const deviceIds = [...new Set(rows.map((r) => Number(r.device_id)))];
   await withTransaction(async (conn) => {
     await conn.query(
-      `UPDATE schedules SET is_enabled = FALSE WHERE id IN (${rows.map(() => '?').join(',')})`,
+      `UPDATE schedules SET is_enabled = FALSE, deleted_at = UTC_TIMESTAMP(), updated_by = 'system'
+       WHERE id IN (${rows.map(() => '?').join(',')})`,
       rows.map((r) => r.id),
     );
     await bumpDevices(conn, deviceIds);
@@ -278,7 +288,7 @@ export async function startupScan(now = new Date()) {
 async function refreshAnchoredTimes(now = new Date()) {
   const rows = await query(
     `SELECT s.id, s.repeat_type, s.holidays,
-            DATE_FORMAT(s.annual_date,'%Y-%m-%d') AS annual_date, s.annual_calendar,
+            DATE_FORMAT(s.annual_date,'%Y-%m-%d') AS annual_date, DATE_FORMAT(s.annual_end_date,'%Y-%m-%d') AS annual_end_date, s.annual_calendar,
             DATE_FORMAT(s.on_date,'%Y-%m-%d') AS on_date, DATE_FORMAT(s.off_date,'%Y-%m-%d') AS off_date,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,

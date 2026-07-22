@@ -91,7 +91,7 @@ test('freshHolidayFor: mid-block keeps the current block (Shabbat afternoon)', (
 });
 
 // ── yearly (anniversary) schedules ──
-import { resolveYearlySchedule, yearlyDatesAround } from '../src/services/holidays.js';
+import { resolveYearlySchedule, yearlyDatesAround, yearlyRangesAround } from '../src/services/holidays.js';
 import { HDate } from '@hebcal/core';
 
 test('yearly greg: next occurrence this year, rolls to next year once passed', () => {
@@ -136,4 +136,60 @@ test('yearly heb: direct day+month pick (15 Shvat) resolves and recurs on the He
   assert.equal(next.getMonthName(), "Sh'vat");
   assert.ok(s.annual_date, 'representative date stored');
   assert.equal(s.annual_heb_day, undefined); // consumed, not persisted
+});
+
+// ── yearly RANGE (from date → to date) ──
+
+test('yearly greg range: ON on the from-date, OFF on the to-date', () => {
+  const s = { annual_date: '2026-09-01', annual_end_date: '2026-09-05', annual_calendar: 'greg', on_time: '18:00', off_time: '08:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-14T09:00:00Z') });
+  assert.equal(s.on_date, '2026-09-01');
+  assert.equal(s.off_date, '2026-09-05'); // no midnight roll — the range already spans days
+});
+
+test('yearly range: end earlier in the year than the start wraps to the next year', () => {
+  const s = { annual_date: '2026-12-30', annual_end_date: '2026-01-02', annual_calendar: 'greg', on_time: '18:00', off_time: '20:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-14T09:00:00Z') });
+  assert.equal(s.on_date, '2026-12-30');
+  assert.equal(s.off_date, '2027-01-02');
+});
+
+test('yearly range: mid-range now keeps the current occurrence (OFF still ahead)', () => {
+  const s = { annual_date: '2026-09-01', annual_end_date: '2026-09-05', annual_calendar: 'greg', on_time: '18:00', off_time: '08:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-09-03T09:00:00Z') });
+  assert.equal(s.on_date, '2026-09-01');
+  assert.equal(s.off_date, '2026-09-05');
+});
+
+test('yearly heb range: from/to day+month picks resolve to the same Hebrew year', () => {
+  const s = {
+    annual_calendar: 'heb', annual_heb_day: 8, annual_heb_month: 5, // ח' אב
+    annual_end_heb_day: 10, annual_end_heb_month: 5, // י' אב
+    on_time: '18:00', off_time: '20:00',
+  };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-14T09:00:00Z') });
+  const on = new HDate(new Date(`${s.on_date}T12:00:00`));
+  const off = new HDate(new Date(`${s.off_date}T12:00:00`));
+  assert.equal(on.getDate(), 8);
+  assert.equal(off.getDate(), 10);
+  assert.equal(on.getMonthName(), off.getMonthName());
+  assert.equal(s.annual_end_heb_day, undefined); // consumed, not persisted
+});
+
+test('yearly range: same from/to keeps the midnight-roll rule for overnight pairs', () => {
+  const s = { annual_date: '2026-09-01', annual_end_date: '2026-09-01', annual_calendar: 'greg', on_time: '20:00', off_time: '01:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-14T09:00:00Z') });
+  assert.equal(s.on_date, '2026-09-01');
+  assert.equal(s.off_date, '2026-09-02');
+});
+
+test('yearlyRangesAround pairs each start with its (possibly wrapped) end', () => {
+  const pairs = yearlyRangesAround('2024-12-30', '2024-01-02', 'greg', { y: 2026, mo: 7, d: 1 }, 2);
+  for (const p of pairs) {
+    assert.equal(p.on.mo, 12);
+    assert.equal(p.off.mo, 1);
+    assert.equal(p.off.y, p.on.y + 1);
+  }
+  const flat = yearlyRangesAround('2024-03-05', null, 'greg', { y: 2026, mo: 7, d: 1 }, 2);
+  assert.ok(flat.every((p) => p.on.y === p.off.y && p.off.d === 5 && p.off.mo === 3));
 });

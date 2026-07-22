@@ -18,9 +18,11 @@ function resolveSchedule(s, opts) {
   if (s.repeat_type === 'yearly') return resolveYearlySchedule(s, opts);
   const hebOnce = s.repeat_type === 'once' && s.once_heb_day && s.once_heb_month;
   if (hebOnce) {
+    // Stamp the resolved date only on the side(s) the schedule performs — an
+    // off-only schedule must not grow a dateless ON side.
     const d = hebOnceDate(s.once_heb_day, s.once_heb_month, { tz: opts.tz, now: opts.now });
-    s.on_date = d;
-    s.off_date = d;
+    if ((s.on_anchor && s.on_anchor !== 'clock') || s.on_time) s.on_date = d;
+    if ((s.off_anchor && s.off_anchor !== 'clock') || s.off_time) s.off_date = d;
   }
   delete s.once_heb_day;
   delete s.once_heb_month;
@@ -186,12 +188,13 @@ export async function createSchedule({ userId, relayId, createdVia, actingUserId
     const res = await conn.query(
       `INSERT INTO schedules (user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
         off_day_of_week, off_time, off_anchor, off_offset_min,
-        repeat_type, holidays, annual_date, annual_calendar, on_date, off_date, is_enabled, created_via, created_by, updated_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
+        repeat_type, holidays, annual_date, annual_end_date, annual_calendar, on_date, off_date, is_enabled, created_via, created_by, updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
       [relay.user_id, relayId, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
         s.off_day_of_week, s.off_time, s.off_anchor, s.off_offset_min,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
+        s.repeat_type === 'yearly' ? (s.annual_end_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_calendar ?? null) : null,
         s.on_date ?? null, s.off_date ?? null, createdVia, actor, actor],
     );
@@ -227,8 +230,10 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
       repeat_type: patch.repeat_type !== undefined ? patch.repeat_type : existing.repeat_type,
       holidays: patch.holidays !== undefined ? patch.holidays : existing.holidays,
       annual_date: patch.annual_date !== undefined ? patch.annual_date : (existing.annual_date ? ymdOf(existing.annual_date) : null),
+      annual_end_date: patch.annual_end_date !== undefined ? patch.annual_end_date : (existing.annual_end_date ? ymdOf(existing.annual_end_date) : null),
       annual_calendar: patch.annual_calendar !== undefined ? patch.annual_calendar : existing.annual_calendar,
       annual_heb_day: patch.annual_heb_day, annual_heb_month: patch.annual_heb_month,
+      annual_end_heb_day: patch.annual_end_heb_day, annual_end_heb_month: patch.annual_end_heb_month,
       once_heb_day: patch.once_heb_day, once_heb_month: patch.once_heb_month,
       on_date: patch.on_date !== undefined ? patch.on_date : (existing.on_date ? ymdOf(existing.on_date) : null),
       off_date: patch.off_date !== undefined ? patch.off_date : (existing.off_date ? ymdOf(existing.off_date) : null),
@@ -243,12 +248,13 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
     await conn.query(
       `UPDATE schedules SET on_day_of_week=?, on_time=?, on_anchor=?, on_offset_min=?,
         off_day_of_week=?, off_time=?, off_anchor=?, off_offset_min=?,
-        repeat_type=?, holidays=?, annual_date=?, annual_calendar=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
+        repeat_type=?, holidays=?, annual_date=?, annual_end_date=?, annual_calendar=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
        WHERE id = ?`,
       [s.on_day_of_week, s.on_time, s.on_anchor ?? 'clock', s.on_offset_min ?? 0,
         s.off_day_of_week, s.off_time, s.off_anchor ?? 'clock', s.off_offset_min ?? 0,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
+        s.repeat_type === 'yearly' ? (s.annual_end_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_calendar ?? null) : null,
         s.on_date ?? null, s.off_date ?? null, is_enabled, actor, scheduleId],
     );
@@ -284,7 +290,7 @@ export async function listSchedules({ userId }) {
             s.user_id, u.full_name AS user_name,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,
-            s.repeat_type, s.holidays, s.annual_date, s.annual_calendar, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
+            s.repeat_type, s.holidays, s.annual_date, s.annual_end_date, s.annual_calendar, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
      JOIN devices d ON d.id = r.device_id
@@ -293,12 +299,16 @@ export async function listSchedules({ userId }) {
      ORDER BY s.id DESC`,
     userId != null ? [userId] : [],
   );
-  // Hebrew-anniversary rows also expose their Hebrew day/month for the UI.
+  // Hebrew-anniversary rows also expose their Hebrew day/month (both range
+  // ends; a missing end mirrors the start) for the UI.
   for (const r of rows) {
     if (r.repeat_type === 'yearly' && r.annual_calendar === 'heb' && r.annual_date) {
       const hd = new HDate(new Date(`${ymdOf(r.annual_date)}T12:00:00`));
       r.annual_heb_day = hd.getDate();
       r.annual_heb_month = hd.getMonth();
+      const he = new HDate(new Date(`${ymdOf(r.annual_end_date || r.annual_date)}T12:00:00`));
+      r.annual_end_heb_day = he.getDate();
+      r.annual_end_heb_month = he.getMonth();
     }
   }
   return rows;

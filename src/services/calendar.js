@@ -6,7 +6,7 @@
 import { query } from '../db/pool.js';
 import { shiftDate, dowOfDate, timeToMinutes } from './time.js';
 import { resolveForDate, DEFAULT_REGION } from './zmanim.js';
-import { upcomingBlocks, parseHolidayKeys, yearlyDatesAround } from './holidays.js';
+import { upcomingBlocks, parseHolidayKeys, yearlyRangesAround } from './holidays.js';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymdStr = (dt) => `${dt.y}-${pad2(dt.mo)}-${pad2(dt.d)}`;
@@ -60,16 +60,16 @@ export function expandSchedules(rows, { from, days }) {
         if (inRange(ymdStr(d))) push(d, s[`${side}_time`], side);
       }
     } else if (s.repeat_type === 'yearly' && s.annual_date) {
-      // Every occurrence of the anniversary in/near the range; OFF earlier than
-      // ON crosses midnight to the next day (same rule as the resolver).
-      for (const d of yearlyDatesAround(s.annual_date, s.annual_calendar, from, Math.ceil(days / 365) + 1)) {
-        const onT = s.on_time ? sideTimeFor('on', d) : null;
-        if (onT && inRange(ymdStr(d))) push(d, onT, 'on');
+      // Every occurrence of the range in/near the calendar window; a same-day
+      // OFF earlier than the ON crosses midnight (same rule as the resolver).
+      for (const r of yearlyRangesAround(s.annual_date, s.annual_end_date, s.annual_calendar, from, Math.ceil(days / 365) + 1)) {
+        const onT = s.on_time ? sideTimeFor('on', r.on) : null;
+        if (onT && inRange(ymdStr(r.on))) push(r.on, onT, 'on');
         if (s.off_time) {
-          let offD = d;
-          let offT = sideTimeFor('off', d);
-          if (onT && offT && timeToMinutes(offT) <= timeToMinutes(onT)) {
-            offD = shiftDate(d, 1);
+          let offD = r.off;
+          let offT = sideTimeFor('off', offD);
+          if (onT && offT && ymdStr(offD) === ymdStr(r.on) && timeToMinutes(offT) <= timeToMinutes(onT)) {
+            offD = shiftDate(offD, 1);
             offT = sideTimeFor('off', offD) ?? offT;
           }
           if (offT && inRange(ymdStr(offD))) push(offD, offT, 'off');
@@ -104,7 +104,7 @@ export function expandSchedules(rows, { from, days }) {
 export async function calendarEvents({ userId, from, days }) {
   const rows = await query(
     `SELECT s.id, s.repeat_type, s.holidays,
-            DATE_FORMAT(s.annual_date,'%Y-%m-%d') AS annual_date, s.annual_calendar,
+            DATE_FORMAT(s.annual_date,'%Y-%m-%d') AS annual_date, DATE_FORMAT(s.annual_end_date,'%Y-%m-%d') AS annual_end_date, s.annual_calendar,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             DATE_FORMAT(s.on_date,'%Y-%m-%d') AS on_date,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,

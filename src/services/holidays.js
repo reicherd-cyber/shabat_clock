@@ -169,6 +169,23 @@ export function yearlyDatesAround(annualDate, calendar, aroundParts, span = 3) {
   return out;
 }
 
+// Paired {on, off} occurrences of a yearly RANGE near the given local date. An
+// end date earlier in the year than the start wraps to the following year
+// (e.g. כ״ט אלול → ב׳ תשרי); a null end collapses to the start day.
+export function yearlyRangesAround(annualDate, annualEndDate, calendar, aroundParts, span = 3) {
+  const cal = calendar === 'heb' ? 'heb' : 'greg';
+  const src = ymdParts(annualDate);
+  const endSrc = annualEndDate ? ymdParts(annualEndDate) : src;
+  const out = [];
+  for (let i = -1; i < span; i++) {
+    const on = yearlyOccurrence(src, cal, i, aroundParts);
+    let off = yearlyOccurrence(endSrc, cal, i, aroundParts);
+    if (ymdStr(off) < ymdStr(on)) off = yearlyOccurrence(endSrc, cal, i + 1, aroundParts);
+    out.push({ on, off });
+  }
+  return out;
+}
+
 // Next occurrence (today included) of a Hebrew day+month, as 'YYYY-MM-DD' — for
 // one-time schedules entered by the Hebrew date. Plain Adar is observed in
 // Adar II on leap years; long days clamp in short months.
@@ -194,36 +211,45 @@ export function hebOnceDate(day, month, { tz = 'Asia/Jerusalem', now = new Date(
   throw errors.validation('לא נמצא מופע קרוב לתאריך', { once_heb_day: 'none' });
 }
 
+// Hebrew pick (day 1–30 + hebcal month, Nisan=1 … Tishrei=7 … Adar=12/Adar II=13)
+// → a representative Gregorian date whose Hebrew date equals the pick; a
+// plain-Adar pick is anchored in a NON-leap year so the yearly mapping observes
+// it in Adar II on leap years.
+function hebPickDate(day0, month0, p0, errPrefix) {
+  const day = Number(day0);
+  const month = Number(month0);
+  if (!Number.isInteger(day) || day < 1 || day > 30 || !Number.isInteger(month) || month < 1 || month > 13) {
+    throw errors.validation('תאריך עברי לא תקין', { [`${errPrefix}_day`]: '1-30', [`${errPrefix}_month`]: '1-13' });
+  }
+  let hy = new HDate(new Date(Date.UTC(p0.y, p0.mo - 1, p0.d, 12))).getFullYear();
+  const leap = (y) => HDate.monthsInYear(y) === 13;
+  if (month === 12) while (leap(hy)) hy += 1; // plain Adar → non-leap anchor
+  if (month === 13) while (!leap(hy)) hy += 1; // Adar II → leap anchor
+  const m = month === 13 && !leap(hy) ? 12 : month;
+  const dim = new HDate(1, m, hy).daysInMonth();
+  const g = new HDate(Math.min(day, dim), m, hy).greg();
+  return ymdStr({ y: g.getFullYear(), mo: g.getMonth() + 1, d: g.getDate() });
+}
+
 // Normalize + resolve a yearly schedule in place: next occurrence of the
-// anniversary (rolling once its last event passed), sides like holiday blocks.
-// A pair whose OFF time is before its ON time crosses midnight — OFF lands on
-// the following day.
+// annual_date→annual_end_date range (rolling once its last event passed), sides
+// like holiday blocks. Missing end = same day as the start; a same-day pair
+// whose OFF time is before its ON time crosses midnight to the following day.
 export function resolveYearlySchedule(s, { region = DEFAULT_REGION, tz = 'Asia/Jerusalem', now = new Date() } = {}) {
   const calendar = s.annual_calendar === 'heb' ? 'heb' : 'greg';
   s.annual_calendar = calendar;
 
-  // Hebrew pick arrives as day (1–30) + month (hebcal numbering, Nisan=1 …
-  // Tishrei=7 … Adar=12/Adar II=13). Store a representative Gregorian date whose
-  // Hebrew date equals the pick; a plain-Adar pick is anchored in a NON-leap year
-  // so the yearly mapping observes it in Adar II on leap years.
+  const p0 = localParts(now, tz);
   if (calendar === 'heb' && s.annual_heb_day && s.annual_heb_month) {
-    const day = Number(s.annual_heb_day);
-    const month = Number(s.annual_heb_month);
-    if (!Number.isInteger(day) || day < 1 || day > 30 || !Number.isInteger(month) || month < 1 || month > 13) {
-      throw errors.validation('תאריך עברי לא תקין', { annual_heb_day: '1-30', annual_heb_month: '1-13' });
-    }
-    const p0 = localParts(now, tz);
-    let hy = new HDate(new Date(Date.UTC(p0.y, p0.mo - 1, p0.d, 12))).getFullYear();
-    const leap = (y) => HDate.monthsInYear(y) === 13;
-    if (month === 12) while (leap(hy)) hy += 1; // plain Adar → non-leap anchor
-    if (month === 13) while (!leap(hy)) hy += 1; // Adar II → leap anchor
-    const m = month === 13 && !leap(hy) ? 12 : month;
-    const dim = new HDate(1, m, hy).daysInMonth();
-    const g = new HDate(Math.min(day, dim), m, hy).greg();
-    s.annual_date = ymdStr({ y: g.getFullYear(), mo: g.getMonth() + 1, d: g.getDate() });
+    s.annual_date = hebPickDate(s.annual_heb_day, s.annual_heb_month, p0, 'annual_heb');
+  }
+  if (calendar === 'heb' && s.annual_end_heb_day && s.annual_end_heb_month) {
+    s.annual_end_date = hebPickDate(s.annual_end_heb_day, s.annual_end_heb_month, p0, 'annual_end_heb');
   }
   delete s.annual_heb_day;
   delete s.annual_heb_month;
+  delete s.annual_end_heb_day;
+  delete s.annual_end_heb_month;
   if (!s.annual_date) throw errors.validation('נדרש תאריך', { annual_date: 'required' });
   const hasOn = (s.on_anchor && s.on_anchor !== 'clock') || Boolean(s.on_time);
   const hasOff = (s.off_anchor && s.off_anchor !== 'clock') || Boolean(s.off_time);
@@ -238,19 +264,21 @@ export function resolveYearlySchedule(s, { region = DEFAULT_REGION, tz = 'Asia/J
   }
 
   const src = ymdParts(s.annual_date);
-  const p = localParts(now, tz);
-  const today = { y: p.y, mo: p.mo, d: p.d };
-  const nowKey = localKey(today, p.hh * 60 + p.mm);
+  const endSrc = s.annual_end_date ? ymdParts(s.annual_end_date) : src;
+  const today = { y: p0.y, mo: p0.mo, d: p0.d };
+  const nowKey = localKey(today, p0.hh * 60 + p0.mm);
   for (let i = 0; i < 3; i++) {
     const date = yearlyOccurrence(src, calendar, i, today);
+    let endDate = yearlyOccurrence(endSrc, calendar, i, today);
+    if (ymdStr(endDate) < ymdStr(date)) endDate = yearlyOccurrence(endSrc, calendar, i + 1, today); // range wraps the year boundary
     const onMin = hasOn ? sideMinutes(s, 'on', date, region, tz) : null;
     if (hasOn && onMin == null) throw errors.validation('ON side needs on_time HH:MM', { on_time: 'HH:MM' });
-    let offDate = date;
+    let offDate = endDate;
     let offMin = null;
     if (hasOff) {
-      offMin = sideMinutes(s, 'off', date, region, tz);
+      offMin = sideMinutes(s, 'off', offDate, region, tz);
       if (offMin == null) throw errors.validation('OFF side needs off_time HH:MM', { off_time: 'HH:MM' });
-      if (hasOn && offMin <= onMin) {
+      if (hasOn && ymdStr(offDate) === ymdStr(date) && offMin <= onMin) {
         offDate = shiftDate(date, 1);
         offMin = sideMinutes(s, 'off', offDate, region, tz) ?? offMin;
       }
@@ -276,7 +304,7 @@ export function freshYearlyFor(row, now = new Date()) {
   };
   try {
     const s = {
-      annual_date: row.annual_date, annual_calendar: row.annual_calendar,
+      annual_date: row.annual_date, annual_end_date: row.annual_end_date ?? null, annual_calendar: row.annual_calendar,
       on_anchor: row.on_anchor, on_offset_min: row.on_offset_min, on_time: row.on_time,
       off_anchor: row.off_anchor, off_offset_min: row.off_offset_min, off_time: row.off_time,
     };

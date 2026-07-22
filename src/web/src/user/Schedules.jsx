@@ -56,16 +56,24 @@ export default function Schedules() {
   const sideTime = (s, p) => (s[`${p}_anchor`] && s[`${p}_anchor`] !== 'clock'
     ? `${anchorText(s[`${p}_anchor`], s[`${p}_offset_min`])} (≈${s[`${p}_time`]})`
     : s[`${p}_time`]);
+  // Yearly range "ח׳ אב עד י׳ אב" (collapses to a single date when from = to).
+  const yearlyRange = (s) => {
+    const from = s.annual_calendar === 'heb'
+      ? `${HEB_DAYS[(s.annual_heb_day || 1) - 1]} ${hebMonthLabel(s.annual_heb_month)}`
+      : fmtDate(s.annual_date);
+    const to = s.annual_calendar === 'heb'
+      ? `${HEB_DAYS[(s.annual_end_heb_day || s.annual_heb_day || 1) - 1]} ${hebMonthLabel(s.annual_end_heb_month || s.annual_heb_month)}`
+      : fmtDate(s.annual_end_date || s.annual_date);
+    return to !== from ? `${from} עד ${to}` : from;
+  };
   const onLabel = (s) => (s.on_time == null ? null
     : s.repeat_type === 'holiday' ? `בכניסה (${fmtDate(s.on_date)}) · ${sideTime(s, 'on')} · הדלקה`
-      : s.repeat_type === 'yearly' ? `כל שנה — ${s.annual_calendar === 'heb'
-        ? `${HEB_DAYS[(s.annual_heb_day || 1) - 1]} ${hebMonthLabel(s.annual_heb_month)}`
-        : fmtDate(s.annual_date)} · הקרוב ${fmtDate(s.on_date)} · ${sideTime(s, 'on')} · הדלקה`
+      : s.repeat_type === 'yearly' ? `כל שנה — ${yearlyRange(s)} · הקרוב ${fmtDate(s.on_date)} · ${sideTime(s, 'on')} · הדלקה`
         : s.repeat_type === 'once' ? `${String(s.on_date).slice(0, 10)} ${sideTime(s, 'on')} · הדלקה`
           : `${s.on_day_of_week == null ? 'כל יום' : DAY_NAMES[s.on_day_of_week]} ${sideTime(s, 'on')} · הדלקה`);
   const offLabel = (s) => (s.off_time == null ? null
     : s.repeat_type === 'holiday' ? `ביציאה (${fmtDate(s.off_date)}) · ${sideTime(s, 'off')} · כיבוי`
-      : s.repeat_type === 'yearly' ? `${fmtDate(s.off_date)} · ${sideTime(s, 'off')} · כיבוי`
+      : s.repeat_type === 'yearly' ? `${s.on_time == null ? `כל שנה — ${yearlyRange(s)} · ` : ''}${fmtDate(s.off_date)} · ${sideTime(s, 'off')} · כיבוי`
         : s.repeat_type === 'once' ? `${String(s.off_date).slice(0, 10)} ${sideTime(s, 'off')} · כיבוי`
           : `${s.off_day_of_week == null ? 'כל יום' : DAY_NAMES[s.off_day_of_week]} ${sideTime(s, 'off')} · כיבוי`);
 
