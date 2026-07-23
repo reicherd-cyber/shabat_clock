@@ -246,6 +246,10 @@ export default function Devices() {
                 שעל המכשיר ולוחץ התקנה. תקף 30 יום — שלחו בערוץ פרטי בלבד.
               </p>
             </div>
+            <div className="border-t border-line pt-3">
+              <p className="text-sm text-muted mb-2">ההתקנה בשטח הסתיימה בהצלחה? הזינו למעלה את ה-MAC ולחצו:</p>
+              <Button variant="ghost" className="w-full" disabled={busy || !shelly.mac} onClick={shellyProbe}>המכשיר חובר — בדוק חיבור ›</Button>
+            </div>
           </div>
         )}
         {shelly?.step === 'prep' && shelly.prep && (
