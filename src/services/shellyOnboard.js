@@ -309,6 +309,10 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
   <li>חברו את הטלפון הזה לאותו Wi-Fi ביתי.</li>
   <li>הקלידו למטה את קוד המכשיר (MAC) מהמדבקה ולחצו "התחל התקנה".</li>
  </ol>
+ <div style="margin-top:8px;font-size:14px;color:#a06a00">
+  ⚠ <b>קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> ההתקנה תיראה תקינה אבל המכשיר לא
+  יתחבר לשרת עד שספק הסינון יחריג את 188.166.29.235 פורט 8883. כדאי לבקש את ההחרגה מראש.
+ </div>
  <details style="margin-top:8px;font-size:14px">
   <summary style="cursor:pointer"><b>אין אפליקציה? התקנה דרך הרשת שהמכשיר משדר ›</b></summary>
   <div style="margin-top:6px">
@@ -356,7 +360,7 @@ async function finish(){
  const r=await serverCheck(90);
  if(r==='ok'){verdict('הצליח! המכשיר מחובר לשרת. אפשר לחזור למסך הניהול וללחוץ "בדוק חיבור".','ok');return}
  if(r==='wrong'){verdict('מכשיר אחר התחבר עם ההגדרות האלה — כנראה הוזנה כתובת IP של Shelly אחר. בדקו את הכתובת והריצו שוב.','bad');return}
- verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (ShellyPro2-...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).','warn');
+ verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (ShellyPro2-...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> ככל הנראה הסינון חוסם את החיבור המוצפן של המכשיר. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את השרת 188.166.29.235 פורט 8883 (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.','warn');
  actionBtn('בדוק שוב מול השרת',async()=>{await finish()},true);
  if(sntpIdx<B.sntp.length-1){actionBtn('נסה שרת זמן אחר (בעיית שעון נפוצה)',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true)}
  actionBtn('נסה חיבור ללא אימות תעודה (עדיין מוצפן)',async()=>{log('מגדיר חיבור ללא אימות תעודה ומאתחל...');await rpc(B.noVerify);await rpc(B.reboot).catch(()=>{});await waitBack();const r2=await serverCheck(90);if(r2==='ok'){verdict('מחובר — אבל ללא אימות תעודה. דווחו על כך למנהל המערכת.','warn')}else{verdict('אין חיבור גם ללא אימות תעודה. צלמו מסך ודווחו.','bad')}},true);
