@@ -198,6 +198,19 @@ export default function Devices() {
         title={{ prep: 'הוספת Shelly — הכנת מכשיר מרוחק', 2: 'הוספת Shelly — הגדרת ערוצים', 3: 'הוספת Shelly — הושלם' }[shelly?.step] || 'הוספת Shelly'}>
         {shelly?.step === 1 && (
           <div className="space-y-3">
+            <details className="border border-line rounded-xl p-3 text-sm">
+              <summary className="cursor-pointer font-medium text-accent-dk">המדריך המלא: חיבור Shelly חדש מאפס ›</summary>
+              <ol className="mt-2 space-y-1.5 ps-4 list-decimal">
+                <li><b>כאן:</b> בחרו את הלקוח, הורידו את "דף התקנה לנייד" ושלחו למי שנמצא באתר. אפשר לסגור את החלון — אין צורך בכם עד שההתקנה בשטח תסתיים.</li>
+                <li><b>באתר:</b> מחברים את ה-Shelly לחשמל ול-Wi-Fi הביתי (דרך אפליקציית Shelly, או ברשת שהוא משדר ← 192.168.33.1 ← הגדרות Wi-Fi).</li>
+                <li><b>באתר:</b> הטלפון על אותו Wi-Fi ביתי ← פותחים את הקובץ מההורדות ← מקלידים את ה-MAC מהמדבקה ← "התחל התקנה" ← ממתינים לירוק.</li>
+                <li><b>כאן:</b> מזינים למטה את אותו MAC ← "בדוק חיבור" ← שם למכשיר, שם וספרה לכל ערוץ ← סיום.</li>
+              </ol>
+              <p className="text-muted text-xs mt-2">
+                קו מסונן (נטפרי/אתרוג) והמכשיר לא מתחבר בסוף שלב 3? בדקו פעם אחת דרך נקודה
+                חמה של טלפון — אם התחבר, בקשו מספק הסינון לפתוח את 188.166.29.235 פורט 8883.
+              </p>
+            </details>
             <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>
               {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
             </Select>
