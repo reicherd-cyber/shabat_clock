@@ -341,7 +341,7 @@ async function finish(){
  const r=await serverCheck(90);
  if(r==='ok'){verdict('הצליח! המכשיר מחובר לשרת. אפשר לחזור למסך הניהול וללחוץ "בדוק חיבור".','ok');return}
  if(r==='wrong'){verdict('מכשיר אחר התחבר עם ההגדרות האלה — כנראה הוזנה כתובת IP של Shelly אחר. בדקו את הכתובת והריצו שוב.','bad');return}
- verdict('המכשיר עדיין לא התחבר לשרת.','warn');
+ verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (ShellyPro2-...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).','warn');
  actionBtn('בדוק שוב מול השרת',async()=>{await finish()},true);
  if(sntpIdx<B.sntp.length-1){actionBtn('נסה שרת זמן אחר (בעיית שעון נפוצה)',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true)}
  actionBtn('נסה חיבור ללא אימות תעודה (עדיין מוצפן)',async()=>{log('מגדיר חיבור ללא אימות תעודה ומאתחל...');await rpc(B.noVerify);await rpc(B.reboot).catch(()=>{});await waitBack();const r2=await serverCheck(90);if(r2==='ok'){verdict('מחובר — אבל ללא אימות תעודה. דווחו על כך למנהל המערכת.','warn')}else{verdict('אין חיבור גם ללא אימות תעודה. צלמו מסך ודווחו.','bad')}},true);
@@ -351,13 +351,19 @@ $('go').onclick=async()=>{
  if(PREPARE_URL){
   const mac=parseMac($('mac').value);
   if(mac.length!==12){verdict('קוד המכשיר לא תקין — הקלידו את שם הרשת המלא (ShellyPro2-...) או 12 תווים מהמדבקה.','bad');$('go').disabled=false;return}
-  log('יוצר פרטי חיבור למכשיר בשרת... (דורש אינטרנט)');
-  try{
-   const r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'});
-   if(!r.ok){const e=await r.json().catch(()=>null);throw new Error((e&&e.error&&e.error.message)||('HTTP '+r.status))}
-   const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
-   log('פרטי חיבור נוצרו.','ok');
-  }catch(e){verdict('יצירת פרטי החיבור נכשלה: '+e.message+' — ודאו שיש אינטרנט (אם אתם על רשת ShellyPro2 — עברו רגע ל-Wi-Fi רגיל, לחצו שוב, ורק אז חזרו לרשת המכשיר). אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');$('go').disabled=false;return}
+  // Credentials already minted for this MAC on a previous press (e.g. before
+  // switching to the device hotspot, which has no internet) — reuse, don't re-mint:
+  // a re-mint would both fail offline AND rotate the password server-side.
+  if(B&&mac===UID){log('פרטי החיבור כבר נוצרו קודם — ממשיך.','ok')}
+  else{
+   log('יוצר פרטי חיבור למכשיר בשרת... (דורש אינטרנט)');
+   try{
+    const r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'});
+    if(!r.ok){const e=await r.json().catch(()=>null);throw new Error((e&&e.error&&e.error.message)||('HTTP '+r.status))}
+    const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
+    log('פרטי חיבור נוצרו.','ok');
+   }catch(e){verdict('יצירת פרטי החיבור נכשלה: '+e.message+' — שלב זה דורש אינטרנט. אם אתם על רשת ShellyPro2 (בלי אינטרנט) — עברו ל-Wi-Fi רגיל, לחצו שוב, וכשיופיע "פרטי חיבור נוצרו" חזרו לרשת המכשיר ולחצו שוב (הפרטים נשמרים). אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');$('go').disabled=false;return}
+  }
  }
  const manual=$('ip').value.trim();
  const candidates=manual?[manual]:['shellypro2-'+UID+'.local','192.168.33.1'];
