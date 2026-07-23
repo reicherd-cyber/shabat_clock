@@ -211,9 +211,8 @@ export default function Devices() {
                 חמה של טלפון — אם התחבר, בקשו מספק הסינון לפתוח את 188.166.29.235 פורט 8883.
               </p>
               <p className="text-muted text-xs mt-1">
-                בדיקת פורט ממחשב Windows על הקו החשוד (PowerShell):{' '}
-                <code dir="ltr" className="bg-surface2 rounded px-1.5 py-0.5">Test-NetConnection 188.166.29.235 -Port 8883</code>
-                {' '}— False = חסום; True = פתוח אך ייתכן יירוט הצפנה, ולכן מבחן הנקודה החמה הוא הקובע.
+                בדיקה מלאה ממחשב Windows על הקו החשוד — שורה אחת ב-PowerShell (בודקת גם פורט וגם יירוט הצפנה, עם פסק דין):{' '}
+                <code dir="ltr" className="bg-surface2 rounded px-1.5 py-0.5">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>
               </p>
             </details>
             <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>

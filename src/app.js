@@ -56,6 +56,9 @@ export function createApp() {
 
   // Web panels (React RTL) served same-origin — no CORS [D27].
   const dist = path.join(__dirname, 'web', 'dist');
+  // Line-check script must be text/plain so `irm ... | iex` gets a string, not bytes
+  // (express.static would serve .ps1 as octet-stream).
+  app.get('/linecheck.ps1', (req, res) => res.type('text/plain; charset=utf-8').sendFile(path.join(dist, 'linecheck.ps1')));
   app.use(express.static(dist));
   app.get(/^\/(?!api|ivr).*/, (req, res) => {
     res.sendFile(path.join(dist, 'index.html'), (err) => {
