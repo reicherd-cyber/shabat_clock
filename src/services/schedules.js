@@ -64,17 +64,22 @@ export function validateScheduleRules(schedule, { tz = 'Asia/Jerusalem', now = n
     s.off_day_of_week = null;
     if (!hasOn) { s.on_time = null; s.on_date = null; }
     if (!hasOff) { s.off_time = null; s.off_date = null; }
-    if (hasOn && hasOff && (s.off_date < s.on_date || (s.off_date === s.on_date && offMin <= onMin))) {
-      throw new ApiError(400, 'OFF_BEFORE_ON', 'OFF must be after ON');
+    // Either order is legal — ON→OFF (interval) or OFF→ON ("turn off tonight,
+    // back on in the morning" for a normally-on device); only a zero-length
+    // pair is meaningless.
+    if (hasOn && hasOff && s.off_date === s.on_date && offMin === onMin) {
+      throw new ApiError(400, 'ZERO_LENGTH_PAIR', 'ON and OFF are identical');
     }
-    // ALREADY_PAST: the first (or only) event must be in the future, device-local.
+    // ALREADY_PAST: the earliest event must be in the future, device-local.
     const p = localParts(now, tz);
     const pad = (n) => String(n).padStart(2, '0');
     const nowLocalKey = `${p.y}-${pad(p.mo)}-${pad(p.d)}T${pad(p.hh)}:${pad(p.mm)}`;
     const keyOf = (date, min) => `${date}T${pad(Math.floor(min / 60))}:${pad(min % 60)}`;
-    const firstKey = hasOn ? keyOf(s.on_date, onMin) : keyOf(s.off_date, offMin);
-    if (firstKey <= nowLocalKey) {
-      throw new ApiError(400, 'ALREADY_PAST', `${hasOn ? 'ON' : 'OFF'} time is in the past`);
+    const keys = [];
+    if (hasOn) keys.push(keyOf(s.on_date, onMin));
+    if (hasOff) keys.push(keyOf(s.off_date, offMin));
+    if (keys.sort()[0] <= nowLocalKey) {
+      throw new ApiError(400, 'ALREADY_PAST', 'first event time is in the past');
     }
   } else if (s.repeat_type === 'holiday' || s.repeat_type === 'yearly') {
     // Sides arrive with the resolved next-occurrence dates+times from their

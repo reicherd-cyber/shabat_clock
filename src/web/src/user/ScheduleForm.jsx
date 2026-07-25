@@ -91,8 +91,11 @@ export const anchorText = (anchor, offsetMin) => {
   return off === 0 ? name : `${Math.abs(off)} דק׳ ${off < 0 ? 'לפני' : 'אחרי'} ${name}`;
 };
 
+// 'offon' = reversed pair (turn OFF first, back ON later — a normally-on device);
+// weekly/once only: the holiday and yearly resolvers assume ON opens the range.
 const MODES = [
   { v: 'both', label: 'הדלקה וכיבוי' },
+  { v: 'offon', label: 'כיבוי והדלקה' },
   { v: 'on', label: 'הדלקה בלבד' },
   { v: 'off', label: 'כיבוי בלבד' },
 ];
@@ -121,7 +124,14 @@ export const rowToForm = (s) => ({
   end_date: s.repeat_type === 'yearly'
     ? String(s.annual_end_date || s.annual_date).slice(0, 10)
     : '',
-  mode: s.on_time && s.off_time ? 'both' : s.on_time ? 'on' : 'off',
+  // A stored pair whose OFF lands before its ON re-opens as כיבוי והדלקה.
+  mode: s.on_time && s.off_time
+    ? ((s.repeat_type === 'once'
+      ? `${String(s.off_date).slice(0, 10)}T${s.off_time}` < `${String(s.on_date).slice(0, 10)}T${s.on_time}`
+      : s.repeat_type === 'weekly' && s.on_day_of_week != null
+        && `${s.off_day_of_week}${s.off_time}` < `${s.on_day_of_week}${s.on_time}`)
+      ? 'offon' : 'both')
+    : s.on_time ? 'on' : 'off',
   daily: s.repeat_type === 'weekly'
     && (s.on_time ? s.on_day_of_week == null : s.off_day_of_week == null),
   on_day_of_week: s.on_day_of_week ?? 6,
@@ -299,6 +309,12 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
       const on_time = form.on_time || nowHm();
       const off = plus(on_date, on_time, minutes);
       setForm({ ...form, on_date, on_time, off_date: off.date, off_time: off.time });
+    } else if (form.mode === 'offon') {
+      // reversed pair: ON = OFF + duration
+      const off_date = form.off_date || todayYmd();
+      const off_time = form.off_time || nowHm();
+      const on = plus(off_date, off_time, minutes);
+      setForm({ ...form, off_date, off_time, on_date: on.date, on_time: on.time });
     } else {
       const t = plus(todayYmd(), nowHm(), minutes);
       setForm(form.mode === 'on'
@@ -333,7 +349,7 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
               onClick={() => {
                 const base = form.on_date || todayYmd();
                 const endBase = form.end_date || base;
-                setForm({ ...form, repeat_type: 'yearly', on_date: base, end_date: endBase });
+                setForm({ ...form, repeat_type: 'yearly', on_date: base, end_date: endBase, ...(form.mode === 'offon' ? { mode: 'both' } : {}) });
                 if (form.annual_calendar === 'heb') {
                   Promise.all([hebOf(base), hebOf(endBase)]).then(([a, z]) => setForm((f) => (f
                     ? { ...f, ...a, heb_day_to: z.heb_day, heb_month_to: z.heb_month } : f))).catch(() => {});
@@ -341,7 +357,7 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
               }}>לפי תאריך</Button>
             <Button variant={form.repeat_type === 'holiday' ? 'primary' : 'ghost'}
               onClick={() => setForm({
-                ...form, repeat_type: 'holiday',
+                ...form, repeat_type: 'holiday', ...(form.mode === 'offon' ? { mode: 'both' } : {}),
                 // Sensible zmanim defaults on first switch (user can revert to שעה קבועה)
                 ...(form.on_kind === 'clock' && form.off_kind === 'clock'
                   ? { on_kind: 'sunset', on_dir: 'before', on_offset: 20, off_kind: 'tzeit', off_dir: 'after', off_offset: 0 }
@@ -376,12 +392,12 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
             </div>
           )}
           <div className="flex gap-1.5 flex-wrap">
-            {MODES.map((m) => (
+            {MODES.filter((m) => m.v !== 'offon' || form.repeat_type === 'weekly' || form.repeat_type === 'once').map((m) => (
               <Button key={m.v} variant={form.mode === m.v ? 'primary' : 'ghost'} className="!px-2.5 !py-1 text-xs"
                 onClick={() => setForm({
                   ...form, mode: m.v,
                   ...(form.repeat_type === 'once' && m.v !== 'off' ? { on_date: form.on_date || todayYmd(), on_time: form.on_time || nowHm() } : {}),
-                  ...(form.repeat_type === 'once' && m.v !== 'on' ? { off_date: form.off_date || todayYmd() } : {}),
+                  ...(form.repeat_type === 'once' && m.v !== 'on' ? { off_date: form.off_date || todayYmd(), ...(m.v === 'offon' ? { off_time: form.off_time || nowHm() } : {}) } : {}),
                   ...(form.repeat_type === 'yearly' ? { on_date: form.on_date || todayYmd(), end_date: form.end_date || form.on_date || todayYmd() } : {}),
                 })}>{m.label}</Button>
             ))}
@@ -453,7 +469,7 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
             );
           })()}
           <div className="grid grid-cols-2 gap-3">
-            {['on', 'off'].map((p) => (form.mode !== (p === 'on' ? 'off' : 'on') && <div key={p} className="space-y-2">
+            {(form.mode === 'offon' ? ['off', 'on'] : ['on', 'off']).map((p) => (form.mode !== (p === 'on' ? 'off' : 'on') && <div key={p} className="space-y-2">
               <span className={`text-sm font-medium ${p === 'on' ? 'text-on' : 'text-off'}`}>{p === 'on' ? 'הדלקה' : 'כיבוי'}</span>
               {form.repeat_type === 'weekly' && !form.daily && (
                 <Select className="w-full" value={form[`${p}_day_of_week`]} onChange={(e) => setForm({ ...form, [`${p}_day_of_week`]: e.target.value })}>
@@ -490,7 +506,7 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
           {form.repeat_type === 'once' && !anchored && form.once_calendar === 'greg' && (
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-sm text-muted shrink-0">
-                {form.mode === 'on' ? 'הדלקה בעוד:' : form.mode === 'off' ? 'כיבוי בעוד:' : 'כיבוי אחרי:'}
+                {form.mode === 'on' ? 'הדלקה בעוד:' : form.mode === 'off' ? 'כיבוי בעוד:' : form.mode === 'offon' ? 'הדלקה אחרי:' : 'כיבוי אחרי:'}
               </span>
               {DURATIONS.map((p) => (
                 <Button key={p.min} variant="ghost" className="!px-2 !py-1 text-xs"

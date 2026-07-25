@@ -52,13 +52,32 @@ test('weekly with dates → VALIDATION', () => {
   );
 });
 
-test('once: OFF before ON rejected', () => {
+test('once: OFF before ON is a legal reversed pair (כיבוי והדלקה)', () => {
+  const s = validateScheduleRules({
+    repeat_type: 'once', on_time: '18:00', off_time: '17:00',
+    on_date: '2126-09-22', off_date: '2126-09-22',
+  });
+  assert.equal(s.on_time, '18:00');
+  assert.equal(s.off_time, '17:00');
+});
+
+test('once: identical ON and OFF rejected (ZERO_LENGTH_PAIR)', () => {
+  assert.throws(
+    () => validateScheduleRules({
+      repeat_type: 'once', on_time: '18:00', off_time: '18:00',
+      on_date: '2126-09-22', off_date: '2126-09-22',
+    }),
+    (e) => e.code === 'ZERO_LENGTH_PAIR',
+  );
+});
+
+test('once: reversed pair with past OFF rejected (ALREADY_PAST checks earliest side)', () => {
   assert.throws(
     () => validateScheduleRules({
       repeat_type: 'once', on_time: '18:00', off_time: '17:00',
-      on_date: '2126-09-22', off_date: '2126-09-22',
+      on_date: '2126-09-22', off_date: '2020-01-01',
     }),
-    (e) => e.code === 'OFF_BEFORE_ON',
+    (e) => e.code === 'ALREADY_PAST',
   );
 });
 
