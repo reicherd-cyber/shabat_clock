@@ -1,0 +1,327 @@
+import { useEffect, useState } from 'react';
+import { adminApi } from '../api.js';
+import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
+import { Plus, Phone, Trash2 } from 'lucide-react';
+
+// CRM — ניהול לידים ומכירות: מי לא רוצה, מי מתעניין, מי הזמין, מה קנה, כמה
+// שילם, מתי ואיך. סטטוסים רכים, ארכיון הפיך, כל כתיבה מבוקרת בשרת (audit).
+
+const STATUS = {
+  new: { label: 'חדש', cls: 'bg-[#E4EFFE] text-accent-dk' },
+  interested: { label: 'מעוניין', cls: 'bg-[#FEF4D6] text-[#B45309]' },
+  not_interested: { label: 'לא מעוניין', cls: 'bg-surface2 text-muted' },
+  customer: { label: 'לקוח', cls: 'bg-[#E7F6EC] text-[#006e00]' },
+};
+const METHODS = {
+  cash: 'מזומן', transfer: 'העברה בנקאית', bit: 'ביט', credit: 'אשראי', check: "צ'ק", other: 'אחר',
+};
+const ORDER_STATUS = { open: 'פתוחה', delivered: 'סופקה', cancelled: 'בוטלה' };
+const ils = (n) => `₪${Number(n || 0).toLocaleString('he-IL')}`;
+const fmtD = (d) => (d ? new Date(d).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: '2-digit' }) : '');
+const todayYmd = () => new Date().toISOString().slice(0, 10);
+
+const EMPTY_LEAD = { name: '', phone: '', city: '', email: '', source: '', status: 'new', notes: '', follow_up: '' };
+
+export function Crm() {
+  const [data, setData] = useState(null); // { rows, counts, sources }
+  const [fStatus, setFStatus] = useState('');
+  const [fSource, setFSource] = useState('');
+  const [search, setSearch] = useState('');
+  const [archived, setArchived] = useState(false);
+  const [leadForm, setLeadForm] = useState(null); // add/edit basic fields
+  const [open, setOpen] = useState(null); // full lead (with orders+payments)
+  const [orderForm, setOrderForm] = useState(null); // { description, amount, notes }
+  const [payForm, setPayForm] = useState(null); // { orderId, amount, method, paid_on, note }
+  const [archiving, setArchiving] = useState(null); // lead pending archive confirm
+  const { busy, error, run, setError } = useAsync();
+
+  const refresh = async () => {
+    const p = new URLSearchParams();
+    if (fStatus) p.set('status', fStatus);
+    if (fSource) p.set('source', fSource);
+    if (search.trim()) p.set('q', search.trim());
+    if (archived) p.set('archived', '1');
+    setData(await adminApi.get(`/crm/leads${p.toString() ? `?${p}` : ''}`));
+  };
+  useEffect(() => {
+    const t = setTimeout(() => { refresh().catch(setError); }, search ? 400 : 0);
+    return () => clearTimeout(t);
+  }, [fStatus, fSource, search, archived]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openLead = (id) => run(async () => setOpen(await adminApi.get(`/crm/leads/${id}`)));
+  const reopen = async () => { setOpen(await adminApi.get(`/crm/leads/${open.id}`)); await refresh(); };
+
+  const saveLead = () => run(async () => {
+    const b = { ...leadForm };
+    delete b.id;
+    if (leadForm.id) await adminApi.patch(`/crm/leads/${leadForm.id}`, b);
+    else await adminApi.post('/crm/leads', b);
+    setLeadForm(null);
+    await refresh();
+    if (open && leadForm.id === open.id) await reopen();
+  });
+
+  const setLeadStatus = (lead, status) => run(async () => {
+    await adminApi.patch(`/crm/leads/${lead.id}`, { status });
+    await refresh();
+    if (open && open.id === lead.id) await reopen();
+  });
+
+  const counts = data?.counts || {};
+  const filtering = fStatus || fSource || search || archived;
+  const debt = (row) => Number(row.total_amount) - Number(row.total_paid);
+
+  return (
+    <div className="space-y-4">
+      <SectionHead title="מכירות ולידים">
+        <Button onClick={() => setLeadForm({ ...EMPTY_LEAD })}>
+          <span className="inline-flex items-center gap-1"><Plus size={16} />ליד חדש</span>
+        </Button>
+      </SectionHead>
+
+      {/* מונים לפי סטטוס — לחיצים */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {Object.entries(STATUS).map(([k, s]) => (
+          <Card key={k} className={`cursor-pointer text-center ${fStatus === k ? 'border-accent' : ''}`}
+            onClick={() => setFStatus(fStatus === k ? '' : k)} role="button">
+            <div className="text-2xl font-bold">{counts[k] || 0}</div>
+            <div className={`inline-block text-xs font-medium rounded-full px-2 py-0.5 mt-1 ${s.cls}`}>{s.label}</div>
+          </Card>
+        ))}
+      </div>
+
+      {/* סינון */}
+      <div className="flex gap-2 flex-wrap items-center">
+        <Select className="py-2 text-sm w-36" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+          <option value="">כל הסטטוסים</option>
+          {Object.entries(STATUS).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
+        </Select>
+        <Select className="py-2 text-sm w-36" value={fSource} onChange={(e) => setFSource(e.target.value)}>
+          <option value="">כל המקורות</option>
+          {(data?.sources || []).map((s) => <option key={s} value={s}>{s}</option>)}
+        </Select>
+        <Input className="w-56 py-2 text-sm" placeholder="חיפוש: שם, טלפון, עיר, הערות…"
+          value={search} onChange={(e) => setSearch(e.target.value)} />
+        <label className="flex items-center gap-1 text-sm text-muted">
+          <input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} /> ארכיון
+        </label>
+        {filtering && (
+          <Button variant="ghost" className="text-sm" onClick={() => { setFStatus(''); setFSource(''); setSearch(''); setArchived(false); }}>נקה סינון</Button>
+        )}
+      </div>
+      <ErrorNote error={error} />
+
+      {/* רשימה */}
+      <Card flush>
+        {data == null ? (
+          <p className="text-muted p-8 text-center">טוען…</p>
+        ) : data.rows.length === 0 ? (
+          <p className="text-muted p-8 text-center">אין לידים{filtering ? ' בסינון הנוכחי' : ' עדיין — הוסיפו את הראשון'}</p>
+        ) : (
+          data.rows.map((l) => (
+            <div key={l.id} onClick={() => (archived ? null : openLead(l.id))}
+              className={`flex items-center gap-3 px-4 py-3 border-b border-line last:border-b-0 flex-wrap ${archived ? '' : 'cursor-pointer hover:bg-surface2/50'}`}>
+              <span className={`text-xs font-medium rounded-full px-2 py-0.5 shrink-0 ${STATUS[l.status]?.cls || ''}`}>{STATUS[l.status]?.label || l.status}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <b>{l.name}</b>
+                  {l.phone && <span className="text-sm text-muted inline-flex items-center gap-1" dir="ltr"><Phone size={12} />{l.phone}</span>}
+                  {l.city && <span className="text-sm text-muted">{l.city}</span>}
+                  {l.source && <span className="text-xs text-muted">מקור: {l.source}</span>}
+                </div>
+                {l.notes && <div className="text-sm text-muted truncate">{l.notes}</div>}
+              </div>
+              {l.follow_up && <span className="text-xs text-muted shrink-0">מעקב: {fmtD(l.follow_up)}</span>}
+              {Number(l.total_amount) > 0 && (
+                <span className="text-sm shrink-0">
+                  <b style={{ color: '#006e00' }}>{ils(l.total_paid)}</b>
+                  <span className="text-muted"> / {ils(l.total_amount)}</span>
+                  {debt(l) > 0 && <b style={{ color: '#e11d48' }}> · חוב {ils(debt(l))}</b>}
+                </span>
+              )}
+              {archived && (
+                <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                  onClick={() => run(async () => { await adminApi.patch(`/crm/leads/${l.id}`, { deleted: false }); await refresh(); })}>שחזר</Button>
+              )}
+            </div>
+          ))
+        )}
+      </Card>
+
+      {/* ליד מלא: פרטים, סטטוס, הזמנות ותשלומים */}
+      <Modal open={!!open} onClose={() => setOpen(null)} title={open ? open.name : ''}>
+        {open && (
+          <div className="space-y-4">
+            <div className="text-sm text-muted flex flex-wrap gap-x-4 gap-y-1">
+              {open.phone && <span dir="ltr">{open.phone}</span>}
+              {open.email && <span dir="ltr">{open.email}</span>}
+              {open.city && <span>{open.city}</span>}
+              {open.source && <span>מקור: {open.source}</span>}
+              {open.follow_up && <span>מעקב: {fmtD(open.follow_up)}</span>}
+              {open.user_name && <span>משתמש במערכת: {open.user_name}</span>}
+            </div>
+            {open.notes && <div className="border border-line rounded-[10px] px-3 py-2 text-sm whitespace-pre-wrap">{open.notes}</div>}
+
+            <div className="flex gap-1.5 flex-wrap">
+              {Object.entries(STATUS).map(([k, s]) => (
+                <Button key={k} variant={open.status === k ? 'primary' : 'ghost'} className="!px-2.5 !py-1 text-xs"
+                  disabled={busy} onClick={() => setLeadStatus(open, k)}>{s.label}</Button>
+              ))}
+            </div>
+
+            {/* הזמנות */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <b className="text-sm">הזמנות</b>
+                <Button variant="ghost" className="!px-2 !py-1 text-xs"
+                  onClick={() => setOrderForm({ description: '', amount: '', notes: '' })}>
+                  <span className="inline-flex items-center gap-1"><Plus size={13} />הזמנה</span>
+                </Button>
+              </div>
+              {open.orders.length === 0 && <p className="text-muted text-sm">אין הזמנות עדיין.</p>}
+              {open.orders.map((o) => {
+                const paid = o.payments.reduce((a, p) => a + Number(p.amount), 0);
+                const left = Number(o.amount) - paid;
+                return (
+                  <div key={o.id} className={`border border-line rounded-[10px] p-3 space-y-2 ${o.status === 'cancelled' ? 'opacity-50' : ''}`}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <b className="text-sm flex-1">{o.description}</b>
+                      <span className="text-sm">{ils(o.amount)}</span>
+                      <Select className="!py-0.5 text-xs" value={o.status} disabled={busy}
+                        onChange={(e) => run(async () => { await adminApi.patch(`/crm/orders/${o.id}`, { status: e.target.value }); await reopen(); })}>
+                        {Object.entries(ORDER_STATUS).map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+                      </Select>
+                    </div>
+                    {o.payments.map((p) => (
+                      <div key={p.id} className="flex items-center gap-2 text-sm">
+                        <span style={{ color: '#006e00' }} className="font-medium">{ils(p.amount)}</span>
+                        <span className="text-muted">{METHODS[p.method] || p.method} · {fmtD(p.paid_on)}{p.note ? ` · ${p.note}` : ''}</span>
+                        <button disabled={busy} title="מחק תשלום" className="text-muted hover:text-off cursor-pointer ms-auto"
+                          onClick={() => run(async () => { await adminApi.del(`/crm/payments/${p.id}`); await reopen(); })}>
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                    <div className="flex items-center gap-2 text-sm">
+                      {left > 0 && o.status !== 'cancelled'
+                        ? <b style={{ color: '#e11d48' }}>נותר לתשלום: {ils(left)}</b>
+                        : o.status !== 'cancelled' && <b style={{ color: '#006e00' }}>שולם במלואו ✓</b>}
+                      {o.status !== 'cancelled' && (
+                        <Button variant="ghost" className="!px-2 !py-0.5 text-xs ms-auto"
+                          onClick={() => setPayForm({ orderId: o.id, amount: left > 0 ? String(left) : '', method: 'cash', paid_on: todayYmd(), note: '' })}>
+                          <span className="inline-flex items-center gap-1"><Plus size={12} />תשלום</span>
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={() => setLeadForm({
+                id: open.id, name: open.name, phone: open.phone || '', city: open.city || '', email: open.email || '',
+                source: open.source || '', status: open.status, notes: open.notes || '',
+                follow_up: open.follow_up ? String(open.follow_up).slice(0, 10) : '',
+              })}>עריכת פרטים</Button>
+              <Button variant="danger" onClick={() => setArchiving(open)}>העבר לארכיון</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* טופס ליד */}
+      <Modal open={!!leadForm} onClose={() => setLeadForm(null)} title={leadForm?.id ? 'עריכת ליד' : 'ליד חדש'}>
+        {leadForm && (
+          <div className="space-y-2">
+            <Input placeholder="שם *" value={leadForm.name} onChange={(e) => setLeadForm({ ...leadForm, name: e.target.value })} />
+            <Input placeholder="טלפון" dir="ltr" value={leadForm.phone} onChange={(e) => setLeadForm({ ...leadForm, phone: e.target.value })} />
+            <div className="grid grid-cols-2 gap-2">
+              <Input placeholder="עיר" value={leadForm.city} onChange={(e) => setLeadForm({ ...leadForm, city: e.target.value })} />
+              <Input placeholder="מקור (המלצה, טלפון…)" value={leadForm.source} list="crm-sources"
+                onChange={(e) => setLeadForm({ ...leadForm, source: e.target.value })} />
+              <datalist id="crm-sources">{(data?.sources || []).map((s) => <option key={s} value={s} />)}</datalist>
+            </div>
+            <Input placeholder="אימייל" dir="ltr" value={leadForm.email} onChange={(e) => setLeadForm({ ...leadForm, email: e.target.value })} />
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted shrink-0">תאריך מעקב:</span>
+              <Input type="date" value={leadForm.follow_up} onChange={(e) => setLeadForm({ ...leadForm, follow_up: e.target.value })} />
+            </div>
+            <textarea className="w-full border border-line rounded-[10px] px-3 py-2 min-h-[70px] bg-surface focus:outline-accent"
+              placeholder="הערות…" value={leadForm.notes} onChange={(e) => setLeadForm({ ...leadForm, notes: e.target.value })} />
+            <ErrorNote error={error} />
+            <Button className="w-full" disabled={busy || leadForm.name.trim().length < 2} onClick={saveLead}>שמירה</Button>
+          </div>
+        )}
+      </Modal>
+
+      {/* טופס הזמנה */}
+      <Modal open={!!orderForm} onClose={() => setOrderForm(null)} title="הזמנה חדשה">
+        {orderForm && (
+          <div className="space-y-2">
+            <Input placeholder="מה הוזמן? (למשל: שעון שבת 2 ערוצים + התקנה)" value={orderForm.description}
+              onChange={(e) => setOrderForm({ ...orderForm, description: e.target.value })} />
+            <Input placeholder="סכום בש״ח" dir="ltr" inputMode="decimal" value={orderForm.amount}
+              onChange={(e) => setOrderForm({ ...orderForm, amount: e.target.value })} />
+            <Input placeholder="הערות (אופציונלי)" value={orderForm.notes}
+              onChange={(e) => setOrderForm({ ...orderForm, notes: e.target.value })} />
+            <ErrorNote error={error} />
+            <Button className="w-full" disabled={busy || !orderForm.description.trim() || !(Number(orderForm.amount) >= 0)}
+              onClick={() => run(async () => {
+                await adminApi.post(`/crm/leads/${open.id}/orders`, {
+                  description: orderForm.description, amount: Number(orderForm.amount), notes: orderForm.notes,
+                });
+                setOrderForm(null);
+                await reopen();
+              })}>שמירה</Button>
+          </div>
+        )}
+      </Modal>
+
+      {/* טופס תשלום */}
+      <Modal open={!!payForm} onClose={() => setPayForm(null)} title="רישום תשלום">
+        {payForm && (
+          <div className="space-y-2">
+            <Input placeholder="סכום בש״ח" dir="ltr" inputMode="decimal" value={payForm.amount}
+              onChange={(e) => setPayForm({ ...payForm, amount: e.target.value })} />
+            <Select className="w-full" value={payForm.method} onChange={(e) => setPayForm({ ...payForm, method: e.target.value })}>
+              {Object.entries(METHODS).map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+            </Select>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted shrink-0">מתי שולם:</span>
+              <Input type="date" value={payForm.paid_on} onChange={(e) => setPayForm({ ...payForm, paid_on: e.target.value })} />
+            </div>
+            <Input placeholder="הערה (אופציונלי)" value={payForm.note} onChange={(e) => setPayForm({ ...payForm, note: e.target.value })} />
+            <ErrorNote error={error} />
+            <Button className="w-full" disabled={busy || !(Number(payForm.amount) > 0)}
+              onClick={() => run(async () => {
+                await adminApi.post(`/crm/orders/${payForm.orderId}/payments`, {
+                  amount: Number(payForm.amount), method: payForm.method, paid_on: payForm.paid_on, note: payForm.note,
+                });
+                setPayForm(null);
+                await reopen();
+              })}>שמירה</Button>
+          </div>
+        )}
+      </Modal>
+
+      {/* אישור ארכיון — רך והפיך */}
+      <Modal open={!!archiving} onClose={() => setArchiving(null)} title="להעביר לארכיון?">
+        {archiving && (
+          <div className="space-y-3">
+            <p className="text-sm"><b>{archiving.name}</b> יוסתר מהרשימה (כולל ההזמנות והתשלומים שלו). אפשר לשחזר בכל רגע מתצוגת הארכיון.</p>
+            <div className="flex gap-2">
+              <Button disabled={busy} onClick={() => run(async () => {
+                await adminApi.patch(`/crm/leads/${archiving.id}`, { deleted: true });
+                setArchiving(null);
+                setOpen(null);
+                await refresh();
+              })}>כן, לארכיון</Button>
+              <Button variant="ghost" onClick={() => setArchiving(null)}>ביטול</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}

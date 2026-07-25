@@ -20,11 +20,12 @@ import AdminHistory from './admin/History.jsx';
 import VoiceCosts from './admin/VoiceCosts.jsx';
 import Finance from './admin/Finance.jsx';
 import { SupportInbox } from './admin/Support.jsx';
+import { Crm } from './admin/Crm.jsx';
 import { Logo, Wordmark, useInterval } from './ui.jsx';
 import {
   LayoutGrid, CalendarClock, CalendarDays, History as HistoryIcon, Settings as SettingsIcon,
   Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
-  ShieldCheck, ScrollText, ChevronDown, AudioLines, LifeBuoy, Inbox,
+  ShieldCheck, ScrollText, ChevronDown, AudioLines, LifeBuoy, Inbox, Handshake,
 } from 'lucide-react';
 
 // Decode a JWT payload client-side (base64url) — used only to detect impersonation.
@@ -122,6 +123,7 @@ const ADMIN_NAV = [
   {
     title: 'ניהול',
     items: [
+      { to: '/admin/crm', label: 'מכירות ולידים', Icon: Handshake },
       { to: '/admin/users', label: 'משתמשים', Icon: UsersIcon },
       { to: '/admin/devices', label: 'מכשירים', Icon: Plug },
       { to: '/admin/schedules', label: 'תזמונים', Icon: CalendarClock },
@@ -311,6 +313,7 @@ export default function App() {
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Monitoring />} />
           <Route path="support" element={<SupportInbox />} />
+          <Route path="crm" element={<Crm />} />
           <Route path="users" element={<Users />} />
           <Route path="devices" element={<Devices />} />
           <Route path="schedules" element={<AdminSchedules />} />

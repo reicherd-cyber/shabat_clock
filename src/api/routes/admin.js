@@ -679,3 +679,176 @@ adminRouter.patch('/support/:id', requireWrite, async (req, res, next) => {
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
+
+// ── CRM: לידים, הזמנות ותשלומים (admin-only sales pipeline) ──
+
+const CRM_STATUSES = ['new', 'interested', 'not_interested', 'customer'];
+
+adminRouter.get('/crm/leads', async (req, res, next) => {
+  try {
+    const cond = ['l.deleted_at IS NULL'];
+    const params = [];
+    if (req.query.archived === '1') { cond[0] = 'l.deleted_at IS NOT NULL'; }
+    if (req.query.status && CRM_STATUSES.includes(req.query.status)) { cond.push('l.status = ?'); params.push(req.query.status); }
+    if (req.query.source) { cond.push('l.source = ?'); params.push(String(req.query.source)); }
+    if (req.query.from) { cond.push('l.created_at >= ?'); params.push(String(req.query.from)); }
+    if (req.query.q) {
+      cond.push('(l.name LIKE ? OR l.phone LIKE ? OR l.city LIKE ? OR l.notes LIKE ?)');
+      const like = `%${String(req.query.q)}%`;
+      params.push(like, like, like, like);
+    }
+    const rows = await query(
+      `SELECT l.*, u.full_name AS user_name,
+              (SELECT COALESCE(SUM(o.amount),0) FROM crm_orders o
+                WHERE o.lead_id = l.id AND o.deleted_at IS NULL AND o.status <> 'cancelled') AS total_amount,
+              (SELECT COALESCE(SUM(p.amount),0) FROM crm_payments p
+                JOIN crm_orders o2 ON o2.id = p.order_id
+                WHERE o2.lead_id = l.id AND p.deleted_at IS NULL AND o2.deleted_at IS NULL AND o2.status <> 'cancelled') AS total_paid
+         FROM crm_leads l LEFT JOIN users u ON u.id = l.user_id
+        WHERE ${cond.join(' AND ')} ORDER BY l.id DESC LIMIT 500`,
+      params,
+    );
+    const counts = await query(
+      'SELECT status, COUNT(*) AS n FROM crm_leads WHERE deleted_at IS NULL GROUP BY status',
+    );
+    const sources = await query(
+      "SELECT DISTINCT source FROM crm_leads WHERE deleted_at IS NULL AND source IS NOT NULL AND source <> '' ORDER BY source",
+    );
+    res.json({
+      rows,
+      counts: Object.fromEntries(counts.map((c) => [c.status, c.n])),
+      sources: sources.map((s) => s.source),
+    });
+  } catch (e) { next(e); }
+});
+
+// Full lead: orders, each with its payments — the drill-down modal's payload.
+adminRouter.get('/crm/leads/:id', async (req, res, next) => {
+  try {
+    const [lead] = await query('SELECT l.*, u.full_name AS user_name FROM crm_leads l LEFT JOIN users u ON u.id = l.user_id WHERE l.id = ?', [Number(req.params.id)]);
+    if (!lead) throw errors.notFound();
+    const orders = await query('SELECT * FROM crm_orders WHERE lead_id = ? AND deleted_at IS NULL ORDER BY id DESC', [lead.id]);
+    const payments = orders.length
+      ? await query(`SELECT * FROM crm_payments WHERE order_id IN (${orders.map(() => '?').join(',')}) AND deleted_at IS NULL ORDER BY paid_on, id`, orders.map((o) => o.id))
+      : [];
+    res.json({ ...lead, orders: orders.map((o) => ({ ...o, payments: payments.filter((p) => p.order_id === o.id) })) });
+  } catch (e) { next(e); }
+});
+
+const CRM_LEAD_FIELDS = ['name', 'phone', 'email', 'city', 'source', 'status', 'user_id', 'notes', 'follow_up'];
+const crmLeadBody = (b) => {
+  const out = {};
+  for (const f of CRM_LEAD_FIELDS) {
+    if (b?.[f] === undefined) continue;
+    out[f] = b[f] === '' ? null : b[f];
+  }
+  if (out.status && !CRM_STATUSES.includes(out.status)) throw errors.validation('unknown status', { status: CRM_STATUSES.join('|') });
+  return out;
+};
+
+adminRouter.post('/crm/leads', requireWrite, async (req, res, next) => {
+  try {
+    const f = crmLeadBody(req.body);
+    if (!f.name || String(f.name).trim().length < 2) throw errors.validation('name required', { name: '2+ chars' });
+    f.created_by = adminActor(req);
+    const r = await query(
+      `INSERT INTO crm_leads (${Object.keys(f).join(',')}) VALUES (${Object.keys(f).map(() => '?').join(',')})`,
+      Object.values(f),
+    );
+    audit(req, 'crm_lead_create', 'crm_lead', r.insertId, { after: { name: f.name } });
+    res.status(201).json({ id: r.insertId });
+  } catch (e) { next(e); }
+});
+
+adminRouter.patch('/crm/leads/:id', requireWrite, async (req, res, next) => {
+  try {
+    const f = crmLeadBody(req.body);
+    if (req.body?.deleted !== undefined) f.deleted_at = req.body.deleted ? new Date() : null; // soft archive / restore
+    if (!Object.keys(f).length) throw errors.validation('nothing to update');
+    f.updated_at = new Date();
+    f.updated_by = adminActor(req);
+    const r = await query(
+      `UPDATE crm_leads SET ${Object.keys(f).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+      [...Object.values(f), Number(req.params.id)],
+    );
+    if (!r.affectedRows) throw errors.notFound();
+    audit(req, 'crm_lead_update', 'crm_lead', Number(req.params.id), { after: req.body });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+adminRouter.post('/crm/leads/:id/orders', requireWrite, async (req, res, next) => {
+  try {
+    const description = String(req.body?.description || '').trim();
+    const amount = Number(req.body?.amount);
+    if (!description) throw errors.validation('description required', { description: 'required' });
+    if (!Number.isFinite(amount) || amount < 0) throw errors.validation('amount must be >= 0', { amount: '>=0' });
+    const [lead] = await query('SELECT id FROM crm_leads WHERE id = ? AND deleted_at IS NULL', [Number(req.params.id)]);
+    if (!lead) throw errors.notFound();
+    const r = await query(
+      'INSERT INTO crm_orders (lead_id, description, amount, notes, created_by) VALUES (?,?,?,?,?)',
+      [lead.id, description, amount, req.body?.notes || null, adminActor(req)],
+    );
+    // An order makes the lead a customer — the pipeline moves by itself.
+    await query("UPDATE crm_leads SET status = 'customer', updated_by = ? WHERE id = ? AND status <> 'customer'", [adminActor(req), lead.id]);
+    audit(req, 'crm_order_create', 'crm_order', r.insertId, { after: { lead_id: lead.id, description, amount } });
+    res.status(201).json({ id: r.insertId });
+  } catch (e) { next(e); }
+});
+
+adminRouter.patch('/crm/orders/:id', requireWrite, async (req, res, next) => {
+  try {
+    const f = {};
+    if (req.body?.description !== undefined) f.description = String(req.body.description).trim();
+    if (req.body?.amount !== undefined) {
+      const amount = Number(req.body.amount);
+      if (!Number.isFinite(amount) || amount < 0) throw errors.validation('amount must be >= 0', { amount: '>=0' });
+      f.amount = amount;
+    }
+    if (req.body?.status !== undefined) {
+      if (!['open', 'delivered', 'cancelled'].includes(req.body.status)) throw errors.validation('unknown status', { status: 'open|delivered|cancelled' });
+      f.status = req.body.status;
+    }
+    if (req.body?.notes !== undefined) f.notes = req.body.notes || null;
+    if (req.body?.deleted !== undefined) f.deleted_at = req.body.deleted ? new Date() : null;
+    if (!Object.keys(f).length) throw errors.validation('nothing to update');
+    f.updated_at = new Date();
+    f.updated_by = adminActor(req);
+    const r = await query(
+      `UPDATE crm_orders SET ${Object.keys(f).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+      [...Object.values(f), Number(req.params.id)],
+    );
+    if (!r.affectedRows) throw errors.notFound();
+    audit(req, 'crm_order_update', 'crm_order', Number(req.params.id), { after: req.body });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+adminRouter.post('/crm/orders/:id/payments', requireWrite, async (req, res, next) => {
+  try {
+    const amount = Number(req.body?.amount);
+    const method = String(req.body?.method || 'cash');
+    const paid_on = String(req.body?.paid_on || '').slice(0, 10);
+    if (!Number.isFinite(amount) || amount <= 0) throw errors.validation('amount must be > 0', { amount: '>0' });
+    if (!['cash', 'transfer', 'bit', 'credit', 'check', 'other'].includes(method)) throw errors.validation('unknown method');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(paid_on)) throw errors.validation('paid_on must be YYYY-MM-DD', { paid_on: 'date' });
+    const [order] = await query('SELECT id FROM crm_orders WHERE id = ? AND deleted_at IS NULL', [Number(req.params.id)]);
+    if (!order) throw errors.notFound();
+    const r = await query(
+      'INSERT INTO crm_payments (order_id, amount, method, paid_on, note, created_by) VALUES (?,?,?,?,?,?)',
+      [order.id, amount, method, paid_on, req.body?.note || null, adminActor(req)],
+    );
+    audit(req, 'crm_payment_create', 'crm_payment', r.insertId, { after: { order_id: order.id, amount, method, paid_on } });
+    res.status(201).json({ id: r.insertId });
+  } catch (e) { next(e); }
+});
+
+// Payment removal is soft, like everything else — a typo must not erase history.
+adminRouter.delete('/crm/payments/:id', requireWrite, async (req, res, next) => {
+  try {
+    const r = await query('UPDATE crm_payments SET deleted_at = UTC_TIMESTAMP() WHERE id = ? AND deleted_at IS NULL', [Number(req.params.id)]);
+    if (!r.affectedRows) throw errors.notFound();
+    audit(req, 'crm_payment_delete', 'crm_payment', Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
