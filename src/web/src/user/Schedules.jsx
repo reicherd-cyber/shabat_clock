@@ -120,17 +120,21 @@ export default function Schedules() {
   };
   // Groups: one card per RELAY (מטבח, סלון…), rows in firing order; relays ordered
   // by their soonest upcoming action so "what happens next" is always at the top.
+  // Seeded from the RELAY list (not just schedules) so a relay with no schedules
+  // still gets a table with its own add button; schedules of removed relays keep
+  // their table too.
   const groups = useMemo(() => {
     if (!schedules) return [];
     const byRelay = new Map();
+    for (const r of relays) byRelay.set(r.id, { relayId: r.id, relay: r.name, device: r.device, items: [] });
     for (const s of schedules) {
-      if (!byRelay.has(s.relay_id)) byRelay.set(s.relay_id, { relay: s.relay_name, device: s.device_name, items: [] });
+      if (!byRelay.has(s.relay_id)) byRelay.set(s.relay_id, { relayId: s.relay_id, relay: s.relay_name, device: s.device_name, items: [] });
       byRelay.get(s.relay_id).items.push(s);
     }
     return [...byRelay.values()]
       .map((g) => ({ ...g, items: g.items.sort((a, b) => sortKey(a) - sortKey(b)) }))
-      .sort((a, b) => sortKey(a.items[0]) - sortKey(b.items[0]));
-  }, [schedules]); // eslint-disable-line react-hooks/exhaustive-deps
+      .sort((a, b) => (g => g.items.length ? sortKey(g.items[0]) : Infinity)(a) - (g => g.items.length ? sortKey(g.items[0]) : Infinity)(b));
+  }, [schedules, relays]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onLabel = (s) => (s.on_time == null ? null
     : s.repeat_type === 'holiday' ? `בכניסה (${fmtDate(s.on_date)}) · ${sideTime(s, 'on')} · הדלקה`
@@ -146,13 +150,9 @@ export default function Schedules() {
   if (!schedules) return <p className="text-muted">טוען…</p>;
   return (
     <>
-      <SectionHead title="תזמונים">
-        <Button onClick={() => setFormInit({ ...emptyForm, relay_ids: relays[0] ? [relays[0].id] : [] })} disabled={!relays.length}>
-          <span className="inline-flex items-center gap-1"><Plus size={16} />תזמון חדש</span>
-        </Button>
-      </SectionHead>
+      <SectionHead title="תזמונים" />
       <ErrorNote error={error} />
-      {schedules.length === 0 && <Card>אין תזמונים עדיין.</Card>}
+      {groups.length === 0 && <Card>אין ערוצים פעילים בחשבון.</Card>}
       {groups.map((g) => (
         <div key={`${g.device}·${g.relay}`} className="mb-7">
           <Card flush className="overflow-hidden border-accent/30">
@@ -160,8 +160,15 @@ export default function Schedules() {
             <div className="flex items-center gap-2.5 px-5 py-3 bg-[#E4EFFE]/70 border-b-2 border-accent/40">
               <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><House size={16} /></span>
               <h3 className="font-bold text-[17px]">{g.relay}</h3>
-              <span className="text-muted text-sm ms-auto">{g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`}</span>
+              <span className="text-muted text-sm ms-auto">{g.items.length === 0 ? '' : g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`}</span>
+              <Button variant="ghost" className="!py-1 !px-2.5 text-sm" disabled={busy}
+                onClick={() => setFormInit({ ...emptyForm, relay_ids: [g.relayId] })}>
+                <span className="inline-flex items-center gap-1"><Plus size={14} />תזמון</span>
+              </Button>
             </div>
+            {g.items.length === 0 && (
+              <p className="text-muted text-sm px-5 py-4">אין תזמונים לערוץ זה עדיין — הוסיפו עם הכפתור למעלה.</p>
+            )}
             {g.items.map((s, i) => {
               const chip = nextChip(s);
               return (
