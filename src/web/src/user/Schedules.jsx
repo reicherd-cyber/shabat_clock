@@ -154,13 +154,14 @@ export default function Schedules() {
       <ErrorNote error={error} />
       {schedules.length === 0 && <Card>אין תזמונים עדיין.</Card>}
       {groups.map((g) => (
-        <div key={g.device} className="mb-6">
-          <div className="flex items-baseline gap-2 mb-2 px-1">
-            <House size={15} className="text-accent-dk self-center" />
-            <h3 className="font-bold text-[17px]">{g.device}</h3>
-            <span className="text-muted text-sm">{g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`} · לפי סדר הפעולה הקרובה</span>
-          </div>
-          <Card flush>
+        <div key={g.device} className="mb-7">
+          <Card flush className="overflow-hidden border-accent/30">
+            {/* device band — every device is its own clearly-bounded block */}
+            <div className="flex items-center gap-2.5 px-5 py-3 bg-[#E4EFFE]/70 border-b-2 border-accent/40">
+              <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><House size={16} /></span>
+              <h3 className="font-bold text-[17px]">{g.device}</h3>
+              <span className="text-muted text-sm ms-auto">{g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`} · לפי סדר הפעולה הקרובה</span>
+            </div>
             {g.items.map((s, i) => {
               const chip = nextChip(s);
               return (
