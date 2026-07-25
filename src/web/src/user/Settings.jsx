@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, timeFormat } from '../ui.jsx';
 import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2 } from 'lucide-react';
 
 // Phones (caller-ID) + PIN + relay management — relay names/codes drive the IVR
@@ -18,6 +18,7 @@ export default function Settings() {
   const [disablingDevice, setDisablingDevice] = useState(null); // device pending "disable all" confirmation
   const [removingDevice, setRemovingDevice] = useState(null); // device pending removal confirmation
   const [showRemoved, setShowRemoved] = useState(false);
+  const [clockFmt, setClockFmt] = useState(timeFormat.get()); // 12/24h time-entry preference (per device)
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -188,6 +189,14 @@ export default function Settings() {
           </Select>
         </div>
         <p className="text-muted text-xs mt-1">לפי האזור מחושבים זמני שקיעה, זריחה וצאת הכוכבים בתזמונים ההלכתיים.</p>
+        <div className="flex items-center gap-2 flex-wrap mt-3">
+          <span className="text-sm">תצוגת שעה:</span>
+          <Select value={clockFmt} onChange={(e) => { timeFormat.set(e.target.value); setClockFmt(e.target.value); }}>
+            <option value="24">24 שעות (18:00)</option>
+            <option value="12">12 שעות (6:00 PM)</option>
+          </Select>
+        </div>
+        <p className="text-muted text-xs mt-1">קובע איך בוחרים שעה בתזמונים במכשיר הזה.</p>
         <Button variant="ghost" className="mt-2" onClick={() => setPinForm({ old_pin: '', new_pin: '' })}>
           <span className="inline-flex items-center gap-1"><KeyRound size={14} />שינוי קוד סודי</span>
         </Button>

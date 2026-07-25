@@ -47,11 +47,26 @@ export const Input = ({ className = '', ...props }) => (
   />
 );
 
-// 24-hour time input. The native <input type="time"> renders 12h AM/PM per the
-// OS locale with no way to force 24h — so this is a plain text field that
-// accepts "18:00" / "1800" / "8" and normalizes to HH:MM on blur/Enter.
-// onChange fires with {target:{value}} on commit, like a native input.
+// Per-device clock preference for time-entry fields: '24' (default) renders our
+// 24h text field; '12' renders the browser's native picker, which shows AM/PM on
+// 12-hour-locale systems. The Settings page flips it; live inputs follow via the
+// window event.
+export const timeFormat = {
+  get: () => localStorage.getItem('timeFormat') || '24',
+  set: (v) => { localStorage.setItem('timeFormat', v); window.dispatchEvent(new Event('time-format-changed')); },
+};
+
+// Time input honoring the 12/24 preference. In 24h mode it's a plain text field
+// that accepts "18:00" / "1800" / "8" and normalizes to HH:MM on blur/Enter
+// (the native <input type="time"> can't be forced to 24h — it follows the OS
+// locale). onChange fires with {target:{value}} on commit, like a native input.
 export const TimeInput = ({ value, onChange, className = '', ...props }) => {
+  const [fmt, setFmt] = useState(timeFormat.get());
+  useEffect(() => {
+    const f = () => setFmt(timeFormat.get());
+    window.addEventListener('time-format-changed', f);
+    return () => window.removeEventListener('time-format-changed', f);
+  }, []);
   const [draft, setDraft] = useState(value || '');
   useEffect(() => { setDraft(value || ''); }, [value]);
   const commit = () => {
@@ -64,6 +79,15 @@ export const TimeInput = ({ value, onChange, className = '', ...props }) => {
     setDraft(out);
     if (out !== value) onChange?.({ target: { value: out } });
   };
+  if (fmt === '12') {
+    return (
+      <input
+        type="time" dir="ltr"
+        className={`border border-line rounded-[10px] px-3 py-2.5 bg-surface w-full focus:outline-none focus:border-accent ${className}`}
+        value={value || ''} onChange={onChange} {...props}
+      />
+    );
+  }
   return (
     <input
       dir="ltr" inputMode="numeric" placeholder="18:00" maxLength={5}
