@@ -47,7 +47,11 @@ export function createApp() {
     },
   }]));
 
-  app.use(ivrLimiter, ivrRouter); // GET /ivr — Yemot webhook (30 req/min/phone)
+  // Limiter scoped to /ivr ONLY — a pathless app.use(ivrLimiter) counted EVERY app
+  // request (dashboard polling included) toward the 30/min bucket; on one IP
+  // (localhost, or pre-proxy prod) that 429'd normal API traffic.
+  app.use('/ivr', ivrLimiter);
+  app.use(ivrRouter); // GET /ivr — Yemot webhook (30 req/min/phone)
   app.use('/api/v1', authRouter);
   // adminRouter's specific /api/v1/admin prefix MUST be mounted before the catch-all
   // userRouter — userRouter.use(requireUser) would otherwise 403 every admin request.
