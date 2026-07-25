@@ -160,8 +160,7 @@ export default function Schedules() {
             <div className="flex items-center gap-2.5 px-5 py-3 bg-[#E4EFFE]/70 border-b-2 border-accent/40">
               <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><House size={16} /></span>
               <h3 className="font-bold text-[17px]">{g.relay}</h3>
-              <span className="text-muted text-[12.5px]">{g.device}</span>
-              <span className="text-muted text-sm ms-auto">{g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`} · לפי סדר הפעולה הקרובה</span>
+              <span className="text-muted text-sm ms-auto">{g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`}</span>
             </div>
             {g.items.map((s, i) => {
               const chip = nextChip(s);
