@@ -161,9 +161,9 @@ export default function Schedules() {
               <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><House size={16} /></span>
               <h3 className="font-bold text-[17px]">{g.relay}</h3>
               <span className="text-muted text-sm ms-auto">{g.items.length === 0 ? '' : g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`}</span>
-              <Button className="!py-1.5" disabled={busy}
+              <Button className="!py-1 !px-3 text-sm" disabled={busy}
                 onClick={() => setFormInit({ ...emptyForm, relay_ids: [g.relayId] })}>
-                <span className="inline-flex items-center gap-1"><Plus size={16} />תזמון חדש</span>
+                <span className="inline-flex items-center gap-1"><Plus size={14} />תזמון חדש</span>
               </Button>
             </div>
             {g.items.length === 0 && (
