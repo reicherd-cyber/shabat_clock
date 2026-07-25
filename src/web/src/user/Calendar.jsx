@@ -106,6 +106,24 @@ function toIntervals(events) {
   }
   const intervals = [];
   for (const list of bySchedule.values()) {
+    // כיבוי והדלקה: pair OFF→ON into a "gap" (device resting) window — the
+    // meaningful thing to draw. start = the OFF event, end = the ON event.
+    if (list[0]?.reversed) {
+      let openOff = null;
+      for (const ev of list) {
+        if (ev.action === 'off') {
+          if (openOff) intervals.push({ start: openOff, end: null, gap: true });
+          openOff = ev;
+        } else if (openOff) {
+          intervals.push({ start: openOff, end: ev, gap: true });
+          openOff = null;
+        } else {
+          intervals.push({ start: null, end: ev, gap: true });
+        }
+      }
+      if (openOff) intervals.push({ start: openOff, end: null, gap: true });
+      continue;
+    }
     let open = null;
     for (const ev of list) {
       if (ev.action === 'on') {
@@ -132,7 +150,21 @@ function chipsByDay(intervals) {
   };
   for (const iv of intervals) {
     const ev = iv.start || iv.end;
-    const base = { sid: ev.schedule_id, relay_id: ev.relay_id, relay_name: ev.relay_name, device_name: ev.device_name, sort: ev.time };
+    const base = { sid: ev.schedule_id, relay_id: ev.relay_id, relay_name: ev.relay_name, device_name: ev.device_name, sort: ev.time, gap: iv.gap };
+    if (iv.gap) { // gap window: start=OFF, end=ON — labels flip
+      if (!iv.start) { add(iv.end.date, { ...base, text: `הדלקה ${iv.end.time}`, sort: iv.end.time }); continue; }
+      if (!iv.end) { add(iv.start.date, { ...base, text: `כיבוי ${iv.start.time}` }); continue; }
+      if (iv.start.date === iv.end.date) {
+        add(iv.start.date, { ...base, text: `כבוי ${iv.start.time}–${iv.end.time}` });
+      } else {
+        add(iv.start.date, { ...base, text: `כיבוי מ־${iv.start.time}` });
+        for (let mid = shiftYmd(iv.start.date, 1); mid < iv.end.date; mid = shiftYmd(mid, 1)) {
+          add(mid, { ...base, text: 'כבוי כל היום', sort: '00:00' });
+        }
+        add(iv.end.date, { ...base, text: `הדלקה ${iv.end.time}`, sort: '00:00' });
+      }
+      continue;
+    }
     if (!iv.start) { add(iv.end.date, { ...base, text: `כיבוי ${iv.end.time}`, sort: iv.end.time }); continue; }
     if (!iv.end) { add(iv.start.date, { ...base, text: `הדלקה ${iv.start.time}` }); continue; }
     if (iv.start.date === iv.end.date) {
@@ -159,7 +191,22 @@ function segmentsByDay(intervals) {
   };
   for (const iv of intervals) {
     const ev = iv.start || iv.end;
-    const base = { sid: ev.schedule_id, relay_id: ev.relay_id, relay_name: ev.relay_name, device_name: ev.device_name };
+    const base = { sid: ev.schedule_id, relay_id: ev.relay_id, relay_name: ev.relay_name, device_name: ev.device_name, gap: iv.gap };
+    if (iv.gap) { // gap window: start=OFF, end=ON
+      if (!iv.start) { const m = toMin(iv.end.time); add(iv.end.date, { ...base, startMin: Math.max(0, m - 45), endMin: m, label: `הדלקה ${iv.end.time}`, openStart: true }); continue; }
+      if (!iv.end) { const m = toMin(iv.start.time); add(iv.start.date, { ...base, startMin: m, endMin: Math.min(1440, m + 45), label: `כיבוי ${iv.start.time}`, openEnd: true }); continue; }
+      const gS = toMin(iv.start.time); const gE = toMin(iv.end.time);
+      if (iv.start.date === iv.end.date) {
+        add(iv.start.date, { ...base, startMin: gS, endMin: Math.max(gE, gS + 45), label: `כבוי ${iv.start.time}–${iv.end.time}` });
+      } else {
+        add(iv.start.date, { ...base, startMin: gS, endMin: 1440, label: `כיבוי ${iv.start.time}`, cont: 'down' });
+        for (let mid = shiftYmd(iv.start.date, 1); mid < iv.end.date; mid = shiftYmd(mid, 1)) {
+          add(mid, { ...base, startMin: 0, endMin: 1440, label: 'כבוי', cont: 'both' });
+        }
+        add(iv.end.date, { ...base, startMin: 0, endMin: Math.max(gE, 45), label: `הדלקה ${iv.end.time}`, cont: 'up' });
+      }
+      continue;
+    }
     if (!iv.start) { const m = toMin(iv.end.time); add(iv.end.date, { ...base, startMin: Math.max(0, m - 45), endMin: m, label: `כיבוי ${iv.end.time}`, openStart: true }); continue; }
     if (!iv.end) { const m = toMin(iv.start.time); add(iv.start.date, { ...base, startMin: m, endMin: Math.min(1440, m + 45), label: `הדלקה ${iv.start.time}`, openEnd: true }); continue; }
     const sM = toMin(iv.start.time); const eM = toMin(iv.end.time);
@@ -374,9 +421,11 @@ export default function Calendar() {
   };
   const toggleAll = () => setHiddenRelays(hiddenRelays.size === 0 ? new Set(relays.map((r) => r.id)) : new Set());
 
+  // gap (כבוי window of a כיבוי-והדלקה schedule): grey fill, dashed relay-color
+  // edge — the relay keeps its identity but the block clearly reads "resting".
   const blockStyle = (relayId, seg = {}) => ({
-    backgroundColor: `${colorOf(relayId)}24`,
-    borderInlineStart: `3px solid ${colorOf(relayId)}`,
+    backgroundColor: seg.gap ? 'rgba(107,114,128,0.14)' : `${colorOf(relayId)}24`,
+    borderInlineStart: `3px ${seg.gap ? 'dashed' : 'solid'} ${colorOf(relayId)}`,
     ...(seg.cont === 'down' || seg.cont === 'both' ? { borderBottomLeftRadius: 0, borderBottomRightRadius: 0 } : {}),
     ...(seg.cont === 'up' || seg.cont === 'both' ? { borderTopLeftRadius: 0, borderTopRightRadius: 0 } : {}),
   });
@@ -519,9 +568,9 @@ export default function Calendar() {
                 )}
                 <div className="space-y-[3px]">
                   {shown.map((chip, j) => (
-                    <div key={j} style={blockStyle(chip.relay_id)} title={`${chip.relay_name} · ${chip.device_name} — לחיצה לעריכה`}
+                    <div key={j} style={blockStyle(chip.relay_id, chip)} title={`${chip.relay_name} · ${chip.device_name} — לחיצה לעריכה`}
                       onClick={(e) => { e.stopPropagation(); openEdit(chip.sid); }}
-                      className="text-[12.5px] font-medium leading-tight rounded px-1.5 py-[3px] truncate text-ink hover:ring-1 hover:ring-accent/50">
+                      className={`text-[12.5px] font-medium leading-tight rounded px-1.5 py-[3px] truncate ${chip.gap ? 'text-muted' : 'text-ink'} hover:ring-1 hover:ring-accent/50`}>
                       {chip.text}
                     </div>
                   ))}
@@ -581,9 +630,9 @@ export default function Calendar() {
         {dayModal && (
           <div className="space-y-2">
             {(monthChips.get(dayModal) || []).map((chip, i) => (
-              <div key={i} style={blockStyle(chip.relay_id)}
+              <div key={i} style={blockStyle(chip.relay_id, chip)}
                 onClick={() => openEdit(chip.sid)} title="לחיצה לעריכה"
-                className="rounded-md px-3 py-2 text-sm text-ink cursor-pointer hover:ring-1 hover:ring-accent/50">
+                className={`rounded-md px-3 py-2 text-sm cursor-pointer ${chip.gap ? 'text-muted' : 'text-ink'} hover:ring-1 hover:ring-accent/50`}>
                 <b>{chip.text}</b>
                 <span className="text-muted"> — {chip.relay_name} · <House size={11} className="inline" /> {chip.device_name}</span>
               </div>

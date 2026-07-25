@@ -27,8 +27,18 @@ export function expandSchedules(rows, { from, days }) {
   for (const s of rows) {
     const tz = s.timezone || 'Asia/Jerusalem';
     const region = s.zmanim_region || DEFAULT_REGION;
+    // Reversed pair (כיבוי והדלקה): OFF fires before ON — the calendar should
+    // show the off-WINDOW, not a cycle-spanning on-interval.
+    const reversed = Boolean(s.on_time && s.off_time) && (
+      s.repeat_type === 'weekly'
+        ? (s.on_day_of_week != null && s.off_day_of_week != null
+          && `${s.off_day_of_week}${s.off_time}` < `${s.on_day_of_week}${s.on_time}`)
+        : s.repeat_type === 'once'
+          ? `${s.off_date}T${s.off_time}` < `${s.on_date}T${s.on_time}`
+          : false
+    );
     const meta = {
-      schedule_id: Number(s.id), repeat_type: s.repeat_type,
+      schedule_id: Number(s.id), repeat_type: s.repeat_type, reversed,
       relay_id: Number(s.relay_id), relay_name: s.relay_name,
       device_id: Number(s.device_id), device_name: s.device_name,
     };
