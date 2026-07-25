@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { Button, Input, Select, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
+import { Button, Input, TimeInput, Select, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
 import { Check, ChevronDown, Trash2 } from 'lucide-react';
 
 // The schedule create/edit form, extracted so it can open as a modal on BOTH
@@ -394,12 +394,29 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
           <div className="flex gap-1.5 flex-wrap">
             {MODES.filter((m) => m.v !== 'offon' || form.repeat_type === 'weekly' || form.repeat_type === 'once').map((m) => (
               <Button key={m.v} variant={form.mode === m.v ? 'primary' : 'ghost'} className="!px-2.5 !py-1 text-xs"
-                onClick={() => setForm({
-                  ...form, mode: m.v,
-                  ...(form.repeat_type === 'once' && m.v !== 'off' ? { on_date: form.on_date || todayYmd(), on_time: form.on_time || nowHm() } : {}),
-                  ...(form.repeat_type === 'once' && m.v !== 'on' ? { off_date: form.off_date || todayYmd(), ...(m.v === 'offon' ? { off_time: form.off_time || nowHm() } : {}) } : {}),
-                  ...(form.repeat_type === 'yearly' ? { on_date: form.on_date || todayYmd(), end_date: form.end_date || form.on_date || todayYmd() } : {}),
-                })}>{m.label}</Button>
+                onClick={() => {
+                  let next = {
+                    ...form, mode: m.v,
+                    ...(form.repeat_type === 'once' && m.v !== 'off' ? { on_date: form.on_date || todayYmd(), on_time: form.on_time || nowHm() } : {}),
+                    ...(form.repeat_type === 'once' && m.v !== 'on' ? { off_date: form.off_date || todayYmd(), ...(m.v === 'offon' ? { off_time: form.off_time || nowHm() } : {}) } : {}),
+                    ...(form.repeat_type === 'yearly' ? { on_date: form.on_date || todayYmd(), end_date: form.end_date || form.on_date || todayYmd() } : {}),
+                  };
+                  // both ↔ offon: the first-happening event keeps its slot, so the
+                  // sides swap wholesale (שישי 18:00 הדלקה becomes שישי 18:00 כיבוי).
+                  const pair = (v) => v === 'both' || v === 'offon';
+                  if (pair(m.v) && pair(form.mode) && m.v !== form.mode) {
+                    next = {
+                      ...next,
+                      on_day_of_week: next.off_day_of_week, off_day_of_week: next.on_day_of_week,
+                      on_time: next.off_time, off_time: next.on_time,
+                      on_date: next.off_date, off_date: next.on_date,
+                      on_kind: next.off_kind, off_kind: next.on_kind,
+                      on_offset: next.off_offset, off_offset: next.on_offset,
+                      on_dir: next.off_dir, off_dir: next.on_dir,
+                    };
+                  }
+                  setForm(next);
+                }}>{m.label}</Button>
             ))}
           </div>
           {(form.repeat_type === 'yearly' || form.repeat_type === 'once') && (() => {
@@ -484,7 +501,7 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
                 {Object.entries(ANCHOR_NAMES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
               </Select>
               {form[`${p}_kind`] === 'clock'
-                ? <Input type="time" value={form[`${p}_time`]} onChange={(e) => setForm({ ...form, [`${p}_time`]: e.target.value })} />
+                ? <TimeInput value={form[`${p}_time`]} onChange={(e) => setForm({ ...form, [`${p}_time`]: e.target.value })} />
                 : <div className="flex gap-1.5 items-center">
                   <Input type="number" min="0" max="240" className="w-16 text-center" value={form[`${p}_offset`]}
                     onChange={(e) => setForm({ ...form, [`${p}_offset`]: e.target.value })} />

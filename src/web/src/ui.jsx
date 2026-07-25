@@ -47,6 +47,36 @@ export const Input = ({ className = '', ...props }) => (
   />
 );
 
+// 24-hour time input. The native <input type="time"> renders 12h AM/PM per the
+// OS locale with no way to force 24h — so this is a plain text field that
+// accepts "18:00" / "1800" / "8" and normalizes to HH:MM on blur/Enter.
+// onChange fires with {target:{value}} on commit, like a native input.
+export const TimeInput = ({ value, onChange, className = '', ...props }) => {
+  const [draft, setDraft] = useState(value || '');
+  useEffect(() => { setDraft(value || ''); }, [value]);
+  const commit = () => {
+    const digits = String(draft).replace(/\D/g, '');
+    if (!digits) { setDraft(value || ''); return; }
+    const hh = digits.length <= 2 ? Number(digits) : Number(digits.slice(0, digits.length - 2));
+    const mm = digits.length <= 2 ? 0 : Number(digits.slice(-2));
+    if (hh > 23 || mm > 59) { setDraft(value || ''); return; }
+    const out = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    setDraft(out);
+    if (out !== value) onChange?.({ target: { value: out } });
+  };
+  return (
+    <input
+      dir="ltr" inputMode="numeric" placeholder="18:00" maxLength={5}
+      className={`border border-line rounded-[10px] px-3 py-2.5 bg-surface w-full text-center focus:outline-none focus:border-accent ${className}`}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      {...props}
+    />
+  );
+};
+
 export const Select = ({ className = '', children, ...props }) => (
   <select className={`border border-line rounded-[10px] px-3 py-2.5 bg-surface ${className}`} {...props}>
     {children}

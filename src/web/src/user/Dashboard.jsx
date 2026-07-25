@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api.js';
-import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, Input, useInterval } from '../ui.jsx';
+import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, Input, TimeInput, useInterval } from '../ui.jsx';
 import { House, Timer, TriangleAlert } from 'lucide-react';
 
 const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
@@ -136,7 +136,7 @@ export default function Dashboard() {
                 {quickOff?.relayId === r.id && (
                   <div className="flex items-center gap-2.5 px-5 pb-3.5 flex-wrap">
                     <span className="text-[13px] text-muted">כיבוי בשעה</span>
-                    <Input type="time" className="w-28" value={quickOff.time}
+                    <TimeInput className="!w-28" value={quickOff.time}
                       onChange={(e) => setQuickOff({ ...quickOff, time: e.target.value })} />
                     <Button disabled={!!busyRelays[r.id] || !quickOff.time} onClick={() => saveQuickOff(r)}>אישור</Button>
                     <Button variant="ghost" onClick={() => setQuickOff(null)}>ביטול</Button>
