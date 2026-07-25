@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, SectionHead, Modal, ErrorNote, useAsync, DAY_NAMES, Toggle, SyncNote } from '../ui.jsx';
 import { House, Trash2, Plus, Check, RefreshCw, Sparkles, Pencil } from 'lucide-react';
@@ -66,6 +66,72 @@ export default function Schedules() {
       : fmtDate(s.annual_end_date || s.annual_date);
     return to !== from ? `${from} עד ${to}` : from;
   };
+  // ── timeline ordering: when does this schedule act next? ──
+  // Resolves each side to a concrete Date: dated sides (once/holiday/yearly) use
+  // their stored next-occurrence date; weekly sides roll to the coming day-of-week
+  // (null day = daily). Anchored sides already carry the resolved wall time.
+  const sideDate = (s, p) => {
+    if (s[`${p}_time`] == null) return null;
+    const hm = String(s[`${p}_time`]).slice(0, 5);
+    if (s[`${p}_date`]) return new Date(`${String(s[`${p}_date`]).slice(0, 10)}T${hm}:00`);
+    const now = new Date();
+    const [hh, mm] = hm.split(':').map(Number);
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm);
+    const dow = s[`${p}_day_of_week`];
+    if (dow != null) d.setDate(d.getDate() + ((dow - 1 - now.getDay() + 7) % 7));
+    if (d <= now) d.setDate(d.getDate() + (dow == null ? 1 : 7));
+    return d;
+  };
+  // Next event = the earliest FUTURE side; a past ON with a future OFF means the
+  // schedule is running right now (mid-block שבת included).
+  const nextEvent = (s) => {
+    const now = new Date();
+    const on = sideDate(s, 'on');
+    const off = sideDate(s, 'off');
+    const running = on && off && on <= now && off > now;
+    const future = [on, off].filter((d) => d && d > now).sort((a, b) => a - b);
+    if (running) return { d: off, act: 'כיבוי', running: true };
+    if (future.length) return { d: future[0], act: future[0] === on ? 'הדלקה' : 'כיבוי' };
+    return { d: null }; // both sides in the past (a spent one-time)
+  };
+  // Sort key: running first, then by next action time; spent → after those; disabled → last.
+  const sortKey = (s) => {
+    if (!s.is_enabled) return Infinity;
+    const ev = nextEvent(s);
+    if (ev.running) return 0;
+    return ev.d ? ev.d.getTime() : Infinity - 1;
+  };
+  const fmtHM = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const whenText = (d) => {
+    const now = new Date();
+    const days = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400e3);
+    if (days === 0) return `היום ${fmtHM(d)}`;
+    if (days === 1) return `מחר ${fmtHM(d)}`;
+    if (days < 7) return `${DAY_NAMES[d.getDay() + 1]} ${fmtHM(d)}`;
+    return `${d.getDate()}.${d.getMonth() + 1} ${fmtHM(d)}`;
+  };
+  // The compact "next action" chip that gives every row its place on the timeline.
+  const nextChip = (s) => {
+    if (!s.is_enabled) return { text: 'מושבת', cls: 'bg-surface2 text-muted' };
+    const ev = nextEvent(s);
+    if (!ev.d) return { text: 'הסתיים', cls: 'bg-surface2 text-muted' };
+    if (ev.running) return { text: `פועל · כיבוי ${whenText(ev.d)}`, cls: 'bg-[#E7F6EC] text-[#006e00]' };
+    return { text: `${ev.act} ${whenText(ev.d)}`, cls: 'bg-[#E4EFFE] text-accent-dk' };
+  };
+  // Groups: one card per device, rows in firing order; devices ordered by their
+  // soonest upcoming action so "what happens next" is always at the top.
+  const groups = useMemo(() => {
+    if (!schedules) return [];
+    const byDevice = new Map();
+    for (const s of schedules) {
+      if (!byDevice.has(s.device_name)) byDevice.set(s.device_name, []);
+      byDevice.get(s.device_name).push(s);
+    }
+    return [...byDevice.entries()]
+      .map(([device, items]) => ({ device, items: items.sort((a, b) => sortKey(a) - sortKey(b)) }))
+      .sort((a, b) => sortKey(a.items[0]) - sortKey(b.items[0]));
+  }, [schedules]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const onLabel = (s) => (s.on_time == null ? null
     : s.repeat_type === 'holiday' ? `בכניסה (${fmtDate(s.on_date)}) · ${sideTime(s, 'on')} · הדלקה`
       : s.repeat_type === 'yearly' ? `כל שנה — ${yearlyRange(s)} · הקרוב ${fmtDate(s.on_date)} · ${sideTime(s, 'on')} · הדלקה`
@@ -87,39 +153,49 @@ export default function Schedules() {
       </SectionHead>
       <ErrorNote error={error} />
       {schedules.length === 0 && <Card>אין תזמונים עדיין.</Card>}
-      {schedules.length > 0 && (
-        <Card flush>
-          {schedules.map((s, i) => (
-            <div key={s.id} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''}`}>
-              <div className="min-w-[120px] font-bold">
-                {s.relay_name}
-                <small className="flex items-center gap-1 font-normal text-muted text-[12.5px]"><House size={11} />{s.device_name}</small>
-                {s.repeat_type === 'holiday' && (
-                  <small className="block font-normal text-muted text-[12.5px]">{holidaySummary(s.holidays)}</small>
-                )}
-              </div>
-              <div className="flex-1 flex items-center gap-2.5 flex-wrap">
-                {onLabel(s) && <span className="pill on-p">{onLabel(s)}</span>}
-                {onLabel(s) && offLabel(s) && <span className="text-muted">←</span>}
-                {offLabel(s) && <span className="pill off-p">{offLabel(s)}</span>}
-              </div>
-              <SyncNote ok={s.sync_status === 'synced'}>
-                {s.sync_status === 'synced'
-                  ? <span className="inline-flex items-center gap-1"><Check size={13} />מסונכרן</span>
-                  : <span className="inline-flex items-center gap-1"><RefreshCw size={13} />ממתין לסנכרון</span>}
-              </SyncNote>
-              {isShabbatPair(s) && (
-                <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-accent cursor-pointer'}`}
-                  title="החל את זמני השבת גם בחגים" onClick={() => setConvert(s)}><Sparkles size={17} /></button>
-              )}
-              <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-ink cursor-pointer'}`}
-                title="עריכת התזמון" onClick={() => setFormInit(rowToForm(s))}><Pencil size={16} /></button>
-              <Toggle checked={!!s.is_enabled} busy={busy} onChange={() => toggleEnabled(s)} />
-              <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`} title="מחק" onClick={() => remove(s)}><Trash2 size={17} /></button>
-            </div>
-          ))}
-        </Card>
-      )}
+      {groups.map((g) => (
+        <div key={g.device} className="mb-6">
+          <div className="flex items-baseline gap-2 mb-2 px-1">
+            <House size={15} className="text-accent-dk self-center" />
+            <h3 className="font-bold text-[17px]">{g.device}</h3>
+            <span className="text-muted text-sm">{g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`} · לפי סדר הפעולה הקרובה</span>
+          </div>
+          <Card flush>
+            {g.items.map((s, i) => {
+              const chip = nextChip(s);
+              return (
+                <div key={s.id} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''} ${s.is_enabled ? '' : 'opacity-60'}`}>
+                  <div className="min-w-[130px] font-bold">
+                    {s.relay_name}
+                    <small className={`mt-0.5 flex w-fit items-center font-medium text-[11.5px] rounded-full px-2 py-px whitespace-nowrap ${chip.cls}`}>{chip.text}</small>
+                    {s.repeat_type === 'holiday' && (
+                      <small className="block font-normal text-muted text-[12.5px] mt-0.5">{holidaySummary(s.holidays)}</small>
+                    )}
+                  </div>
+                  <div className="flex-1 flex items-center gap-2.5 flex-wrap">
+                    {onLabel(s) && <span className="pill on-p">{onLabel(s)}</span>}
+                    {onLabel(s) && offLabel(s) && <span className="text-muted">←</span>}
+                    {offLabel(s) && <span className="pill off-p">{offLabel(s)}</span>}
+                  </div>
+                  <SyncNote ok={s.sync_status === 'synced'}>
+                    {s.sync_status === 'synced'
+                      ? <span className="inline-flex items-center gap-1"><Check size={13} />מסונכרן</span>
+                      : <span className="inline-flex items-center gap-1"><RefreshCw size={13} />ממתין לסנכרון</span>}
+                  </SyncNote>
+                  {isShabbatPair(s) && (
+                    <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-accent cursor-pointer'}`}
+                      title="החל את זמני השבת גם בחגים" onClick={() => setConvert(s)}><Sparkles size={17} /></button>
+                  )}
+                  <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-ink cursor-pointer'}`}
+                    title="עריכת התזמון" onClick={() => setFormInit(rowToForm(s))}><Pencil size={16} /></button>
+                  <Toggle checked={!!s.is_enabled} busy={busy} onChange={() => toggleEnabled(s)} />
+                  <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`} title="מחק" onClick={() => remove(s)}><Trash2 size={17} /></button>
+                </div>
+              );
+            })}
+          </Card>
+        </div>
+      ))}
 
       {/* convert a weekly Shabbat pair into a שבת וחגים schedule */}
       <Modal open={!!convert} onClose={() => setConvert(null)} title="להחיל את זמני השבת גם בחגים?">
