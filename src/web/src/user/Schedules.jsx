@@ -136,6 +136,19 @@ export default function Schedules() {
       .sort((a, b) => (g => g.items.length ? sortKey(g.items[0]) : Infinity)(a) - (g => g.items.length ? sortKey(g.items[0]) : Infinity)(b));
   }, [schedules, relays]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Reversed pair (כיבוי והדלקה): the OFF fires before the ON — pills must render
+  // in the true order. Daily pairs are cyclic, so they stay ON→OFF.
+  const isReversed = (s) => {
+    if (!s.on_time || !s.off_time) return false;
+    if (s.repeat_type === 'once') {
+      return `${String(s.off_date).slice(0, 10)}T${s.off_time}` < `${String(s.on_date).slice(0, 10)}T${s.on_time}`;
+    }
+    if (s.repeat_type === 'weekly' && s.on_day_of_week != null && s.off_day_of_week != null) {
+      return `${s.off_day_of_week}${s.off_time}` < `${s.on_day_of_week}${s.on_time}`;
+    }
+    return false;
+  };
+
   const onLabel = (s) => (s.on_time == null ? null
     : s.repeat_type === 'holiday' ? `בכניסה (${fmtDate(s.on_date)}) · ${sideTime(s, 'on')} · הדלקה`
       : s.repeat_type === 'yearly' ? `כל שנה — ${yearlyRange(s)} · הקרוב ${fmtDate(s.on_date)} · ${sideTime(s, 'on')} · הדלקה`
@@ -180,9 +193,13 @@ export default function Schedules() {
                     )}
                   </div>
                   <div className="flex-1 flex items-center gap-2.5 flex-wrap">
-                    {onLabel(s) && <span className="pill on-p">{onLabel(s)}</span>}
-                    {onLabel(s) && offLabel(s) && <span className="text-muted">←</span>}
-                    {offLabel(s) && <span className="pill off-p">{offLabel(s)}</span>}
+                    {(isReversed(s)
+                      ? [offLabel(s) && <span key="off" className="pill off-p">{offLabel(s)}</span>,
+                        onLabel(s) && offLabel(s) && <span key="arr" className="text-muted">←</span>,
+                        onLabel(s) && <span key="on" className="pill on-p">{onLabel(s)}</span>]
+                      : [onLabel(s) && <span key="on" className="pill on-p">{onLabel(s)}</span>,
+                        onLabel(s) && offLabel(s) && <span key="arr" className="text-muted">←</span>,
+                        offLabel(s) && <span key="off" className="pill off-p">{offLabel(s)}</span>])}
                   </div>
                   <SyncNote ok={s.sync_status === 'synced'}>
                     {s.sync_status === 'synced'
