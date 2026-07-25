@@ -118,17 +118,17 @@ export default function Schedules() {
     if (ev.running) return { text: `פועל · כיבוי ${whenText(ev.d)}`, cls: 'bg-[#E7F6EC] text-[#006e00]' };
     return { text: `${ev.act} ${whenText(ev.d)}`, cls: 'bg-[#E4EFFE] text-accent-dk' };
   };
-  // Groups: one card per device, rows in firing order; devices ordered by their
-  // soonest upcoming action so "what happens next" is always at the top.
+  // Groups: one card per RELAY (מטבח, סלון…), rows in firing order; relays ordered
+  // by their soonest upcoming action so "what happens next" is always at the top.
   const groups = useMemo(() => {
     if (!schedules) return [];
-    const byDevice = new Map();
+    const byRelay = new Map();
     for (const s of schedules) {
-      if (!byDevice.has(s.device_name)) byDevice.set(s.device_name, []);
-      byDevice.get(s.device_name).push(s);
+      if (!byRelay.has(s.relay_id)) byRelay.set(s.relay_id, { relay: s.relay_name, device: s.device_name, items: [] });
+      byRelay.get(s.relay_id).items.push(s);
     }
-    return [...byDevice.entries()]
-      .map(([device, items]) => ({ device, items: items.sort((a, b) => sortKey(a) - sortKey(b)) }))
+    return [...byRelay.values()]
+      .map((g) => ({ ...g, items: g.items.sort((a, b) => sortKey(a) - sortKey(b)) }))
       .sort((a, b) => sortKey(a.items[0]) - sortKey(b.items[0]));
   }, [schedules]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -154,21 +154,21 @@ export default function Schedules() {
       <ErrorNote error={error} />
       {schedules.length === 0 && <Card>אין תזמונים עדיין.</Card>}
       {groups.map((g) => (
-        <div key={g.device} className="mb-7">
+        <div key={`${g.device}·${g.relay}`} className="mb-7">
           <Card flush className="overflow-hidden border-accent/30">
-            {/* device band — every device is its own clearly-bounded block */}
+            {/* relay band — every relay (מטבח, סלון…) is its own clearly-bounded table */}
             <div className="flex items-center gap-2.5 px-5 py-3 bg-[#E4EFFE]/70 border-b-2 border-accent/40">
               <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><House size={16} /></span>
-              <h3 className="font-bold text-[17px]">{g.device}</h3>
+              <h3 className="font-bold text-[17px]">{g.relay}</h3>
+              <span className="text-muted text-[12.5px]">{g.device}</span>
               <span className="text-muted text-sm ms-auto">{g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`} · לפי סדר הפעולה הקרובה</span>
             </div>
             {g.items.map((s, i) => {
               const chip = nextChip(s);
               return (
                 <div key={s.id} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''} ${s.is_enabled ? '' : 'opacity-60'}`}>
-                  <div className="min-w-[130px] font-bold">
-                    {s.relay_name}
-                    <small className={`mt-0.5 flex w-fit items-center font-medium text-[11.5px] rounded-full px-2 py-px whitespace-nowrap ${chip.cls}`}>{chip.text}</small>
+                  <div className="min-w-[130px]">
+                    <small className={`flex w-fit items-center font-medium text-[11.5px] rounded-full px-2 py-px whitespace-nowrap ${chip.cls}`}>{chip.text}</small>
                     {s.repeat_type === 'holiday' && (
                       <small className="block font-normal text-muted text-[12.5px] mt-0.5">{holidaySummary(s.holidays)}</small>
                     )}
