@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, Badge, ErrorNote, useAsync, useInterval, DAY_NAMES } from '../ui.jsx';
+import { UserRound, House } from 'lucide-react';
 
 // `to` makes the tile a clickable drill-down into the underlying data.
 const Stat = ({ label, value, ok, to }) => {
@@ -394,31 +395,62 @@ export function AdminSchedules() {
       <ErrorNote error={error} />
       {schedules && <p className="text-muted text-sm">{shown.length} תזמונים{filtering ? ' (מסונן)' : ''}</p>}
       {shown.length === 0 && schedules && <Card className="text-muted">לא נמצאו תזמונים</Card>}
-      {shown.map((s) => (
-        <Card key={s.id} className="flex items-center justify-between flex-wrap gap-2 py-3">
-          <div className="text-sm">
-            <b>{s.relay_name}</b> <span className="text-muted">({s.device_name}{s.user_name ? ` · ${s.user_name}` : ''})</span>
-            {' — '}
-            {/* Both repeat types may be one-sided (e.g. dashboard quick "turn off at…",
-                or a weekly "every night off" with no ON) — render only present sides. */}
-            {s.repeat_type === 'once'
-              ? [
-                s.on_time && `הדלקה ${String(s.on_date).slice(0, 10)} ${s.on_time}`,
-                s.off_time && `כיבוי ${String(s.off_date).slice(0, 10)} ${s.off_time}`,
-              ].filter(Boolean).join(' ← ')
-              : [
-                s.on_time && `הדלקה ${s.on_day_of_week == null ? 'כל יום' : DAY_NAMES[s.on_day_of_week]} ${s.on_time}`,
-                s.off_time && `כיבוי ${s.off_day_of_week == null ? 'כל יום' : DAY_NAMES[s.off_day_of_week]} ${s.off_time}`,
-              ].filter(Boolean).join(' ← ')}
+      {/* Hierarchy: user → device → the device's schedules. */}
+      {(() => {
+        const byUser = new Map();
+        for (const s of shown) {
+          const uKey = s.user_id ?? 'none';
+          if (!byUser.has(uKey)) byUser.set(uKey, { name: s.user_name || `#${s.user_id}`, devices: new Map(), n: 0 });
+          const u = byUser.get(uKey);
+          u.n += 1;
+          if (!u.devices.has(s.device_id)) u.devices.set(s.device_id, { name: s.device_name, items: [] });
+          u.devices.get(s.device_id).items.push(s);
+        }
+        const describe = (s) => (s.repeat_type === 'once'
+          ? [
+            s.on_time && `הדלקה ${String(s.on_date).slice(0, 10)} ${s.on_time}`,
+            s.off_time && `כיבוי ${String(s.off_date).slice(0, 10)} ${s.off_time}`,
+          ].filter(Boolean).join(' ← ')
+          : [
+            s.on_time && `הדלקה ${s.on_day_of_week == null ? 'כל יום' : DAY_NAMES[s.on_day_of_week]} ${s.on_time}`,
+            s.off_time && `כיבוי ${s.off_day_of_week == null ? 'כל יום' : DAY_NAMES[s.off_day_of_week]} ${s.off_time}`,
+          ].filter(Boolean).join(' ← '));
+        return [...byUser.values()].map((u, ui) => (
+          <div key={ui} className="mb-7">
+            {/* user band */}
+            <div className="flex items-center gap-2.5 mb-2.5">
+              <span className="w-8 h-8 rounded-full bg-accent text-white grid place-items-center shrink-0"><UserRound size={16} /></span>
+              <h3 className="font-bold text-[17px]">{u.name}</h3>
+              <span className="text-muted text-sm">{u.n === 1 ? 'תזמון אחד' : `${u.n} תזמונים`}</span>
+            </div>
+            {[...u.devices.values()].map((d, di) => (
+              <Card key={di} flush className="overflow-hidden mb-3 ms-4">
+                <div className="flex items-center gap-2 px-4 py-2 bg-[#E4EFFE]/60 border-b border-line">
+                  <House size={14} className="text-accent-dk" />
+                  <b className="text-sm">{d.name}</b>
+                  <span className="text-muted text-xs ms-auto">{d.items.length === 1 ? 'תזמון אחד' : `${d.items.length} תזמונים`}</span>
+                </div>
+                {d.items.map((s, i) => (
+                  <div key={s.id} className={`flex items-center justify-between flex-wrap gap-2 px-4 py-2.5 ${i > 0 ? 'border-t border-line' : ''} ${s.is_enabled ? '' : 'opacity-60'}`}>
+                    <div className="text-sm">
+                      <b>{s.relay_name}</b>
+                      {' — '}
+                      {/* One-sided schedules render only their present side. */}
+                      {describe(s)}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge ok={s.sync_status === 'synced'}>{s.sync_status}</Badge>
+                      <Badge ok={!!s.is_enabled}>{s.is_enabled ? 'פעיל' : 'מושבת'}</Badge>
+                      <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => toggle(s)}>{s.is_enabled ? 'השבת' : 'הפעל'}</Button>
+                      <Button variant="danger" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => remove(s)}>מחק</Button>
+                    </div>
+                  </div>
+                ))}
+              </Card>
+            ))}
           </div>
-          <div className="flex items-center gap-2">
-            <Badge ok={s.sync_status === 'synced'}>{s.sync_status}</Badge>
-            <Badge ok={!!s.is_enabled}>{s.is_enabled ? 'פעיל' : 'מושבת'}</Badge>
-            <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => toggle(s)}>{s.is_enabled ? 'השבת' : 'הפעל'}</Button>
-            <Button variant="danger" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => remove(s)}>מחק</Button>
-          </div>
-        </Card>
-      ))}
+        ));
+      })()}
     </div>
   );
 }
