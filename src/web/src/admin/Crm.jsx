@@ -20,6 +20,7 @@ const ORDER_STATUS = { open: 'פתוחה', delivered: 'סופקה', cancelled: '
 const ils = (n) => `₪${Number(n || 0).toLocaleString('he-IL')}`;
 const fmtD = (d) => (d ? new Date(d).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: '2-digit' }) : '');
 const todayYmd = () => new Date().toISOString().slice(0, 10);
+const plusDaysYmd = (n) => new Date(Date.now() + n * 86400e3).toISOString().slice(0, 10);
 
 const EMPTY_LEAD = { name: '', phones: [''], city: '', email: '', source: '', devices: [], status: 'new', notes: '', follow_up: '', user_id: null, user_name: '' };
 const CHANNELS = { 1: 'ערוץ אחד', 2: '2 ערוצים', 3: '3 ערוצים', 4: '4 ערוצים' };
@@ -143,7 +144,7 @@ export function Crm() {
 
       {/* הוספה — תמיד צמוד מעל הרשימה */}
       <div className="flex justify-end">
-        <Button onClick={() => setLeadForm({ ...EMPTY_LEAD })}>
+        <Button onClick={() => setLeadForm({ ...EMPTY_LEAD, follow_up: plusDaysYmd(14) })}>
           <span className="inline-flex items-center gap-1"><Plus size={16} />ליד חדש</span>
         </Button>
       </div>
