@@ -750,7 +750,7 @@ adminRouter.get('/crm/leads/:id', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-const CRM_LEAD_FIELDS = ['name', 'phone', 'email', 'city', 'source', 'status', 'user_id', 'notes', 'follow_up'];
+const CRM_LEAD_FIELDS = ['name', 'phone', 'email', 'city', 'source', 'devices_count', 'device_channels', 'status', 'user_id', 'notes', 'follow_up'];
 const crmLeadBody = (b) => {
   const out = {};
   for (const f of CRM_LEAD_FIELDS) {

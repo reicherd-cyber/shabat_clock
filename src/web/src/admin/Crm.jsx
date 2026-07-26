@@ -20,7 +20,13 @@ const ils = (n) => `₪${Number(n || 0).toLocaleString('he-IL')}`;
 const fmtD = (d) => (d ? new Date(d).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: '2-digit' }) : '');
 const todayYmd = () => new Date().toISOString().slice(0, 10);
 
-const EMPTY_LEAD = { name: '', phones: [''], city: '', email: '', source: '', status: 'new', notes: '', follow_up: '', user_id: null, user_name: '' };
+const EMPTY_LEAD = { name: '', phones: [''], city: '', email: '', source: '', devices_count: '', device_channels: '', status: 'new', notes: '', follow_up: '', user_id: null, user_name: '' };
+const CHANNELS = { 1: 'ערוץ אחד', 2: '2 ערוצים', 3: '3 ערוצים', 4: '4 ערוצים' };
+const hwText = (l) => {
+  if (!l.devices_count && !l.device_channels) return null;
+  const type = l.device_channels ? CHANNELS[l.device_channels] : 'מכשיר';
+  return `${l.devices_count || 1}× ${type}`;
+};
 const splitPhones = (s) => {
   const arr = String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
   return arr.length ? arr : [''];
@@ -150,6 +156,7 @@ export function Crm() {
                   {l.phone && <span className="text-sm text-muted inline-flex items-center gap-1" dir="ltr"><Phone size={12} />{l.phone}</span>}
                   {l.city && <span className="text-sm text-muted">{l.city}</span>}
                   {l.source && <span className="text-xs text-muted">מקור: {l.source}</span>}
+                  {hwText(l) && <span className="text-xs font-medium text-accent-dk bg-[#E4EFFE] rounded-full px-2 py-0.5">{hwText(l)}</span>}
                 </div>
                 {l.notes && <div className="text-sm text-muted truncate">{l.notes}</div>}
               </div>
@@ -179,6 +186,7 @@ export function Crm() {
               {open.email && <span dir="ltr">{open.email}</span>}
               {open.city && <span>{open.city}</span>}
               {open.source && <span>מקור: {open.source}</span>}
+              {hwText(open) && <span className="font-medium text-accent-dk">{hwText(open)}</span>}
               {open.follow_up && <span>מעקב: {fmtD(open.follow_up)}</span>}
               {open.user_name && <span>משתמש במערכת: {open.user_name}</span>}
             </div>
@@ -243,7 +251,8 @@ export function Crm() {
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setLeadForm({
                 id: open.id, name: open.name, phones: splitPhones(open.phone), city: open.city || '', email: open.email || '',
-                source: open.source || '', status: open.status, notes: open.notes || '',
+                source: open.source || '', devices_count: open.devices_count || '', device_channels: open.device_channels || '',
+                status: open.status, notes: open.notes || '',
                 follow_up: open.follow_up ? String(open.follow_up).slice(0, 10) : '',
                 user_id: open.user_id || null, user_name: open.user_name || '',
               })}>עריכת פרטים</Button>
@@ -302,6 +311,21 @@ export function Crm() {
               <datalist id="crm-sources">{(data?.sources || []).map((s) => <option key={s} value={s} />)}</datalist>
             </div>
             <Input placeholder="אימייל" dir="ltr" value={leadForm.email} onChange={(e) => setLeadForm({ ...leadForm, email: e.target.value })} />
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="text-xs text-muted">כמות מכשירים</span>
+                <Input type="number" min="1" max="99" dir="ltr" value={leadForm.devices_count}
+                  onChange={(e) => setLeadForm({ ...leadForm, devices_count: e.target.value })} />
+              </label>
+              <label className="block">
+                <span className="text-xs text-muted">סוג מכשיר</span>
+                <Select className="w-full" value={leadForm.device_channels}
+                  onChange={(e) => setLeadForm({ ...leadForm, device_channels: e.target.value })}>
+                  <option value="">—</option>
+                  {Object.entries(CHANNELS).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
+                </Select>
+              </label>
+            </div>
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted shrink-0">תאריך מעקב:</span>
               <Input type="date" value={leadForm.follow_up} onChange={(e) => setLeadForm({ ...leadForm, follow_up: e.target.value })} />
