@@ -353,7 +353,9 @@ export function Crm() {
               <Plus size={14} />מספר טלפון נוסף
             </button>
             <div className="grid grid-cols-2 gap-2">
-              <Input placeholder="עיר" value={leadForm.city} list="il-cities"
+              {/* the datalist attaches only once typing starts — otherwise the browser
+                  pops the full city list on mere focus */}
+              <Input placeholder="עיר" value={leadForm.city} list={leadForm.city ? 'il-cities' : undefined}
                 onChange={(e) => setLeadForm({ ...leadForm, city: e.target.value })} />
               <datalist id="il-cities">{IL_CITIES.map((c) => <option key={c} value={c} />)}</datalist>
               <Input placeholder="מקור (המלצה, טלפון…)" value={leadForm.source} list="crm-sources"
