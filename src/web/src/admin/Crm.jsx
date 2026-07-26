@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
 import { Plus, Phone, Trash2 } from 'lucide-react';
+import { IL_CITIES } from '../cities.js';
 
 // CRM — ניהול לידים ומכירות: מי לא רוצה, מי מתעניין, מי הזמין, מה קנה, כמה
 // שילם, מתי ואיך. סטטוסים רכים, ארכיון הפיך, כל כתיבה מבוקרת בשרת (audit).
@@ -313,7 +314,9 @@ export function Crm() {
               <Plus size={14} />מספר טלפון נוסף
             </button>
             <div className="grid grid-cols-2 gap-2">
-              <Input placeholder="עיר" value={leadForm.city} onChange={(e) => setLeadForm({ ...leadForm, city: e.target.value })} />
+              <Input placeholder="עיר" value={leadForm.city} list="il-cities"
+                onChange={(e) => setLeadForm({ ...leadForm, city: e.target.value })} />
+              <datalist id="il-cities">{IL_CITIES.map((c) => <option key={c} value={c} />)}</datalist>
               <Input placeholder="מקור (המלצה, טלפון…)" value={leadForm.source} list="crm-sources"
                 onChange={(e) => setLeadForm({ ...leadForm, source: e.target.value })} />
               <datalist id="crm-sources">{(data?.sources || []).map((s) => <option key={s} value={s} />)}</datalist>
