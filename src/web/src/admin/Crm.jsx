@@ -120,20 +120,25 @@ export function Crm() {
     <div className="space-y-4">
       <SectionHead title="מכירות ולידים" />
 
-      {/* מונים לפי סטטוס — לחיצים */}
+      {/* מונים: חדש/מעוניין/לקוח (לחיצים) + סה"כ מכשירים מבוקשים. לא-מעוניין
+          נשאר זמין בסינון הסטטוסים. */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {Object.entries(STATUS).map(([k, s]) => (
+        {Object.entries(STATUS).filter(([k]) => k !== 'not_interested').map(([k, s]) => (
           <Card key={k} className={`cursor-pointer text-center ${fStatus === k ? 'border-accent' : ''}`}
             onClick={() => setFStatus(fStatus === k ? '' : k)} role="button">
             <div className="text-2xl font-bold">{counts[k] || 0}</div>
             <div className={`inline-block text-xs font-medium rounded-full px-2 py-0.5 mt-1 ${s.cls}`}>{s.label}</div>
           </Card>
         ))}
+        <Card className="text-center">
+          <div className="text-2xl font-bold">{devTotal}</div>
+          <div className="inline-block text-xs font-medium rounded-full px-2 py-0.5 mt-1 bg-[#E4EFFE] text-accent-dk">מכשירים מבוקשים</div>
+        </Card>
       </div>
 
-      {/* מכשירים מבוקשים — סיכום לפי סוג; לחיצה על סוג מסננת את הרשימה */}
+      {/* פילוח לפי סוג; לחיצה על סוג מסננת את הרשימה */}
       <Card className="flex items-center gap-2 flex-wrap py-3">
-        <b className="text-sm">מכשירים מבוקשים: {devTotal}</b>
+        <b className="text-sm">לפי סוג:</b>
         {Object.entries(CHANNELS).map(([v, n]) => (
           <button key={v} disabled={!devTotals[v] && fType !== v}
             className={`text-xs font-medium rounded-full px-2.5 py-1 cursor-pointer transition-colors
