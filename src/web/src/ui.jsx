@@ -179,9 +179,15 @@ export const SectionHead = ({ title, children }) => (
 );
 
 export function Modal({ open, onClose, title, children, closable = true }) {
+  // Backdrop dismiss must check where the PRESS started: selecting text in an
+  // input and releasing the mouse outside the dialog fires a click on the
+  // backdrop and used to close the modal mid-edit.
+  const pressedBackdrop = useRef(false);
   if (!open) return null;
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={closable ? onClose : undefined}>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      onMouseDown={(e) => { pressedBackdrop.current = e.target === e.currentTarget; }}
+      onClick={closable ? (e) => { if (pressedBackdrop.current && e.target === e.currentTarget) onClose(); } : undefined}>
       <div className="bg-surface rounded-card shadow-card p-5 max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-3">
           <h3 className="font-serif font-bold text-lg">{title}</h3>
