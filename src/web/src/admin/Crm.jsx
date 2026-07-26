@@ -20,7 +20,11 @@ const ils = (n) => `₪${Number(n || 0).toLocaleString('he-IL')}`;
 const fmtD = (d) => (d ? new Date(d).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: '2-digit' }) : '');
 const todayYmd = () => new Date().toISOString().slice(0, 10);
 
-const EMPTY_LEAD = { name: '', phone: '', city: '', email: '', source: '', status: 'new', notes: '', follow_up: '' };
+const EMPTY_LEAD = { name: '', phones: [''], city: '', email: '', source: '', status: 'new', notes: '', follow_up: '', user_id: null, user_name: '' };
+const splitPhones = (s) => {
+  const arr = String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  return arr.length ? arr : [''];
+};
 
 export function Crm() {
   const [data, setData] = useState(null); // { rows, counts, sources }
@@ -33,7 +37,9 @@ export function Crm() {
   const [orderForm, setOrderForm] = useState(null); // { description, amount, notes }
   const [payForm, setPayForm] = useState(null); // { orderId, amount, method, paid_on, note }
   const [archiving, setArchiving] = useState(null); // lead pending archive confirm
+  const [contacts, setContacts] = useState([]); // system users for name-autocomplete
   const { busy, error, run, setError } = useAsync();
+  useEffect(() => { adminApi.get('/crm/contacts').then(setContacts).catch(() => {}); }, []);
 
   const refresh = async () => {
     const p = new URLSearchParams();
@@ -52,13 +58,26 @@ export function Crm() {
   const reopen = async () => { setOpen(await adminApi.get(`/crm/leads/${open.id}`)); await refresh(); };
 
   const saveLead = () => run(async () => {
-    const b = { ...leadForm };
+    const b = { ...leadForm, phone: leadForm.phones.map((p) => p.trim()).filter(Boolean).join(', ') };
     delete b.id;
+    delete b.phones;
+    delete b.user_name;
     if (leadForm.id) await adminApi.patch(`/crm/leads/${leadForm.id}`, b);
     else await adminApi.post('/crm/leads', b);
     setLeadForm(null);
     await refresh();
     if (open && leadForm.id === open.id) await reopen();
+  });
+
+  // Autocomplete: match system users by name or any of their phones.
+  const nameMatches = (q) => {
+    const s = q.trim();
+    if (s.length < 2) return [];
+    return contacts.filter((c) => c.full_name.includes(s) || c.phones.includes(s)).slice(0, 6);
+  };
+  const pickContact = (c) => setLeadForm({
+    ...leadForm, name: c.full_name, user_id: c.id, user_name: c.full_name,
+    phones: c.phones ? splitPhones(c.phones) : leadForm.phones,
   });
 
   const setLeadStatus = (lead, status) => run(async () => {
@@ -220,9 +239,10 @@ export function Crm() {
 
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setLeadForm({
-                id: open.id, name: open.name, phone: open.phone || '', city: open.city || '', email: open.email || '',
+                id: open.id, name: open.name, phones: splitPhones(open.phone), city: open.city || '', email: open.email || '',
                 source: open.source || '', status: open.status, notes: open.notes || '',
                 follow_up: open.follow_up ? String(open.follow_up).slice(0, 10) : '',
+                user_id: open.user_id || null, user_name: open.user_name || '',
               })}>עריכת פרטים</Button>
               <Button variant="danger" onClick={() => setArchiving(open)}>העבר לארכיון</Button>
             </div>
@@ -234,8 +254,44 @@ export function Crm() {
       <Modal open={!!leadForm} onClose={() => setLeadForm(null)} title={leadForm?.id ? 'עריכת ליד' : 'ליד חדש'}>
         {leadForm && (
           <div className="space-y-2">
-            <Input placeholder="שם *" value={leadForm.name} onChange={(e) => setLeadForm({ ...leadForm, name: e.target.value })} />
-            <Input placeholder="טלפון" dir="ltr" value={leadForm.phone} onChange={(e) => setLeadForm({ ...leadForm, phone: e.target.value })} />
+            <div className="relative">
+              <Input placeholder="שם *" value={leadForm.name}
+                onChange={(e) => setLeadForm({ ...leadForm, name: e.target.value, user_id: null, user_name: '' })} />
+              {/* autocomplete from system users — picking links user_id + fills phones */}
+              {!leadForm.user_id && nameMatches(leadForm.name).length > 0 && (
+                <div className="absolute z-10 inset-x-0 top-full mt-1 bg-surface border border-line rounded-[10px] shadow-lg overflow-hidden">
+                  {nameMatches(leadForm.name).map((c) => (
+                    <button key={c.id} className="w-full text-right px-3 py-2 text-sm hover:bg-surface2 cursor-pointer flex justify-between gap-2"
+                      onClick={() => pickContact(c)}>
+                      <span>{c.full_name}</span>
+                      <span className="text-muted text-xs" dir="ltr">{c.phones.split(',')[0] || ''}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {leadForm.user_id && (
+                <div className="text-xs mt-1 flex items-center gap-1.5" style={{ color: '#006e00' }}>
+                  ✓ מקושר למשתמש {leadForm.user_name}
+                  <button className="text-muted underline cursor-pointer" onClick={() => setLeadForm({ ...leadForm, user_id: null, user_name: '' })}>נתק</button>
+                </div>
+              )}
+            </div>
+            {leadForm.phones.map((p, i) => (
+              <div key={i} className="flex gap-2 items-center">
+                <Input placeholder={i === 0 ? 'טלפון' : 'טלפון נוסף'} dir="ltr" value={p}
+                  onChange={(e) => setLeadForm({ ...leadForm, phones: leadForm.phones.map((x, j) => (j === i ? e.target.value : x)) })} />
+                {leadForm.phones.length > 1 && (
+                  <button className="text-muted hover:text-off cursor-pointer shrink-0" title="הסר מספר"
+                    onClick={() => setLeadForm({ ...leadForm, phones: leadForm.phones.filter((_, j) => j !== i) })}>
+                    <Trash2 size={15} />
+                  </button>
+                )}
+              </div>
+            ))}
+            <button className="text-accent-dk text-sm cursor-pointer inline-flex items-center gap-1 hover:underline"
+              onClick={() => setLeadForm({ ...leadForm, phones: [...leadForm.phones, ''] })}>
+              <Plus size={14} />מספר טלפון נוסף
+            </button>
             <div className="grid grid-cols-2 gap-2">
               <Input placeholder="עיר" value={leadForm.city} onChange={(e) => setLeadForm({ ...leadForm, city: e.target.value })} />
               <Input placeholder="מקור (המלצה, טלפון…)" value={leadForm.source} list="crm-sources"

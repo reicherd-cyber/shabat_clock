@@ -684,6 +684,21 @@ adminRouter.patch('/support/:id', requireWrite, async (req, res, next) => {
 
 const CRM_STATUSES = ['new', 'interested', 'not_interested', 'customer'];
 
+// Name-autocomplete source for the lead form: system users + their phones —
+// picking one links the lead (user_id) and pre-fills the numbers.
+adminRouter.get('/crm/contacts', async (req, res, next) => {
+  try {
+    res.json(await query(
+      `SELECT u.id, u.full_name,
+              COALESCE(GROUP_CONCAT(p.phone ORDER BY p.is_primary DESC, p.id SEPARATOR ','), '') AS phones
+         FROM users u
+         LEFT JOIN user_phones p ON p.user_id = u.id AND p.deleted_at IS NULL
+        WHERE u.status <> 'suspended'
+        GROUP BY u.id ORDER BY u.full_name`,
+    ));
+  } catch (e) { next(e); }
+});
+
 adminRouter.get('/crm/leads', async (req, res, next) => {
   try {
     const cond = ['l.deleted_at IS NULL'];
