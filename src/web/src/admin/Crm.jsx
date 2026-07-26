@@ -92,11 +92,7 @@ export function Crm() {
 
   return (
     <div className="space-y-4">
-      <SectionHead title="מכירות ולידים">
-        <Button onClick={() => setLeadForm({ ...EMPTY_LEAD })}>
-          <span className="inline-flex items-center gap-1"><Plus size={16} />ליד חדש</span>
-        </Button>
-      </SectionHead>
+      <SectionHead title="מכירות ולידים" />
 
       {/* מונים לפי סטטוס — לחיצים */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -129,6 +125,13 @@ export function Crm() {
         )}
       </div>
       <ErrorNote error={error} />
+
+      {/* הוספה — תמיד צמוד מעל הרשימה */}
+      <div className="flex justify-end">
+        <Button onClick={() => setLeadForm({ ...EMPTY_LEAD })}>
+          <span className="inline-flex items-center gap-1"><Plus size={16} />ליד חדש</span>
+        </Button>
+      </div>
 
       {/* רשימה */}
       <Card flush>

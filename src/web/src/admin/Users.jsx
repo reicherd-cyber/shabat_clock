@@ -60,11 +60,13 @@ export default function Users() {
           {filtering && (
             <Button variant="ghost" onClick={() => { setQ(''); setFStatus(''); }}>נקה סינון</Button>
           )}
-          <Button onClick={() => setCreateForm({ full_name: '', pin: '', phone: '', email: '', require_pin: false, max_devices: 3 })}>+ משתמש חדש</Button>
         </div>
       </div>
       <ErrorNote error={error} />
-      <p className="text-muted text-sm">{shown.length} משתמשים{filtering ? ' (מסונן)' : ''}</p>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <p className="text-muted text-sm">{shown.length} משתמשים{filtering ? ' (מסונן)' : ''}</p>
+        <Button onClick={() => setCreateForm({ full_name: '', pin: '', phone: '', email: '', require_pin: false, max_devices: 3 })}>+ משתמש חדש</Button>
+      </div>
       <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>

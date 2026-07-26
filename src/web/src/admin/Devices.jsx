@@ -155,12 +155,16 @@ export default function Devices() {
               {showRemoved ? 'הסתר מכשירים מושהים' : `הצג מכשירים מושהים (${removedCount})`}
             </Button>
           )}
+        </div>
+      </div>
+      <ErrorNote error={error} />
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <p className="text-muted text-sm">{visibleDevices.length} מכשירים{filtering ? ' (מסונן)' : ''}</p>
+        <div className="flex gap-2">
           <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: users[0]?.id || '', name: '' })}>+ Shelly</Button>
           <Button onClick={() => setProvForm({ user_id: users[0]?.id || '', name: '', relay_count: 2, device_uid: '' })}>+ הקצאת מכשיר</Button>
         </div>
       </div>
-      <ErrorNote error={error} />
-      <p className="text-muted text-sm">{visibleDevices.length} מכשירים{filtering ? ' (מסונן)' : ''}</p>
       {visibleDevices.length === 0 && <Card className="text-muted">לא נמצאו מכשירים</Card>}
       {visibleDevices.map((d) => (
         <Card key={d.id}>

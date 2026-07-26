@@ -204,10 +204,7 @@ export default function Finance() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center gap-2 flex-wrap">
-        <h2 className="font-bold text-xl">הכנסות והוצאות</h2>
-        <Button onClick={() => setForm({ ...EMPTY_FORM, admin_id: data?.me ?? '' })}>+ הוספה</Button>
-      </div>
+      <h2 className="font-bold text-xl">הכנסות והוצאות</h2>
       <div className="flex gap-2 items-center flex-wrap">
         <Select className="py-2 text-sm w-44" value={period} onChange={(e) => setPeriod(e.target.value)}>
           {PERIODS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
@@ -271,12 +268,15 @@ export default function Finance() {
         </div>
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <h3 className="font-bold">כל הרשומות</h3>
-        <label className="text-muted text-sm flex items-center gap-1.5 cursor-pointer">
-          <input type="checkbox" checked={showDeleted} onChange={(e) => setShowDeleted(e.target.checked)} />
-          הצג מחוקים
-        </label>
+        <div className="flex items-center gap-3">
+          <label className="text-muted text-sm flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" checked={showDeleted} onChange={(e) => setShowDeleted(e.target.checked)} />
+            הצג מחוקים
+          </label>
+          <Button onClick={() => setForm({ ...EMPTY_FORM, admin_id: data?.me ?? '' })}>+ הוספה</Button>
+        </div>
       </div>
       <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
