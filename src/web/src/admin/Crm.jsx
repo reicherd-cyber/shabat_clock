@@ -25,6 +25,15 @@ const plusDaysYmd = (n) => new Date(Date.now() + n * 86400e3).toISOString().slic
 const EMPTY_LEAD = { name: '', phones: [''], city: '', email: '', source: '', devices: [], status: 'new', notes: '', follow_up: '', user_id: null, user_name: '' };
 const CHANNELS = { 1: 'ערוץ אחד', 2: '2 ערוצים', 3: '3 ערוצים', 4: '4 ערוצים' };
 const splitDevices = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
+// Form rows are {c: channels, n: count}; storage stays a flat CSV ("4,4" = 2× ארבעה ערוצים).
+const groupDevices = (csv) => {
+  const by = {};
+  for (const c of splitDevices(csv)) by[c] = (by[c] || 0) + 1;
+  return Object.entries(by).map(([c, n]) => ({ c, n }));
+};
+const expandDevices = (rows) => rows
+  .flatMap(({ c, n }) => Array(Math.max(1, Math.min(99, Number(n) || 1))).fill(c))
+  .join(',');
 // "2,4,4" → "‎1× 2 ערוצים · 2× 4 ערוצים"
 const hwText = (l) => {
   const list = splitDevices(l.devices);
@@ -74,7 +83,7 @@ export function Crm() {
     const b = {
       ...leadForm,
       phone: leadForm.phones.map((p) => p.trim()).filter(Boolean).join(', '),
-      devices: leadForm.devices.filter(Boolean).join(','),
+      devices: expandDevices(leadForm.devices),
     };
     delete b.id;
     delete b.phones;
@@ -290,7 +299,7 @@ export function Crm() {
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setLeadForm({
                 id: open.id, name: open.name, phones: splitPhones(open.phone), city: open.city || '', email: open.email || '',
-                source: open.source || '', devices: splitDevices(open.devices),
+                source: open.source || '', devices: groupDevices(open.devices),
                 status: open.status, notes: open.notes || '',
                 follow_up: open.follow_up ? String(open.follow_up).slice(0, 10) : '',
                 user_id: open.user_id || null, user_name: open.user_name || '',
@@ -360,11 +369,13 @@ export function Crm() {
               ))}
             </div>
             {leadForm.devices.length > 0 && <span className="text-xs text-muted">מכשירים</span>}
-            {leadForm.devices.map((c, i) => (
+            {leadForm.devices.map((row, i) => (
               <div key={i} className="flex gap-2 items-center">
-                <span className="text-sm text-muted w-16 shrink-0">מכשיר {i + 1}:</span>
-                <Select className="flex-1" value={c}
-                  onChange={(e) => setLeadForm({ ...leadForm, devices: leadForm.devices.map((x, j) => (j === i ? e.target.value : x)) })}>
+                <Input type="number" min="1" max="99" dir="ltr" className="!w-16 text-center" value={row.n}
+                  onChange={(e) => setLeadForm({ ...leadForm, devices: leadForm.devices.map((x, j) => (j === i ? { ...x, n: e.target.value } : x)) })} />
+                <span className="text-muted shrink-0">×</span>
+                <Select className="flex-1" value={row.c}
+                  onChange={(e) => setLeadForm({ ...leadForm, devices: leadForm.devices.map((x, j) => (j === i ? { ...x, c: e.target.value } : x)) })}>
                   {Object.entries(CHANNELS).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
                 </Select>
                 <button className="text-muted hover:text-off cursor-pointer shrink-0" title="הסר מכשיר"
@@ -374,7 +385,7 @@ export function Crm() {
               </div>
             ))}
             <button className="text-accent-dk text-sm cursor-pointer inline-flex items-center gap-1 hover:underline"
-              onClick={() => setLeadForm({ ...leadForm, devices: [...leadForm.devices, '2'] })}>
+              onClick={() => setLeadForm({ ...leadForm, devices: [...leadForm.devices, { c: '2', n: 1 }] })}>
               <Plus size={14} />הוסף מכשיר
             </button>
             <div className="flex items-center gap-2">
