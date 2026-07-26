@@ -42,6 +42,7 @@ export function Crm() {
   const [data, setData] = useState(null); // { rows, counts, sources }
   const [fStatus, setFStatus] = useState('');
   const [fSource, setFSource] = useState('');
+  const [fType, setFType] = useState(''); // device-type filter ('1'..'4')
   const [search, setSearch] = useState('');
   const [archived, setArchived] = useState(false);
   const [leadForm, setLeadForm] = useState(null); // add/edit basic fields
@@ -104,8 +105,16 @@ export function Crm() {
   });
 
   const counts = data?.counts || {};
-  const filtering = fStatus || fSource || search || archived;
+  const filtering = fStatus || fSource || search || archived || fType;
   const debt = (row) => Number(row.total_amount) - Number(row.total_paid);
+
+  // Device demand across the current view + the type filter itself.
+  const shownRows = (data?.rows || []).filter((l) => !fType || splitDevices(l.devices).includes(fType));
+  const devTotals = {};
+  let devTotal = 0;
+  for (const l of (data?.rows || [])) {
+    for (const c of splitDevices(l.devices)) { devTotals[c] = (devTotals[c] || 0) + 1; devTotal += 1; }
+  }
 
   return (
     <div className="space-y-4">
@@ -121,6 +130,20 @@ export function Crm() {
           </Card>
         ))}
       </div>
+
+      {/* מכשירים מבוקשים — סיכום לפי סוג; לחיצה על סוג מסננת את הרשימה */}
+      <Card className="flex items-center gap-2 flex-wrap py-3">
+        <b className="text-sm">מכשירים מבוקשים: {devTotal}</b>
+        {Object.entries(CHANNELS).map(([v, n]) => (
+          <button key={v} disabled={!devTotals[v] && fType !== v}
+            className={`text-xs font-medium rounded-full px-2.5 py-1 cursor-pointer transition-colors
+              ${fType === v ? 'bg-accent text-white' : devTotals[v] ? 'bg-[#E4EFFE] text-accent-dk hover:bg-accent/20' : 'bg-surface2 text-muted cursor-default'}`}
+            onClick={() => setFType(fType === v ? '' : v)}>
+            {n}: {devTotals[v] || 0}
+          </button>
+        ))}
+        {fType && <span className="text-xs text-muted">מציג לידים עם {CHANNELS[fType]}</span>}
+      </Card>
 
       {/* סינון */}
       <div className="flex gap-2 flex-wrap items-center">
@@ -138,7 +161,7 @@ export function Crm() {
           <input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} /> ארכיון
         </label>
         {filtering && (
-          <Button variant="ghost" className="text-sm" onClick={() => { setFStatus(''); setFSource(''); setSearch(''); setArchived(false); }}>נקה סינון</Button>
+          <Button variant="ghost" className="text-sm" onClick={() => { setFStatus(''); setFSource(''); setSearch(''); setArchived(false); setFType(''); }}>נקה סינון</Button>
         )}
       </div>
       <ErrorNote error={error} />
@@ -154,10 +177,10 @@ export function Crm() {
       <Card flush>
         {data == null ? (
           <p className="text-muted p-8 text-center">טוען…</p>
-        ) : data.rows.length === 0 ? (
+        ) : shownRows.length === 0 ? (
           <p className="text-muted p-8 text-center">אין לידים{filtering ? ' בסינון הנוכחי' : ' עדיין — הוסיפו את הראשון'}</p>
         ) : (
-          data.rows.map((l) => (
+          shownRows.map((l) => (
             <div key={l.id} onClick={() => (archived ? null : openLead(l.id))}
               className={`flex items-center gap-3 px-4 py-3 border-b border-line last:border-b-0 flex-wrap ${archived ? '' : 'cursor-pointer hover:bg-surface2/50'}`}>
               <span className={`text-xs font-medium rounded-full px-2 py-0.5 shrink-0 ${STATUS[l.status]?.cls || ''}`}>{STATUS[l.status]?.label || l.status}</span>
