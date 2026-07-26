@@ -80,9 +80,10 @@ export function Crm() {
     delete b.user_name;
     if (leadForm.id) await adminApi.patch(`/crm/leads/${leadForm.id}`, b);
     else await adminApi.post('/crm/leads', b);
+    // Saving closes EVERYTHING (edit form + the lead card) — back to the list.
     setLeadForm(null);
+    setOpen(null);
     await refresh();
-    if (open && leadForm.id === open.id) await reopen();
   });
 
   // Autocomplete: match system users by name or any of their phones.
