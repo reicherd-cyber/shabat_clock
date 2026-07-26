@@ -323,6 +323,13 @@ export function Crm() {
               <datalist id="crm-sources">{(data?.sources || []).map((s) => <option key={s} value={s} />)}</datalist>
             </div>
             <Input placeholder="אימייל" dir="ltr" value={leadForm.email} onChange={(e) => setLeadForm({ ...leadForm, email: e.target.value })} />
+            <div className="flex gap-1.5 flex-wrap items-center">
+              <span className="text-xs text-muted">סטטוס:</span>
+              {Object.entries(STATUS).map(([k, s]) => (
+                <Button key={k} variant={leadForm.status === k ? 'primary' : 'ghost'} className="!px-2.5 !py-1 text-xs"
+                  onClick={() => setLeadForm({ ...leadForm, status: k })}>{s.label}</Button>
+              ))}
+            </div>
             {leadForm.devices.length > 0 && <span className="text-xs text-muted">מכשירים</span>}
             {leadForm.devices.map((c, i) => (
               <div key={i} className="flex gap-2 items-center">
