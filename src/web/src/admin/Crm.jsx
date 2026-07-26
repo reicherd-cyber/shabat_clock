@@ -20,12 +20,16 @@ const ils = (n) => `₪${Number(n || 0).toLocaleString('he-IL')}`;
 const fmtD = (d) => (d ? new Date(d).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: '2-digit' }) : '');
 const todayYmd = () => new Date().toISOString().slice(0, 10);
 
-const EMPTY_LEAD = { name: '', phones: [''], city: '', email: '', source: '', devices_count: '', device_channels: '', status: 'new', notes: '', follow_up: '', user_id: null, user_name: '' };
+const EMPTY_LEAD = { name: '', phones: [''], city: '', email: '', source: '', devices: [], status: 'new', notes: '', follow_up: '', user_id: null, user_name: '' };
 const CHANNELS = { 1: 'ערוץ אחד', 2: '2 ערוצים', 3: '3 ערוצים', 4: '4 ערוצים' };
+const splitDevices = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
+// "2,4,4" → "‎1× 2 ערוצים · 2× 4 ערוצים"
 const hwText = (l) => {
-  if (!l.devices_count && !l.device_channels) return null;
-  const type = l.device_channels ? CHANNELS[l.device_channels] : 'מכשיר';
-  return `${l.devices_count || 1}× ${type}`;
+  const list = splitDevices(l.devices);
+  if (!list.length) return null;
+  const byType = {};
+  for (const c of list) byType[c] = (byType[c] || 0) + 1;
+  return Object.entries(byType).map(([c, n]) => `${n}× ${CHANNELS[c] || `${c} ערוצים`}`).join(' · ');
 };
 const splitPhones = (s) => {
   const arr = String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -64,7 +68,11 @@ export function Crm() {
   const reopen = async () => { setOpen(await adminApi.get(`/crm/leads/${open.id}`)); await refresh(); };
 
   const saveLead = () => run(async () => {
-    const b = { ...leadForm, phone: leadForm.phones.map((p) => p.trim()).filter(Boolean).join(', ') };
+    const b = {
+      ...leadForm,
+      phone: leadForm.phones.map((p) => p.trim()).filter(Boolean).join(', '),
+      devices: leadForm.devices.filter(Boolean).join(','),
+    };
     delete b.id;
     delete b.phones;
     delete b.user_name;
@@ -251,7 +259,7 @@ export function Crm() {
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setLeadForm({
                 id: open.id, name: open.name, phones: splitPhones(open.phone), city: open.city || '', email: open.email || '',
-                source: open.source || '', devices_count: open.devices_count || '', device_channels: open.device_channels || '',
+                source: open.source || '', devices: splitDevices(open.devices),
                 status: open.status, notes: open.notes || '',
                 follow_up: open.follow_up ? String(open.follow_up).slice(0, 10) : '',
                 user_id: open.user_id || null, user_name: open.user_name || '',
@@ -311,21 +319,24 @@ export function Crm() {
               <datalist id="crm-sources">{(data?.sources || []).map((s) => <option key={s} value={s} />)}</datalist>
             </div>
             <Input placeholder="אימייל" dir="ltr" value={leadForm.email} onChange={(e) => setLeadForm({ ...leadForm, email: e.target.value })} />
-            <div className="grid grid-cols-2 gap-2">
-              <label className="block">
-                <span className="text-xs text-muted">כמות מכשירים</span>
-                <Input type="number" min="1" max="99" dir="ltr" value={leadForm.devices_count}
-                  onChange={(e) => setLeadForm({ ...leadForm, devices_count: e.target.value })} />
-              </label>
-              <label className="block">
-                <span className="text-xs text-muted">סוג מכשיר</span>
-                <Select className="w-full" value={leadForm.device_channels}
-                  onChange={(e) => setLeadForm({ ...leadForm, device_channels: e.target.value })}>
-                  <option value="">—</option>
+            {leadForm.devices.length > 0 && <span className="text-xs text-muted">מכשירים</span>}
+            {leadForm.devices.map((c, i) => (
+              <div key={i} className="flex gap-2 items-center">
+                <span className="text-sm text-muted w-16 shrink-0">מכשיר {i + 1}:</span>
+                <Select className="flex-1" value={c}
+                  onChange={(e) => setLeadForm({ ...leadForm, devices: leadForm.devices.map((x, j) => (j === i ? e.target.value : x)) })}>
                   {Object.entries(CHANNELS).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
                 </Select>
-              </label>
-            </div>
+                <button className="text-muted hover:text-off cursor-pointer shrink-0" title="הסר מכשיר"
+                  onClick={() => setLeadForm({ ...leadForm, devices: leadForm.devices.filter((_, j) => j !== i) })}>
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            ))}
+            <button className="text-accent-dk text-sm cursor-pointer inline-flex items-center gap-1 hover:underline"
+              onClick={() => setLeadForm({ ...leadForm, devices: [...leadForm.devices, '2'] })}>
+              <Plus size={14} />הוסף מכשיר
+            </button>
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted shrink-0">תאריך מעקב:</span>
               <Input type="date" value={leadForm.follow_up} onChange={(e) => setLeadForm({ ...leadForm, follow_up: e.target.value })} />
