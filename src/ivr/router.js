@@ -138,13 +138,29 @@ async function mainMenu(session, message = null) {
   return ask(items, { message });
 }
 
-// Schedules submenu (main menu → תזמונים): hear / delete / add. Delete digit 3 and
-// add digit 4 are fixed by spec; 1 is the read-out.
-async function schedMenu(session, message = null) {
-  session.state = 'SCHED_MENU';
+// Schedules browser (main menu → תזמונים): plays one schedule and navigates —
+// 1 next, 2 previous (offered only from the 2nd), 3 delete THIS schedule, 4 add.
+// The list is refetched on every hop so a delete or a parallel web change is
+// always reflected; the index is clamped when the list shrinks.
+async function schedBrowse(session, message = null) {
+  session.state = 'SCHED_BROWSE';
   session.invalidCount = 0;
-  return ask(await speak('ivr.sched_menu', {},
-    'לשמיעת התזמונים הקיימים, הקישו 1, למחיקת תזמון, הקישו 3, להוספת תזמון, הקישו 4, לחזרה לתפריט הראשי, הקישו כוכבית'), { message });
+  const scheds = await listSchedules({ userId: session.userId });
+  session.data.schedList = scheds.map((s) => ({ id: s.id, desc: describeScheduleHe(s) }));
+  if (!scheds.length) {
+    return ask([
+      ...await speak('ivr.sched_none', {}, 'אין תזמונים במערכת'),
+      ...await speak('ivr.sched_browse_empty', {}, 'להוספת תזמון חדש, הקישו 4, לחזרה, הקישו כוכבית'),
+    ], { message });
+  }
+  if (!(session.data.schedIdx >= 0) || session.data.schedIdx >= scheds.length) session.data.schedIdx = 0;
+  const i = session.data.schedIdx;
+  return ask([
+    { t: `תזמון מספר ${i + 1} מתוך ${scheds.length}, ${session.data.schedList[i].desc},` },
+    ...await speak('ivr.sched_browse_next', {}, 'לתזמון הבא, הקישו 1'),
+    ...(i > 0 ? await speak('ivr.sched_browse_prev', {}, 'לתזמון הקודם, הקישו 2') : []),
+    ...await speak('ivr.sched_browse_ops', {}, 'למחיקת תזמון זה, הקישו 3, להוספת תזמון חדש, הקישו 4, לחזרה, הקישו כוכבית'),
+  ], { message });
 }
 
 // The IVR add flow builds createSchedule fields per chosen type and sides
@@ -444,7 +460,8 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           }
           if (input === '4') {
             await appendPath(session.callLogId, 'schedule');
-            return res.send(await schedMenu(session));
+            session.data.schedIdx = 0;
+            return res.send(await schedBrowse(session));
           }
           if (input === '5') return res.send(await runStatus(session));
         } else {
@@ -455,7 +472,8 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           }
           if (input === '3') {
             await appendPath(session.callLogId, 'schedule');
-            return res.send(await schedMenu(session));
+            session.data.schedIdx = 0;
+            return res.send(await schedBrowse(session));
           }
           if (input === '4') return res.send(await runStatus(session));
         }
@@ -507,58 +525,44 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         return res.send(await mainMenu(session, feedback));
       }
 
-      // ── schedules submenu: 1=hear, 3=delete, 4=add (digits per spec) ──
-      case 'SCHED_MENU': {
+      // ── schedules browser: 1 next / 2 previous / 3 delete current / 4 add ──
+      case 'SCHED_BROWSE': {
         if (input === '*' || input === '0') return res.send(await mainMenu(session));
-        if (input === '1') {
-          await appendPath(session.callLogId, 'sched_list');
-          const scheds = await listSchedules({ userId: session.userId });
-          const message = scheds.length
-            ? scheds.flatMap((s) => [{ t: `${describeScheduleHe(s)},` }])
-            : await speak('ivr.sched_none', {}, 'אין תזמונים במערכת');
-          return res.send(await schedMenu(session, message));
-        }
-        if (input === '3') {
-          await appendPath(session.callLogId, 'sched_del');
-          const scheds = await listSchedules({ userId: session.userId });
-          if (!scheds.length) {
-            return res.send(await schedMenu(session, await speak('ivr.sched_none', {}, 'אין תזמונים במערכת')));
-          }
-          // Positional pick (1..N), not schedule id — ids are large and unspeakable.
-          session.data.delList = scheds.map((s) => ({ id: s.id, desc: describeScheduleHe(s) }));
-          session.state = 'SCHED_DEL_PICK';
-          const width = scheds.length >= 10 ? 2 : 1;
-          const items = [
-            ...session.data.delList.flatMap((s, i) => [{ t: `תזמון מספר ${i + 1}: ${s.desc},` }]),
-            ...await speak('ivr.sched_del_pick', {}, 'הקישו את מספר התזמון שברצונכם למחוק'),
-          ];
-          return res.send(ask(items, { min: width, max: width }));
-        }
         if (input === '4') {
           await appendPath(session.callLogId, 'sched_add');
           return res.send(await relayMenu(session, 'sched'));
         }
+        const list = session.data.schedList || [];
+        if (!list.length) return res.send(await invalidInput(session));
+        if (input === '1') {
+          session.data.schedIdx = (session.data.schedIdx + 1) % list.length;
+          return res.send(await schedBrowse(session));
+        }
+        if (input === '2') {
+          if (session.data.schedIdx === 0) return res.send(await invalidInput(session));
+          session.data.schedIdx -= 1;
+          return res.send(await schedBrowse(session));
+        }
+        if (input === '3') {
+          await appendPath(session.callLogId, 'sched_del');
+          session.data.delSched = list[session.data.schedIdx];
+          session.state = 'SCHED_DEL_CONFIRM';
+          return res.send(ask([
+            { t: `למחיקת ${session.data.delSched.desc},` },
+            ...await speak('ivr.sched_del_confirm', {}, 'להקיש 1 לאישור, 2 לביטול'),
+          ]));
+        }
         return res.send(await invalidInput(session));
       }
-      case 'SCHED_DEL_PICK': {
-        const pick = session.data.delList?.[Number(input) - 1];
-        if (!pick) return res.send(await invalidInput(session));
-        session.data.delSched = pick;
-        session.state = 'SCHED_DEL_CONFIRM';
-        return res.send(ask([
-          { t: `למחיקת ${pick.desc},` },
-          ...await speak('ivr.sched_del_confirm', {}, 'להקיש 1 לאישור, 2 לביטול'),
-        ]));
-      }
       case 'SCHED_DEL_CONFIRM': {
-        if (input === '2') return res.send(await schedMenu(session));
+        if (input === '2') return res.send(await schedBrowse(session));
         if (input !== '1') return res.send(await invalidInput(session));
         // Soft delete (restorable from the admin panel) — never a hard DELETE.
         await deleteSchedule({ userId: session.userId, scheduleId: session.data.delSched.id, actor: `ivr:${session.userId}` });
         await logAction({ type: 'ivr', id: session.userId }, 'delete', 'schedule', session.data.delSched.id, { after: { via: 'ivr_menu' } });
         await appendPath(session.callLogId, 'sched_deleted');
         await finishCall(session.callLogId, 'schedule');
-        return res.send(await schedMenu(session, await speak('ivr.sched_deleted', {}, 'התזמון נמחק')));
+        return res.send(await schedBrowse(session, await speak('ivr.sched_deleted', {}, 'התזמון נמחק')));
       }
 
       // ── dynamic relay menu (immediate + schedule contexts) ──
