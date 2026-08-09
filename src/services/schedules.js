@@ -2,7 +2,7 @@
 // plus schedule CRUD with the version-bump + push side effect.
 import { ApiError, errors } from '../config/errors.js';
 import { query, withTransaction } from '../db/pool.js';
-import { MINUTES_PER_WEEK, MINUTES_PER_DAY } from '../config/constants.js';
+import { MINUTES_PER_WEEK, MINUTES_PER_DAY, DAY_NAMES_HE } from '../config/constants.js';
 import { timeToMinutes, localParts, wallToUtc } from './time.js';
 import { resolveScheduleAnchors, DEFAULT_REGION } from './zmanim.js';
 import { HDate } from '@hebcal/core';
@@ -317,6 +317,38 @@ export async function listSchedules({ userId }) {
     }
   }
   return rows;
+}
+
+// One-line Hebrew description of a listSchedules row, phrased for readout over the
+// phone — used by the IVR schedules menu and the voice-command interpreter prompt.
+// No '.' in the output: Yemot treats a dot inside TTS text as an item separator.
+export function describeScheduleHe(row) {
+  const hhmm = (t) => String(t).slice(0, 5);
+  const dayMonth = (d) => {
+    const p = ymdOf(d).split('-');
+    return `${Number(p[2])} לחודש ${Number(p[1])}`;
+  };
+  const side = (label, day, time, date, anchor) => {
+    if (!time) return null;
+    let when = '';
+    if ((row.repeat_type === 'once' || row.repeat_type === 'yearly' || row.repeat_type === 'holiday') && date) {
+      when = ` בתאריך ${dayMonth(date)}`;
+    } else if (day != null) {
+      when = ` ביום ${DAY_NAMES_HE[day]}`;
+    }
+    const zman = anchor && anchor !== 'clock' ? ', לפי זמן הלכתי' : '';
+    return `${label}${when} בשעה ${hhmm(time)}${zman}`;
+  };
+  const type = row.repeat_type === 'once' ? 'חד פעמי'
+    : row.repeat_type === 'yearly' ? 'שנתי'
+    : row.repeat_type === 'holiday' ? 'לחגים'
+    : (row.on_day_of_week == null && row.off_day_of_week == null) ? 'יומי' : 'שבועי';
+  const sides = [
+    side('הדלקה', row.on_day_of_week, row.on_time, row.on_date, row.on_anchor),
+    side('כיבוי', row.off_day_of_week, row.off_time, row.off_date, row.off_anchor),
+  ].filter(Boolean).join(', ');
+  const disabled = row.is_enabled ? '' : ' (מושבת)';
+  return `תזמון ${type} לממסר ${row.relay_name}: ${sides}${disabled}`;
 }
 
 function ymdOf(v) {

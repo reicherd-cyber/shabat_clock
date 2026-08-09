@@ -1,7 +1,7 @@
 import './helpers/env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateScheduleRules } from '../src/services/schedules.js';
+import { validateScheduleRules, describeScheduleHe } from '../src/services/schedules.js';
 
 const weekly = (over = {}) => ({
   repeat_type: 'weekly',
@@ -169,4 +169,40 @@ test('weekly: ON-only with bad time format → VALIDATION', () => {
     () => validateScheduleRules(weekly({ on_time: 'nope', off_time: null, off_day_of_week: null })),
     (e) => e.code === 'VALIDATION',
   );
+});
+
+// ── describeScheduleHe — phone read-out strings ──
+test('describeScheduleHe: weekly pair reads days and times', () => {
+  const txt = describeScheduleHe({
+    repeat_type: 'weekly', relay_name: 'סלון', is_enabled: 1,
+    on_day_of_week: 6, on_time: '18:00:00', off_day_of_week: 7, off_time: '20:00:00',
+  });
+  assert.equal(txt, 'תזמון שבועי לממסר סלון: הדלקה ביום שישי בשעה 18:00, כיבוי ביום שבת בשעה 20:00');
+});
+
+test('describeScheduleHe: null days read as daily; disabled is marked', () => {
+  const txt = describeScheduleHe({
+    repeat_type: 'weekly', relay_name: 'דוד', is_enabled: 0,
+    on_day_of_week: null, on_time: '06:30:00', off_day_of_week: null, off_time: '08:00:00',
+  });
+  assert.equal(txt, 'תזמון יומי לממסר דוד: הדלקה בשעה 06:30, כיבוי בשעה 08:00 (מושבת)');
+});
+
+test('describeScheduleHe: once reads dates without dots (Yemot-safe) and skips a missing side', () => {
+  const txt = describeScheduleHe({
+    repeat_type: 'once', relay_name: 'מזגן', is_enabled: 1,
+    on_day_of_week: null, on_time: null, on_date: null,
+    off_day_of_week: null, off_time: '22:15:00', off_date: '2026-08-11',
+  });
+  assert.equal(txt, 'תזמון חד פעמי לממסר מזגן: כיבוי בתאריך 11 לחודש 8 בשעה 22:15');
+  assert.ok(!txt.includes('.'));
+});
+
+test('describeScheduleHe: halachic anchor is called out', () => {
+  const txt = describeScheduleHe({
+    repeat_type: 'weekly', relay_name: 'סלון', is_enabled: 1,
+    on_day_of_week: 6, on_time: '19:12:00', on_anchor: 'sunset',
+    off_day_of_week: null, off_time: null,
+  });
+  assert.ok(txt.includes('לפי זמן הלכתי'));
 });

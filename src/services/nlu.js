@@ -9,9 +9,12 @@ import { query } from '../db/pool.js';
 import { errors } from '../config/errors.js';
 import { env } from '../config/env.js';
 import { localParts } from './time.js';
+import { listSchedules, describeScheduleHe, validateScheduleRules } from './schedules.js';
+import { DAY_NAMES_HE } from '../config/constants.js';
 
-// One resolved action the UI will preview. relay_id is chosen by Claude from the
-// list we pass in, so it can only ever reference a relay the user actually owns.
+// One resolved action the UI will preview. relay_id/schedule_id are chosen by
+// Claude from the lists we pass in, so they can only ever reference rows the user
+// actually owns (and are re-checked against those lists after the call anyway).
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -25,22 +28,34 @@ const SCHEMA = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          relay_id: { type: 'integer' },
-          kind: { type: 'string', enum: ['immediate', 'timed'] },
-          action: { type: 'string', enum: ['on', 'off'] },
-          // timed only: 24h wall-clock HH:MM and which local day, computed by Claude
-          // from the current time we provide. Ignored for immediate actions.
-          time: { type: ['string', 'null'] },
+          kind: { type: 'string', enum: ['immediate', 'timed', 'recurring', 'delete_schedule'] },
+          // All kinds except delete_schedule (which targets schedule_id instead).
+          relay_id: { type: ['integer', 'null'] },
+          // immediate/timed only.
           // anyOf, not type+enum union — the API schema validator rejects an enum
           // whose values must satisfy a multi-type declaration.
+          action: { anyOf: [{ type: 'string', enum: ['on', 'off'] }, { type: 'null' }] },
+          // timed only: 24h wall-clock HH:MM and which local day, computed by Claude
+          // from the current time we provide.
+          time: { type: ['string', 'null'] },
           day: { anyOf: [{ type: 'string', enum: ['today', 'tomorrow'] }, { type: 'null' }] },
+          // recurring only: repeating schedule. Day 1=ראשון…7=שבת, null=every day;
+          // a side left null is omitted (one-sided schedules are legal).
+          on_day: { type: ['integer', 'null'] },
+          on_time: { type: ['string', 'null'] },
+          off_day: { type: ['integer', 'null'] },
+          off_time: { type: ['string', 'null'] },
+          // delete_schedule only: an id from the existing-schedules list.
+          schedule_id: { type: ['integer', 'null'] },
         },
-        required: ['relay_id', 'kind', 'action', 'time', 'day'],
+        required: ['kind', 'relay_id', 'action', 'time', 'day', 'on_day', 'on_time', 'off_day', 'off_time', 'schedule_id'],
       },
     },
   },
   required: ['understood', 'clarification', 'actions'],
 };
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // $/MTok [input, output] per model — used to stamp each interpretation's cost at
 // the price in effect when it ran (price changes never rewrite history).
@@ -59,10 +74,13 @@ async function logUsage({ userId, phone, text, model, usage }) {
   );
 }
 
-function buildSystemPrompt(relays, tz, nowParts) {
+function buildSystemPrompt(relays, schedules, tz, nowParts) {
   const list = relays
     .map((r) => `- relay_id ${r.id}: "${r.name}" (מכשיר: "${r.device_name}", מצב נוכחי: ${r.current_state === 'on' ? 'דולק' : 'כבוי'})`)
     .join('\n');
+  const schedList = schedules.length
+    ? schedules.map((s) => `- schedule_id ${s.id}: ${describeScheduleHe(s)}`).join('\n')
+    : '(אין תזמונים)';
   const hhmm = `${String(nowParts.hh).padStart(2, '0')}:${String(nowParts.mm).padStart(2, '0')}`;
   return `אתה מפרש פקודות בעברית עבור מערכת "שעון שבת" ששולטת בממסרים (relays) של משתמש.
 השעה המקומית הנוכחית של המשתמש: ${hhmm} (אזור זמן ${tz}).
@@ -70,15 +88,20 @@ function buildSystemPrompt(relays, tz, nowParts) {
 הממסרים הזמינים למשתמש זה:
 ${list}
 
+התזמונים הקיימים של המשתמש:
+${schedList}
+
 הטקסט מגיע מזיהוי דיבור טלפוני באיכות ירודה — מילים עשויות להגיע משובשות אך דומות פונטית לבקשה האמיתית (למשל "אבל זה כלום עכשיו" הוא שיבוש של "כבה את הסלון עכשיו"). לפני שאתה מוותר, נסה לשחזר את הבקשה הסבירה ביותר לפי דמיון צלילי לשמות הממסרים ולפעולות הדלקה/כיבוי/תזמון. אם השחזור ברור מספיק — פרש אותו כרגיל.
 
 המר את בקשת המשתמש לפעולות מובנות:
 - "immediate" = הדלקה/כיבוי מיד (action: on/off).
-- "timed" = הדלקה/כיבוי בשעה עתידית. חשב את השעה בפורמט HH:MM (24 שעות) ואת היום (today/tomorrow) לפי השעה הנוכחית. "בעוד N דקות/שעות" = הוסף לשעה הנוכחית; אם התוצאה אחרי חצות, day=tomorrow.
+- "timed" = הדלקה/כיבוי חד פעמי בשעה עתידית. חשב את השעה בפורמט HH:MM (24 שעות) ואת היום (today/tomorrow) לפי השעה הנוכחית. "בעוד N דקות/שעות" = הוסף לשעה הנוכחית; אם התוצאה אחרי חצות, day=tomorrow.
+- "recurring" = תזמון קבוע שחוזר: "כל יום ב..." → on_day/off_day = null; "כל יום שלישי" → יום בשבוע (1=ראשון, 2=שני, 3=שלישי, 4=רביעי, 5=חמישי, 6=שישי, 7=שבת). מלא on_time/off_time בפורמט HH:MM. מותר צד אחד בלבד (רק הדלקה או רק כיבוי) — השאר את הצד השני null. ההבחנה: "מחר בשמונה" = timed; "כל יום בשמונה" / "בכל שבת" = recurring.
+- "delete_schedule" = מחיקת תזמון קיים: בחר schedule_id מרשימת התזמונים למעלה לפי ההתאמה הטובה ביותר לתיאור המשתמש (ממסר, סוג, שעות). אם הבקשה מכוונת לכמה תזמונים ("תמחק את כל התזמונים של הדוד") — החזר פעולת מחיקה לכל אחד מהם.
 - בחר relay_id רק מהרשימה למעלה. התאם לפי שם הממסר (למשל "סלון", "מטבח") גם אם הניסוח חלקי.
 - המשתמש תמיד מאשר את הפעולה לפני ביצוע, לכן עדיף ניחוש סביר שיוצג לאישור מאשר שאלה. אם יש פירוש סביר אחד — החזר אותו כפעולה עם understood=true. לעולם אל תשאל "האם התכוונת ל..." ב-clarification.
 - קבע understood=false רק כשאין שום פירוש סביר; ה-clarification צריך רק לבקש לנסח מחדש בקצרה (המערכת תקשיב שוב מיד).
-- לפעולה immediate השאר time ו-day כ-null.`;
+- שדות שאינם רלוונטיים לסוג הפעולה — השאר null.`;
 }
 
 // Returns { understood, clarification, actions: [{ relay_id, relay_name, kind,
@@ -100,6 +123,7 @@ export async function interpretCommand({ userId, text, phone = null }) {
     [userId],
   );
   if (relays.length === 0) throw errors.validation('אין ממסרים פעילים לחשבון זה');
+  const schedules = await listSchedules({ userId });
 
   const tz = relays[0].timezone || 'Asia/Jerusalem';
   const nowParts = localParts(new Date(), tz);
@@ -112,7 +136,7 @@ export async function interpretCommand({ userId, text, phone = null }) {
     // (Sonnet 5 default) thinking tokens can eat the 1024 budget before the JSON.
     thinking: { type: 'disabled' },
     output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-    system: buildSystemPrompt(relays, tz, nowParts),
+    system: buildSystemPrompt(relays, schedules, tz, nowParts),
     messages: [{ role: 'user', content: clean }],
   });
 
@@ -134,10 +158,40 @@ export async function interpretCommand({ userId, text, phone = null }) {
   }
 
   const byId = new Map(relays.map((r) => [r.id, r]));
+  const schedById = new Map(schedules.map((s) => [s.id, s]));
   const actions = [];
   for (const a of parsed.actions || []) {
+    // Ids are re-checked against the lists we offered — anything else is dropped
+    // defensively, as are recurring shapes the schedule validator would reject.
+    if (a.kind === 'delete_schedule') {
+      const sched = schedById.get(Number(a.schedule_id));
+      if (!sched) continue;
+      actions.push({ kind: 'delete_schedule', schedule_id: sched.id, summary: `מחיקת ${describeScheduleHe(sched)}` });
+      continue;
+    }
     const relay = byId.get(Number(a.relay_id));
-    if (!relay) continue; // Claude returned an id we didn't offer — drop it defensively.
+    if (!relay) continue;
+    if (a.kind === 'recurring') {
+      const on_time = HHMM.test(a.on_time || '') ? a.on_time : null;
+      const off_time = HHMM.test(a.off_time || '') ? a.off_time : null;
+      const on_day = on_time ? (a.on_day ?? null) : null;
+      const off_day = off_time ? (a.off_day ?? null) : null;
+      try {
+        validateScheduleRules({
+          repeat_type: 'weekly',
+          on_day_of_week: on_day, on_time, off_day_of_week: off_day, off_time,
+        });
+      } catch {
+        continue;
+      }
+      const sideTxt = (verb, day, time) => (time ? `${verb} ${day != null ? `בכל יום ${DAY_NAMES_HE[day]}` : 'בכל יום'} בשעה ${time}` : null);
+      const summary = `תזמון קבוע ל"${relay.name}": ${[sideTxt('הדלקה', on_day, on_time), sideTxt('כיבוי', off_day, off_time)].filter(Boolean).join(', ')}`;
+      actions.push({
+        kind: 'recurring', relay_id: relay.id, relay_name: relay.name,
+        on_day, on_time, off_day, off_time, summary,
+      });
+      continue;
+    }
     const verb = a.action === 'on' ? 'הדלקה' : 'כיבוי';
     const dayHe = a.day === 'tomorrow' ? 'מחר' : 'היום';
     const summary = a.kind === 'timed' && a.time

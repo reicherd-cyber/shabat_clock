@@ -160,7 +160,7 @@ export async function adminDeleteRelay(relayId, { actor = null } = {}) {
 // ordered by sort_order (§4.1.3).
 export async function enabledRelaysForUser(userId) {
   return query(
-    `SELECT r.id, r.name, r.ivr_digit, r.current_state, r.relay_no, r.device_id, d.is_online
+    `SELECT r.id, r.name, r.ivr_digit, r.current_state, r.relay_no, r.device_id, d.is_online, d.timezone
      FROM relays r JOIN devices d ON d.id = r.device_id
      WHERE r.user_id = ? AND r.is_enabled = TRUE AND r.deleted_at IS NULL AND r.ivr_digit IS NOT NULL
        AND d.is_enabled = TRUE

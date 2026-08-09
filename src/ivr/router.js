@@ -8,7 +8,7 @@ import { isLockedOut, recordFailure } from '../services/authFailures.js';
 import { pendingPhoneAddCode } from '../services/otp.js';
 import { enabledRelaysForUser } from '../services/relays.js';
 import { sendImmediateCommand } from '../services/commands.js';
-import { createSchedule, validateScheduleRules } from '../services/schedules.js';
+import { createSchedule, deleteSchedule, listSchedules, describeScheduleHe, validateScheduleRules } from '../services/schedules.js';
 import { logAction } from '../services/audit.js';
 import { startCall, setCallUser, appendPath, finishCall } from '../services/callLogs.js';
 import { getText, getSetting } from '../services/settings.js';
@@ -26,6 +26,13 @@ function ymdForDay(day, tz) {
   return `${t.y}-${pad(t.mo)}-${pad(t.d)}`;
 }
 
+function nextYmd(ymd) {
+  const [y, mo, d] = ymd.split('-').map(Number);
+  const t = shiftDate({ y, mo, d }, 1);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${t.y}-${pad(t.mo)}-${pad(t.d)}`;
+}
+
 // Execute the interpreted actions (relay ids already scoped to the user by the
 // interpreter — this runs the same service calls as the digit menu / web).
 // Returns the number of immediate actions the device did NOT acknowledge, so the
@@ -38,6 +45,20 @@ async function runNluActions(session) {
       const result = await sendImmediateCommand({ relayId: a.relay_id, action: a.action, source: 'ivr', callId: session.callLogId });
       await logAction({ type: 'ivr', id: session.userId }, 'command', 'relay', a.relay_id, { after: { action: a.action, status: result.status, via: 'nlu' } });
       if (result.status !== 'acked') unacked += 1;
+    } else if (a.kind === 'recurring') {
+      const fields = {
+        on_day_of_week: a.on_day, on_time: a.on_time,
+        off_day_of_week: a.off_day, off_time: a.off_time,
+      };
+      const created = await createSchedule({
+        userId: session.userId, actingUserId: session.userId, actor: `ivr:${session.userId}`,
+        relayId: a.relay_id, createdVia: 'ivr', repeat_type: 'weekly', ...fields,
+      });
+      await logAction({ type: 'ivr', id: session.userId }, 'create', 'schedule', created.id, { after: { relay_id: a.relay_id, ...fields, via: 'nlu' } });
+    } else if (a.kind === 'delete_schedule') {
+      // Soft delete (restorable) — same service the web app uses.
+      await deleteSchedule({ userId: session.userId, scheduleId: a.schedule_id, actor: `ivr:${session.userId}` });
+      await logAction({ type: 'ivr', id: session.userId }, 'delete', 'schedule', a.schedule_id, { after: { via: 'nlu' } });
     } else {
       const date = ymdForDay(a.day, tz);
       const fields = a.action === 'off'
@@ -59,6 +80,12 @@ async function runNluActions(session) {
 async function nluConfirmItems(actions) {
   const items = [];
   for (const a of actions) {
+    // Schedule create/delete have free-form summaries — read them as TTS; the
+    // recorded-fragment juxtaposition below only fits the fixed on/off verbs.
+    if (a.kind === 'recurring' || a.kind === 'delete_schedule') {
+      items.push({ t: `${a.summary},` });
+      continue;
+    }
     const verbKey = a.kind === 'timed' && a.time
       ? (a.action === 'on' ? 'ivr.nlu_on_at' : 'ivr.nlu_off_at')
       : (a.action === 'on' ? 'ivr.nlu_on_now' : 'ivr.nlu_off_now');
@@ -109,6 +136,66 @@ async function mainMenu(session, message = null) {
       : [{ t: await getText('ivr.main_menu', { name: session.userName || '' }) }];
   }
   return ask(items, { message });
+}
+
+// Schedules submenu (main menu → תזמונים): hear / delete / add. Delete digit 3 and
+// add digit 4 are fixed by spec; 1 is the read-out.
+async function schedMenu(session, message = null) {
+  session.state = 'SCHED_MENU';
+  session.invalidCount = 0;
+  return ask(await speak('ivr.sched_menu', {},
+    'לשמיעת התזמונים הקיימים, הקישו 1, למחיקת תזמון, הקישו 3, להוספת תזמון, הקישו 4, לחזרה לתפריט הראשי, הקישו כוכבית'), { message });
+}
+
+// The IVR add flow builds createSchedule fields per chosen type; times/days were
+// collected by the SCHED_* states below into session.data.
+function schedFieldsFor(session) {
+  const d = session.data;
+  if (d.schedType === 'weekly') {
+    return {
+      repeat_type: 'weekly',
+      on_day_of_week: d.on_day, on_time: d.on_time,
+      off_day_of_week: d.off_day, off_time: d.off_time,
+    };
+  }
+  if (d.schedType === 'daily') {
+    return { repeat_type: 'weekly', on_time: d.on_time, off_time: d.off_time };
+  }
+  // once: OFF at or before the ON time means "past midnight" — roll to the next day.
+  const on_date = ymdForDay(d.onceDay, d.relay.timezone);
+  const off_date = d.off_time <= d.on_time ? nextYmd(on_date) : on_date;
+  return { repeat_type: 'once', on_time: d.on_time, on_date, off_time: d.off_time, off_date };
+}
+
+// Invalid schedule (rule violation / time already past) → error message + restart
+// at the first step of the chosen type.
+async function schedRestart(session) {
+  const message = await speak('ivr.sched_invalid');
+  if (session.data.schedType === 'once') {
+    session.state = 'SCHED_ONCE_DAY';
+    return ask(await speak('ivr.sched_once_day', {}, 'לתזמון להיום, הקישו 1, למחר, הקישו 2'), { message });
+  }
+  if (session.data.schedType === 'daily') {
+    session.state = 'SCHED_ON_TIME';
+    return ask(await speak('ivr.sched_on_time'), { min: 4, max: 4, message });
+  }
+  session.state = 'SCHED_ON_DAY';
+  return ask(await speak('ivr.sched_on_day'), { message });
+}
+
+async function schedConfirmItems(session) {
+  const d = session.data;
+  if (d.schedType === 'weekly') {
+    return [{ t: await getText('ivr.sched_confirm', {
+      relay: d.relay.name,
+      on_day: DAY_NAMES_HE[d.on_day], on_time: d.on_time,
+      off_day: DAY_NAMES_HE[d.off_day], off_time: d.off_time,
+    }) }];
+  }
+  const head = d.schedType === 'daily'
+    ? `תזמון יומי לממסר ${d.relay.name}: הדלקה בשעה ${d.on_time}, כיבוי בשעה ${d.off_time},`
+    : `תזמון חד פעמי לממסר ${d.relay.name} ${d.onceDay === 'tomorrow' ? 'מחר' : 'היום'}: הדלקה בשעה ${d.on_time}, כיבוי ${d.off_time <= d.on_time ? 'למחרת ' : ''}בשעה ${d.off_time},`;
+  return [{ t: head }, ...await speak('ivr.nlu_confirm', {}, 'להקיש 1 לאישור, 2 לביטול')];
 }
 
 async function relayMenu(session, ctx) {
@@ -304,7 +391,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           }
           if (input === '4') {
             await appendPath(session.callLogId, 'schedule');
-            return res.send(await relayMenu(session, 'sched'));
+            return res.send(await schedMenu(session));
           }
           if (input === '5') return res.send(await runStatus(session));
         } else {
@@ -315,7 +402,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           }
           if (input === '3') {
             await appendPath(session.callLogId, 'schedule');
-            return res.send(await relayMenu(session, 'sched'));
+            return res.send(await schedMenu(session));
           }
           if (input === '4') return res.send(await runStatus(session));
         }
@@ -367,6 +454,60 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         return res.send(await mainMenu(session, feedback));
       }
 
+      // ── schedules submenu: 1=hear, 3=delete, 4=add (digits per spec) ──
+      case 'SCHED_MENU': {
+        if (input === '*' || input === '0') return res.send(await mainMenu(session));
+        if (input === '1') {
+          await appendPath(session.callLogId, 'sched_list');
+          const scheds = await listSchedules({ userId: session.userId });
+          const message = scheds.length
+            ? scheds.flatMap((s) => [{ t: `${describeScheduleHe(s)},` }])
+            : await speak('ivr.sched_none', {}, 'אין תזמונים במערכת');
+          return res.send(await schedMenu(session, message));
+        }
+        if (input === '3') {
+          await appendPath(session.callLogId, 'sched_del');
+          const scheds = await listSchedules({ userId: session.userId });
+          if (!scheds.length) {
+            return res.send(await schedMenu(session, await speak('ivr.sched_none', {}, 'אין תזמונים במערכת')));
+          }
+          // Positional pick (1..N), not schedule id — ids are large and unspeakable.
+          session.data.delList = scheds.map((s) => ({ id: s.id, desc: describeScheduleHe(s) }));
+          session.state = 'SCHED_DEL_PICK';
+          const width = scheds.length >= 10 ? 2 : 1;
+          const items = [
+            ...session.data.delList.flatMap((s, i) => [{ t: `תזמון מספר ${i + 1}: ${s.desc},` }]),
+            ...await speak('ivr.sched_del_pick', {}, 'הקישו את מספר התזמון שברצונכם למחוק'),
+          ];
+          return res.send(ask(items, { min: width, max: width }));
+        }
+        if (input === '4') {
+          await appendPath(session.callLogId, 'sched_add');
+          return res.send(await relayMenu(session, 'sched'));
+        }
+        return res.send(await invalidInput(session));
+      }
+      case 'SCHED_DEL_PICK': {
+        const pick = session.data.delList?.[Number(input) - 1];
+        if (!pick) return res.send(await invalidInput(session));
+        session.data.delSched = pick;
+        session.state = 'SCHED_DEL_CONFIRM';
+        return res.send(ask([
+          { t: `למחיקת ${pick.desc},` },
+          ...await speak('ivr.sched_del_confirm', {}, 'להקיש 1 לאישור, 2 לביטול'),
+        ]));
+      }
+      case 'SCHED_DEL_CONFIRM': {
+        if (input === '2') return res.send(await schedMenu(session));
+        if (input !== '1') return res.send(await invalidInput(session));
+        // Soft delete (restorable from the admin panel) — never a hard DELETE.
+        await deleteSchedule({ userId: session.userId, scheduleId: session.data.delSched.id, actor: `ivr:${session.userId}` });
+        await logAction({ type: 'ivr', id: session.userId }, 'delete', 'schedule', session.data.delSched.id, { after: { via: 'ivr_menu' } });
+        await appendPath(session.callLogId, 'sched_deleted');
+        await finishCall(session.callLogId, 'schedule');
+        return res.send(await schedMenu(session, await speak('ivr.sched_deleted', {}, 'התזמון נמחק')));
+      }
+
       // ── dynamic relay menu (immediate + schedule contexts) ──
       case 'RELAY_SELECT': {
         if (input === '*') return res.send(await mainMenu(session));
@@ -376,14 +517,41 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         if (!relay) return res.send(await invalidInput(session));
         if (session.data.ctx === 'sched') {
           session.data.relay = relay;
-          session.state = 'SCHED_ON_DAY';
+          session.state = 'SCHED_TYPE';
           await appendPath(session.callLogId, `relay:${digit}`);
-          return res.send(ask(await speak('ivr.sched_on_day')));
+          return res.send(ask(await speak('ivr.sched_type', {},
+            'לתזמון חד פעמי, הקישו 1, לתזמון יומי קבוע, הקישו 2, לתזמון שבועי, הקישו 3')));
         }
         return res.send(await runImmediate(session, relay));
       }
 
-      // ── schedule flow 4.1 / 4.2 (weekly only in v1) ──
+      // ── schedule add: type → (day) → times → confirm; mirrors the app's types ──
+      case 'SCHED_TYPE': {
+        if (input === '1') {
+          session.data.schedType = 'once';
+          session.state = 'SCHED_ONCE_DAY';
+          return res.send(ask(await speak('ivr.sched_once_day', {}, 'לתזמון להיום, הקישו 1, למחר, הקישו 2')));
+        }
+        if (input === '2') {
+          session.data.schedType = 'daily';
+          session.state = 'SCHED_ON_TIME';
+          return res.send(ask(await speak('ivr.sched_on_time'), { min: 4, max: 4 }));
+        }
+        if (input === '3') {
+          session.data.schedType = 'weekly';
+          session.state = 'SCHED_ON_DAY';
+          return res.send(ask(await speak('ivr.sched_on_day')));
+        }
+        return res.send(await invalidInput(session));
+      }
+      case 'SCHED_ONCE_DAY': {
+        if (!/^[12]$/.test(input)) return res.send(await invalidInput(session));
+        session.data.onceDay = input === '1' ? 'today' : 'tomorrow';
+        session.state = 'SCHED_ON_TIME';
+        return res.send(ask(await speak('ivr.sched_on_time'), { min: 4, max: 4 }));
+      }
+
+      // ── schedule add flow, shared time steps (type set in SCHED_TYPE) ──
       case 'SCHED_ON_DAY': {
         if (!/^[1-7]$/.test(input)) return res.send(await invalidInput(session));
         session.data.on_day = Number(input);
@@ -393,8 +561,12 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       case 'SCHED_ON_TIME': {
         if (!/^([01]\d|2[0-3])[0-5]\d$/.test(input)) return res.send(await invalidInput(session));
         session.data.on_time = `${input.slice(0, 2)}:${input.slice(2)}`;
-        session.state = 'SCHED_OFF_DAY';
-        return res.send(ask(await speak('ivr.sched_off_day')));
+        if (session.data.schedType === 'weekly') {
+          session.state = 'SCHED_OFF_DAY';
+          return res.send(ask(await speak('ivr.sched_off_day')));
+        }
+        session.state = 'SCHED_OFF_TIME';
+        return res.send(ask(await speak('ivr.sched_off_time'), { min: 4, max: 4 }));
       }
       case 'SCHED_OFF_DAY': {
         if (!/^[1-7]$/.test(input)) return res.send(await invalidInput(session));
@@ -405,24 +577,15 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       case 'SCHED_OFF_TIME': {
         if (!/^([01]\d|2[0-3])[0-5]\d$/.test(input)) return res.send(await invalidInput(session));
         session.data.off_time = `${input.slice(0, 2)}:${input.slice(2)}`;
-        // Validate per §1.1 before the read-back.
+        // Validate per §1.1 before the read-back (ALREADY_PAST is judged device-local).
         try {
-          validateScheduleRules({
-            repeat_type: 'weekly',
-            on_day_of_week: session.data.on_day, on_time: session.data.on_time,
-            off_day_of_week: session.data.off_day, off_time: session.data.off_time,
-          });
+          session.data.schedFields = schedFieldsFor(session);
+          validateScheduleRules(session.data.schedFields, { tz: session.data.relay.timezone || 'Asia/Jerusalem' });
         } catch {
-          session.state = 'SCHED_ON_DAY';
-          return res.send(ask(await speak('ivr.sched_on_day'), { message: await speak('ivr.sched_invalid') }));
+          return res.send(await schedRestart(session));
         }
         session.state = 'SCHED_CONFIRM';
-        const confirm = await getText('ivr.sched_confirm', {
-          relay: session.data.relay.name,
-          on_day: DAY_NAMES_HE[session.data.on_day], on_time: session.data.on_time,
-          off_day: DAY_NAMES_HE[session.data.off_day], off_time: session.data.off_time,
-        });
-        return res.send(ask(confirm));
+        return res.send(ask(await schedConfirmItems(session)));
       }
       case 'SCHED_CONFIRM': {
         if (input === '2') return res.send(await mainMenu(session));
@@ -431,20 +594,13 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           const created = await createSchedule({
             userId: session.userId, actingUserId: session.userId, actor: `ivr:${session.userId}`,
             relayId: session.data.relay.id, createdVia: 'ivr',
-            repeat_type: 'weekly',
-            on_day_of_week: session.data.on_day, on_time: session.data.on_time,
-            off_day_of_week: session.data.off_day, off_time: session.data.off_time,
+            ...session.data.schedFields,
           });
           await logAction({ type: 'ivr', id: session.userId }, 'create', 'schedule', created.id, {
-            after: {
-              relay_id: session.data.relay.id,
-              on_day_of_week: session.data.on_day, on_time: session.data.on_time,
-              off_day_of_week: session.data.off_day, off_time: session.data.off_time,
-            },
+            after: { relay_id: session.data.relay.id, ...session.data.schedFields },
           });
         } catch {
-          session.state = 'SCHED_ON_DAY';
-          return res.send(ask(await speak('ivr.sched_on_day'), { message: await speak('ivr.sched_invalid') }));
+          return res.send(await schedRestart(session));
         }
         await appendPath(session.callLogId, 'sched_saved');
         await finishCall(session.callLogId, 'schedule');
