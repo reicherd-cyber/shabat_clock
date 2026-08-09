@@ -343,6 +343,17 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
     }
     res.type('text/plain; charset=utf-8');
 
+    // Step trace (cheap at our call volume): post-step state, handling duration and
+    // response head — correlates what the caller heard with server timing when a
+    // "no response from API" only reproduces on real calls.
+    const t0 = Date.now();
+    const send0 = res.send.bind(res);
+    res.send = (body) => {
+      const cid = String(req.query.ApiCallId || '');
+      console.log(`IVR[${cid.slice(0, 8)}] ${getSession(cid)?.state || '-'} +${Date.now() - t0}ms ${String(body).length}b: ${String(body).slice(0, 140)}`);
+      return send0(body);
+    };
+
     const callId = String(req.query.ApiCallId || '');
     if (!callId) return res.send(sayAndHangup('שגיאה'));
     const phone = normalizePhone(req.query.ApiPhone);
