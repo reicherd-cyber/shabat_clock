@@ -348,7 +348,8 @@ export function describeScheduleHe(row) {
     side('כיבוי', row.off_day_of_week, row.off_time, row.off_date, row.off_anchor),
   ].filter(Boolean).join(', ');
   const disabled = row.is_enabled ? '' : ' (מושבת)';
-  return `תזמון ${type} לממסר ${row.relay_name}: ${sides}${disabled}`;
+  // Comma, not colon, after the name — Yemot rejects reads with non-time colons.
+  return `תזמון ${type} לממסר ${row.relay_name}, ${sides}${disabled}`;
 }
 
 function ymdOf(v) {

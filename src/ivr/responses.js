@@ -10,7 +10,15 @@
 // '.' separates data items in Yemot syntax (t-a.f-b) — a dot inside TTS text makes
 // Yemot treat the rest as a new (prefix-less) item and abort the call. Verified live
 // 2026-07-08: menu text with ". " hung up 1s in. Replace with ',' (a TTS pause).
-const clean = (t) => String(t).replace(/[=&\r\n]/g, ' ').replace(/\./g, ',').trim();
+// Quotes and non-time colons also make Yemot reject the whole response with the
+// M1607 "אין מענה משרת API" error (real calls, 2026-08-10) — strip/soften them here
+// so user data (relay names, model-written summaries) can never break a call.
+// A colon survives only between digits (times like 12:00, verified working live).
+const clean = (t) => String(t)
+  .replace(/[=&"'\r\n]/g, ' ')
+  .replace(/(?<!\d):|:(?!\d)/g, ',')
+  .replace(/\./g, ',')
+  .trim();
 
 // A prompt is a plain string (TTS text) or an array of items mixing recorded audio
 // with TTS: { f: '99/100' } plays the file at ivr2:/99/100.wav, { t: 'טקסט' } speaks.

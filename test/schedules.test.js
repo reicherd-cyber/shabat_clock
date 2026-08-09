@@ -177,7 +177,7 @@ test('describeScheduleHe: weekly pair reads days and times', () => {
     repeat_type: 'weekly', relay_name: 'סלון', is_enabled: 1,
     on_day_of_week: 6, on_time: '18:00:00', off_day_of_week: 7, off_time: '20:00:00',
   });
-  assert.equal(txt, 'תזמון שבועי לממסר סלון: הדלקה ביום שישי בשעה 18:00, כיבוי ביום שבת בשעה 20:00');
+  assert.equal(txt, 'תזמון שבועי לממסר סלון, הדלקה ביום שישי בשעה 18:00, כיבוי ביום שבת בשעה 20:00');
 });
 
 test('describeScheduleHe: null days read as daily; disabled is marked', () => {
@@ -185,7 +185,7 @@ test('describeScheduleHe: null days read as daily; disabled is marked', () => {
     repeat_type: 'weekly', relay_name: 'דוד', is_enabled: 0,
     on_day_of_week: null, on_time: '06:30:00', off_day_of_week: null, off_time: '08:00:00',
   });
-  assert.equal(txt, 'תזמון יומי לממסר דוד: הדלקה בשעה 06:30, כיבוי בשעה 08:00 (מושבת)');
+  assert.equal(txt, 'תזמון יומי לממסר דוד, הדלקה בשעה 06:30, כיבוי בשעה 08:00 (מושבת)');
 });
 
 test('describeScheduleHe: once reads dates without dots (Yemot-safe) and skips a missing side', () => {
@@ -194,7 +194,7 @@ test('describeScheduleHe: once reads dates without dots (Yemot-safe) and skips a
     on_day_of_week: null, on_time: null, on_date: null,
     off_day_of_week: null, off_time: '22:15:00', off_date: '2026-08-11',
   });
-  assert.equal(txt, 'תזמון חד פעמי לממסר מזגן: כיבוי בתאריך 11 לחודש 8 בשעה 22:15');
+  assert.equal(txt, 'תזמון חד פעמי לממסר מזגן, כיבוי בתאריך 11 לחודש 8 בשעה 22:15');
   assert.ok(!txt.includes('.'));
 });
 

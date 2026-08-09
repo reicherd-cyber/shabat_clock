@@ -185,7 +185,8 @@ export async function interpretCommand({ userId, text, phone = null }) {
         continue;
       }
       const sideTxt = (verb, day, time) => (time ? `${verb} ${day != null ? `בכל יום ${DAY_NAMES_HE[day]}` : 'בכל יום'} בשעה ${time}` : null);
-      const summary = `תזמון קבוע ל"${relay.name}": ${[sideTxt('הדלקה', on_day, on_time), sideTxt('כיבוי', off_day, off_time)].filter(Boolean).join(', ')}`;
+      // No quotes/colons — Yemot rejects reads containing them (see ivr/responses.js).
+      const summary = `תזמון קבוע לממסר ${relay.name}, ${[sideTxt('הדלקה', on_day, on_time), sideTxt('כיבוי', off_day, off_time)].filter(Boolean).join(', ')}`;
       actions.push({
         kind: 'recurring', relay_id: relay.id, relay_name: relay.name,
         on_day, on_time, off_day, off_time, summary,
