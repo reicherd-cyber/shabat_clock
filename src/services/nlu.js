@@ -51,7 +51,7 @@ const PRICE_PER_MTOK = {
 };
 
 async function logUsage({ userId, phone, text, model, usage }) {
-  const [inP, outP] = PRICE_PER_MTOK[model] || [3, 15];
+  const [inP, outP] = PRICE_PER_MTOK[model] || [5, 25];
   const cost = (usage.input_tokens * inP + usage.output_tokens * outP) / 1e6;
   await query(
     'INSERT INTO nlu_usage (user_id, phone, text, model, input_tokens, output_tokens, cost_usd) VALUES (?,?,?,?,?,?,?)',

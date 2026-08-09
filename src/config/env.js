@@ -78,6 +78,6 @@ export const env = {
   // (the "speak to the system" box is hidden). ANTHROPIC_API_KEY is read by the SDK.
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY || '',
-    model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5',
+    model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
   },
 };
