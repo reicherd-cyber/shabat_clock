@@ -147,55 +147,97 @@ async function schedMenu(session, message = null) {
     'לשמיעת התזמונים הקיימים, הקישו 1, למחיקת תזמון, הקישו 3, להוספת תזמון, הקישו 4, לחזרה לתפריט הראשי, הקישו כוכבית'), { message });
 }
 
-// The IVR add flow builds createSchedule fields per chosen type; times/days were
-// collected by the SCHED_* states below into session.data.
+// The IVR add flow builds createSchedule fields per chosen type and sides
+// ('both' | 'on' | 'off'); times/days were collected by the SCHED_* states below
+// into session.data. Sides the user didn't pick are nulled even if stale values
+// linger from an earlier attempt in the same call.
 function schedFieldsFor(session) {
   const d = session.data;
+  const hasOn = d.sides !== 'off';
+  const hasOff = d.sides !== 'on';
   if (d.schedType === 'weekly') {
     return {
       repeat_type: 'weekly',
-      on_day_of_week: d.on_day, on_time: d.on_time,
-      off_day_of_week: d.off_day, off_time: d.off_time,
+      on_day_of_week: hasOn ? d.on_day : null, on_time: hasOn ? d.on_time : null,
+      off_day_of_week: hasOff ? d.off_day : null, off_time: hasOff ? d.off_time : null,
     };
   }
   if (d.schedType === 'daily') {
-    return { repeat_type: 'weekly', on_time: d.on_time, off_time: d.off_time };
+    return { repeat_type: 'weekly', on_time: hasOn ? d.on_time : null, off_time: hasOff ? d.off_time : null };
   }
   // once: OFF at or before the ON time means "past midnight" — roll to the next day.
-  const on_date = ymdForDay(d.onceDay, d.relay.timezone);
-  const off_date = d.off_time <= d.on_time ? nextYmd(on_date) : on_date;
-  return { repeat_type: 'once', on_time: d.on_time, on_date, off_time: d.off_time, off_date };
+  const base = ymdForDay(d.onceDay, d.relay.timezone);
+  const roll = hasOn && hasOff && d.off_time <= d.on_time;
+  return {
+    repeat_type: 'once',
+    on_time: hasOn ? d.on_time : null, on_date: hasOn ? base : null,
+    off_time: hasOff ? d.off_time : null, off_date: hasOff ? (roll ? nextYmd(base) : base) : null,
+  };
 }
 
 // Invalid schedule (rule violation / time already past) → error message + restart
-// at the first step of the chosen type.
+// at the first data step of the chosen type+sides.
 async function schedRestart(session) {
   const message = await speak('ivr.sched_invalid');
-  if (session.data.schedType === 'once') {
+  const d = session.data;
+  if (d.schedType === 'once') {
     session.state = 'SCHED_ONCE_DAY';
     return ask(await speak('ivr.sched_once_day', {}, 'לתזמון להיום, הקישו 1, למחר, הקישו 2'), { message });
   }
-  if (session.data.schedType === 'daily') {
-    session.state = 'SCHED_ON_TIME';
-    return ask(await speak('ivr.sched_on_time'), { min: 4, max: 4, message });
+  if (d.schedType === 'weekly') {
+    if (d.sides === 'off') {
+      session.state = 'SCHED_OFF_DAY';
+      return ask(await speak('ivr.sched_off_day'), { message });
+    }
+    session.state = 'SCHED_ON_DAY';
+    return ask(await speak('ivr.sched_on_day'), { message });
   }
-  session.state = 'SCHED_ON_DAY';
-  return ask(await speak('ivr.sched_on_day'), { message });
+  if (d.sides === 'off') {
+    session.state = 'SCHED_OFF_TIME';
+    return ask(await speak('ivr.sched_off_time'), { min: 4, max: 4, message });
+  }
+  session.state = 'SCHED_ON_TIME';
+  return ask(await speak('ivr.sched_on_time'), { min: 4, max: 4, message });
+}
+
+// All collected → validate, then read back for confirmation. Called from the last
+// data step, which differs per sides (ON-only ends at ON_TIME).
+async function schedFinalize(session) {
+  try {
+    session.data.schedFields = schedFieldsFor(session);
+    validateScheduleRules(session.data.schedFields, { tz: session.data.relay.timezone || 'Asia/Jerusalem' });
+  } catch {
+    return schedRestart(session);
+  }
+  session.state = 'SCHED_CONFIRM';
+  return ask(await schedConfirmItems(session));
 }
 
 async function schedConfirmItems(session) {
   const d = session.data;
-  if (d.schedType === 'weekly') {
+  const f = d.schedFields;
+  // Both-sides weekly keeps the seeded ivr.sched_confirm template (recording compat).
+  if (d.schedType === 'weekly' && d.sides === 'both') {
     return [{ t: await getText('ivr.sched_confirm', {
       relay: d.relay.name,
-      on_day: DAY_NAMES_HE[d.on_day], on_time: d.on_time,
-      off_day: DAY_NAMES_HE[d.off_day], off_time: d.off_time,
+      on_day: DAY_NAMES_HE[f.on_day_of_week], on_time: f.on_time,
+      off_day: DAY_NAMES_HE[f.off_day_of_week], off_time: f.off_time,
     }) }];
   }
-  const head = d.schedType === 'daily'
-    ? `תזמון יומי לממסר ${d.relay.name}: הדלקה בשעה ${d.on_time}, כיבוי בשעה ${d.off_time},`
-    : `תזמון חד פעמי לממסר ${d.relay.name} ${d.onceDay === 'tomorrow' ? 'מחר' : 'היום'}: הדלקה בשעה ${d.on_time}, כיבוי ${d.off_time <= d.on_time ? 'למחרת ' : ''}בשעה ${d.off_time},`;
-  return [{ t: head }, ...await speak('ivr.nlu_confirm', {}, 'להקיש 1 לאישור, 2 לביטול')];
+  const typeHe = d.schedType === 'daily' ? 'יומי' : d.schedType === 'weekly' ? 'שבועי' : 'חד פעמי';
+  const when = d.schedType === 'once' ? (d.onceDay === 'tomorrow' ? ' מחר' : ' היום') : '';
+  const sides = [];
+  if (f.on_time) {
+    sides.push(`הדלקה${f.on_day_of_week != null ? ` ביום ${DAY_NAMES_HE[f.on_day_of_week]}` : ''} בשעה ${f.on_time}`);
+  }
+  if (f.off_time) {
+    const nextDay = d.schedType === 'once' && f.on_date && f.off_date !== f.on_date ? 'למחרת ' : '';
+    sides.push(`כיבוי ${nextDay}${f.off_day_of_week != null ? `ביום ${DAY_NAMES_HE[f.off_day_of_week]} ` : ''}בשעה ${f.off_time}`);
+  }
+  return [
+    { t: `תזמון ${typeHe} לממסר ${d.relay.name}${when}: ${sides.join(', ')},` },
+    ...await speak('ivr.nlu_confirm', {}, 'להקיש 1 לאישור, 2 לביטול'),
+  ];
 }
 
 async function relayMenu(session, ctx) {
@@ -525,28 +567,46 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         return res.send(await runImmediate(session, relay));
       }
 
-      // ── schedule add: type → (day) → times → confirm; mirrors the app's types ──
+      // ── schedule add: type → sides → (day) → times → confirm; mirrors the app,
+      // including one-sided schedules (only ON or only OFF) ──
       case 'SCHED_TYPE': {
-        if (input === '1') {
-          session.data.schedType = 'once';
+        const schedType = { 1: 'once', 2: 'daily', 3: 'weekly' }[input];
+        if (!schedType) return res.send(await invalidInput(session));
+        session.data.schedType = schedType;
+        session.state = 'SCHED_SIDES';
+        return res.send(ask(await speak('ivr.sched_sides', {},
+          'לתזמון הדלקה וכיבוי, הקישו 1, להדלקה בלבד, הקישו 2, לכיבוי בלבד, הקישו 3')));
+      }
+      case 'SCHED_SIDES': {
+        const sides = { 1: 'both', 2: 'on', 3: 'off' }[input];
+        if (!sides) return res.send(await invalidInput(session));
+        session.data.sides = sides;
+        if (session.data.schedType === 'once') {
           session.state = 'SCHED_ONCE_DAY';
           return res.send(ask(await speak('ivr.sched_once_day', {}, 'לתזמון להיום, הקישו 1, למחר, הקישו 2')));
         }
-        if (input === '2') {
-          session.data.schedType = 'daily';
-          session.state = 'SCHED_ON_TIME';
-          return res.send(ask(await speak('ivr.sched_on_time'), { min: 4, max: 4 }));
-        }
-        if (input === '3') {
-          session.data.schedType = 'weekly';
+        if (session.data.schedType === 'weekly') {
+          if (sides === 'off') {
+            session.state = 'SCHED_OFF_DAY';
+            return res.send(ask(await speak('ivr.sched_off_day')));
+          }
           session.state = 'SCHED_ON_DAY';
           return res.send(ask(await speak('ivr.sched_on_day')));
         }
-        return res.send(await invalidInput(session));
+        if (sides === 'off') {
+          session.state = 'SCHED_OFF_TIME';
+          return res.send(ask(await speak('ivr.sched_off_time'), { min: 4, max: 4 }));
+        }
+        session.state = 'SCHED_ON_TIME';
+        return res.send(ask(await speak('ivr.sched_on_time'), { min: 4, max: 4 }));
       }
       case 'SCHED_ONCE_DAY': {
         if (!/^[12]$/.test(input)) return res.send(await invalidInput(session));
         session.data.onceDay = input === '1' ? 'today' : 'tomorrow';
+        if (session.data.sides === 'off') {
+          session.state = 'SCHED_OFF_TIME';
+          return res.send(ask(await speak('ivr.sched_off_time'), { min: 4, max: 4 }));
+        }
         session.state = 'SCHED_ON_TIME';
         return res.send(ask(await speak('ivr.sched_on_time'), { min: 4, max: 4 }));
       }
@@ -561,6 +621,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       case 'SCHED_ON_TIME': {
         if (!/^([01]\d|2[0-3])[0-5]\d$/.test(input)) return res.send(await invalidInput(session));
         session.data.on_time = `${input.slice(0, 2)}:${input.slice(2)}`;
+        if (session.data.sides === 'on') return res.send(await schedFinalize(session));
         if (session.data.schedType === 'weekly') {
           session.state = 'SCHED_OFF_DAY';
           return res.send(ask(await speak('ivr.sched_off_day')));
@@ -577,15 +638,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       case 'SCHED_OFF_TIME': {
         if (!/^([01]\d|2[0-3])[0-5]\d$/.test(input)) return res.send(await invalidInput(session));
         session.data.off_time = `${input.slice(0, 2)}:${input.slice(2)}`;
-        // Validate per §1.1 before the read-back (ALREADY_PAST is judged device-local).
-        try {
-          session.data.schedFields = schedFieldsFor(session);
-          validateScheduleRules(session.data.schedFields, { tz: session.data.relay.timezone || 'Asia/Jerusalem' });
-        } catch {
-          return res.send(await schedRestart(session));
-        }
-        session.state = 'SCHED_CONFIRM';
-        return res.send(ask(await schedConfirmItems(session)));
+        return res.send(await schedFinalize(session));
       }
       case 'SCHED_CONFIRM': {
         if (input === '2') return res.send(await mainMenu(session));
