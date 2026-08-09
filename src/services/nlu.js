@@ -51,7 +51,7 @@ const PRICE_PER_MTOK = {
 };
 
 async function logUsage({ userId, phone, text, model, usage }) {
-  const [inP, outP] = PRICE_PER_MTOK[model] || [5, 25];
+  const [inP, outP] = PRICE_PER_MTOK[model] || [3, 15];
   const cost = (usage.input_tokens * inP + usage.output_tokens * outP) / 1e6;
   await query(
     'INSERT INTO nlu_usage (user_id, phone, text, model, input_tokens, output_tokens, cost_usd) VALUES (?,?,?,?,?,?,?)',
@@ -108,6 +108,9 @@ export async function interpretCommand({ userId, text, phone = null }) {
   const response = await client.messages.create({
     model: env.anthropic.model,
     max_tokens: 1024,
+    // Thinking off: the caller is waiting on a live phone line, and with it on
+    // (Sonnet 5 default) thinking tokens can eat the 1024 budget before the JSON.
+    thinking: { type: 'disabled' },
     output_config: { format: { type: 'json_schema', schema: SCHEMA } },
     system: buildSystemPrompt(relays, tz, nowParts),
     messages: [{ role: 'user', content: clean }],
