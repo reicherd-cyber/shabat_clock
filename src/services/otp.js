@@ -82,6 +82,10 @@ export async function pendingPhoneAddCode(phone) {
 
 // channel 'call' (default, Yemot) or 'email' (requires a target email).
 export async function requestOtp({ phone, purpose, userPhoneId = null, channel = 'call', email = null }) {
+  // Google Play review account: no code is stored and no call/email goes out —
+  // verifyOtp accepts the fixed REVIEW_OTP_CODE for this phone instead.
+  if (env.review.phone && env.review.otp && phone === env.review.phone && purpose === 'login') return;
+
   let code;
   if (purpose === 'phone_add') {
     // Reuse the live code (10-min validity) — re-requesting keeps the SAME code.
@@ -116,6 +120,11 @@ export async function requestOtp({ phone, purpose, userPhoneId = null, channel =
 // pooled auth_failures row in one transaction (§3.1). Purposes never cross.
 // Returns the winning otp_codes row (with user_phone_id for phone_add).
 export async function verifyOtp({ phone, code, purpose, userPhoneId = null }) {
+  // Google Play review account: the fixed code always works (login only, no lockout
+  // interplay — the row-shaped return is unused on the login path).
+  if (env.review.phone && env.review.otp && phone === env.review.phone
+      && purpose === 'login' && code === env.review.otp) return {};
+
   if (await isLockedOut(phone, 'web_otp')) throw errors.rateLimited();
 
   const rows = await query(

@@ -64,6 +64,12 @@ export const env = {
   },
   // "Sign in with Google" for the admin panel; empty = the button is hidden.
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+  // Google Play review account: this phone logs in with the fixed code below and
+  // no real Yemot call goes out. Both vars must be set for the bypass to exist.
+  review: {
+    phone: process.env.REVIEW_PHONE || '',
+    otp: process.env.REVIEW_OTP_CODE || '',
+  },
   // Emergency escape hatch: ADMIN_PASSWORD_LOGIN=1 re-enables the email+password
   // admin login if Google sign-in is ever unavailable. Off by default — Google only.
   adminPasswordLogin: process.env.ADMIN_PASSWORD_LOGIN === '1',
