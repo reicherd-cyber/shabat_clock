@@ -4,6 +4,7 @@
 import crypto from 'node:crypto';
 import { query } from '../db/pool.js';
 import { localParts } from './time.js';
+import { inExclusionRange } from './holidays.js';
 
 function hhmm(t) {
   // MySQL TIME arrives as "HH:MM:SS"
@@ -33,7 +34,8 @@ export async function buildDevicePayload(deviceId) {
 
   const schedules = await query(
     `SELECT s.id, s.on_day_of_week, s.on_time, s.off_day_of_week, s.off_time,
-            s.repeat_type, s.is_exclusion, s.on_date, s.off_date, r.relay_no
+            s.repeat_type, s.on_date, s.off_date, r.relay_no,
+            DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date, s.excl_calendar
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
      WHERE r.device_id = ? AND s.is_enabled = TRUE AND s.deleted_at IS NULL
@@ -42,26 +44,17 @@ export async function buildDevicePayload(deviceId) {
     [deviceId],
   );
 
-  // החרגה windows per relay: dated entries falling inside any window are dropped;
-  // weekly entries are dropped wholesale while a window is ACTIVE (device-local
-  // today inside it) — the daily refresh re-pushes at window boundaries.
+  // Per-schedule החרגה: a schedule's weekly entries are dropped while its own
+  // window is ACTIVE (device-local today inside it) — the daily refresh
+  // re-pushes at the boundaries; dated entries drop when their date is inside.
   const p = localParts(new Date(), device.timezone || 'Asia/Jerusalem');
   const today = `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
-  const windows = new Map();
-  for (const s of schedules) {
-    if (!s.is_exclusion || !s.on_date || !s.off_date) continue;
-    if (!windows.has(s.relay_no)) windows.set(s.relay_no, []);
-    windows.get(s.relay_no).push({ from: ymd(s.on_date), to: ymd(s.off_date) });
-  }
-  const inWindow = (relayNo, dateStr) => (windows.get(relayNo) || [])
-    .some((w) => dateStr >= w.from && dateStr <= w.to);
 
   const events = [];
   const once = [];
   for (const s of schedules) {
-    if (s.is_exclusion) continue; // suppresses others, never fires itself
     if (s.repeat_type === 'weekly') {
-      if (inWindow(s.relay_no, today)) continue;
+      if (inExclusionRange(s, today)) continue;
       // [D5] 0 on the wire = daily (NULL in DB). One-sided weekly contributes a
       // single entry — the wire format is unchanged, entries were always independent.
       if (s.on_time) events.push({ sid: Number(s.id), relay: s.relay_no, day: s.on_day_of_week ?? 0, time: hhmm(s.on_time), action: 'on' });
@@ -69,8 +62,8 @@ export async function buildDevicePayload(deviceId) {
     } else {
       // One-sided 'once' contributes a single entry — the wire format is unchanged,
       // each entry was always an independent action.
-      if (s.on_date && s.on_time && !inWindow(s.relay_no, ymd(s.on_date))) once.push({ sid: Number(s.id), relay: s.relay_no, date: ymd(s.on_date), time: hhmm(s.on_time), action: 'on' });
-      if (s.off_date && s.off_time && !inWindow(s.relay_no, ymd(s.off_date))) once.push({ sid: Number(s.id), relay: s.relay_no, date: ymd(s.off_date), time: hhmm(s.off_time), action: 'off' });
+      if (s.on_date && s.on_time && !inExclusionRange(s, ymd(s.on_date))) once.push({ sid: Number(s.id), relay: s.relay_no, date: ymd(s.on_date), time: hhmm(s.on_time), action: 'on' });
+      if (s.off_date && s.off_time && !inExclusionRange(s, ymd(s.off_date))) once.push({ sid: Number(s.id), relay: s.relay_no, date: ymd(s.off_date), time: hhmm(s.off_time), action: 'off' });
     }
   }
 

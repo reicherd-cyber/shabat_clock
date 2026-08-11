@@ -6,7 +6,7 @@
 import { query } from '../db/pool.js';
 import { shiftDate, dowOfDate, timeToMinutes } from './time.js';
 import { resolveForDate, DEFAULT_REGION } from './zmanim.js';
-import { upcomingBlocks, parseHolidayKeys, yearlyRangesAround } from './holidays.js';
+import { upcomingBlocks, parseHolidayKeys, yearlyRangesAround, inExclusionRange } from './holidays.js';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymdStr = (dt) => `${dt.y}-${pad2(dt.mo)}-${pad2(dt.d)}`;
@@ -24,32 +24,7 @@ export function expandSchedules(rows, { from, days }) {
   const inRange = (dateStr) => dateStr >= fromStr && dateStr <= endStr;
 
   const events = [];
-
-  // החרגה rows first: collect every occurrence of each range near the window —
-  // they suppress other schedules' events (below) and are drawn as their own
-  // bands, clamped to the window so the UI always gets a closed interval.
-  const exclusions = new Map(); // relay_id → [{from, to}]
   for (const s of rows) {
-    if (!s.is_exclusion || !s.annual_date) continue;
-    for (const r of yearlyRangesAround(s.annual_date, s.annual_end_date, s.annual_calendar, from, Math.ceil(days / 365) + 1)) {
-      const w = { from: ymdStr(r.on), to: ymdStr(r.off) };
-      if (w.to < fromStr || w.from > endStr) continue;
-      if (!exclusions.has(Number(s.relay_id))) exclusions.set(Number(s.relay_id), []);
-      exclusions.get(Number(s.relay_id)).push(w);
-      const meta = {
-        schedule_id: Number(s.id), repeat_type: s.repeat_type, reversed: false, exclude: true,
-        relay_id: Number(s.relay_id), relay_name: s.relay_name,
-        device_id: Number(s.device_id), device_name: s.device_name,
-      };
-      events.push({ ...meta, date: w.from < fromStr ? fromStr : w.from, time: '00:00', action: 'on' });
-      events.push({ ...meta, date: w.to > endStr ? endStr : w.to, time: '23:59', action: 'off' });
-    }
-  }
-  const suppressed = (relayId, dateStr) => (exclusions.get(Number(relayId)) || [])
-    .some((w) => dateStr >= w.from && dateStr <= w.to);
-
-  for (const s of rows) {
-    if (s.is_exclusion) continue;
     const tz = s.timezone || 'Asia/Jerusalem';
     const region = s.zmanim_region || DEFAULT_REGION;
     // Reversed pair (כיבוי והדלקה): OFF fires before ON — the calendar should
@@ -74,8 +49,9 @@ export function expandSchedules(rows, { from, days }) {
       if (anchor === 'clock') return s[`${side}_time`] || null;
       try { return resolveForDate(anchor, Number(s[`${side}_offset_min`] || 0), date, region, tz); } catch { return null; }
     };
+    // A date inside the schedule's own החרגה range contributes no event.
     const push = (date, time, action) => {
-      if (time && !suppressed(s.relay_id, ymdStr(date))) events.push({ ...meta, date: ymdStr(date), time, action });
+      if (time && !inExclusionRange(s, ymdStr(date))) events.push({ ...meta, date: ymdStr(date), time, action });
     };
 
     if (s.repeat_type === 'weekly') {
@@ -138,7 +114,8 @@ export function expandSchedules(rows, { from, days }) {
 
 export async function calendarEvents({ userId, from, days }) {
   const rows = await query(
-    `SELECT s.id, s.repeat_type, s.holidays, s.is_exclusion,
+    `SELECT s.id, s.repeat_type, s.holidays,
+            DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date, s.excl_calendar,
             DATE_FORMAT(s.annual_date,'%Y-%m-%d') AS annual_date, DATE_FORMAT(s.annual_end_date,'%Y-%m-%d') AS annual_end_date, s.annual_calendar,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             DATE_FORMAT(s.on_date,'%Y-%m-%d') AS on_date,

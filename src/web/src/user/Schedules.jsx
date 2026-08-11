@@ -56,6 +56,17 @@ export default function Schedules() {
   const sideTime = (s, p) => (s[`${p}_anchor`] && s[`${p}_anchor`] !== 'clock'
     ? `${anchorText(s[`${p}_anchor`], s[`${p}_offset_min`])} (≈${s[`${p}_time`]})`
     : s[`${p}_time`]);
+  // Per-schedule החרגה range, in its own calendar ("א׳ אב עד א׳ אלול" / "9.7–18.7").
+  const exclRange = (s) => {
+    const heb = s.excl_calendar === 'heb';
+    const from = heb
+      ? `${HEB_DAYS[(s.excl_heb_day || 1) - 1]} ${hebMonthLabel(s.excl_heb_month)}`
+      : fmtDate(s.excl_date);
+    const to = heb
+      ? `${HEB_DAYS[(s.excl_end_heb_day || s.excl_heb_day || 1) - 1]} ${hebMonthLabel(s.excl_end_heb_month || s.excl_heb_month)}`
+      : fmtDate(s.excl_end_date || s.excl_date);
+    return to !== from ? `${from} עד ${to}` : from;
+  };
   // Yearly range "ח׳ אב עד י׳ אב" (collapses to a single date when from = to).
   const yearlyRange = (s) => {
     const from = s.annual_calendar === 'heb'
@@ -114,11 +125,6 @@ export default function Schedules() {
   const nextChip = (s) => {
     if (!s.is_enabled) return { text: 'מושבת', cls: 'bg-surface2 text-muted' };
     const ev = nextEvent(s);
-    if (s.is_exclusion) {
-      // החרגה: amber while the window is open, neutral while it waits its turn.
-      if (ev.running) return { text: `בהחרגה · עד ${fmtDate(s.off_date)}`, cls: 'bg-[#FBF3DC] text-[#B45309]' };
-      return { text: `החרגה מ־${fmtDate(s.on_date)}`, cls: 'bg-surface2 text-muted' };
-    }
     if (!ev.d) return { text: 'הסתיים', cls: 'bg-surface2 text-muted' };
     if (ev.running) return { text: `פועל · כיבוי ${whenText(ev.d)}`, cls: 'bg-[#E7F6EC] text-[#006e00]' };
     return { text: `${ev.act} ${whenText(ev.d)}`, cls: 'bg-[#E4EFFE] text-accent-dk' };
@@ -154,12 +160,12 @@ export default function Schedules() {
     return false;
   };
 
-  const onLabel = (s) => (s.is_exclusion || s.on_time == null ? null
+  const onLabel = (s) => (s.on_time == null ? null
     : s.repeat_type === 'holiday' ? `בכניסה (${fmtDate(s.on_date)}) · ${sideTime(s, 'on')} · הדלקה`
       : s.repeat_type === 'yearly' ? `כל שנה — ${yearlyRange(s)} · הקרוב ${fmtDate(s.on_date)} · ${sideTime(s, 'on')} · הדלקה`
         : s.repeat_type === 'once' ? `${String(s.on_date).slice(0, 10)} ${sideTime(s, 'on')} · הדלקה`
           : `${s.on_day_of_week == null ? 'כל יום' : DAY_NAMES[s.on_day_of_week]} ${sideTime(s, 'on')} · הדלקה`);
-  const offLabel = (s) => (s.is_exclusion || s.off_time == null ? null
+  const offLabel = (s) => (s.off_time == null ? null
     : s.repeat_type === 'holiday' ? `ביציאה (${fmtDate(s.off_date)}) · ${sideTime(s, 'off')} · כיבוי`
       : s.repeat_type === 'yearly' ? `${s.on_time == null ? `כל שנה — ${yearlyRange(s)} · ` : ''}${fmtDate(s.off_date)} · ${sideTime(s, 'off')} · כיבוי`
         : s.repeat_type === 'once' ? `${String(s.off_date).slice(0, 10)} ${sideTime(s, 'off')} · כיבוי`
@@ -196,13 +202,14 @@ export default function Schedules() {
                     {s.repeat_type === 'holiday' && (
                       <small className="block font-normal text-muted text-[12.5px] mt-0.5">{holidaySummary(s.holidays)}</small>
                     )}
+                    {s.excl_date && (
+                      <small className="block font-normal text-[12.5px] mt-0.5" style={{ color: '#B45309' }}
+                        title="בתקופה זו התזמון לא יפעל">
+                        החרגה: {exclRange(s)}
+                      </small>
+                    )}
                   </div>
                   <div className="flex-1 flex items-center gap-2.5 flex-wrap">
-                    {s.is_exclusion && (
-                      <span className="pill" title="בתקופה זו לא יפעלו שאר התזמונים של הערוץ">
-                        החרגה — כל שנה {yearlyRange(s)} · {fmtDate(s.on_date)}–{fmtDate(s.off_date)}
-                      </span>
-                    )}
                     {(isReversed(s)
                       ? [offLabel(s) && <span key="off" className="pill off-p">{offLabel(s)}</span>,
                         onLabel(s) && offLabel(s) && <span key="arr" className="text-muted">←</span>,

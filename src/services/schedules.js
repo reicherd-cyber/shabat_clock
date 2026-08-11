@@ -6,7 +6,7 @@ import { MINUTES_PER_WEEK, MINUTES_PER_DAY, DAY_NAMES_HE } from '../config/const
 import { timeToMinutes, localParts, wallToUtc } from './time.js';
 import { resolveScheduleAnchors, DEFAULT_REGION } from './zmanim.js';
 import { HDate } from '@hebcal/core';
-import { resolveHolidaySchedule, resolveYearlySchedule, hebOnceDate } from './holidays.js';
+import { resolveHolidaySchedule, resolveYearlySchedule, hebOnceDate, hebPickDate } from './holidays.js';
 
 // Holiday/yearly schedules resolve their next-occurrence dates+times; other
 // types resolve anchored sides only. All mutate in place and validate anchors.
@@ -38,17 +38,33 @@ function resolveSchedule(s, opts) {
 
 const mod = (n, m) => ((n % m) + m) % m;
 
-// החרגה rows ride the yearly-range machinery: fixed 00:00 → 23:59 sides so the
-// resolver/daily-refresh roll the range like any anniversary, but the row never
-// fires events — it only suppresses the relay's other schedules while active.
-function normalizeExclusion(s) {
-  s.repeat_type = 'yearly';
-  s.on_anchor = 'clock';
-  s.on_offset_min = 0;
-  s.on_time = '00:00';
-  s.off_anchor = 'clock';
-  s.off_offset_min = 0;
-  s.off_time = '23:59';
+// Per-schedule החרגה: an optional yearly-recurring date range (Hebrew or civil)
+// during which THIS schedule doesn't fire. Hebrew picks resolve to representative
+// dates like the annual range; no range (or a 'once' schedule) clears the fields.
+function normalizeExclusionFields(s, { tz = 'Asia/Jerusalem', now = new Date() } = {}) {
+  const cal = s.excl_calendar === 'heb' ? 'heb' : s.excl_calendar === 'greg' ? 'greg' : null;
+  const p0 = localParts(now, tz);
+  if (cal === 'heb' && s.excl_heb_day && s.excl_heb_month) {
+    s.excl_date = hebPickDate(s.excl_heb_day, s.excl_heb_month, p0, 'excl_heb');
+    s.excl_end_date = s.excl_end_heb_day && s.excl_end_heb_month
+      ? hebPickDate(s.excl_end_heb_day, s.excl_end_heb_month, p0, 'excl_end_heb')
+      : s.excl_date;
+  }
+  delete s.excl_heb_day;
+  delete s.excl_heb_month;
+  delete s.excl_end_heb_day;
+  delete s.excl_end_heb_month;
+  if (!cal || !s.excl_date || s.repeat_type === 'once') {
+    s.excl_date = null;
+    s.excl_end_date = null;
+    s.excl_calendar = null;
+    return;
+  }
+  const ymdRe = /^\d{4}-\d{2}-\d{2}/;
+  if (!ymdRe.test(String(s.excl_date))) throw errors.validation('תאריך החרגה לא תקין', { excl_date: 'YYYY-MM-DD' });
+  if (!s.excl_end_date) s.excl_end_date = s.excl_date;
+  if (!ymdRe.test(String(s.excl_end_date))) throw errors.validation('תאריך החרגה לא תקין', { excl_end_date: 'YYYY-MM-DD' });
+  s.excl_calendar = cal;
 }
 
 // Pure rules 1–3. `schedule` fields: on_day_of_week, on_time "HH:MM", off_day_of_week,
@@ -197,27 +213,25 @@ async function regionOf(conn, userId) {
 
 export async function createSchedule({ userId, relayId, createdVia, actingUserId = userId, actor = null, ...fields }) {
   const deviceIds = [];
-  const isExclusion = Boolean(fields.is_exclusion);
-  delete fields.is_exclusion;
-  if (isExclusion) normalizeExclusion(fields);
   const result = await withTransaction(async (conn) => {
     const relay = await requireRelay(conn, relayId, actingUserId);
     // Anchored sides (sunset±offset…) and holiday blocks resolve to concrete wall
     // times/dates first, so the clock-time rules below apply unchanged.
+    normalizeExclusionFields(fields, { tz: relay.timezone });
     resolveSchedule(fields, { region: await regionOf(conn, relay.user_id), tz: relay.timezone });
     const s = validateScheduleRules(fields, { tz: relay.timezone });
     const res = await conn.query(
       `INSERT INTO schedules (user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
         off_day_of_week, off_time, off_anchor, off_offset_min,
-        repeat_type, holidays, annual_date, annual_end_date, annual_calendar, is_exclusion, on_date, off_date, is_enabled, created_via, created_by, updated_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
+        repeat_type, holidays, annual_date, annual_end_date, annual_calendar, excl_date, excl_end_date, excl_calendar, on_date, off_date, is_enabled, created_via, created_by, updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
       [relay.user_id, relayId, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
         s.off_day_of_week, s.off_time, s.off_anchor, s.off_offset_min,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_end_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_calendar ?? null) : null,
-        isExclusion ? 1 : 0,
+        s.excl_date ?? null, s.excl_end_date ?? null, s.excl_calendar ?? null,
         s.on_date ?? null, s.off_date ?? null, createdVia, actor, actor],
     );
     deviceIds.push(relay.device_id);
@@ -259,11 +273,15 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
       once_heb_day: patch.once_heb_day, once_heb_month: patch.once_heb_month,
       on_date: patch.on_date !== undefined ? patch.on_date : (existing.on_date ? ymdOf(existing.on_date) : null),
       off_date: patch.off_date !== undefined ? patch.off_date : (existing.off_date ? ymdOf(existing.off_date) : null),
+      excl_calendar: patch.excl_calendar !== undefined ? patch.excl_calendar : existing.excl_calendar,
+      excl_date: patch.excl_date !== undefined ? patch.excl_date : (existing.excl_date ? ymdOf(existing.excl_date) : null),
+      excl_end_date: patch.excl_end_date !== undefined ? patch.excl_end_date : (existing.excl_end_date ? ymdOf(existing.excl_end_date) : null),
+      excl_heb_day: patch.excl_heb_day, excl_heb_month: patch.excl_heb_month,
+      excl_end_heb_day: patch.excl_end_heb_day, excl_end_heb_month: patch.excl_end_heb_month,
     };
-    const isExclusion = Boolean(patch.is_exclusion !== undefined ? patch.is_exclusion : existing.is_exclusion);
     const onlyToggle = Object.keys(patch).every((k) => k === 'is_enabled');
     if (!onlyToggle) {
-      if (isExclusion) normalizeExclusion(merged);
+      normalizeExclusionFields(merged, { tz: existing.timezone });
       resolveSchedule(merged, { region: await regionOf(conn, existing.user_id), tz: existing.timezone });
     }
     const s = onlyToggle ? merged : validateScheduleRules(merged, { tz: existing.timezone });
@@ -272,7 +290,7 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
     await conn.query(
       `UPDATE schedules SET on_day_of_week=?, on_time=?, on_anchor=?, on_offset_min=?,
         off_day_of_week=?, off_time=?, off_anchor=?, off_offset_min=?,
-        repeat_type=?, holidays=?, annual_date=?, annual_end_date=?, annual_calendar=?, is_exclusion=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
+        repeat_type=?, holidays=?, annual_date=?, annual_end_date=?, annual_calendar=?, excl_date=?, excl_end_date=?, excl_calendar=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
        WHERE id = ?`,
       [s.on_day_of_week, s.on_time, s.on_anchor ?? 'clock', s.on_offset_min ?? 0,
         s.off_day_of_week, s.off_time, s.off_anchor ?? 'clock', s.off_offset_min ?? 0,
@@ -280,7 +298,7 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
         s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_end_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_calendar ?? null) : null,
-        isExclusion ? 1 : 0,
+        s.excl_date ?? null, s.excl_end_date ?? null, s.excl_calendar ?? null,
         s.on_date ?? null, s.off_date ?? null, is_enabled, actor, scheduleId],
     );
     deviceIds.push(existing.device_id);
@@ -315,7 +333,8 @@ export async function listSchedules({ userId }) {
             s.user_id, u.full_name AS user_name,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,
-            s.repeat_type, s.holidays, s.annual_date, s.annual_end_date, s.annual_calendar, s.is_exclusion, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
+            s.repeat_type, s.holidays, s.annual_date, s.annual_end_date, s.annual_calendar,
+            s.excl_date, s.excl_end_date, s.excl_calendar, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
      JOIN devices d ON d.id = r.device_id
@@ -325,7 +344,8 @@ export async function listSchedules({ userId }) {
     userId != null ? [userId] : [],
   );
   // Hebrew-anniversary rows also expose their Hebrew day/month (both range
-  // ends; a missing end mirrors the start) for the UI.
+  // ends; a missing end mirrors the start) for the UI — same for a Hebrew
+  // per-schedule החרגה range.
   for (const r of rows) {
     if (r.repeat_type === 'yearly' && r.annual_calendar === 'heb' && r.annual_date) {
       const hd = new HDate(new Date(`${ymdOf(r.annual_date)}T12:00:00`));
@@ -334,6 +354,14 @@ export async function listSchedules({ userId }) {
       const he = new HDate(new Date(`${ymdOf(r.annual_end_date || r.annual_date)}T12:00:00`));
       r.annual_end_heb_day = he.getDate();
       r.annual_end_heb_month = he.getMonth();
+    }
+    if (r.excl_calendar === 'heb' && r.excl_date) {
+      const hd = new HDate(new Date(`${ymdOf(r.excl_date)}T12:00:00`));
+      r.excl_heb_day = hd.getDate();
+      r.excl_heb_month = hd.getMonth();
+      const he = new HDate(new Date(`${ymdOf(r.excl_end_date || r.excl_date)}T12:00:00`));
+      r.excl_end_heb_day = he.getDate();
+      r.excl_end_heb_month = he.getMonth();
     }
   }
   return rows;
@@ -359,10 +387,21 @@ export function describeScheduleHe(row) {
     const zman = anchor && anchor !== 'clock' ? ', לפי זמן הלכתי' : '';
     return `${label}${when} בשעה ${hhmm(time)}${zman}`;
   };
-  const disabledNote = row.is_enabled ? '' : ' (מושבת)';
-  if (row.is_exclusion) {
-    return `החרגה לממסר ${row.relay_name}, התזמונים לא יפעלו מתאריך ${dayMonth(row.on_date)} עד ${dayMonth(row.off_date)}${disabledNote}`;
-  }
+  // Yemot-safe Hebrew date readout for the per-schedule החרגה clause.
+  const HEB_MONTH_HE = {
+    1: 'ניסן', 2: 'אייר', 3: 'סיון', 4: 'תמוז', 5: 'אב', 6: 'אלול', 7: 'תשרי',
+    8: 'חשון', 9: 'כסלו', 10: 'טבת', 11: 'שבט', 12: 'אדר', 13: 'אדר ב',
+  };
+  const exclDM = (d) => {
+    if (row.excl_calendar === 'heb') {
+      const hd = new HDate(new Date(`${ymdOf(d)}T12:00:00`));
+      return `${hd.getDate()} ${HEB_MONTH_HE[hd.getMonth()] || ''}`;
+    }
+    return dayMonth(d);
+  };
+  const excl = row.excl_date
+    ? `, עם החרגה מ${exclDM(row.excl_date)} עד ${exclDM(row.excl_end_date || row.excl_date)}`
+    : '';
   const type = row.repeat_type === 'once' ? 'חד פעמי'
     : row.repeat_type === 'yearly' ? 'שנתי'
     : row.repeat_type === 'holiday' ? 'לחגים'
@@ -373,7 +412,7 @@ export function describeScheduleHe(row) {
   ].filter(Boolean).join(', ');
   const disabled = row.is_enabled ? '' : ' (מושבת)';
   // Comma, not colon, after the name — Yemot rejects reads with non-time colons.
-  return `תזמון ${type} לממסר ${row.relay_name}, ${sides}${disabled}`;
+  return `תזמון ${type} לממסר ${row.relay_name}, ${sides}${excl}${disabled}`;
 }
 
 function ymdOf(v) {

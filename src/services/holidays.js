@@ -211,11 +211,22 @@ export function hebOnceDate(day, month, { tz = 'Asia/Jerusalem', now = new Date(
   throw errors.validation('לא נמצא מופע קרוב לתאריך', { once_heb_day: 'none' });
 }
 
+// Per-schedule החרגה: does a LOCAL date fall inside the schedule's own excluded
+// range? The range recurs yearly (Hebrew or civil, like the לפי־תאריך type) and
+// is stored as representative dates — occurrences are projected around the
+// tested date itself, so wrap-the-year ranges (אלול→תשרי) work too. Pure.
+export function inExclusionRange(row, dateStr) {
+  if (!row || !row.excl_date) return false;
+  const p = ymdParts(dateStr);
+  return yearlyRangesAround(row.excl_date, row.excl_end_date, row.excl_calendar, p, 2)
+    .some((r) => dateStr >= ymdStr(r.on) && dateStr <= ymdStr(r.off));
+}
+
 // Hebrew pick (day 1–30 + hebcal month, Nisan=1 … Tishrei=7 … Adar=12/Adar II=13)
 // → a representative Gregorian date whose Hebrew date equals the pick; a
 // plain-Adar pick is anchored in a NON-leap year so the yearly mapping observes
 // it in Adar II on leap years.
-function hebPickDate(day0, month0, p0, errPrefix) {
+export function hebPickDate(day0, month0, p0, errPrefix) {
   const day = Number(day0);
   const month = Number(month0);
   if (!Number.isInteger(day) || day < 1 || day > 30 || !Number.isInteger(month) || month < 1 || month > 13) {

@@ -1,10 +1,44 @@
 import './helpers/env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { upcomingBlocks, resolveHolidaySchedule, freshHolidayFor, anchorMinutes } from '../src/services/holidays.js';
+import { upcomingBlocks, resolveHolidaySchedule, freshHolidayFor, anchorMinutes, inExclusionRange, hebPickDate } from '../src/services/holidays.js';
 import { timeToMinutes } from '../src/services/time.js';
 
 const TZ = 'Asia/Jerusalem';
+
+test('inExclusionRange: greg range is inclusive and recurs yearly', () => {
+  const row = { excl_calendar: 'greg', excl_date: '2026-07-09', excl_end_date: '2026-07-18' };
+  assert.ok(inExclusionRange(row, '2026-07-09')); // first day
+  assert.ok(inExclusionRange(row, '2026-07-18')); // last day
+  assert.ok(!inExclusionRange(row, '2026-07-08'));
+  assert.ok(!inExclusionRange(row, '2026-07-19'));
+  assert.ok(inExclusionRange(row, '2027-07-10')); // recurs next civil year
+  assert.ok(!inExclusionRange({}, '2026-07-10')); // no range → never excluded
+});
+
+test('inExclusionRange: Hebrew range follows the Hebrew calendar across years and wraps', () => {
+  const p = { y: 2026, mo: 7, d: 1 };
+  // א׳ אב → א׳ אלול
+  const row = {
+    excl_calendar: 'heb',
+    excl_date: hebPickDate(1, 5, p, 'excl_heb'),
+    excl_end_date: hebPickDate(1, 6, p, 'excl_end_heb'),
+  };
+  // 5786: 1 Av = 2026-07-15, 1 Elul = 2026-08-14
+  assert.ok(inExclusionRange(row, '2026-07-15'));
+  assert.ok(inExclusionRange(row, '2026-08-01'));
+  assert.ok(!inExclusionRange(row, '2026-07-10'));
+  // 5787: 1 Av = 2027-08-04 — the civil dates shift but the Hebrew range holds
+  assert.ok(inExclusionRange(row, '2027-08-04'));
+  assert.ok(!inExclusionRange(row, '2027-07-15'));
+  // wrap-the-year range: כ׳ אלול → י׳ תשרי covers ראש השנה
+  const wrap = {
+    excl_calendar: 'heb',
+    excl_date: hebPickDate(20, 6, p, 'excl_heb'),
+    excl_end_date: hebPickDate(10, 7, p, 'excl_end_heb'),
+  };
+  assert.ok(inExclusionRange(wrap, '2026-09-12')); // רה 5787 (Sep 12 2026)
+});
 
 test('shabbat-only: blocks are Friday erev → Saturday exit (list may open with the just-passed one)', () => {
   // Wed 2026-07-22 → previous Shabbat Jul 18 (kept for mid-block), then Jul 25
