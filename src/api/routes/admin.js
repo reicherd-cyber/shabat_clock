@@ -438,7 +438,7 @@ adminRouter.post('/schedules', requireWrite, async (req, res, next) => {
     const result = await createSchedule({
       userId: null, actingUserId: null, actor: adminActor(req),
       relayId: Number(b.relay_id), createdVia: 'admin',
-      repeat_type: b.repeat_type || 'weekly', holidays: b.holidays ?? null,
+      repeat_type: b.repeat_type || 'weekly', holidays: b.holidays ?? null, is_exclusion: Boolean(b.is_exclusion),
       annual_date: b.annual_date ?? null, annual_end_date: b.annual_end_date ?? null, annual_calendar: b.annual_calendar ?? null,
       annual_heb_day: b.annual_heb_day ?? null, annual_heb_month: b.annual_heb_month ?? null,
       annual_end_heb_day: b.annual_end_heb_day ?? null, annual_end_heb_month: b.annual_end_heb_month ?? null,

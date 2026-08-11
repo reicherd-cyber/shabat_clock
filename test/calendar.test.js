@@ -91,6 +91,44 @@ test('events are chronologically sorted across schedules', () => {
     ['2026-07-01 07:00', '2026-07-01 20:00', '2026-07-02 07:00', '2026-07-02 20:00']);
 });
 
+test('החרגה suppresses the relay events inside its range and draws a band', () => {
+  const events = expandSchedules([
+    {
+      ...base, id: 1, repeat_type: 'weekly',
+      on_day_of_week: 6, on_time: '18:00', off_day_of_week: 7, off_time: '20:00',
+    },
+    {
+      ...base, id: 2, repeat_type: 'yearly', is_exclusion: 1,
+      annual_calendar: 'greg', annual_date: '2026-07-09', annual_end_date: '2026-07-18',
+    },
+  ], RANGE);
+  // Fridays 10+17 and Saturdays 11+18 fall inside the window — gone.
+  const ons = events.filter((e) => e.action === 'on' && !e.exclude);
+  const offs = events.filter((e) => e.action === 'off' && !e.exclude);
+  assert.deepEqual(ons.map((e) => e.date), ['2026-07-03', '2026-07-24', '2026-07-31']);
+  assert.deepEqual(offs.map((e) => e.date), ['2026-07-04', '2026-07-25']);
+  // The band itself: a closed on→off pair over the range, flagged exclude.
+  const band = events.filter((e) => e.exclude);
+  assert.deepEqual(band.map((e) => [e.date, e.time, e.action]),
+    [['2026-07-09', '00:00', 'on'], ['2026-07-18', '23:59', 'off']]);
+  assert.ok(band.every((e) => e.schedule_id === 2));
+});
+
+test('החרגה only affects its own relay', () => {
+  const events = expandSchedules([
+    {
+      ...base, id: 1, relay_id: 20, relay_name: 'מטבח', repeat_type: 'weekly',
+      on_day_of_week: 6, on_time: '18:00',
+    },
+    {
+      ...base, id: 2, repeat_type: 'yearly', is_exclusion: 1,
+      annual_calendar: 'greg', annual_date: '2026-07-01', annual_end_date: '2026-07-31',
+    },
+  ], RANGE);
+  // relay 20's Fridays all survive relay 10's exclusion.
+  assert.equal(events.filter((e) => e.action === 'on' && !e.exclude).length, 5);
+});
+
 test('sanity: expanded times parse as HH:MM', () => {
   const events = expandSchedules([{
     ...base, repeat_type: 'weekly', on_day_of_week: null, on_anchor: 'sunrise', on_offset_min: 30, on_time: '06:15',

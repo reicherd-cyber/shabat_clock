@@ -93,11 +93,14 @@ export const anchorText = (anchor, offsetMin) => {
 
 // 'offon' = reversed pair (turn OFF first, back ON later — a normally-on device);
 // weekly/once only: the holiday and yearly resolvers assume ON opens the range.
+// 'exclude' (yearly only) = החרגה: during the date range the channel's OTHER
+// schedules are suppressed — no times, the server stores a 00:00→23:59 range.
 const MODES = [
   { v: 'both', label: 'הדלקה וכיבוי' },
   { v: 'offon', label: 'כיבוי והדלקה' },
   { v: 'on', label: 'הדלקה בלבד' },
   { v: 'off', label: 'כיבוי בלבד' },
+  { v: 'exclude', label: 'החרגה' },
 ];
 
 // Quick duration chips (once mode only): OFF = ON + duration, rolling the date.
@@ -125,7 +128,8 @@ export const rowToForm = (s) => ({
     ? String(s.annual_end_date || s.annual_date).slice(0, 10)
     : '',
   // A stored pair whose OFF lands before its ON re-opens as כיבוי והדלקה.
-  mode: s.on_time && s.off_time
+  mode: s.is_exclusion ? 'exclude'
+    : s.on_time && s.off_time
     ? ((s.repeat_type === 'once'
       ? `${String(s.off_date).slice(0, 10)}T${s.off_time}` < `${String(s.on_date).slice(0, 10)}T${s.on_time}`
       : s.repeat_type === 'weekly' && s.on_day_of_week != null
@@ -230,11 +234,12 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
     const isAnnual = form.repeat_type === 'yearly';
     const b = form.id
       ? {
-        repeat_type: form.repeat_type, annual_date: null, annual_end_date: null, annual_calendar: null,
+        repeat_type: form.repeat_type, annual_date: null, annual_end_date: null, annual_calendar: null, is_exclusion: false,
         on_time: null, on_day_of_week: null, on_date: null, on_anchor: 'clock', on_offset_min: 0,
         off_time: null, off_day_of_week: null, off_date: null, off_anchor: 'clock', off_offset_min: 0,
       }
       : { relay_id: Number(form.relay_id), repeat_type: form.repeat_type };
+    if (isAnnual && form.mode === 'exclude') b.is_exclusion = true;
     if (isAnnual) {
       b.annual_calendar = form.annual_calendar;
       // ON fires on the from-date, OFF on the to-date; a one-sided schedule
@@ -266,8 +271,11 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
       if (form.mode !== 'on') side('off');
     } else if (isAnnual) {
       // Single anniversary date — the server resolves each year's occurrence.
-      if (form.mode !== 'off') side('on');
-      if (form.mode !== 'on') side('off');
+      // החרגה sends no sides at all — the server fixes them to 00:00→23:59.
+      if (form.mode !== 'exclude') {
+        if (form.mode !== 'off') side('on');
+        if (form.mode !== 'on') side('off');
+      }
     } else if (form.once_calendar === 'heb') {
       // One-time by HEBREW date — the server resolves the next occurrence.
       b.once_heb_day = Number(form.heb_day);
@@ -342,9 +350,10 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
             </div>
           )}
           <div className="flex gap-2 items-center flex-wrap">
-            <Button variant={form.repeat_type === 'weekly' ? 'primary' : 'ghost'} onClick={() => setForm({ ...form, repeat_type: 'weekly' })}>שבועי</Button>
+            <Button variant={form.repeat_type === 'weekly' ? 'primary' : 'ghost'}
+              onClick={() => setForm({ ...form, repeat_type: 'weekly', ...(form.mode === 'exclude' ? { mode: 'both' } : {}) })}>שבועי</Button>
             <Button variant={form.repeat_type === 'once' ? 'primary' : 'ghost'}
-              onClick={() => setForm({ ...form, repeat_type: 'once', on_date: form.on_date || todayYmd(), on_time: form.on_time || nowHm() })}>חד-פעמי</Button>
+              onClick={() => setForm({ ...form, repeat_type: 'once', on_date: form.on_date || todayYmd(), on_time: form.on_time || nowHm(), ...(form.mode === 'exclude' ? { mode: 'both' } : {}) })}>חד-פעמי</Button>
             <Button variant={form.repeat_type === 'yearly' ? 'primary' : 'ghost'}
               onClick={() => {
                 const base = form.on_date || todayYmd();
@@ -357,7 +366,7 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
               }}>לפי תאריך</Button>
             <Button variant={form.repeat_type === 'holiday' ? 'primary' : 'ghost'}
               onClick={() => setForm({
-                ...form, repeat_type: 'holiday', ...(form.mode === 'offon' ? { mode: 'both' } : {}),
+                ...form, repeat_type: 'holiday', ...(form.mode === 'offon' || form.mode === 'exclude' ? { mode: 'both' } : {}),
                 // Sensible zmanim defaults on first switch (user can revert to שעה קבועה)
                 ...(form.on_kind === 'clock' && form.off_kind === 'clock'
                   ? { on_kind: 'sunset', on_dir: 'before', on_offset: 20, off_kind: 'tzeit', off_dir: 'after', off_offset: 0 }
@@ -392,7 +401,8 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
             </div>
           )}
           <div className="flex gap-1.5 flex-wrap">
-            {MODES.filter((m) => m.v !== 'offon' || form.repeat_type === 'weekly' || form.repeat_type === 'once').map((m) => (
+            {MODES.filter((m) => (m.v !== 'offon' || form.repeat_type === 'weekly' || form.repeat_type === 'once')
+              && (m.v !== 'exclude' || form.repeat_type === 'yearly')).map((m) => (
               <Button key={m.v} variant={form.mode === m.v ? 'primary' : 'ghost'} className="!px-2.5 !py-1 text-xs"
                 onClick={() => {
                   let next = {
@@ -485,7 +495,13 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
               </div>
             );
           })()}
-          <div className="grid grid-cols-2 gap-3">
+          {form.mode === 'exclude' && (
+            <p className="text-sm text-muted bg-surface2 rounded-xl px-3 py-2">
+              בתקופת ההחרגה לא יפעלו שאר התזמונים של הערוץ — לא הדלקות ולא כיבויים.
+              הם חוזרים לפעול מעצמם מיד בסיום התקופה.
+            </p>
+          )}
+          {form.mode !== 'exclude' && <div className="grid grid-cols-2 gap-3">
             {(form.mode === 'offon' ? ['off', 'on'] : ['on', 'off']).map((p) => (form.mode !== (p === 'on' ? 'off' : 'on') && <div key={p} className="space-y-2">
               <span className={`text-sm font-medium ${p === 'on' ? 'text-on' : 'text-off'}`}>{p === 'on' ? 'הדלקה' : 'כיבוי'}</span>
               {form.repeat_type === 'weekly' && !form.daily && (
@@ -511,8 +527,8 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
                   </Select>
                 </div>}
             </div>))}
-          </div>
-          {anchored && (
+          </div>}
+          {anchored && form.mode !== 'exclude' && (
             <label className="block">
               <span className="text-sm text-muted">אזור לחישוב הזמנים</span>
               <Select className="w-full" value={region} onChange={(e) => setRegion(e.target.value)}>

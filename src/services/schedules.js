@@ -38,6 +38,19 @@ function resolveSchedule(s, opts) {
 
 const mod = (n, m) => ((n % m) + m) % m;
 
+// החרגה rows ride the yearly-range machinery: fixed 00:00 → 23:59 sides so the
+// resolver/daily-refresh roll the range like any anniversary, but the row never
+// fires events — it only suppresses the relay's other schedules while active.
+function normalizeExclusion(s) {
+  s.repeat_type = 'yearly';
+  s.on_anchor = 'clock';
+  s.on_offset_min = 0;
+  s.on_time = '00:00';
+  s.off_anchor = 'clock';
+  s.off_offset_min = 0;
+  s.off_time = '23:59';
+}
+
 // Pure rules 1–3. `schedule` fields: on_day_of_week, on_time "HH:MM", off_day_of_week,
 // off_time, repeat_type, on_date "YYYY-MM-DD", off_date. For 'once', pass {tz, now}
 // so ALREADY_PAST is judged in device-local time. Returns normalized copy.
@@ -184,6 +197,9 @@ async function regionOf(conn, userId) {
 
 export async function createSchedule({ userId, relayId, createdVia, actingUserId = userId, actor = null, ...fields }) {
   const deviceIds = [];
+  const isExclusion = Boolean(fields.is_exclusion);
+  delete fields.is_exclusion;
+  if (isExclusion) normalizeExclusion(fields);
   const result = await withTransaction(async (conn) => {
     const relay = await requireRelay(conn, relayId, actingUserId);
     // Anchored sides (sunset±offset…) and holiday blocks resolve to concrete wall
@@ -193,14 +209,15 @@ export async function createSchedule({ userId, relayId, createdVia, actingUserId
     const res = await conn.query(
       `INSERT INTO schedules (user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
         off_day_of_week, off_time, off_anchor, off_offset_min,
-        repeat_type, holidays, annual_date, annual_end_date, annual_calendar, on_date, off_date, is_enabled, created_via, created_by, updated_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
+        repeat_type, holidays, annual_date, annual_end_date, annual_calendar, is_exclusion, on_date, off_date, is_enabled, created_via, created_by, updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
       [relay.user_id, relayId, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
         s.off_day_of_week, s.off_time, s.off_anchor, s.off_offset_min,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_end_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_calendar ?? null) : null,
+        isExclusion ? 1 : 0,
         s.on_date ?? null, s.off_date ?? null, createdVia, actor, actor],
     );
     deviceIds.push(relay.device_id);
@@ -243,8 +260,10 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
       on_date: patch.on_date !== undefined ? patch.on_date : (existing.on_date ? ymdOf(existing.on_date) : null),
       off_date: patch.off_date !== undefined ? patch.off_date : (existing.off_date ? ymdOf(existing.off_date) : null),
     };
+    const isExclusion = Boolean(patch.is_exclusion !== undefined ? patch.is_exclusion : existing.is_exclusion);
     const onlyToggle = Object.keys(patch).every((k) => k === 'is_enabled');
     if (!onlyToggle) {
+      if (isExclusion) normalizeExclusion(merged);
       resolveSchedule(merged, { region: await regionOf(conn, existing.user_id), tz: existing.timezone });
     }
     const s = onlyToggle ? merged : validateScheduleRules(merged, { tz: existing.timezone });
@@ -253,7 +272,7 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
     await conn.query(
       `UPDATE schedules SET on_day_of_week=?, on_time=?, on_anchor=?, on_offset_min=?,
         off_day_of_week=?, off_time=?, off_anchor=?, off_offset_min=?,
-        repeat_type=?, holidays=?, annual_date=?, annual_end_date=?, annual_calendar=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
+        repeat_type=?, holidays=?, annual_date=?, annual_end_date=?, annual_calendar=?, is_exclusion=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
        WHERE id = ?`,
       [s.on_day_of_week, s.on_time, s.on_anchor ?? 'clock', s.on_offset_min ?? 0,
         s.off_day_of_week, s.off_time, s.off_anchor ?? 'clock', s.off_offset_min ?? 0,
@@ -261,6 +280,7 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
         s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_end_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_calendar ?? null) : null,
+        isExclusion ? 1 : 0,
         s.on_date ?? null, s.off_date ?? null, is_enabled, actor, scheduleId],
     );
     deviceIds.push(existing.device_id);
@@ -295,7 +315,7 @@ export async function listSchedules({ userId }) {
             s.user_id, u.full_name AS user_name,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,
-            s.repeat_type, s.holidays, s.annual_date, s.annual_end_date, s.annual_calendar, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
+            s.repeat_type, s.holidays, s.annual_date, s.annual_end_date, s.annual_calendar, s.is_exclusion, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
      JOIN devices d ON d.id = r.device_id
@@ -339,6 +359,10 @@ export function describeScheduleHe(row) {
     const zman = anchor && anchor !== 'clock' ? ', לפי זמן הלכתי' : '';
     return `${label}${when} בשעה ${hhmm(time)}${zman}`;
   };
+  const disabledNote = row.is_enabled ? '' : ' (מושבת)';
+  if (row.is_exclusion) {
+    return `החרגה לממסר ${row.relay_name}, התזמונים לא יפעלו מתאריך ${dayMonth(row.on_date)} עד ${dayMonth(row.off_date)}${disabledNote}`;
+  }
   const type = row.repeat_type === 'once' ? 'חד פעמי'
     : row.repeat_type === 'yearly' ? 'שנתי'
     : row.repeat_type === 'holiday' ? 'לחגים'

@@ -151,6 +151,12 @@ function chipsByDay(intervals) {
   for (const iv of intervals) {
     const ev = iv.start || iv.end;
     const base = { sid: ev.schedule_id, relay_id: ev.relay_id, relay_name: ev.relay_name, device_name: ev.device_name, sort: ev.time, gap: iv.gap };
+    if (ev.exclude) { // החרגה band: one chip per covered day, no times
+      const first = (iv.start || iv.end).date;
+      const last = (iv.end || iv.start).date;
+      for (let d = first; d <= last; d = shiftYmd(d, 1)) add(d, { ...base, gap: true, text: 'החרגה', sort: '00:00' });
+      continue;
+    }
     if (iv.gap) { // gap window: start=OFF, end=ON — labels flip
       if (!iv.start) { add(iv.end.date, { ...base, text: `הדלקה ${iv.end.time}`, sort: iv.end.time }); continue; }
       if (!iv.end) { add(iv.start.date, { ...base, text: `כיבוי ${iv.start.time}` }); continue; }
@@ -192,6 +198,15 @@ function segmentsByDay(intervals) {
   for (const iv of intervals) {
     const ev = iv.start || iv.end;
     const base = { sid: ev.schedule_id, relay_id: ev.relay_id, relay_name: ev.relay_name, device_name: ev.device_name, gap: iv.gap };
+    if (ev.exclude) { // החרגה band: full-day blocks across the covered days
+      const first = (iv.start || iv.end).date;
+      const last = (iv.end || iv.start).date;
+      for (let d = first; d <= last; d = shiftYmd(d, 1)) {
+        const cont = d === first ? (first === last ? undefined : 'down') : d === last ? 'up' : 'both';
+        add(d, { ...base, gap: true, startMin: 0, endMin: 1440, label: 'החרגה', cont });
+      }
+      continue;
+    }
     if (iv.gap) { // gap window: start=OFF, end=ON
       if (!iv.start) { const m = toMin(iv.end.time); add(iv.end.date, { ...base, startMin: Math.max(0, m - 45), endMin: m, label: `הדלקה ${iv.end.time}`, openStart: true }); continue; }
       if (!iv.end) { const m = toMin(iv.start.time); add(iv.start.date, { ...base, startMin: m, endMin: Math.min(1440, m + 45), label: `כיבוי ${iv.start.time}`, openEnd: true }); continue; }

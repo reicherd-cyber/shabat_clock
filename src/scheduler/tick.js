@@ -17,7 +17,7 @@ async function loadActiveSchedules() {
   return query(
     `SELECT s.id, s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time,
-            s.repeat_type, s.on_date, s.off_date,
+            s.repeat_type, s.is_exclusion, s.on_date, s.off_date,
             r.id AS relay_id, r.relay_no,
             d.id AS device_id, d.device_uid, d.is_online, d.timezone,
             d.device_type, d.transport, d.ip_address
@@ -37,6 +37,28 @@ const ymdParts = (v) => {
   const [y, mo, d] = s.split('-').map(Number);
   return { y, mo, d };
 };
+const ymdStr = (v) => {
+  const p = ymdParts(v);
+  return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
+};
+
+// החרגה windows per relay, as inclusive local-date ranges. Stored on_date/off_date
+// always hold the current-or-next occurrence (the resolver only rolls forward once
+// the range's last minute passed), so a window we're inside is present here.
+export function exclusionWindows(schedules) {
+  const map = new Map();
+  for (const s of schedules) {
+    if (!s.is_exclusion || !s.on_date || !s.off_date) continue;
+    if (!map.has(s.relay_id)) map.set(s.relay_id, []);
+    map.get(s.relay_id).push({ from: ymdStr(s.on_date), to: ymdStr(s.off_date) });
+  }
+  return map;
+}
+
+// An occurrence is suppressed when its intended LOCAL date falls inside any
+// החרגה window of its own relay — it neither fires nor gets an execution row.
+export const isSuppressed = (excl, relayId, localDateStr) => (excl.get(relayId) || [])
+  .some((w) => localDateStr >= w.from && localDateStr <= w.to);
 
 // All occurrences of one schedule's ON/OFF events with occurrence_utc in
 // [winStart, winEnd). Spring-forward gap events land on the jump instant;
@@ -178,9 +200,11 @@ export async function tick(now = new Date()) {
   const shellyEnd = new Date(nowM.getTime() + 60000);
 
   const schedules = await loadActiveSchedules();
-  const due = sortDue(schedules.flatMap((s) => (s.device_type === 'shelly'
+  const excl = exclusionWindows(schedules);
+  const due = sortDue(schedules.filter((s) => !s.is_exclusion).flatMap((s) => (s.device_type === 'shelly'
     ? occurrencesInWindow(s, nowM, shellyEnd)
-    : occurrencesInWindow(s, winStart, winEnd))));
+    : occurrencesInWindow(s, winStart, winEnd)))
+    .filter((occ) => !isSuppressed(excl, occ.schedule.relay_id, occ.localKey.slice(0, 10))));
 
   for (const occ of due) {
     const s = occ.schedule;
@@ -268,8 +292,11 @@ export async function startupScan(now = new Date()) {
   const winEnd = new Date(floorMinute(now).getTime() - BACKUP_GRACE_MIN * 60000);
   const winStart = new Date(winEnd.getTime() - RECONCILE_WINDOW_H * 3600000);
   const schedules = await loadActiveSchedules();
+  const excl = exclusionWindows(schedules);
   for (const s of schedules) {
+    if (s.is_exclusion) continue;
     for (const occ of occurrencesInWindow(s, winStart, winEnd)) {
+      if (isSuppressed(excl, occ.schedule.relay_id, occ.localKey.slice(0, 10))) continue;
       const existing = await existingRow(s.id, occ.occurrenceUtc, occ.action);
       if (existing) continue;
       await insertOccurrenceRow({
@@ -287,7 +314,7 @@ export async function startupScan(now = new Date()) {
 // collide with the backup windows above.
 async function refreshAnchoredTimes(now = new Date()) {
   const rows = await query(
-    `SELECT s.id, s.repeat_type, s.holidays,
+    `SELECT s.id, s.repeat_type, s.holidays, s.is_exclusion,
             DATE_FORMAT(s.annual_date,'%Y-%m-%d') AS annual_date, DATE_FORMAT(s.annual_end_date,'%Y-%m-%d') AS annual_end_date, s.annual_calendar,
             DATE_FORMAT(s.on_date,'%Y-%m-%d') AS on_date, DATE_FORMAT(s.off_date,'%Y-%m-%d') AS off_date,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
@@ -302,6 +329,17 @@ async function refreshAnchoredTimes(now = new Date()) {
   );
   const deviceIds = new Set();
   for (const row of rows) {
+    // החרגה boundary: the payload's contents flip the day a window opens or
+    // closes — re-push those devices even when the row's own dates didn't move
+    // (window open leaves them unchanged; only the close rolls them forward).
+    if (row.is_exclusion && row.on_date && row.off_date) {
+      const p = localParts(now, row.timezone || 'Asia/Jerusalem');
+      const fmt = (dt) => `${dt.y}-${String(dt.mo).padStart(2, '0')}-${String(dt.d).padStart(2, '0')}`;
+      const today = fmt(p);
+      const yesterday = fmt(shiftDate({ y: p.y, mo: p.mo, d: p.d }, -1));
+      const inWin = (d) => d >= row.on_date && d <= row.off_date;
+      if (inWin(today) !== inWin(yesterday)) deviceIds.add(Number(row.device_id));
+    }
     if (row.repeat_type === 'holiday' || row.repeat_type === 'yearly') {
       const fresh = row.repeat_type === 'holiday' ? freshHolidayFor(row, now) : freshYearlyFor(row, now);
       if ((fresh.on_time ?? null) === (row.on_time ?? null) && (fresh.off_time ?? null) === (row.off_time ?? null)
