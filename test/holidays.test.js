@@ -7,7 +7,7 @@ import { timeToMinutes } from '../src/services/time.js';
 const TZ = 'Asia/Jerusalem';
 
 test('inExclusionRange: greg range is inclusive and recurs yearly', () => {
-  const row = { excl_calendar: 'greg', excl_date: '2026-07-09', excl_end_date: '2026-07-18' };
+  const row = { excl_type: 'yearly', excl_calendar: 'greg', excl_date: '2026-07-09', excl_end_date: '2026-07-18' };
   assert.ok(inExclusionRange(row, '2026-07-09')); // first day
   assert.ok(inExclusionRange(row, '2026-07-18')); // last day
   assert.ok(!inExclusionRange(row, '2026-07-08'));
@@ -20,7 +20,7 @@ test('inExclusionRange: Hebrew range follows the Hebrew calendar across years an
   const p = { y: 2026, mo: 7, d: 1 };
   // א׳ אב → א׳ אלול
   const row = {
-    excl_calendar: 'heb',
+    excl_type: 'yearly', excl_calendar: 'heb',
     excl_date: hebPickDate(1, 5, p, 'excl_heb'),
     excl_end_date: hebPickDate(1, 6, p, 'excl_end_heb'),
   };
@@ -33,11 +33,40 @@ test('inExclusionRange: Hebrew range follows the Hebrew calendar across years an
   assert.ok(!inExclusionRange(row, '2027-07-15'));
   // wrap-the-year range: כ׳ אלול → י׳ תשרי covers ראש השנה
   const wrap = {
-    excl_calendar: 'heb',
+    excl_type: 'yearly', excl_calendar: 'heb',
     excl_date: hebPickDate(20, 6, p, 'excl_heb'),
     excl_end_date: hebPickDate(10, 7, p, 'excl_end_heb'),
   };
   assert.ok(inExclusionRange(wrap, '2026-09-12')); // רה 5787 (Sep 12 2026)
+});
+
+test('inExclusionRange: once range does NOT recur', () => {
+  const row = { excl_type: 'once', excl_calendar: 'greg', excl_date: '2026-07-09', excl_end_date: '2026-07-18' };
+  assert.ok(inExclusionRange(row, '2026-07-09'));
+  assert.ok(inExclusionRange(row, '2026-07-18'));
+  assert.ok(!inExclusionRange(row, '2027-07-10')); // next year not excluded
+});
+
+test('inExclusionRange: weekly excludes the chosen days of week', () => {
+  const row = { excl_type: 'weekly', excl_days: '3,6' }; // Tuesdays + Fridays
+  assert.ok(inExclusionRange(row, '2026-07-07')); // Tuesday
+  assert.ok(inExclusionRange(row, '2026-07-10')); // Friday
+  assert.ok(!inExclusionRange(row, '2026-07-08')); // Wednesday
+  assert.ok(!inExclusionRange(row, '2026-07-11')); // Saturday not chosen
+});
+
+test('inExclusionRange: holiday covers the block erev→exit, same days as the include type', () => {
+  const shab = { excl_type: 'holiday', excl_holidays: 'shabbat' };
+  assert.ok(inExclusionRange(shab, '2026-07-17')); // Friday (erev)
+  assert.ok(inExclusionRange(shab, '2026-07-18')); // Saturday
+  assert.ok(!inExclusionRange(shab, '2026-07-16')); // Thursday
+  const rh = { excl_type: 'holiday', excl_holidays: 'rosh_hashana' };
+  // רה 5787: Sat+Sun Sep 12–13; erev Friday Sep 11. Plain Shabbatot excluded only
+  // as part of the chag block — Sep 5 is an ordinary Saturday.
+  assert.ok(inExclusionRange(rh, '2026-09-11'));
+  assert.ok(inExclusionRange(rh, '2026-09-12'));
+  assert.ok(inExclusionRange(rh, '2026-09-13'));
+  assert.ok(!inExclusionRange(rh, '2026-09-05'));
 });
 
 test('shabbat-only: blocks are Friday erev → Saturday exit (list may open with the just-passed one)', () => {

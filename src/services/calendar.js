@@ -115,7 +115,8 @@ export function expandSchedules(rows, { from, days }) {
 export async function calendarEvents({ userId, from, days }) {
   const rows = await query(
     `SELECT s.id, s.repeat_type, s.holidays,
-            DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date, s.excl_calendar,
+            s.excl_type, DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date,
+            s.excl_calendar, s.excl_holidays, s.excl_days,
             DATE_FORMAT(s.annual_date,'%Y-%m-%d') AS annual_date, DATE_FORMAT(s.annual_end_date,'%Y-%m-%d') AS annual_end_date, s.annual_calendar,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             DATE_FORMAT(s.on_date,'%Y-%m-%d') AS on_date,

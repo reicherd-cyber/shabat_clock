@@ -18,7 +18,8 @@ async function loadActiveSchedules() {
     `SELECT s.id, s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time,
             s.repeat_type, s.on_date, s.off_date,
-            DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date, s.excl_calendar,
+            s.excl_type, DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date,
+            s.excl_calendar, s.excl_holidays, s.excl_days,
             r.id AS relay_id, r.relay_no,
             d.id AS device_id, d.device_uid, d.is_online, d.timezone,
             d.device_type, d.transport, d.ip_address
@@ -294,7 +295,8 @@ export async function startupScan(now = new Date()) {
 async function refreshAnchoredTimes(now = new Date()) {
   const rows = await query(
     `SELECT s.id, s.repeat_type, s.holidays,
-            DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date, s.excl_calendar,
+            s.excl_type, DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date,
+            s.excl_calendar, s.excl_holidays, s.excl_days,
             DATE_FORMAT(s.annual_date,'%Y-%m-%d') AS annual_date, DATE_FORMAT(s.annual_end_date,'%Y-%m-%d') AS annual_end_date, s.annual_calendar,
             DATE_FORMAT(s.on_date,'%Y-%m-%d') AS on_date, DATE_FORMAT(s.off_date,'%Y-%m-%d') AS off_date,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
@@ -306,14 +308,14 @@ async function refreshAnchoredTimes(now = new Date()) {
      LEFT JOIN users u ON u.id = s.user_id
      WHERE s.is_enabled = TRUE AND s.deleted_at IS NULL
        AND (s.on_anchor <> 'clock' OR s.off_anchor <> 'clock' OR s.repeat_type IN ('holiday','yearly')
-            OR s.excl_date IS NOT NULL)`,
+            OR s.excl_type IS NOT NULL)`,
   );
   const deviceIds = new Set();
   for (const row of rows) {
     // Per-schedule החרגה boundary: the payload's contents flip the day the
     // schedule's window opens or closes — re-push its device even when the
     // row's resolved times didn't move.
-    if (row.excl_date) {
+    if (row.excl_type) {
       const p = localParts(now, row.timezone || 'Asia/Jerusalem');
       const fmt = (dt) => `${dt.y}-${String(dt.mo).padStart(2, '0')}-${String(dt.d).padStart(2, '0')}`;
       const today = fmt(p);

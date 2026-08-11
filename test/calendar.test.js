@@ -95,7 +95,7 @@ test('per-schedule החרגה: events inside the range are suppressed', () => {
   const events = expandSchedules([{
     ...base, repeat_type: 'weekly',
     on_day_of_week: 6, on_time: '18:00', off_day_of_week: 7, off_time: '20:00',
-    excl_calendar: 'greg', excl_date: '2026-07-09', excl_end_date: '2026-07-18',
+    excl_type: 'yearly', excl_calendar: 'greg', excl_date: '2026-07-09', excl_end_date: '2026-07-18',
   }], RANGE);
   // Fridays 10+17 and Saturdays 11+18 fall inside the window — gone.
   assert.deepEqual(events.filter((e) => e.action === 'on').map((e) => e.date),
@@ -108,7 +108,7 @@ test('החרגה is per schedule — a sibling schedule keeps all its events', (
   const events = expandSchedules([
     {
       ...base, id: 1, repeat_type: 'weekly', on_day_of_week: 6, on_time: '18:00',
-      excl_calendar: 'greg', excl_date: '2026-07-01', excl_end_date: '2026-07-31',
+      excl_type: 'yearly', excl_calendar: 'greg', excl_date: '2026-07-01', excl_end_date: '2026-07-31',
     },
     { ...base, id: 2, repeat_type: 'weekly', on_day_of_week: 6, on_time: '19:00' },
   ], RANGE);

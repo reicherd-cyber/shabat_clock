@@ -6,7 +6,7 @@ import { MINUTES_PER_WEEK, MINUTES_PER_DAY, DAY_NAMES_HE } from '../config/const
 import { timeToMinutes, localParts, wallToUtc } from './time.js';
 import { resolveScheduleAnchors, DEFAULT_REGION } from './zmanim.js';
 import { HDate } from '@hebcal/core';
-import { resolveHolidaySchedule, resolveYearlySchedule, hebOnceDate, hebPickDate } from './holidays.js';
+import { resolveHolidaySchedule, resolveYearlySchedule, hebOnceDate, hebPickDate, parseHolidayKeys } from './holidays.js';
 
 // Holiday/yearly schedules resolve their next-occurrence dates+times; other
 // types resolve anchored sides only. All mutate in place and validate anchors.
@@ -38,33 +38,82 @@ function resolveSchedule(s, opts) {
 
 const mod = (n, m) => ((n % m) + m) % m;
 
-// Per-schedule החרגה: an optional yearly-recurring date range (Hebrew or civil)
-// during which THIS schedule doesn't fire. Hebrew picks resolve to representative
-// dates like the annual range; no range (or a 'once' schedule) clears the fields.
+// Per-schedule החרגה — same type choices as the schedule itself. Normalizes the
+// incoming fields per excl_type; anything inconsistent (or a 'once' schedule,
+// where exclusion is meaningless) clears the whole group.
 function normalizeExclusionFields(s, { tz = 'Asia/Jerusalem', now = new Date() } = {}) {
+  const type = ['yearly', 'once', 'holiday', 'weekly'].includes(s.excl_type) ? s.excl_type : null;
   const cal = s.excl_calendar === 'heb' ? 'heb' : s.excl_calendar === 'greg' ? 'greg' : null;
   const p0 = localParts(now, tz);
-  if (cal === 'heb' && s.excl_heb_day && s.excl_heb_month) {
-    s.excl_date = hebPickDate(s.excl_heb_day, s.excl_heb_month, p0, 'excl_heb');
-    s.excl_end_date = s.excl_end_heb_day && s.excl_end_heb_month
-      ? hebPickDate(s.excl_end_heb_day, s.excl_end_heb_month, p0, 'excl_end_heb')
-      : s.excl_date;
-  }
-  delete s.excl_heb_day;
-  delete s.excl_heb_month;
-  delete s.excl_end_heb_day;
-  delete s.excl_end_heb_month;
-  if (!cal || !s.excl_date || s.repeat_type === 'once') {
+  const clear = () => {
+    s.excl_type = null;
     s.excl_date = null;
     s.excl_end_date = null;
     s.excl_calendar = null;
+    s.excl_holidays = null;
+    s.excl_days = null;
+  };
+  const dropHebPicks = () => {
+    delete s.excl_heb_day;
+    delete s.excl_heb_month;
+    delete s.excl_end_heb_day;
+    delete s.excl_end_heb_month;
+  };
+  if (!type || s.repeat_type === 'once') {
+    dropHebPicks();
+    clear();
+    return;
+  }
+  if (type === 'weekly') {
+    const days = (Array.isArray(s.excl_days) ? s.excl_days : String(s.excl_days || '').split(','))
+      .map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7);
+    dropHebPicks();
+    clear();
+    if (!days.length) throw errors.validation('נדרש לבחור לפחות יום אחד להחרגה', { excl_days: '1-7' });
+    s.excl_type = 'weekly';
+    s.excl_days = [...new Set(days)].sort().join(',');
+    return;
+  }
+  if (type === 'holiday') {
+    const keys = parseHolidayKeys(s.excl_holidays); // throws when empty
+    dropHebPicks();
+    clear();
+    s.excl_type = 'holiday';
+    s.excl_holidays = keys.join(',');
+    return;
+  }
+  // date ranges — 'yearly' (recurring, representative dates) or 'once' (concrete)
+  if (cal === 'heb' && s.excl_heb_day && s.excl_heb_month) {
+    if (type === 'once') {
+      // Next occurrence of the from-pick; the to-pick resolves relative to it
+      // (so אלול→תשרי wraps into the following year, not the past).
+      s.excl_date = hebOnceDate(s.excl_heb_day, s.excl_heb_month, { tz, now });
+      s.excl_end_date = s.excl_end_heb_day && s.excl_end_heb_month
+        ? hebOnceDate(s.excl_end_heb_day, s.excl_end_heb_month, { tz, now: new Date(`${s.excl_date}T12:00:00Z`) })
+        : s.excl_date;
+    } else {
+      s.excl_date = hebPickDate(s.excl_heb_day, s.excl_heb_month, p0, 'excl_heb');
+      s.excl_end_date = s.excl_end_heb_day && s.excl_end_heb_month
+        ? hebPickDate(s.excl_end_heb_day, s.excl_end_heb_month, p0, 'excl_end_heb')
+        : s.excl_date;
+    }
+  }
+  dropHebPicks();
+  if (!cal || !s.excl_date) {
+    clear();
     return;
   }
   const ymdRe = /^\d{4}-\d{2}-\d{2}/;
   if (!ymdRe.test(String(s.excl_date))) throw errors.validation('תאריך החרגה לא תקין', { excl_date: 'YYYY-MM-DD' });
   if (!s.excl_end_date) s.excl_end_date = s.excl_date;
   if (!ymdRe.test(String(s.excl_end_date))) throw errors.validation('תאריך החרגה לא תקין', { excl_end_date: 'YYYY-MM-DD' });
+  if (type === 'once' && String(s.excl_end_date) < String(s.excl_date)) {
+    throw errors.validation('תאריך הסיום של ההחרגה לפני תחילתה', { excl_end_date: 'after excl_date' });
+  }
+  s.excl_type = type;
   s.excl_calendar = cal;
+  s.excl_holidays = null;
+  s.excl_days = null;
 }
 
 // Pure rules 1–3. `schedule` fields: on_day_of_week, on_time "HH:MM", off_day_of_week,
@@ -223,15 +272,16 @@ export async function createSchedule({ userId, relayId, createdVia, actingUserId
     const res = await conn.query(
       `INSERT INTO schedules (user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
         off_day_of_week, off_time, off_anchor, off_offset_min,
-        repeat_type, holidays, annual_date, annual_end_date, annual_calendar, excl_date, excl_end_date, excl_calendar, on_date, off_date, is_enabled, created_via, created_by, updated_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
+        repeat_type, holidays, annual_date, annual_end_date, annual_calendar, excl_type, excl_date, excl_end_date, excl_calendar, excl_holidays, excl_days, on_date, off_date, is_enabled, created_via, created_by, updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
       [relay.user_id, relayId, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
         s.off_day_of_week, s.off_time, s.off_anchor, s.off_offset_min,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_end_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_calendar ?? null) : null,
-        s.excl_date ?? null, s.excl_end_date ?? null, s.excl_calendar ?? null,
+        s.excl_type ?? null, s.excl_date ?? null, s.excl_end_date ?? null, s.excl_calendar ?? null,
+        s.excl_holidays ?? null, s.excl_days ?? null,
         s.on_date ?? null, s.off_date ?? null, createdVia, actor, actor],
     );
     deviceIds.push(relay.device_id);
@@ -273,9 +323,12 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
       once_heb_day: patch.once_heb_day, once_heb_month: patch.once_heb_month,
       on_date: patch.on_date !== undefined ? patch.on_date : (existing.on_date ? ymdOf(existing.on_date) : null),
       off_date: patch.off_date !== undefined ? patch.off_date : (existing.off_date ? ymdOf(existing.off_date) : null),
+      excl_type: patch.excl_type !== undefined ? patch.excl_type : existing.excl_type,
       excl_calendar: patch.excl_calendar !== undefined ? patch.excl_calendar : existing.excl_calendar,
       excl_date: patch.excl_date !== undefined ? patch.excl_date : (existing.excl_date ? ymdOf(existing.excl_date) : null),
       excl_end_date: patch.excl_end_date !== undefined ? patch.excl_end_date : (existing.excl_end_date ? ymdOf(existing.excl_end_date) : null),
+      excl_holidays: patch.excl_holidays !== undefined ? patch.excl_holidays : existing.excl_holidays,
+      excl_days: patch.excl_days !== undefined ? patch.excl_days : existing.excl_days,
       excl_heb_day: patch.excl_heb_day, excl_heb_month: patch.excl_heb_month,
       excl_end_heb_day: patch.excl_end_heb_day, excl_end_heb_month: patch.excl_end_heb_month,
     };
@@ -290,7 +343,7 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
     await conn.query(
       `UPDATE schedules SET on_day_of_week=?, on_time=?, on_anchor=?, on_offset_min=?,
         off_day_of_week=?, off_time=?, off_anchor=?, off_offset_min=?,
-        repeat_type=?, holidays=?, annual_date=?, annual_end_date=?, annual_calendar=?, excl_date=?, excl_end_date=?, excl_calendar=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
+        repeat_type=?, holidays=?, annual_date=?, annual_end_date=?, annual_calendar=?, excl_type=?, excl_date=?, excl_end_date=?, excl_calendar=?, excl_holidays=?, excl_days=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
        WHERE id = ?`,
       [s.on_day_of_week, s.on_time, s.on_anchor ?? 'clock', s.on_offset_min ?? 0,
         s.off_day_of_week, s.off_time, s.off_anchor ?? 'clock', s.off_offset_min ?? 0,
@@ -298,7 +351,8 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
         s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_end_date ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_calendar ?? null) : null,
-        s.excl_date ?? null, s.excl_end_date ?? null, s.excl_calendar ?? null,
+        s.excl_type ?? null, s.excl_date ?? null, s.excl_end_date ?? null, s.excl_calendar ?? null,
+        s.excl_holidays ?? null, s.excl_days ?? null,
         s.on_date ?? null, s.off_date ?? null, is_enabled, actor, scheduleId],
     );
     deviceIds.push(existing.device_id);
@@ -334,7 +388,8 @@ export async function listSchedules({ userId }) {
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,
             s.repeat_type, s.holidays, s.annual_date, s.annual_end_date, s.annual_calendar,
-            s.excl_date, s.excl_end_date, s.excl_calendar, s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
+            s.excl_type, s.excl_date, s.excl_end_date, s.excl_calendar, s.excl_holidays, s.excl_days,
+            s.on_date, s.off_date, s.is_enabled, s.created_via, s.created_at
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
      JOIN devices d ON d.id = r.device_id
@@ -399,9 +454,19 @@ export function describeScheduleHe(row) {
     }
     return dayMonth(d);
   };
-  const excl = row.excl_date
-    ? `, עם החרגה מ${exclDM(row.excl_date)} עד ${exclDM(row.excl_end_date || row.excl_date)}`
-    : '';
+  let excl = '';
+  if (row.excl_type === 'weekly') {
+    const days = String(row.excl_days || '').split(',').filter(Boolean).map((d) => DAY_NAMES_HE[d]).join(' ו');
+    if (days) excl = `, עם החרגה בימי ${days}`;
+  } else if (row.excl_type === 'holiday') {
+    const keys = String(row.excl_holidays || '').split(',').filter(Boolean);
+    const parts = [];
+    if (keys.includes('shabbat')) parts.push('בשבתות');
+    if (keys.some((k) => k !== 'shabbat')) parts.push('בחגים');
+    if (parts.length) excl = `, עם החרגה ${parts.join(' ו')}`;
+  } else if (row.excl_date) {
+    excl = `, עם החרגה מ${exclDM(row.excl_date)} עד ${exclDM(row.excl_end_date || row.excl_date)}`;
+  }
   const type = row.repeat_type === 'once' ? 'חד פעמי'
     : row.repeat_type === 'yearly' ? 'שנתי'
     : row.repeat_type === 'holiday' ? 'לחגים'

@@ -211,12 +211,71 @@ export function hebOnceDate(day, month, { tz = 'Asia/Jerusalem', now = new Date(
   throw errors.validation('לא נמצא מופע קרוב לתאריך', { once_heb_day: 'none' });
 }
 
-// Per-schedule החרגה: does a LOCAL date fall inside the schedule's own excluded
-// range? The range recurs yearly (Hebrew or civil, like the לפי־תאריך type) and
-// is stored as representative dates — occurrences are projected around the
-// tested date itself, so wrap-the-year ranges (אלול→תשרי) work too. Pure.
+// ── per-schedule החרגה — same type choices as the schedule itself ──
+
+// Chag-date memo per (keys, hebrew year) — the block test below is called per
+// occurrence/event and must stay cheap.
+const chagMemo = new Map();
+function chagSetFor(keys, hy) {
+  const k = `${keys.join(',')}|${hy}`;
+  let v = chagMemo.get(k);
+  if (!v) {
+    v = chagDates(keys, [hy]);
+    chagMemo.set(k, v);
+  }
+  return v;
+}
+
+// Is the date inside a שבת/חג block for the given keys — SAME days the include
+// type acts on: the merged protected run PLUS its erev (entry day). Erev is
+// deliberately included: evening events on erev land inside שבת/חג itself, and
+// for a Shabbat clock skipping them is the safe reading of "לא בשבת".
+function inHolidayBlock(keysCsv, dateStr) {
+  let keys;
+  try { keys = parseHolidayKeys(keysCsv); } catch { return false; }
+  const includeShabbat = keys.includes('shabbat');
+  const isChag = (dt) => {
+    const hy = new HDate(new Date(Date.UTC(dt.y, dt.mo - 1, dt.d, 12))).getFullYear();
+    return chagSetFor(keys, hy).has(dateKey(dt));
+  };
+  const isProtected = (dt) => isChag(dt) || dowOfDate(dt) === 7;
+  // The run containing d (or starting at d+1 when d is the erev). Runs are a
+  // few days at most — walking ±8 days is far more than enough.
+  const runSelected = (start) => {
+    let first = start;
+    while (isProtected(shiftDate(first, -1))) first = shiftDate(first, -1);
+    let hasChag = false;
+    let d = first;
+    for (let i = 0; i < 8 && isProtected(d); i++, d = shiftDate(d, 1)) hasChag = hasChag || isChag(d);
+    return hasChag || includeShabbat;
+  };
+  const p = ymdParts(dateStr);
+  if (isProtected(p)) return runSelected(p);
+  const next = shiftDate(p, 1);
+  if (isProtected(next)) return runSelected(next); // d is the erev
+  return false;
+}
+
+// Does a LOCAL date fall inside the schedule's own החרגה? Pure — projected from
+// the stored fields per excl_type:
+//   'yearly'  recurring date range (Hebrew or civil), representative dates —
+//             occurrences projected around the tested date, so wrap-the-year
+//             ranges (אלול→תשרי) work;
+//   'once'    concrete date range, no recurrence;
+//   'holiday' שבת/חג blocks (erev through exit) of the chosen excl_holidays keys;
+//   'weekly'  chosen days of week (CSV of 1–7).
 export function inExclusionRange(row, dateStr) {
-  if (!row || !row.excl_date) return false;
+  if (!row || !row.excl_type) return false;
+  if (row.excl_type === 'weekly') {
+    return String(row.excl_days || '').split(',').includes(String(dowOfDate(ymdParts(dateStr))));
+  }
+  if (row.excl_type === 'holiday') return inHolidayBlock(row.excl_holidays, dateStr);
+  if (!row.excl_date) return false;
+  if (row.excl_type === 'once') {
+    const from = ymdStr(ymdParts(row.excl_date));
+    const to = ymdStr(ymdParts(row.excl_end_date || row.excl_date));
+    return dateStr >= from && dateStr <= to;
+  }
   const p = ymdParts(dateStr);
   return yearlyRangesAround(row.excl_date, row.excl_end_date, row.excl_calendar, p, 2)
     .some((r) => dateStr >= ymdStr(r.on) && dateStr <= ymdStr(r.off));

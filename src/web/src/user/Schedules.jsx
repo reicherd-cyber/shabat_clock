@@ -56,8 +56,13 @@ export default function Schedules() {
   const sideTime = (s, p) => (s[`${p}_anchor`] && s[`${p}_anchor`] !== 'clock'
     ? `${anchorText(s[`${p}_anchor`], s[`${p}_offset_min`])} (≈${s[`${p}_time`]})`
     : s[`${p}_time`]);
-  // Per-schedule החרגה range, in its own calendar ("א׳ אב עד א׳ אלול" / "9.7–18.7").
+  // Per-schedule החרגה summary, per its type ("א׳ אב עד א׳ אלול", "בימי שלישי",
+  // "שבתות + כל החגים", "9.7–18.7").
   const exclRange = (s) => {
+    if (s.excl_type === 'weekly') {
+      return `בימי ${String(s.excl_days || '').split(',').filter(Boolean).map((d) => DAY_NAMES[d]).join(', ')}`;
+    }
+    if (s.excl_type === 'holiday') return holidaySummary(s.excl_holidays);
     const heb = s.excl_calendar === 'heb';
     const from = heb
       ? `${HEB_DAYS[(s.excl_heb_day || 1) - 1]} ${hebMonthLabel(s.excl_heb_month)}`
@@ -65,7 +70,8 @@ export default function Schedules() {
     const to = heb
       ? `${HEB_DAYS[(s.excl_end_heb_day || s.excl_heb_day || 1) - 1]} ${hebMonthLabel(s.excl_end_heb_month || s.excl_heb_month)}`
       : fmtDate(s.excl_end_date || s.excl_date);
-    return to !== from ? `${from} עד ${to}` : from;
+    const range = to !== from ? `${from} עד ${to}` : from;
+    return s.excl_type === 'yearly' ? `כל שנה ${range}` : range;
   };
   // Yearly range "ח׳ אב עד י׳ אב" (collapses to a single date when from = to).
   const yearlyRange = (s) => {
@@ -202,9 +208,9 @@ export default function Schedules() {
                     {s.repeat_type === 'holiday' && (
                       <small className="block font-normal text-muted text-[12.5px] mt-0.5">{holidaySummary(s.holidays)}</small>
                     )}
-                    {s.excl_date && (
+                    {s.excl_type && (
                       <small className="block font-normal text-[12.5px] mt-0.5" style={{ color: '#B45309' }}
-                        title="בתקופה זו התזמון לא יפעל">
+                        title="בזמני ההחרגה התזמון לא יפעל">
                         החרגה: {exclRange(s)}
                       </small>
                     )}

@@ -19,11 +19,13 @@ export const emptyForm = {
   // לפי תאריך (yearly, from→to range) + one-time date entry: Hebrew or civil calendar
   annual_calendar: 'heb', once_calendar: 'greg', heb_day: 1, heb_month: 7,
   heb_day_to: 1, heb_month_to: 7, end_date: '',
-  // Per-schedule החרגה: optional yearly-recurring date range in which THIS
-  // schedule doesn't fire (not for one-time schedules). Default אב→אלול-ish.
-  excl_on: false, excl_calendar: 'heb',
+  // Per-schedule החרגה: optional times in which THIS schedule doesn't fire —
+  // same type choices as the schedule itself (not for one-time schedules).
+  excl_on: false, excl_type: 'yearly', excl_calendar: 'heb',
   excl_heb_day: 1, excl_heb_month: 5, excl_heb_day_to: 1, excl_heb_month_to: 6,
   excl_date: '', excl_end_date: '',
+  excl_holidays: ['shabbat', 'rosh_hashana', 'yom_kippur', 'sukkot', 'shemini_atzeret', 'pesach_1', 'pesach_7', 'shavuot'],
+  excl_days: [],
 };
 
 // Day-order — the select renders in this order.
@@ -129,7 +131,8 @@ export const rowToForm = (s) => ({
   end_date: s.repeat_type === 'yearly'
     ? String(s.annual_end_date || s.annual_date).slice(0, 10)
     : '',
-  excl_on: Boolean(s.excl_date),
+  excl_on: Boolean(s.excl_type),
+  excl_type: s.excl_type || 'yearly',
   excl_calendar: s.excl_calendar || 'heb',
   excl_heb_day: s.excl_heb_day || 1, excl_heb_month: s.excl_heb_month || 5,
   excl_heb_day_to: s.excl_end_heb_day || s.excl_heb_day || 1,
@@ -137,6 +140,10 @@ export const rowToForm = (s) => ({
   excl_date: s.excl_date ? String(s.excl_date).slice(0, 10) : '',
   excl_end_date: s.excl_end_date ? String(s.excl_end_date).slice(0, 10)
     : (s.excl_date ? String(s.excl_date).slice(0, 10) : ''),
+  excl_holidays: s.excl_type === 'holiday'
+    ? String(s.excl_holidays || '').split(',').filter(Boolean)
+    : [...emptyForm.excl_holidays],
+  excl_days: String(s.excl_days || '').split(',').filter(Boolean).map(Number),
   // A stored pair whose OFF lands before its ON re-opens as כיבוי והדלקה.
   mode: s.on_time && s.off_time
     ? ((s.repeat_type === 'once'
@@ -248,23 +255,28 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
         off_time: null, off_day_of_week: null, off_date: null, off_anchor: 'clock', off_offset_min: 0,
       }
       : { relay_id: Number(form.relay_id), repeat_type: form.repeat_type };
-    // Per-schedule החרגה: send the range (Hebrew picks or civil dates); editing
-    // with the fold closed sends explicit nulls so the server clears it.
+    // Per-schedule החרגה: send the chosen type's fields; editing with the fold
+    // closed sends an explicit null type so the server clears the whole group.
     if (form.repeat_type !== 'once' && form.excl_on) {
-      b.excl_calendar = form.excl_calendar;
-      if (form.excl_calendar === 'heb') {
-        b.excl_heb_day = Number(form.excl_heb_day);
-        b.excl_heb_month = Number(form.excl_heb_month);
-        b.excl_end_heb_day = Number(form.excl_heb_day_to);
-        b.excl_end_heb_month = Number(form.excl_heb_month_to);
+      b.excl_type = form.excl_type;
+      if (form.excl_type === 'weekly') {
+        b.excl_days = form.excl_days.map(Number);
+      } else if (form.excl_type === 'holiday') {
+        b.excl_holidays = form.excl_holidays;
       } else {
-        b.excl_date = form.excl_date;
-        b.excl_end_date = form.excl_end_date || form.excl_date;
+        b.excl_calendar = form.excl_calendar;
+        if (form.excl_calendar === 'heb') {
+          b.excl_heb_day = Number(form.excl_heb_day);
+          b.excl_heb_month = Number(form.excl_heb_month);
+          b.excl_end_heb_day = Number(form.excl_heb_day_to);
+          b.excl_end_heb_month = Number(form.excl_heb_month_to);
+        } else {
+          b.excl_date = form.excl_date;
+          b.excl_end_date = form.excl_end_date || form.excl_date;
+        }
       }
     } else if (form.id) {
-      b.excl_calendar = null;
-      b.excl_date = null;
-      b.excl_end_date = null;
+      b.excl_type = null;
     }
     if (isAnnual) {
       b.annual_calendar = form.annual_calendar;
@@ -569,43 +581,105 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
               {form.excl_on && (
                 <div className="px-3 pb-3 pt-2 space-y-2 border-t border-line">
                   <p className="text-xs text-muted">
-                    בתקופה זו התזמון לא יפעל כלל (גם לא כיבויים), ויחזור לפעול מעצמו בסיומה. חוזר כל שנה.
+                    בזמני ההחרגה התזמון לא יפעל כלל (גם לא כיבויים), ויחזור לפעול מעצמו אחריהם.
                   </p>
-                  <div className="flex items-center gap-3 flex-wrap">
-                    {[{ v: 'heb', label: 'תאריך עברי' }, { v: 'greg', label: 'תאריך לועזי' }].map((o) => (
-                      <label key={o.v} className="flex items-center gap-1 text-sm">
-                        <input type="radio" name="excl_calendar" checked={form.excl_calendar === o.v}
-                          onChange={() => setForm({
-                            ...form, excl_calendar: o.v,
-                            ...(o.v === 'greg' && !form.excl_date ? { excl_date: todayYmd(), excl_end_date: todayYmd() } : {}),
-                          })} />
-                        {o.label}
-                      </label>
+                  {/* the same type choices as the schedule itself */}
+                  <div className="flex gap-1.5 flex-wrap">
+                    {[{ v: 'weekly', label: 'שבועי' }, { v: 'once', label: 'חד-פעמי' },
+                      { v: 'yearly', label: 'לפי תאריך' }, { v: 'holiday', label: 'שבת וחגים' }].map((t) => (
+                      <Button key={t.v} variant={form.excl_type === t.v ? 'primary' : 'ghost'} className="!px-2.5 !py-1 text-xs"
+                        onClick={() => setForm({
+                          ...form, excl_type: t.v,
+                          ...(t.v === 'once' && form.excl_calendar === 'greg' && !form.excl_date
+                            ? { excl_date: todayYmd(), excl_end_date: todayYmd() } : {}),
+                        })}>{t.label}</Button>
                     ))}
                   </div>
-                  {['from', 'to'].map((end) => {
-                    const dayKey = end === 'from' ? 'excl_heb_day' : 'excl_heb_day_to';
-                    const monthKey = end === 'from' ? 'excl_heb_month' : 'excl_heb_month_to';
-                    const dateKey = end === 'from' ? 'excl_date' : 'excl_end_date';
-                    return (
-                      <div key={end} className="flex items-center gap-2">
-                        <span className="text-sm text-muted w-14 shrink-0">{end === 'from' ? 'מתאריך' : 'עד'}</span>
-                        {form.excl_calendar === 'heb' ? (
-                          <>
-                            <Select value={form[dayKey]} onChange={(e) => setForm({ ...form, [dayKey]: e.target.value })}>
-                              {HEB_DAYS.map((n, i) => <option key={i + 1} value={i + 1}>{n}</option>)}
-                            </Select>
-                            <span className="text-sm text-muted">ב</span>
-                            <Select value={form[monthKey]} onChange={(e) => setForm({ ...form, [monthKey]: e.target.value })}>
-                              {HEB_MONTHS.map((m) => <option key={m.v} value={m.v}>{m.label}</option>)}
-                            </Select>
-                          </>
-                        ) : (
-                          <Input type="date" value={form[dateKey]} onChange={(e) => setForm({ ...form, [dateKey]: e.target.value })} />
-                        )}
+                  {form.excl_type === 'weekly' && (
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                      {Object.entries(DAY_NAMES).map(([v, n]) => (
+                        <label key={v} className="flex items-center gap-1.5 text-sm">
+                          <input type="checkbox" checked={form.excl_days.includes(Number(v))}
+                            onChange={() => setForm({
+                              ...form,
+                              excl_days: form.excl_days.includes(Number(v))
+                                ? form.excl_days.filter((d) => d !== Number(v))
+                                : [...form.excl_days, Number(v)],
+                            })} /> {n}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  {form.excl_type === 'holiday' && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted">כולל ערב החג — מהכניסה ועד היציאה</span>
+                        <Button variant="ghost" className="!px-2 !py-0.5 text-xs"
+                          onClick={() => setForm({
+                            ...form,
+                            excl_holidays: form.excl_holidays.length === ALL_HOLIDAYS.length ? [] : [...ALL_HOLIDAYS],
+                          })}>
+                          {form.excl_holidays.length === ALL_HOLIDAYS.length ? 'נקה הכל' : 'בחר הכל'}
+                        </Button>
                       </div>
-                    );
-                  })}
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                        {Object.entries(HOLIDAY_NAMES).map(([k, n]) => (
+                          <label key={k} className="flex items-center gap-1.5 text-sm">
+                            <input type="checkbox" checked={form.excl_holidays.includes(k)}
+                              onChange={() => setForm({
+                                ...form,
+                                excl_holidays: form.excl_holidays.includes(k)
+                                  ? form.excl_holidays.filter((x) => x !== k)
+                                  : [...form.excl_holidays, k],
+                              })} /> {n}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {(form.excl_type === 'yearly' || form.excl_type === 'once') && (
+                    <>
+                      <div className="flex items-center gap-3 flex-wrap">
+                        {form.excl_type === 'yearly' && <span className="text-xs text-muted">חוזר כל שנה —</span>}
+                        {[{ v: 'heb', label: 'תאריך עברי' }, { v: 'greg', label: 'תאריך לועזי' }].map((o) => (
+                          <label key={o.v} className="flex items-center gap-1 text-sm">
+                            <input type="radio" name="excl_calendar" checked={form.excl_calendar === o.v}
+                              onChange={() => setForm({
+                                ...form, excl_calendar: o.v,
+                                ...(o.v === 'greg' && !form.excl_date ? { excl_date: todayYmd(), excl_end_date: todayYmd() } : {}),
+                              })} />
+                            {o.label}
+                          </label>
+                        ))}
+                      </div>
+                      {['from', 'to'].map((end) => {
+                        const dayKey = end === 'from' ? 'excl_heb_day' : 'excl_heb_day_to';
+                        const monthKey = end === 'from' ? 'excl_heb_month' : 'excl_heb_month_to';
+                        const dateKey = end === 'from' ? 'excl_date' : 'excl_end_date';
+                        return (
+                          <div key={end} className="flex items-center gap-2">
+                            <span className="text-sm text-muted w-14 shrink-0">{end === 'from' ? 'מתאריך' : 'עד'}</span>
+                            {form.excl_calendar === 'heb' ? (
+                              <>
+                                <Select value={form[dayKey]} onChange={(e) => setForm({ ...form, [dayKey]: e.target.value })}>
+                                  {HEB_DAYS.map((n, i) => <option key={i + 1} value={i + 1}>{n}</option>)}
+                                </Select>
+                                <span className="text-sm text-muted">ב</span>
+                                <Select value={form[monthKey]} onChange={(e) => setForm({ ...form, [monthKey]: e.target.value })}>
+                                  {HEB_MONTHS.map((m) => <option key={m.v} value={m.v}>{m.label}</option>)}
+                                </Select>
+                              </>
+                            ) : (
+                              <Input type="date" value={form[dateKey]} onChange={(e) => setForm({ ...form, [dateKey]: e.target.value })} />
+                            )}
+                          </div>
+                        );
+                      })}
+                      {form.excl_type === 'once' && form.excl_calendar === 'heb' && (
+                        <span className="text-xs text-muted">— המופע הקרוב של התאריכים</span>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -626,7 +700,10 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
             disabled={busy || (!form.id && !form.relay_ids.length)
               || (form.repeat_type === 'yearly' && form.annual_calendar === 'greg'
                 && ((form.mode !== 'off' && !form.on_date) || (form.mode !== 'on' && !form.end_date)))
-              || (form.repeat_type !== 'once' && form.excl_on && form.excl_calendar === 'greg' && !form.excl_date)}
+              || (form.repeat_type !== 'once' && form.excl_on && (
+                ((form.excl_type === 'yearly' || form.excl_type === 'once') && form.excl_calendar === 'greg' && !form.excl_date)
+                || (form.excl_type === 'weekly' && !form.excl_days.length)
+                || (form.excl_type === 'holiday' && !form.excl_holidays.length)))}
             onClick={save}>
             {form.id ? 'שמור שינויים'
               : form.relay_ids.length > 1 ? `שמור תזמון ל־${form.relay_ids.length} ערוצים` : 'שמור תזמון'}

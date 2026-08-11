@@ -35,7 +35,8 @@ export async function buildDevicePayload(deviceId) {
   const schedules = await query(
     `SELECT s.id, s.on_day_of_week, s.on_time, s.off_day_of_week, s.off_time,
             s.repeat_type, s.on_date, s.off_date, r.relay_no,
-            DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date, s.excl_calendar
+            s.excl_type, DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date,
+            s.excl_calendar, s.excl_holidays, s.excl_days
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
      WHERE r.device_id = ? AND s.is_enabled = TRUE AND s.deleted_at IS NULL
@@ -54,11 +55,16 @@ export async function buildDevicePayload(deviceId) {
   const once = [];
   for (const s of schedules) {
     if (s.repeat_type === 'weekly') {
-      if (inExclusionRange(s, today)) continue;
+      // A fixed-day entry under a weekly-type החרגה drops statically (the day
+      // itself is excluded every week); anything else drops while the exclusion
+      // covers device-local today.
+      const entryExcluded = (day) => (s.excl_type === 'weekly' && day !== 0
+        ? String(s.excl_days || '').split(',').includes(String(day))
+        : inExclusionRange(s, today));
       // [D5] 0 on the wire = daily (NULL in DB). One-sided weekly contributes a
       // single entry — the wire format is unchanged, entries were always independent.
-      if (s.on_time) events.push({ sid: Number(s.id), relay: s.relay_no, day: s.on_day_of_week ?? 0, time: hhmm(s.on_time), action: 'on' });
-      if (s.off_time) events.push({ sid: Number(s.id), relay: s.relay_no, day: s.off_day_of_week ?? 0, time: hhmm(s.off_time), action: 'off' });
+      if (s.on_time && !entryExcluded(s.on_day_of_week ?? 0)) events.push({ sid: Number(s.id), relay: s.relay_no, day: s.on_day_of_week ?? 0, time: hhmm(s.on_time), action: 'on' });
+      if (s.off_time && !entryExcluded(s.off_day_of_week ?? 0)) events.push({ sid: Number(s.id), relay: s.relay_no, day: s.off_day_of_week ?? 0, time: hhmm(s.off_time), action: 'off' });
     } else {
       // One-sided 'once' contributes a single entry — the wire format is unchanged,
       // each entry was always an independent action.
