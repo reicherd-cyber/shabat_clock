@@ -68,6 +68,7 @@ export const TimeInput = ({ value, onChange, className = '', ...props }) => {
     return () => window.removeEventListener('time-format-changed', f);
   }, []);
   const [draft, setDraft] = useState(value || '');
+  const [focused, setFocused] = useState(false);
   useEffect(() => { setDraft(value || ''); }, [value]);
   const commit = () => {
     const digits = String(draft).replace(/\D/g, '');
@@ -90,11 +91,12 @@ export const TimeInput = ({ value, onChange, className = '', ...props }) => {
   }
   return (
     <input
-      dir="ltr" inputMode="numeric" placeholder="18:00" maxLength={5}
+      dir="ltr" inputMode="numeric" placeholder={focused ? '' : '18:00'} maxLength={5}
       className={`border border-line rounded-[10px] px-3 py-2.5 bg-surface w-full text-center focus:outline-none focus:border-accent ${className}`}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
+      onFocus={() => { setFocused(true); setDraft(''); }}
+      onBlur={() => { setFocused(false); commit(); }}
       onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
       {...props}
     />
