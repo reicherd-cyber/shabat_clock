@@ -41,13 +41,23 @@ export function ask(spec, { min = 1, max = 1, message = null } = {}) {
 // 6=max-digits, 7=engine, 8=max-silence-sec, 9=max-record-sec.
 // Yemot's default engine is the menu-word detector, tuned for short phrases — on long
 // sentences it gives up with its own "לא זוהה דיבור". engine=record records the whole
-// utterance (up to maxSeconds, ended by maxSilence of quiet) and transcribes that, so
-// long/compound orders survive.
-export function askVoice(spec, { varName = 'nlu', lang = 'he-IL', message = null, maxSilence = 3, maxSeconds = 30 } = {}) {
+// utterance (up to maxSeconds, ended by maxSilence of quiet — or instantly with the
+// standard Yemot #, which needs DTMF unblocked, hence the empty 5th position) and
+// transcribes that, so long/compound orders survive.
+export function askVoice(spec, { varName = 'nlu', lang = 'he-IL', message = null, maxSilence = 2, maxSeconds = 30 } = {}) {
   const parts = [];
   if (message) parts.push(`id_list_message=${data(message)}`);
-  parts.push(`read=${data(spec)}=${varName},,voice,${lang},no,,record,${maxSilence},${maxSeconds}`);
+  parts.push(`read=${data(spec)}=${varName},,voice,${lang},,,record,${maxSilence},${maxSeconds}`);
   return parts.join('&');
+}
+
+// Play a message, then jump to a folder. With goto pointing back at the API
+// extension itself this is the "one moment please" building block: the message
+// plays while re-entry forces Yemot to request the next command — a standalone
+// id_list_message does NOT reliably trigger such a poll (real calls, 2026-08-12:
+// sometimes "הפקודה לא קיימת" + drop), so always chain the goto.
+export function say(spec, { goto = '/' } = {}) {
+  return `id_list_message=${data(spec)}&go_to_folder=${goto}`;
 }
 
 // Play a message and hang up.

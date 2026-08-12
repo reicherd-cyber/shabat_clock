@@ -13,7 +13,7 @@ import { logAction } from '../services/audit.js';
 import { startCall, setCallUser, appendPath, finishCall } from '../services/callLogs.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, createSession, endSession } from './session.js';
-import { ask, askVoice, sayAndHangup } from './responses.js';
+import { ask, askVoice, say, sayAndHangup } from './responses.js';
 import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
 import { localParts, shiftDate } from '../services/time.js';
@@ -102,6 +102,39 @@ async function nluConfirmItems(actions) {
   }
   items.push(...await speak('ivr.nlu_confirm', {}, 'להקיש 1 לאישור, 2 לביטול'));
   return items;
+}
+
+// Interpretation finished — build the next IVR response: confirmation read, guided
+// re-listen, or error. Shared by the fast inline path (model answered within the
+// ack window) and the NLU_WAIT poll-back path.
+async function nluDeliver(session, out) {
+  if (!out.ok) {
+    console.error('IVR NLU interpret error:', out.e);
+    return mainMenu(session, await speak('ivr.nlu_parse_error', {}, 'אירעה שגיאה בפירוש הבקשה, נסו שוב'));
+  }
+  const interp = out.r;
+  if (!interp.understood) {
+    await appendPath(session.callLogId, 'nlu_fail');
+    // Re-listen right away (clarification as the prompt) instead of a main-menu
+    // round-trip; after two misses fall back to the menu so nobody loops forever.
+    // Keep the garbled transcript — the next attempt is interpreted with both
+    // texts, which doubles the phonetic evidence Claude can recover from.
+    session.data.nluPrev = session.data.nluSpoken;
+    session.data.nluRetries = (session.data.nluRetries || 0) + 1;
+    session.state = 'NLU_LISTEN';
+    if (session.data.nluRetries <= 2) {
+      return askVoice([{ t: interp.clarification }]);
+    }
+    return mainMenu(session, [{ t: interp.clarification }]);
+  }
+  session.data.nluActions = interp.actions;
+  session.data.nluTz = interp.tz;
+  session.state = 'NLU_CONFIRM';
+  // Partial understanding: read the "couldn't find X" note before the actions
+  // that did parse, so the caller knows what the confirmation does NOT cover.
+  const confirmItems = await nluConfirmItems(interp.actions);
+  if (interp.clarification) confirmItems.unshift({ t: interp.clarification });
+  return ask(confirmItems);
 }
 
 export const ivrRouter = Router();
@@ -452,8 +485,10 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
             session.state = 'NLU_LISTEN';
             session.data.nluRetries = 0;
             session.data.nluPrev = null;
-            return res.send(askVoice(await speak('ivr.nlu_listen', {},
-              'אמרו את הבקשה לאחר הצפצוף, למשל: כבה את הסלון בעוד חמש דקות')));
+            return res.send(askVoice([
+              ...await speak('ivr.nlu_listen', {}, 'אמרו את הבקשה לאחר הצפצוף, למשל: כבה את הסלון בעוד חמש דקות'),
+              { t: 'בסיום אפשר להקיש סולמית' },
+            ]));
           }
           if (input === '2' || input === '3') {
             await appendPath(session.callLogId, input === '2' ? 'immediate_on' : 'immediate_off');
@@ -495,37 +530,32 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           }
           return res.send(await mainMenu(session, await speak('ivr.nlu_giveup', {}, 'לא זוהה דיבור, חוזרים לתפריט הראשי')));
         }
-        let interp;
-        try {
-          interp = await interpretCommand({
-            userId: session.userId, text: spoken, phone: session.phone,
-            prevText: session.data.nluPrev || null,
-          });
-        } catch (e) {
-          console.error('IVR NLU interpret error:', e);
-          return res.send(await mainMenu(session, await speak('ivr.nlu_parse_error', {}, 'אירעה שגיאה בפירוש הבקשה, נסו שוב')));
+        // Interpret and answer inline when the model is quick (the usual ~3s).
+        // Past 20s a spoken ack goes out so the caller knows we're still working,
+        // and the result is delivered on Yemot's poll-back (NLU_WAIT).
+        session.data.nluSpoken = spoken;
+        const pending = interpretCommand({
+          userId: session.userId, text: spoken, phone: session.phone,
+          prevText: session.data.nluPrev || null,
+        }).then((r) => ({ ok: true, r }), (e) => ({ ok: false, e }));
+        let ackTimer;
+        const first = await Promise.race([
+          pending,
+          new Promise((resolve) => { ackTimer = setTimeout(resolve, 20_000, null); }),
+        ]);
+        clearTimeout(ackTimer);
+        if (first === null) {
+          session.data.nluPromise = pending;
+          session.state = 'NLU_WAIT';
+          return res.send(say(await speak('ivr.nlu_thinking', {}, 'קיבלתי, מעבד את הבקשה')));
         }
-        if (!interp.understood) {
-          await appendPath(session.callLogId, 'nlu_fail');
-          // Re-listen right away (clarification as the prompt) instead of a main-menu
-          // round-trip; after two misses fall back to the menu so nobody loops forever.
-          // Keep the garbled transcript — the next attempt is interpreted with both
-          // texts, which doubles the phonetic evidence Claude can recover from.
-          session.data.nluPrev = spoken;
-          session.data.nluRetries = (session.data.nluRetries || 0) + 1;
-          if (session.data.nluRetries <= 2) {
-            return res.send(askVoice([{ t: interp.clarification }]));
-          }
-          return res.send(await mainMenu(session, [{ t: interp.clarification }]));
-        }
-        session.data.nluActions = interp.actions;
-        session.data.nluTz = interp.tz;
-        session.state = 'NLU_CONFIRM';
-        // Partial understanding: read the "couldn't find X" note before the actions
-        // that did parse, so the caller knows what the confirmation does NOT cover.
-        const confirmItems = await nluConfirmItems(interp.actions);
-        if (interp.clarification) confirmItems.unshift({ t: interp.clarification });
-        return res.send(ask(confirmItems));
+        return res.send(await nluDeliver(session, first));
+      }
+      case 'NLU_WAIT': {
+        const pending = session.data.nluPromise;
+        session.data.nluPromise = null;
+        if (!pending) return res.send(await mainMenu(session));
+        return res.send(await nluDeliver(session, await pending));
       }
       case 'NLU_CONFIRM': {
         if (input === '2') return res.send(await mainMenu(session));
