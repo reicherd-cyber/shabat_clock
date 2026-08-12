@@ -451,6 +451,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
             await appendPath(session.callLogId, 'nlu');
             session.state = 'NLU_LISTEN';
             session.data.nluRetries = 0;
+            session.data.nluPrev = null;
             return res.send(askVoice(await speak('ivr.nlu_listen', {},
               'אמרו את הבקשה לאחר הצפצוף, למשל: כבה את הסלון בעוד חמש דקות')));
           }
@@ -484,10 +485,22 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       case 'NLU_LISTEN': {
         const rawNlu = req.query.nlu;
         const spoken = String(Array.isArray(rawNlu) ? rawNlu[rawNlu.length - 1] : (rawNlu ?? '')).trim();
-        if (!spoken) return res.send(await invalidInput(session));
+        if (!spoken) {
+          // Yemot's STT returned nothing — guide and listen again (the generic
+          // invalidInput talks about digits, which only confuses here).
+          session.data.nluRetries = (session.data.nluRetries || 0) + 1;
+          if (session.data.nluRetries <= 2) {
+            return res.send(askVoice(await speak('ivr.nlu_not_heard', {},
+              'לא שמעתי, אפשר לומר את הבקשה שוב לאחר הצפצוף, לאט וברור')));
+          }
+          return res.send(await mainMenu(session, await speak('ivr.nlu_giveup', {}, 'לא זוהה דיבור, חוזרים לתפריט הראשי')));
+        }
         let interp;
         try {
-          interp = await interpretCommand({ userId: session.userId, text: spoken, phone: session.phone });
+          interp = await interpretCommand({
+            userId: session.userId, text: spoken, phone: session.phone,
+            prevText: session.data.nluPrev || null,
+          });
         } catch (e) {
           console.error('IVR NLU interpret error:', e);
           return res.send(await mainMenu(session, await speak('ivr.nlu_parse_error', {}, 'אירעה שגיאה בפירוש הבקשה, נסו שוב')));
@@ -496,6 +509,9 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           await appendPath(session.callLogId, 'nlu_fail');
           // Re-listen right away (clarification as the prompt) instead of a main-menu
           // round-trip; after two misses fall back to the menu so nobody loops forever.
+          // Keep the garbled transcript — the next attempt is interpreted with both
+          // texts, which doubles the phonetic evidence Claude can recover from.
+          session.data.nluPrev = spoken;
           session.data.nluRetries = (session.data.nluRetries || 0) + 1;
           if (session.data.nluRetries <= 2) {
             return res.send(askVoice([{ t: interp.clarification }]));
@@ -505,7 +521,11 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         session.data.nluActions = interp.actions;
         session.data.nluTz = interp.tz;
         session.state = 'NLU_CONFIRM';
-        return res.send(ask(await nluConfirmItems(interp.actions)));
+        // Partial understanding: read the "couldn't find X" note before the actions
+        // that did parse, so the caller knows what the confirmation does NOT cover.
+        const confirmItems = await nluConfirmItems(interp.actions);
+        if (interp.clarification) confirmItems.unshift({ t: interp.clarification });
+        return res.send(ask(confirmItems));
       }
       case 'NLU_CONFIRM': {
         if (input === '2') return res.send(await mainMenu(session));

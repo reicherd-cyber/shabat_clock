@@ -74,7 +74,7 @@ async function logUsage({ userId, phone, text, model, usage }) {
   );
 }
 
-function buildSystemPrompt(relays, schedules, tz, nowParts) {
+function buildSystemPrompt(relays, schedules, tz, nowParts, prevText) {
   const list = relays
     .map((r) => `- relay_id ${r.id}: "${r.name}" (מכשיר: "${r.device_name}", מצב נוכחי: ${r.current_state === 'on' ? 'דולק' : 'כבוי'})`)
     .join('\n');
@@ -92,6 +92,9 @@ ${list}
 ${schedList}
 
 הטקסט מגיע מזיהוי דיבור טלפוני באיכות ירודה — מילים עשויות להגיע משובשות אך דומות פונטית לבקשה האמיתית (למשל "אבל זה כלום עכשיו" הוא שיבוש של "כבה את הסלון עכשיו"). לפני שאתה מוותר, נסה לשחזר את הבקשה הסבירה ביותר לפי דמיון צלילי לשמות הממסרים ולפעולות הדלקה/כיבוי/תזמון. אם השחזור ברור מספיק — פרש אותו כרגיל.
+${prevText ? `
+בניסיון קודם באותה שיחה המשתמש אמר (תמלול משובש שלא הובן): «${prevText}». הבקשה הנוכחית היא ניסוח מחדש של אותה כוונה — השתמש בשני התמלולים יחד כדי לשחזר אותה.
+` : ''}
 
 המר את בקשת המשתמש לפעולות מובנות:
 - "immediate" = הדלקה/כיבוי מיד (action: on/off).
@@ -99,21 +102,25 @@ ${schedList}
 - "recurring" = תזמון קבוע שחוזר: "כל יום ב..." → on_day/off_day = null; "כל יום שלישי" → יום בשבוע (1=ראשון, 2=שני, 3=שלישי, 4=רביעי, 5=חמישי, 6=שישי, 7=שבת). מלא on_time/off_time בפורמט HH:MM. מותר צד אחד בלבד (רק הדלקה או רק כיבוי) — השאר את הצד השני null. ההבחנה: "מחר בשמונה" = timed; "כל יום בשמונה" / "בכל שבת" = recurring.
 - "delete_schedule" = מחיקת תזמון קיים: בחר schedule_id מרשימת התזמונים למעלה לפי ההתאמה הטובה ביותר לתיאור המשתמש (ממסר, סוג, שעות). אם הבקשה מכוונת לכמה תזמונים ("תמחק את כל התזמונים של הדוד") — החזר פעולת מחיקה לכל אחד מהם.
 - בחר relay_id רק מהרשימה למעלה. התאם לפי שם הממסר (למשל "סלון", "מטבח") גם אם הניסוח חלקי.
+- בקשה אחת יכולה להכיל כמה פעולות — פרק משפט מורכב לכל חלקיו והחזר פעולה נפרדת לכל חלק. למשל "תדליק את הדוד בשש ותכבה את הסלון בעוד עשר דקות" = שתי פעולות; "תדליק את הדוד מעכשיו עד שמונה" = הדלקה מיידית + כיבוי timed בשעה 20:00; "כל יום שישי תדליק את הפלטה בארבע ותכבה במוצאי שבת בעשר" = recurring אחד עם שני צדדים.
+- אל תוותר על חלק מהבקשה: אם הבנת רק חלק — החזר את הפעולות שהבנת עם understood=true, וב-clarification ציין בקצרה ובלי לשאול מה מהבקשה לא הובן או לא נמצא (למשל, שים לב, לא מצאתי ממסר בשם דוד). המשפט הזה יוקרא לפני הקראת הפעולות לאישור. אם הכל הובן — clarification=null.
 - המשתמש תמיד מאשר את הפעולה לפני ביצוע, לכן עדיף ניחוש סביר שיוצג לאישור מאשר שאלה. אם יש פירוש סביר אחד — החזר אותו כפעולה עם understood=true. לעולם אל תשאל "האם התכוונת ל..." ב-clarification.
-- קבע understood=false רק כשאין שום פירוש סביר; ה-clarification צריך רק לבקש לנסח מחדש בקצרה (המערכת תקשיב שוב מיד).
+- קבע understood=false רק כשאין שום פירוש סביר. במקרה כזה ה-clarification חייב להדריך את המשתמש לאפשרות הקרובה ביותר, לא רק לבקש לנסות שוב: ציין מה כן נקלט אם נקלט משהו, הזכר את שם הממסר הקרוב ביותר למה שנשמע, ותן דוגמת ניסוח קצרה ומלאה עם שם ממסר אמיתי מהרשימה, למשל, אפשר לומר, הדלק את הדוד בשש בערב. המשפט יוקרא בטלפון והמערכת תקשיב שוב מיד — בלי סימני שאלה, בלי גרשיים, בלי נקודתיים ובלי נקודות (פסיקים במקום).
 - שדות שאינם רלוונטיים לסוג הפעולה — השאר null.`;
 }
 
 // Returns { understood, clarification, actions: [{ relay_id, relay_name, kind,
 // action, time, day, summary }] } — enriched with the relay name and a Hebrew
 // summary line for the confirmation UI. Throws if the feature isn't configured.
-export async function interpretCommand({ userId, text, phone = null }) {
+export async function interpretCommand({ userId, text, phone = null, prevText = null }) {
   if (!env.anthropic.apiKey) {
     throw errors.validation('פירוש פקודות קוליות אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
   }
   const clean = String(text || '').trim();
   if (!clean) throw errors.validation('לא הוזן טקסט');
-  if (clean.length > 500) throw errors.validation('הטקסט ארוך מדי');
+  // Record-engine STT allows up to ~30s of speech — a long order transcribes to a
+  // few hundred chars, so the guard only needs to stop runaway garbage.
+  if (clean.length > 1000) throw errors.validation('הטקסט ארוך מדי');
 
   const relays = await query(
     `SELECT r.id, r.name, r.current_state, d.name AS device_name, d.timezone
@@ -131,12 +138,13 @@ export async function interpretCommand({ userId, text, phone = null }) {
 
   const response = await client.messages.create({
     model: env.anthropic.model,
-    max_tokens: 1024,
+    // Compound orders return several actions — 1024 could truncate the JSON mid-array.
+    max_tokens: 2048,
     // Thinking off: the caller is waiting on a live phone line, and with it on
-    // (Sonnet 5 default) thinking tokens can eat the 1024 budget before the JSON.
+    // (Sonnet 5 default) thinking tokens can eat the budget before the JSON.
     thinking: { type: 'disabled' },
     output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-    system: buildSystemPrompt(relays, schedules, tz, nowParts),
+    system: buildSystemPrompt(relays, schedules, tz, nowParts, prevText),
     messages: [{ role: 'user', content: clean }],
   });
 
@@ -204,10 +212,13 @@ export async function interpretCommand({ userId, text, phone = null }) {
     });
   }
 
-  const understood = Boolean(parsed.understood) && actions.length > 0;
+  // Anything that survived validation is worth confirming — even when Claude marked
+  // the request only partially understood. clarification then rides along as a note
+  // ("לא מצאתי ממסר בשם...") that the IVR reads before the confirmation items.
+  const understood = actions.length > 0;
   return {
     understood,
-    clarification: understood ? null : (parsed.clarification || 'לא הבנתי את הבקשה. נסו לנסח אחרת.'),
+    clarification: parsed.clarification || (understood ? null : 'לא הבנתי את הבקשה. נסו לנסח אחרת.'),
     actions,
     tz, // device-local zone, so callers (e.g. the IVR) can resolve today/tomorrow dates
   };

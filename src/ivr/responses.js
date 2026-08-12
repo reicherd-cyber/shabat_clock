@@ -36,14 +36,17 @@ export function ask(spec, { min = 1, max = 1, message = null } = {}) {
 
 // Speech-to-text prompt (Yemot voice recognition — costs units like a call).
 // Per Yemot API-extension docs the read type 'voice' captures speech and returns the
-// recognized text in the named query param instead of digits:
-//   read=<prompt>=<var>,,voice,<lang>,no   (var empty-2nd, type voice, language, no-digits)
-// The exact param order is verified against a real call (see the temp trace in
-// router.js NLU_LISTEN) since Yemot's positional syntax has bitten us before.
-export function askVoice(spec, { varName = 'nlu', lang = 'he-IL', message = null } = {}) {
+// recognized text in the named query param instead of digits. Positional params after
+// the var name (per the docs' numbered list): 2=re-enter, 3=type, 4=lang, 5=block-DTMF,
+// 6=max-digits, 7=engine, 8=max-silence-sec, 9=max-record-sec.
+// Yemot's default engine is the menu-word detector, tuned for short phrases — on long
+// sentences it gives up with its own "לא זוהה דיבור". engine=record records the whole
+// utterance (up to maxSeconds, ended by maxSilence of quiet) and transcribes that, so
+// long/compound orders survive.
+export function askVoice(spec, { varName = 'nlu', lang = 'he-IL', message = null, maxSilence = 3, maxSeconds = 30 } = {}) {
   const parts = [];
   if (message) parts.push(`id_list_message=${data(message)}`);
-  parts.push(`read=${data(spec)}=${varName},,voice,${lang},no`);
+  parts.push(`read=${data(spec)}=${varName},,voice,${lang},no,,record,${maxSilence},${maxSeconds}`);
   return parts.join('&');
 }
 
