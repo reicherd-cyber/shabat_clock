@@ -38,6 +38,14 @@ function reloadBroker() {
 // mode that burned both real onboardings so far.
 const SNTP_SERVERS = ['pool.ntp.org', 'time.google.com', 'time.cloudflare.com'];
 
+// mDNS hostname prefixes by model family — the device announces itself as
+// <model>-<mac>.local, so discovery tries each known model until one answers.
+// The MQTT topic_prefix/client_id stays 'shellypro2-<mac>' for ALL models: it's
+// a label our scripts write onto the device and the server/ACL expect — not
+// something the hardware must match.
+const MDNS_PREFIXES = ['shellypro2', 'shellypro4pm', 'shellyplus2pm'];
+const mdnsCandidates = (uid) => MDNS_PREFIXES.map((p) => `${p}-${uid}.local`);
+
 // The RPC bodies are serialized server-side so the scripts stay dumb pipes — no
 // quoting/escaping logic runs on the helper's machine.
 function rpcBodies({ uid, password, ca }) {
@@ -106,13 +114,16 @@ function Main {
     }
     return $false
   }
-  # The device announces itself as shellypro2-<mac>.local on the LAN — try that first,
-  # but only accept an answer that actually looks like a Shelly (some routers hijack
-  # unresolved names and answer with their own web page).
-  $script:ip = 'shellypro2-${uid}.local'
-  Write-Host "Looking for the Shelly automatically ($script:ip)..."
+  # The device announces itself as <model>-<mac>.local on the LAN — try each known
+  # model prefix, but only accept an answer that actually looks like a Shelly (some
+  # routers hijack unresolved names and answer with their own web page).
+  $candidates = @(${mdnsCandidates(uid).map((h) => `'${h}'`).join(', ')})
   $found = $false
-  try { if ((Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}').mac) { $found = $true } } catch {}
+  foreach ($c in $candidates) {
+    $script:ip = $c
+    Write-Host "Looking for the Shelly automatically ($c)..."
+    try { if ((Rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}').mac) { $found = $true; break } } catch {}
+  }
   if (-not $found) {
     $script:ip = Read-Host 'Not found automatically. Enter the Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]'
     if (-not $script:ip) { $script:ip = '192.168.33.1' }
@@ -182,12 +193,17 @@ set -uo pipefail
 # Keep the verdict readable even when the terminal window closes on exit.
 trap 'read -rp "Finished - press Enter to close this window: "' EXIT
 rpc() { curl -sf --noproxy '*' --max-time 8 "http://$IP/rpc" -H 'Content-Type: application/json' -d "$1"; }
-# The device announces itself as shellypro2-<mac>.local on the LAN — try that first,
-# accepting only an answer that actually looks like a Shelly (routers may hijack
-# unresolved names).
-IP='shellypro2-${uid}.local'
-echo "Looking for the Shelly automatically ($IP)..."
-if ! rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' 2>/dev/null | grep -q '"mac"'; then
+# The device announces itself as <model>-<mac>.local on the LAN — try each known
+# model prefix, accepting only an answer that actually looks like a Shelly (routers
+# may hijack unresolved names).
+IP=''
+for C in ${mdnsCandidates(uid).join(' ')}; do
+  echo "Looking for the Shelly automatically ($C)..."
+  IP="$C"
+  rpc '{"id":0,"method":"Shelly.GetDeviceInfo"}' 2>/dev/null | grep -q '"mac"' && break
+  IP=''
+done
+if [ -z "$IP" ]; then
   read -rp 'Not found automatically. Enter the Shelly IP address [press Enter for 192.168.33.1 = when connected to the Shelly own Wi-Fi hotspot]: ' IP
   IP=\${IP:-192.168.33.1}
 fi
@@ -327,10 +343,11 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
  <div style="margin-top:10px">
   <div id="macHelp" class="hidden" style="font-size:14px;margin-bottom:6px">
    קוד המכשיר (MAC) מופיע בשם הרשת שהוא משדר — למשל ברשת
-   <b dir="ltr">ShellyPro2-80F3DAC8DCA8</b> הקוד הוא <b dir="ltr">80F3DAC8DCA8</b>.
+   <b dir="ltr">ShellyPro2-80F3DAC8DCA8</b> או <b dir="ltr">ShellyPro4PM-80F3DAC8DCA8</b>
+   הקוד הוא <b dir="ltr">80F3DAC8DCA8</b>.
    אפשר להקליד את שם הרשת המלא, את הקוד בלבד, או את ה-MAC מהמדבקה שעל המכשיר.
   </div>
-  <input id="mac" class="hidden" placeholder="שם הרשת ShellyPro2-... או קוד המכשיר (MAC)" style="margin-bottom:8px">
+  <input id="mac" class="hidden" placeholder="שם הרשת שהמכשיר משדר או קוד המכשיר (MAC)" style="margin-bottom:8px">
   <input id="ip" class="hidden" placeholder="כתובת IP של המכשיר">
   <button id="go">התחל התקנה</button>
  </div>
@@ -343,8 +360,9 @@ let IP='', sntpIdx=0;
 const $=(id)=>document.getElementById(id);
 if(UID)$('uid').textContent=UID;
 if(PREPARE_URL){$('mac').classList.remove('hidden');$('macHelp').classList.remove('hidden')}
-// Accepts "ShellyPro2-80F3DAC8DCA8", "80F3DAC8DCA8", or a colon-separated MAC —
-// the part after the last dash wins so the letters of "shellypro" don't pollute it.
+// Accepts any model's SSID ("ShellyPro2-80F3DAC8DCA8", "ShellyPro4PM-..."),
+// "80F3DAC8DCA8", or a colon-separated MAC — the part after the last dash wins
+// so the letters/digits of the model name don't pollute it.
 function parseMac(v){const s=v.trim().toLowerCase();const tail=s.includes('-')?s.slice(s.lastIndexOf('-')+1):s;const hex=tail.replace(/[^0-9a-f]/g,'');return hex.length===12?hex:s.replace(/[^0-9a-f]/g,'')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
 const log=(t,cls)=>{const d=document.createElement('div');d.textContent=t;if(cls)d.className=cls;$('log').appendChild(d);d.scrollIntoView()};
@@ -360,7 +378,7 @@ async function finish(){
  const r=await serverCheck(90);
  if(r==='ok'){verdict('הצליח! המכשיר מחובר לשרת. אפשר לחזור למסך הניהול וללחוץ "בדוק חיבור".','ok');return}
  if(r==='wrong'){verdict('מכשיר אחר התחבר עם ההגדרות האלה — כנראה הוזנה כתובת IP של Shelly אחר. בדקו את הכתובת והריצו שוב.','bad');return}
- verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (ShellyPro2-...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> ככל הנראה הסינון חוסם את החיבור המוצפן של המכשיר. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את השרת 188.166.29.235 פורט 8883 (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.<br><br>בדיקה מלאה ממחשב Windows על אותו קו — הדביקו שורה אחת ב-PowerShell (בודקת פורט + יירוט הצפנה ומדפיסה פסק דין):<br><code dir="ltr" style="display:block;background:#efe9df;border-radius:8px;padding:6px 8px;margin-top:4px;text-align:left">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>','warn');
+ verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> ככל הנראה הסינון חוסם את החיבור המוצפן של המכשיר. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את השרת 188.166.29.235 פורט 8883 (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.<br><br>בדיקה מלאה ממחשב Windows על אותו קו — הדביקו שורה אחת ב-PowerShell (בודקת פורט + יירוט הצפנה ומדפיסה פסק דין):<br><code dir="ltr" style="display:block;background:#efe9df;border-radius:8px;padding:6px 8px;margin-top:4px;text-align:left">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>','warn');
  actionBtn('בדוק שוב מול השרת',async()=>{await finish()},true);
  if(sntpIdx<B.sntp.length-1){actionBtn('נסה שרת זמן אחר (בעיית שעון נפוצה)',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true)}
  actionBtn('נסה חיבור ללא אימות תעודה (עדיין מוצפן)',async()=>{log('מגדיר חיבור ללא אימות תעודה ומאתחל...');await rpc(B.noVerify);await rpc(B.reboot).catch(()=>{});await waitBack();const r2=await serverCheck(90);if(r2==='ok'){verdict('מחובר — אבל ללא אימות תעודה. דווחו על כך למנהל המערכת.','warn')}else{verdict('אין חיבור גם ללא אימות תעודה. צלמו מסך ודווחו.','bad')}},true);
@@ -369,7 +387,7 @@ $('go').onclick=async()=>{
  $('go').disabled=true;$('progress').classList.remove('hidden');$('log').innerHTML='';$('verdict').innerHTML='';$('actions').innerHTML='';
  if(PREPARE_URL){
   const mac=parseMac($('mac').value);
-  if(mac.length!==12){verdict('קוד המכשיר לא תקין — הקלידו את שם הרשת המלא (ShellyPro2-...) או 12 תווים מהמדבקה.','bad');$('go').disabled=false;return}
+  if(mac.length!==12){verdict('קוד המכשיר לא תקין — הקלידו את שם הרשת המלא שהמכשיר משדר (Shelly...) או 12 תווים מהמדבקה.','bad');$('go').disabled=false;return}
   // Credentials already minted for this MAC on a previous press (e.g. before
   // switching to the device hotspot, which has no internet) — reuse, don't re-mint:
   // a re-mint would both fail offline AND rotate the password server-side.
@@ -381,16 +399,16 @@ $('go').onclick=async()=>{
     if(!r.ok){const e=await r.json().catch(()=>null);throw new Error((e&&e.error&&e.error.message)||('HTTP '+r.status))}
     const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
     log('פרטי חיבור נוצרו.','ok');
-   }catch(e){verdict('יצירת פרטי החיבור נכשלה: '+e.message+' — שלב זה דורש אינטרנט. אם אתם על רשת ShellyPro2 (בלי אינטרנט) — עברו ל-Wi-Fi רגיל, לחצו שוב, וכשיופיע "פרטי חיבור נוצרו" חזרו לרשת המכשיר ולחצו שוב (הפרטים נשמרים). אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');$('go').disabled=false;return}
+   }catch(e){verdict('יצירת פרטי החיבור נכשלה: '+e.message+' — שלב זה דורש אינטרנט. אם אתם על רשת המכשיר (Shelly..., בלי אינטרנט) — עברו ל-Wi-Fi רגיל, לחצו שוב, וכשיופיע "פרטי חיבור נוצרו" חזרו לרשת המכשיר ולחצו שוב (הפרטים נשמרים). אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');$('go').disabled=false;return}
   }
  }
  const manual=$('ip').value.trim();
- const candidates=manual?[manual]:['shellypro2-'+UID+'.local','192.168.33.1'];
+ const candidates=manual?[manual]:${JSON.stringify(MDNS_PREFIXES)}.map(p=>p+'-'+UID+'.local').concat('192.168.33.1');
  IP='';
  for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
  if(!IP){
   $('ip').classList.remove('hidden');
-  verdict('המכשיר לא נמצא אוטומטית. אפשרויות: (1) התחברו לרשת שהמכשיר משדר (ShellyPro2-...) ולחצו שוב; (2) מצאו את כתובת ה-IP שלו באפליקציית Shelly (תחת Device Information) או ברשימת המכשירים בנתב, הזינו אותה בשדה שנפתח למעלה ולחצו שוב.','warn');
+  verdict('המכשיר לא נמצא אוטומטית. אפשרויות: (1) התחברו לרשת שהמכשיר משדר (Shelly...) ולחצו שוב; (2) מצאו את כתובת ה-IP שלו באפליקציית Shelly (תחת Device Information) או ברשימת המכשירים בנתב, הזינו אותה בשדה שנפתח למעלה ולחצו שוב.','warn');
   $('go').disabled=false;return}
  log('המכשיר נמצא ('+IP+'). שולח הגדרות...','ok');
  try{
