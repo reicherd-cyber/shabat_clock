@@ -349,6 +349,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
    <b dir="ltr">ShellyPro2-80F3DAC8DCA8</b> או <b dir="ltr">ShellyPro4PM-80F3DAC8DCA8</b>
    הקוד הוא <b dir="ltr">80F3DAC8DCA8</b>.
    אפשר להקליד את שם הרשת המלא, את הקוד בלבד, או את ה-MAC מהמדבקה שעל המכשיר.
+   <b>מחוברים לרשת שהמכשיר משדר? אפשר להשאיר ריק</b> — הדף ישאל את המכשיר בעצמו.
   </div>
   <input id="mac" class="hidden" placeholder="שם הרשת שהמכשיר משדר או קוד המכשיר (MAC)" style="margin-bottom:8px">
   <input id="ip" class="hidden" placeholder="כתובת IP של המכשיר">
@@ -383,6 +384,18 @@ const verdict=(t,cls)=>{$('verdict').innerHTML='<div class="verdict '+cls+'">'+t
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 // no-cors: an opaque response still resolves = the device answered; reject = unreachable.
 async function ping(ip){try{await fetch('http://'+ip+'/rpc/Shelly.GetDeviceInfo',{mode:'no-cors',cache:'no-store',signal:AbortSignal.timeout(4000)});return true}catch{return false}}
+// WebSocket RPC is the one readable channel: HTTP replies lack CORS headers (the
+// browser can send but never read them — the reason the MAC is typed by hand),
+// but ws://<ip>/rpc has no such restriction, so the page can ask the device for
+// its own MAC when the helper leaves the field empty.
+function wsMac(ip){return new Promise((res)=>{
+ let ws,done=false;const fin=(v)=>{if(done)return;done=true;try{ws&&ws.close()}catch(e){}res(v)};
+ try{ws=new WebSocket('ws://'+ip+'/rpc')}catch(e){return res(null)}
+ const t=setTimeout(()=>fin(null),5000);
+ ws.onopen=()=>{try{ws.send(JSON.stringify({id:1,src:'installer',method:'Shelly.GetDeviceInfo'}))}catch(e){clearTimeout(t);fin(null)}};
+ ws.onmessage=(e)=>{clearTimeout(t);try{const m=String(JSON.parse(e.data).result.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');fin(m.length===12?m:null)}catch(err){fin(null)}};
+ ws.onerror=()=>{clearTimeout(t);fin(null)};
+})}
 async function rpc(body){await fetch('http://'+IP+'/rpc',{method:'POST',mode:'no-cors',cache:'no-store',body,signal:AbortSignal.timeout(10000)})}
 async function waitBack(){log('ממתין שהמכשיר יופעל מחדש...');await sleep(6000);for(let i=0;i<30;i++){if(await ping(IP))return true;await sleep(2000)}return false}
 async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok)return 'ok';if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
@@ -429,8 +442,16 @@ async function finish(){
 $('go').onclick=async()=>{
  $('go').disabled=true;$('progress').classList.remove('hidden');$('log').innerHTML='';$('verdict').innerHTML='';$('actions').innerHTML='';
  if(PREPARE_URL){
-  const mac=parseMac($('mac').value);
-  if(mac.length!==12){verdict('קוד המכשיר לא תקין — הקלידו את שם הרשת המלא שהמכשיר משדר (Shelly...) או 12 תווים מהמדבקה.','bad');$('go').disabled=false;return}
+  let mac=parseMac($('mac').value);
+  if(mac.length!==12){
+   const manual0=$('ip').value.trim();
+   log('לא הוזן קוד מכשיר — מנסה לזהות אותו מהמכשיר עצמו...');
+   for(const c of (manual0?[manual0,'192.168.33.1']:['192.168.33.1'])){
+    const m=await wsMac(c);
+    if(m){mac=m;$('mac').value=m;log('קוד המכשיר זוהה: '+m,'ok');break}
+   }
+  }
+  if(mac.length!==12){verdict('קוד המכשיר לא זוהה. זיהוי אוטומטי עובד כשהטלפון על הרשת שהמכשיר משדר (Shelly...) — או הקלידו ידנית: את שם הרשת המלא או 12 תווים מהמדבקה שעל המכשיר.','bad');$('go').disabled=false;return}
   // Credentials already minted for this MAC on a previous press (e.g. before
   // switching to the device hotspot, which has no internet) — reuse, don't re-mint:
   // a re-mint would both fail offline AND rotate the password server-side.
