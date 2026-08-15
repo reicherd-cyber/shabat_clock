@@ -338,12 +338,17 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
  </div>
  <div style="margin-top:10px">
   <div id="macHelp" class="hidden" style="font-size:14px;margin-bottom:6px">
-   <b>מחוברים לרשת שהמכשיר משדר? השאירו ריק</b> — הדף מזהה את קוד המכשיר לבד.
-   אפשר גם להקליד ידנית: את שם הרשת המלא (למשל ברשת
-   <b dir="ltr">ShellyPro4PM-80F3DAC8DCA8</b> הקוד הוא <b dir="ltr">80F3DAC8DCA8</b>),
-   את הקוד בלבד, או את ה-MAC מהמדבקה שעל המכשיר.
+   <b>מחוברים לרשת שהמכשיר משדר?</b> הדף מזהה את קוד המכשיר לבד — פשוט לחצו "התחל התקנה".
   </div>
-  <input id="mac" class="hidden" placeholder="שם הרשת שהמכשיר משדר או קוד המכשיר (MAC)" style="margin-bottom:8px">
+  <details id="macFold" class="hidden" style="font-size:14px;margin-bottom:8px">
+   <summary style="cursor:pointer"><b>לא מחוברים לרשת שהמכשיר משדר? לחצו כאן ›</b></summary>
+   <div style="margin-top:6px">
+    הקלידו את קוד המכשיר: את שם הרשת המלא שהוא משדר (למשל ברשת
+    <b dir="ltr">ShellyPro4PM-80F3DAC8DCA8</b> הקוד הוא <b dir="ltr">80F3DAC8DCA8</b>),
+    את הקוד בלבד, או את ה-MAC מהמדבקה שעל המכשיר.
+   </div>
+   <input id="mac" placeholder="שם הרשת שהמכשיר משדר או קוד המכשיר (MAC)" style="margin-top:6px">
+  </details>
   <input id="ip" class="hidden" placeholder="כתובת IP של המכשיר">
   <details style="margin-top:8px;font-size:14px">
    <summary style="cursor:pointer"><b>המכשיר עוד לא מחובר ל-Wi-Fi הביתי? חיבור מכאן ›</b></summary>
@@ -365,7 +370,7 @@ const PREPARE_URL=${inject.prepareUrl};
 let IP='', sntpIdx=0;
 const $=(id)=>document.getElementById(id);
 if(UID)$('uid').textContent=UID;
-if(PREPARE_URL){$('mac').classList.remove('hidden');$('macHelp').classList.remove('hidden')}
+if(PREPARE_URL){$('macFold').classList.remove('hidden');$('macHelp').classList.remove('hidden')}
 // Accepts any model's SSID ("ShellyPro2-80F3DAC8DCA8", "ShellyPro4PM-..."),
 // "80F3DAC8DCA8", or a colon-separated MAC — the part after the last dash wins
 // so the letters/digits of the model name don't pollute it.
@@ -443,7 +448,7 @@ $('go').onclick=async()=>{
     if(m){mac=m;$('mac').value=m;log('קוד המכשיר זוהה: '+m,'ok');break}
    }
   }
-  if(mac.length!==12){verdict('קוד המכשיר לא זוהה. זיהוי אוטומטי עובד כשהטלפון על הרשת שהמכשיר משדר (Shelly...) — או הקלידו ידנית: את שם הרשת המלא או 12 תווים מהמדבקה שעל המכשיר.','bad');$('go').disabled=false;return}
+  if(mac.length!==12){$('macFold').open=true;verdict('קוד המכשיר לא זוהה. זיהוי אוטומטי עובד כשהטלפון על הרשת שהמכשיר משדר (Shelly...) — או הקלידו ידנית בשדה שנפתח למעלה: את שם הרשת המלא או 12 תווים מהמדבקה שעל המכשיר.','bad');$('go').disabled=false;return}
   // Credentials already minted for this MAC on a previous press (e.g. before
   // switching to the device hotspot, which has no internet) — reuse, don't re-mint:
   // a re-mint would both fail offline AND rotate the password server-side.
