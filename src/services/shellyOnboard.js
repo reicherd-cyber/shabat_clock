@@ -338,10 +338,9 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
   <div style="margin-top:6px">
    שלב א' — בטלפון על Wi-Fi רגיל (עם אינטרנט): הקלידו את הקוד ולחצו "התחל התקנה" עד
    שיופיע "פרטי חיבור נוצרו" (המכשיר עוד לא יימצא — זה בסדר).
-   שלב ב' — עברו לרשת שהמכשיר משדר (...-Shelly), השאירו את שדה הכתובת ריק ולחצו שוב —
-   ההגדרות יישלחו למכשיר.
-   שלב ג' — חזרו ל-Wi-Fi הרגיל ולחצו "בדוק שוב מול השרת".
-   שימו לב: גם בדרך זו המכשיר חייב להיות מחובר ל-Wi-Fi הביתי כדי להתחבר לשרת בסוף.
+   שלב ב' — עברו לרשת שהמכשיר משדר (...-Shelly), מלאו את פרטי ה-Wi-Fi הביתי
+   (בקישור "חיבור מכאן" למטה) ולחצו שוב — ההגדרות יישלחו והמכשיר יתחבר לרשת הביתית לבד.
+   שלב ג' — חזרו ל-Wi-Fi הרגיל ולחצו "בדוק מול השרת".
   </div>
  </details>
  <div style="margin-top:10px">
@@ -353,6 +352,16 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
   </div>
   <input id="mac" class="hidden" placeholder="שם הרשת שהמכשיר משדר או קוד המכשיר (MAC)" style="margin-bottom:8px">
   <input id="ip" class="hidden" placeholder="כתובת IP של המכשיר">
+  <details style="margin-top:8px;font-size:14px">
+   <summary style="cursor:pointer"><b>המכשיר עוד לא מחובר ל-Wi-Fi הביתי? חיבור מכאן ›</b></summary>
+   <div style="margin-top:6px">
+    הזינו את פרטי ה-Wi-Fi הביתי והם יישלחו למכשיר יחד עם שאר ההגדרות — כך אפשר
+    להתקין בלי אפליקציית Shelly בכלל: מתחברים לרשת שהמכשיר משדר, ממלאים וזהו.
+    אם המכשיר כבר על ה-Wi-Fi הביתי — השאירו ריק.
+   </div>
+   <input id="wifiSsid" placeholder="שם רשת ה-Wi-Fi הביתית" style="margin-top:6px">
+   <input id="wifiPass" placeholder="סיסמת ה-Wi-Fi" style="margin-top:6px">
+  </details>
   <button id="go">התחל התקנה</button>
  </div>
 </div>
@@ -445,13 +454,21 @@ $('go').onclick=async()=>{
   verdict('המכשיר לא נמצא אוטומטית. אפשרויות: (1) התחברו לרשת שהמכשיר משדר (Shelly...) ולחצו שוב; (2) מצאו את כתובת ה-IP שלו באפליקציית Shelly (תחת Device Information) או ברשימת המכשירים בנתב, הזינו אותה בשדה שנפתח למעלה ולחצו שוב.','warn');
   $('go').disabled=false;return}
  log('המכשיר נמצא ('+IP+'). שולח הגדרות...','ok');
+ const ssid=$('wifiSsid').value.trim(), wifiPass=$('wifiPass').value;
  try{
   log('מתקין תעודת שרת...');await rpc(B.putCa);
   log('מגדיר חיבור לשרת...');await rpc(B.mqtt);
   log('מגדיר שרת זמן...');await rpc(B.sntp[0]);
+  // Wi-Fi last, so the server config already sits on the device even if the
+  // network switch cuts this session short.
+  if(ssid){log('מגדיר חיבור לרשת '+ssid+'...');await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}))}
   log('מאתחל את המכשיר...');await rpc(B.reboot).catch(()=>{});
  }catch(e){verdict('שגיאה בשליחת ההגדרות: '+e.message+' — ודאו שנשארתם על אותו Wi-Fi ונסו שוב.','bad');$('go').disabled=false;return}
- if(!(await waitBack())){verdict('המכשיר לא חזר אחרי האתחול — בדקו חשמל וכתובת, ונסו שוב.','bad');$('go').disabled=false;return}
+ if(!(await waitBack())){
+  // With a Wi-Fi change this is expected: the device moved to the home network
+  // and the phone may still sit on the (now stale) hotspot connection.
+  if(ssid){verdict('המכשיר עבר כנראה לרשת '+ssid+'. חברו את הטלפון ל-Wi-Fi הביתי ולחצו "בדוק מול השרת".','warn');actionBtn('בדוק מול השרת',async()=>{await finish()});$('go').disabled=false;return}
+  verdict('המכשיר לא חזר אחרי האתחול — בדקו חשמל וכתובת, ונסו שוב.','bad');$('go').disabled=false;return}
  log('המכשיר חזר לרשת.','ok');
  await finish();
  $('go').disabled=false;
