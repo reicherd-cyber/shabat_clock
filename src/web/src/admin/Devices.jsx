@@ -343,6 +343,10 @@ export default function Devices() {
                 </label>
               </div>
             ))}
+            <p className="text-off text-xs font-medium">
+              ⚠ ודאו שהנתב (ראוטר) אינו מקבל חשמל דרך אחד הערוצים — כיבוי ערוץ כזה
+              ינתק את הבית מהאינטרנט ואת המכשיר מהשרת. בדף ההתקנה לנייד יש בדיקה לזה.
+            </p>
             <ErrorNote error={error} />
             <div className="flex gap-2">
               <Button variant="ghost" className="flex-1" onClick={() => setShelly({ ...shelly, step: 1 })}>‹ חזרה</Button>

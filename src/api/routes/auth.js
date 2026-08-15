@@ -81,7 +81,17 @@ authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, 
     const { shellyMqttRpc } = await import('../../mqtt/client.js');
     const reply = await shellyMqttRpc(claims.uid, 'Shelly.GetDeviceInfo', undefined, 4000);
     const mac = reply?.result?.mac ? String(reply.result.mac).toLowerCase().replace(/[^0-9a-f]/g, '') : null;
-    res.json({ connected: !!mac, mac_ok: mac === claims.uid });
+    const out = { connected: !!mac, mac_ok: mac === claims.uid };
+    // ?channels=1: per-channel on/off states, for the installer's router-check step
+    // (it must only cycle channels that are already ON — flipping an off channel
+    // could power someone's boiler).
+    if (out.connected && String(req.query.channels || '') === '1') {
+      const states = await Promise.all([0, 1, 2, 3].map((id) =>
+        shellyMqttRpc(claims.uid, 'Switch.GetStatus', { id }, 3000)));
+      out.channels = states.flatMap((r, i) =>
+        (r && !r.error && typeof r.result?.output === 'boolean') ? [{ relay_no: i + 1, on: r.result.output }] : []);
+    }
+    res.json(out);
   } catch (e) { next(e); }
 });
 

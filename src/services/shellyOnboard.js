@@ -325,6 +325,10 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
   <li>חברו את הטלפון הזה לאותו Wi-Fi ביתי.</li>
   <li>הקלידו למטה את קוד המכשיר (MAC) מהמדבקה ולחצו "התחל התקנה".</li>
  </ol>
+ <div style="margin-top:8px;font-size:14px;color:#b3372f">
+  ⚠ <b>חשוב:</b> אל תחברו את הנתב (ראוטר) לחשמל דרך ערוצי המכשיר — כל כיבוי של
+  הערוץ ינתק את הבית מהאינטרנט ואת המכשיר מהשרת. בסוף ההתקנה יש כפתור בדיקה לזה.
+ </div>
  <div style="margin-top:8px;font-size:14px;color:#a06a00">
   ⚠ <b>קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> ההתקנה תיראה תקינה אבל המכשיר לא
   יתחבר לשרת עד שספק הסינון יחריג את 188.166.29.235 פורט 8883. כדאי לבקש את ההחרגה מראש.
@@ -374,9 +378,39 @@ async function rpc(body){await fetch('http://'+IP+'/rpc',{method:'POST',mode:'no
 async function waitBack(){log('ממתין שהמכשיר יופעל מחדש...');await sleep(6000);for(let i=0;i<30;i++){if(await ping(IP))return true;await sleep(2000)}return false}
 async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok)return 'ok';if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
 function actionBtn(txt,fn,alt){const b=document.createElement('button');b.textContent=txt;if(alt)b.className='alt';b.onclick=()=>{$('actions').innerHTML='';fn()};$('actions').appendChild(b)}
+// Router check: the router must not be powered THROUGH a Shelly channel — a real
+// install had the Wi-Fi router on a channel, and every off-command cut the house's
+// internet and dropped the device from the server. Only channels that are already
+// ON are cycled (flipping an off channel could power someone's boiler), and only
+// with the device-local toggle_after timer, which restores power even if Wi-Fi
+// dies mid-test.
+async function quickConnected(){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();return !!r.connected}catch(e){return false}}
+function offerRouterCheck(){actionBtn('בדיקה: האם הנתב מחובר דרך המכשיר? (מומלץ)',routerCheck,true)}
+async function routerCheck(){
+ log('בודק אילו ערוצים דולקים...');
+ let ch=null;
+ try{const r=await(await fetch(STATUS_URL+'&channels=1',{cache:'no-store'})).json();if(r.connected)ch=r.channels||[]}catch(e){}
+ if(ch===null){verdict('אין חיבור לשרת כרגע — לא ניתן לבדוק. נסו שוב בעוד רגע.','warn');offerRouterCheck();return}
+ const on=ch.filter(c=>c.on);
+ if(!on.length){verdict('אין כרגע ערוצים דולקים — הבדיקה מכבה לרגע רק ערוצים דולקים. הדליקו את הערוצים שבשימוש ולחצו שוב.','warn');offerRouterCheck();return}
+ for(const c of on){
+  log('מכבה את ערוץ '+c.relay_no+' ל-4 שניות...');
+  try{await rpc(JSON.stringify({id:9000+c.relay_no,method:'Switch.Set',params:{id:c.relay_no-1,on:false,toggle_after:4}}))}
+  catch(e){verdict('לא ניתן להגיע למכשיר ברשת המקומית — ודאו שהטלפון על אותו Wi-Fi ונסו שוב.','warn');offerRouterCheck();return}
+  await sleep(7000);
+  if(!(await quickConnected())){
+   log('החיבור נפל אחרי כיבוי ערוץ '+c.relay_no+' — ממתין שהרשת תחזור (עד 3 דקות)...','warn');
+   const until=Date.now()+180000;let back=false;
+   while(Date.now()<until){await sleep(5000);if(await quickConnected()){back=true;break}}
+   verdict('נמצא: הנתב (ראוטר) מקבל חשמל דרך ערוץ '+c.relay_no+'! חברו את הנתב לחשמל ישיר (לא דרך המכשיר) — אחרת כל כיבוי של הערוץ ינתק את הבית מהאינטרנט ואת המכשיר מהשרת.'+(back?'':'<br>הרשת עדיין לא חזרה — בדקו שהנתב נדלק.'),'bad');
+   return}
+  log('ערוץ '+c.relay_no+' תקין — הנתב לא שם.','ok');
+ }
+ verdict('מצוין — הנתב אינו מחובר דרך אף ערוץ דולק ('+on.map(c=>c.relay_no).join(', ')+'). המכשיר מוכן.','ok');
+}
 async function finish(){
  const r=await serverCheck(90);
- if(r==='ok'){verdict('הצליח! המכשיר מחובר לשרת. אפשר לחזור למסך הניהול וללחוץ "בדוק חיבור".','ok');return}
+ if(r==='ok'){verdict('הצליח! המכשיר מחובר לשרת. אפשר לחזור למסך הניהול וללחוץ "בדוק חיבור".','ok');offerRouterCheck();return}
  if(r==='wrong'){verdict('מכשיר אחר התחבר עם ההגדרות האלה — כנראה הוזנה כתובת IP של Shelly אחר. בדקו את הכתובת והריצו שוב.','bad');return}
  verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> ככל הנראה הסינון חוסם את החיבור המוצפן של המכשיר. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את השרת 188.166.29.235 פורט 8883 (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.<br><br>בדיקה מלאה ממחשב Windows על אותו קו — הדביקו שורה אחת ב-PowerShell (בודקת פורט + יירוט הצפנה ומדפיסה פסק דין):<br><code dir="ltr" style="display:block;background:#efe9df;border-radius:8px;padding:6px 8px;margin-top:4px;text-align:left">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>','warn');
  actionBtn('בדוק שוב מול השרת',async()=>{await finish()},true);
