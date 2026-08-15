@@ -323,7 +323,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
  <ol style="margin:6px 0 0;padding-inline-start:18px">
   <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly). אם הטלפון שואל אם להישאר
    ברשת בלי אינטרנט — הישארו, והשאירו את חבילת הגלישה (נתונים) פעילה.</li>
-  <li>מלאו את פרטי ה-Wi-Fi הביתי בקישור "חיבור מכאן" למטה ולחצו "התחל התקנה" —
+  <li>מלאו למטה את פרטי ה-Wi-Fi הביתי ולחצו "התחל התקנה" —
    הדף מזהה את המכשיר לבד, יוצר פרטי חיבור ושולח את ההגדרות.</li>
   <li>בסיום חזרו ל-Wi-Fi הרגיל ולחצו "בדוק מול השרת". אין לטלפון חבילת גלישה?
    הדף ינחה אתכם לעבור רשת בכל שלב שצריך.</li>
@@ -350,16 +350,12 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
    <input id="mac" placeholder="שם הרשת שהמכשיר משדר או קוד המכשיר (MAC)" style="margin-top:6px">
   </details>
   <input id="ip" class="hidden" placeholder="כתובת IP של המכשיר">
-  <details style="margin-top:8px;font-size:14px">
-   <summary style="cursor:pointer"><b>המכשיר עוד לא מחובר ל-Wi-Fi הביתי? חיבור מכאן ›</b></summary>
-   <div style="margin-top:6px">
-    הזינו את פרטי ה-Wi-Fi הביתי והם יישלחו למכשיר יחד עם שאר ההגדרות — כך אפשר
-    להתקין בלי אפליקציית Shelly בכלל: מתחברים לרשת שהמכשיר משדר, ממלאים וזהו.
-    אם המכשיר כבר על ה-Wi-Fi הביתי — השאירו ריק.
-   </div>
+  <div style="margin-top:8px;font-size:14px">
+   <b>פרטי ה-Wi-Fi הביתי</b> — יישלחו למכשיר עם שאר ההגדרות והוא יתחבר לרשת לבד.
    <input id="wifiSsid" placeholder="שם רשת ה-Wi-Fi הביתית" style="margin-top:6px">
    <input id="wifiPass" placeholder="סיסמת ה-Wi-Fi" style="margin-top:6px">
-  </details>
+   <div style="margin-top:4px;color:#8a8377">המכשיר כבר מחובר ל-Wi-Fi הביתי? השאירו ריק.</div>
+  </div>
   <button id="go">התחל התקנה</button>
  </div>
 </div>
