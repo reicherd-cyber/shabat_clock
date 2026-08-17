@@ -322,13 +322,13 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '') {
 <div class="box">
  <b>איך מתקינים:</b>
  <ol style="margin:6px 0 0;padding-inline-start:18px">
-  <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly). אם הטלפון שואל אם להישאר
-   ברשת בלי אינטרנט — הישארו, והשאירו את חבילת הגלישה (נתונים) פעילה.</li>
-  <li>לחצו "התחל התקנה" — הדף מזהה את המכשיר ויוצר פרטי חיבור (בלי אינטרנט
-   הדף יבקש לעבור רגע לרשת אחרת). אחר-כך מלאו את פרטי ה-Wi-Fi הביתי ולחצו
-   "שלח הגדרות למכשיר".</li>
-  <li>בסיום חזרו ל-Wi-Fi הרגיל ולחצו "בדוק מול השרת". אין לטלפון חבילת גלישה?
-   הדף ינחה אתכם לעבור רשת בכל שלב שצריך.</li>
+  <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly) ולחצו "התחל התקנה" —
+   הדף מזהה את המכשיר לבד. (אם הטלפון שואל אם להישאר ברשת בלי אינטרנט — הישארו.)</li>
+  <li>מלאו את פרטי ה-Wi-Fi הביתי ולחצו "חבר לרשת הביתית" — הדף מוודא במקום
+   שהמכשיר באמת התחבר (סיסמה שגויה מתגלה מיד, כשקל לתקן).</li>
+  <li>חברו את הטלפון בחזרה ל-Wi-Fi הביתי ולחצו "השלם התקנה" — יצירת פרטי
+   החיבור, שליחת ההגדרות והבדיקה מול השרת רצות כולן משם. מעבר אחד לכל כיוון,
+   בלי לחזור לרשת המכשיר.</li>
  </ol>
  <div style="margin-top:8px;font-size:14px;color:#b3372f">
   ⚠ <b>חשוב:</b> אל תחברו את הנתב (ראוטר) לחשמל דרך ערוצי המכשיר — כל כיבוי של
@@ -368,7 +368,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '') {
 <script>
 let UID=${inject.uid}, STATUS_URL=${inject.statusUrl}, B=${inject.bodies};
 const PREPARE_URL=${inject.prepareUrl}, BROKER=${inject.broker};
-let IP='', sntpIdx=0, PROVISIONED=false, DEVIP='';
+let IP='', sntpIdx=0, PROVISIONED=false, DEVIP='', STA_IP='';
 const $=(id)=>document.getElementById(id);
 if(UID)$('uid').textContent=UID;
 if(PREPARE_URL){$('macFold').classList.remove('hidden');$('macHelp').classList.remove('hidden')}
@@ -454,7 +454,14 @@ async function finish(){
 }
 $('go').onclick=async()=>{
  $('go').disabled=true;$('progress').classList.remove('hidden');$('log').innerHTML='';$('verdict').innerHTML='';$('actions').innerHTML='';
- try{ if(STAGE==='detect'){await stageDetect()} else if(STAGE==='mint'){await tryMint()} else {await stageInstall()} }
+ try{
+  if(STAGE==='detect'){await stageDetect()}
+  else if(STAGE==='wifi'){await stageWifi()}
+  else if(STAGE==='complete'){await stageComplete()}
+  else if(STAGE==='mint'){await tryMint()}
+  else if(STAGE==='done'){/* nothing left */}
+  else {await stageInstall()}
+ }
  finally{$('go').disabled=false}
 };
 // Stage 1: identify the device only. No server, no Wi-Fi questions yet.
@@ -481,43 +488,101 @@ async function stageDetect(){
  }
  $('foundMac').textContent=mac+(PROVISIONED?' · מוגדר מראש לשרת ✓':'');
  $('foundBox').classList.remove('hidden');
- if(PROVISIONED){
+ // On the device's network: Wi-Fi comes FIRST — it's a local setting needing no
+ // internet, and once the device joins the home LAN, everything else (creds,
+ // config, verification) runs from the home network. One hop each way, ending
+ // on the user's own network — no coming back to the hotspot.
+ if(DEVIP){
   $('wifiBlock').classList.remove('hidden');
-  $('go').textContent='חבר ל-Wi-Fi ›';
-  verdict('המכשיר כבר מוגדר לשרת — נשאר רק לחבר אותו ל-Wi-Fi הביתי. מלאו את הפרטים ולחצו "חבר ל-Wi-Fi". (אין צורך באינטרנט בטלפון.)','ok');
-  STAGE='install';
+  $('go').textContent='חבר לרשת הביתית ›';
+  verdict((PROVISIONED?'המכשיר מוגדר מראש לשרת ✓. ':'')+'מלאו את פרטי ה-Wi-Fi הביתי ולחצו "חבר לרשת הביתית" — שלב זה כולו מקומי, בלי אינטרנט.','ok');
+  STAGE='wifi';
   return}
- // Credentials next — BEFORE the Wi-Fi questions, so a phone without data hears
- // "hop to internet" right after identification, not after filling a form.
+ // Typed-MAC path (phone is NOT on the device's network): mint now, then a
+ // single hop to the device network sends everything at once.
  await tryMint();
 }
-// Mint broker credentials for the identified MAC. Success reveals the Wi-Fi step;
-// failure parks the flow in 'mint' so the next press retries just this.
-async function tryMint(){
+// Mint broker credentials for the current MAC. Returns true when creds are in
+// hand; on failure prints a stage-appropriate message and returns false.
+async function mintCreds(){
  const mac=parseMac($('mac').value);
- if(mac.length!==12){STAGE='detect';$('go').textContent='התחל התקנה';verdict('קוד המכשיר התרוקן — לחצו שוב לזיהוי מחדש.','warn');return}
- if(B&&mac===UID){advanceToWifi(true);return}
+ if(B&&mac===UID)return true;
  log('יוצר פרטי חיבור בשרת (דרך האינטרנט)...');
  let r=null;
  try{r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'})}
- catch(e){
-  STAGE='mint';$('go').textContent='צור פרטי חיבור ›';
-  verdict('קוד המכשיר נשמר ✓, אבל ליצירת פרטי החיבור צריך אינטרנט ולטלפון אין כרגע. הפעילו גלישה (נתונים) ולחצו "צור פרטי חיבור" — או עברו ל-Wi-Fi עם אינטרנט ולחצו שם.','warn');
-  return}
+ catch(e){verdict('אין לטלפון אינטרנט כרגע. ודאו שהטלפון חזר ל-Wi-Fi הביתי (או הפעילו גלישה) ולחצו שוב.','warn');return false}
  if(!r.ok){
   const e=await r.json().catch(()=>null);
-  STAGE='mint';$('go').textContent='צור פרטי חיבור ›';
   verdict('השרת לא אישר את הבקשה: '+((e&&e.error&&e.error.message)||('שגיאה '+r.status))+'. אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');
-  return}
+  return false}
  const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
  log('פרטי חיבור נוצרו ✓','ok');
- advanceToWifi(false);
+ return true;
 }
-function advanceToWifi(existed){
+// Typed-MAC path only (phone not on the device network): mint, then one hop.
+async function tryMint(){
+ const mac=parseMac($('mac').value);
+ if(mac.length!==12){STAGE='detect';$('go').textContent='התחל התקנה';verdict('קוד המכשיר התרוקן — לחצו שוב לזיהוי מחדש.','warn');return}
+ STAGE='mint';$('go').textContent='צור פרטי חיבור ›';
+ if(!(await mintCreds()))return;
  $('wifiBlock').classList.remove('hidden');
  $('go').textContent='שלח הגדרות למכשיר ›';
  STAGE='install';
- verdict('פרטי החיבור '+(existed?'כבר קיימים':'נוצרו')+' ✓. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...), מלאו את פרטי ה-Wi-Fi הביתי ולחצו "שלח הגדרות למכשיר".','ok');
+ verdict('פרטי החיבור מוכנים ✓. מלאו את פרטי ה-Wi-Fi הביתי, עברו לרשת שהמכשיר משדר (Shelly...) ולחצו "שלח הגדרות למכשיר" — מעבר אחד ויחיד.','ok');
+}
+// Stage 'wifi' (on the device network): send home Wi-Fi and VERIFY it connected —
+// a wrong password surfaces here, while fixing it is a keystroke away.
+async function stageWifi(){
+ const ssid=$('wifiSsid').value.trim(), wifiPass=$('wifiPass').value;
+ if(!ssid){
+  const st=await wsRpc(DEVIP,'Wifi.GetStatus');
+  if(st&&st.status==='got ip'&&st.sta_ip){STA_IP=st.sta_ip;afterWifi('');return}
+  verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה.','warn');return}
+ IP=DEVIP;
+ log('שולח את פרטי הרשת "'+ssid+'" למכשיר...');
+ try{await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}))}
+ catch(e){verdict('שגיאה בשליחה — ודאו שהטלפון עדיין על רשת המכשיר (Shelly...) ונסו שוב.','bad');return}
+ log('ממתין שהמכשיר יתחבר לרשת...');
+ let st=null;
+ for(let i=0;i<15;i++){await sleep(2000);st=await wsRpc(DEVIP,'Wifi.GetStatus');if(st&&st.status==='got ip'&&st.sta_ip)break}
+ if(!(st&&st.status==='got ip'&&st.sta_ip)){
+  verdict('המכשיר לא הצליח להתחבר לרשת "'+ssid+'" — כנראה שם רשת או סיסמה שגויים. תקנו את הפרטים ולחצו שוב (אתם עדיין על רשת המכשיר — אפשר לתקן מיד).','warn');
+  return}
+ STA_IP=st.sta_ip;
+ afterWifi(ssid);
+}
+function afterWifi(ssid){
+ log('המכשיר מחובר לרשת הביתית ✓ (כתובת '+STA_IP+')','ok');
+ if(PROVISIONED){
+  STAGE='done';$('go').textContent='סיום';
+  verdict('סיימתם! המכשיר מחובר לרשת הביתית ומוגדר מראש לשרת — הוא יתקשר לבד תוך דקות ספורות. אפשר לוודא במסך הניהול ("בדוק חיבור").','ok');
+  return}
+ STAGE='complete';$('go').textContent='השלם התקנה ›';
+ verdict('המכשיר התחבר לרשת הביתית ✓. עכשיו חברו את הטלפון ל-Wi-Fi הביתי ולחצו "השלם התקנה" — הכל ימשיך משם, בלי לחזור לרשת המכשיר.','ok');
+}
+// Stage 'complete' (on the home network — phone and device now share a LAN):
+// mint creds, reach the device at its home address, send server config, verify.
+async function stageComplete(){
+ if(PREPARE_URL&&!(B&&parseMac($('mac').value)===UID)){if(!(await mintCreds()))return}
+ const manual=$('ip').value.trim();
+ const candidates=[...new Set([manual,STA_IP,DEVIP].filter(Boolean))]
+  .concat(${JSON.stringify(MDNS_PREFIXES)}.map(p=>p+'-'+UID+'.local'));
+ IP='';
+ for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
+ if(!IP){
+  $('ip').classList.remove('hidden');
+  verdict('המכשיר לא נמצא ברשת הזו. ודאו שהטלפון על אותו Wi-Fi ביתי שאליו חיברתם את המכשיר ולחצו שוב — או הזינו את כתובת ה-IP שלו ('+(STA_IP||'מהנתב')+') בשדה שנפתח למעלה.','warn');
+  return}
+ log('המכשיר נמצא ('+IP+'). שולח הגדרות שרת...','ok');
+ try{
+  log('מתקין תעודת שרת...');await rpc(B.putCa);
+  log('מגדיר חיבור לשרת...');await rpc(B.mqtt);
+  log('מגדיר שרת זמן...');await rpc(B.sntp[0]);
+  log('מאתחל את המכשיר...');await rpc(B.reboot).catch(()=>{});
+ }catch(e){verdict('שגיאה בשליחת ההגדרות: '+e.message+' — ודאו שנשארתם על אותו Wi-Fi ונסו שוב.','bad');return}
+ if(!(await waitBack())){verdict('המכשיר לא חזר אחרי האתחול — המתינו חצי דקה ולחצו "בדוק מול השרת".','warn');actionBtn('בדוק מול השרת',async()=>{await finish()});return}
+ log('המכשיר חזר לרשת.','ok');
+ await finish();
 }
 // Stage 2: mint credentials (internet) + send everything to the device (local).
 async function stageInstall(){
