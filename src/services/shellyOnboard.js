@@ -324,8 +324,9 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '') {
  <ol style="margin:6px 0 0;padding-inline-start:18px">
   <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly). אם הטלפון שואל אם להישאר
    ברשת בלי אינטרנט — הישארו, והשאירו את חבילת הגלישה (נתונים) פעילה.</li>
-  <li>לחצו "התחל התקנה" — הדף מזהה את קוד המכשיר לבד. אחרי הזיהוי מלאו את
-   פרטי ה-Wi-Fi הביתי ולחצו "שלח הגדרות למכשיר".</li>
+  <li>לחצו "התחל התקנה" — הדף מזהה את המכשיר ויוצר פרטי חיבור (בלי אינטרנט
+   הדף יבקש לעבור רגע לרשת אחרת). אחר-כך מלאו את פרטי ה-Wi-Fi הביתי ולחצו
+   "שלח הגדרות למכשיר".</li>
   <li>בסיום חזרו ל-Wi-Fi הרגיל ולחצו "בדוק מול השרת". אין לטלפון חבילת גלישה?
    הדף ינחה אתכם לעבור רשת בכל שלב שצריך.</li>
  </ol>
@@ -443,7 +444,7 @@ async function finish(){
 }
 $('go').onclick=async()=>{
  $('go').disabled=true;$('progress').classList.remove('hidden');$('log').innerHTML='';$('verdict').innerHTML='';$('actions').innerHTML='';
- try{ if(STAGE==='detect'){await stageDetect()} else {await stageInstall()} }
+ try{ if(STAGE==='detect'){await stageDetect()} else if(STAGE==='mint'){await tryMint()} else {await stageInstall()} }
  finally{$('go').disabled=false}
 };
 // Stage 1: identify the device only. No server, no Wi-Fi questions yet.
@@ -470,15 +471,43 @@ async function stageDetect(){
  }
  $('foundMac').textContent=mac+(PROVISIONED?' · מוגדר מראש לשרת ✓':'');
  $('foundBox').classList.remove('hidden');
- $('wifiBlock').classList.remove('hidden');
  if(PROVISIONED){
+  $('wifiBlock').classList.remove('hidden');
   $('go').textContent='חבר ל-Wi-Fi ›';
   verdict('המכשיר כבר מוגדר לשרת — נשאר רק לחבר אותו ל-Wi-Fi הביתי. מלאו את הפרטים ולחצו "חבר ל-Wi-Fi". (אין צורך באינטרנט בטלפון.)','ok');
- }else{
-  $('go').textContent='שלח הגדרות למכשיר ›';
-  verdict('עכשיו מלאו את פרטי ה-Wi-Fi הביתי (או השאירו ריק אם המכשיר כבר מחובר) ולחצו "שלח הגדרות למכשיר".','ok');
- }
+  STAGE='install';
+  return}
+ // Credentials next — BEFORE the Wi-Fi questions, so a phone without data hears
+ // "hop to internet" right after identification, not after filling a form.
+ await tryMint();
+}
+// Mint broker credentials for the identified MAC. Success reveals the Wi-Fi step;
+// failure parks the flow in 'mint' so the next press retries just this.
+async function tryMint(){
+ const mac=parseMac($('mac').value);
+ if(mac.length!==12){STAGE='detect';$('go').textContent='התחל התקנה';verdict('קוד המכשיר התרוקן — לחצו שוב לזיהוי מחדש.','warn');return}
+ if(B&&mac===UID){advanceToWifi(true);return}
+ log('יוצר פרטי חיבור בשרת (דרך האינטרנט)...');
+ let r=null;
+ try{r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'})}
+ catch(e){
+  STAGE='mint';$('go').textContent='צור פרטי חיבור ›';
+  verdict('קוד המכשיר נשמר ✓, אבל ליצירת פרטי החיבור צריך אינטרנט ולטלפון אין כרגע. הפעילו גלישה (נתונים) ולחצו "צור פרטי חיבור" — או עברו ל-Wi-Fi עם אינטרנט ולחצו שם.','warn');
+  return}
+ if(!r.ok){
+  const e=await r.json().catch(()=>null);
+  STAGE='mint';$('go').textContent='צור פרטי חיבור ›';
+  verdict('השרת לא אישר את הבקשה: '+((e&&e.error&&e.error.message)||('שגיאה '+r.status))+'. אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');
+  return}
+ const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
+ log('פרטי חיבור נוצרו ✓','ok');
+ advanceToWifi(false);
+}
+function advanceToWifi(existed){
+ $('wifiBlock').classList.remove('hidden');
+ $('go').textContent='שלח הגדרות למכשיר ›';
  STAGE='install';
+ verdict('פרטי החיבור '+(existed?'כבר קיימים':'נוצרו')+' ✓. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...), מלאו את פרטי ה-Wi-Fi הביתי ולחצו "שלח הגדרות למכשיר".','ok');
 }
 // Stage 2: mint credentials (internet) + send everything to the device (local).
 async function stageInstall(){
@@ -496,23 +525,9 @@ async function stageInstall(){
   }catch(e){verdict('שגיאה בשליחה: '+e.message+' — ודאו שנשארתם על רשת המכשיר ונסו שוב.','bad');return}
   verdict('נשלח ✓. המכשיר יתחבר לרשת '+ssid+' ולשרת בתוך כדקה — אין צורך בשום דבר נוסף כאן. אפשר לוודא במסך הניהול ("בדוק חיבור").','ok');
   return}
- if(PREPARE_URL){
-  const mac=parseMac($('mac').value);
-  if(mac.length!==12){STAGE='detect';$('go').textContent='התחל התקנה';verdict('קוד המכשיר התרוקן — לחצו שוב לזיהוי מחדש.','warn');return}
-  // Credentials already minted for this MAC on a previous press (e.g. before a
-  // network hop) — reuse, don't re-mint: a re-mint would both fail offline AND
-  // rotate the password server-side.
-  if(B&&mac===UID){log('פרטי החיבור כבר נוצרו — ממשיך.','ok')}
-  else{
-   log('יוצר פרטי חיבור בשרת (דרך האינטרנט)...');
-   let r=null;
-   try{r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'})}
-   catch(e){verdict('אין לטלפון אינטרנט כרגע. הפעילו גלישה (נתונים) ולחצו שוב — או עברו ל-Wi-Fi עם אינטרנט, לחצו שוב, וחזרו לרשת המכשיר ללחיצה אחרונה. הקוד שזוהה נשמר.','warn');return}
-   if(!r.ok){const e=await r.json().catch(()=>null);verdict('השרת לא אישר את הבקשה: '+((e&&e.error&&e.error.message)||('שגיאה '+r.status))+'. אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');return}
-   const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
-   log('פרטי חיבור נוצרו.','ok');
-  }
- }
+ // Credentials are minted before this stage; if they're somehow missing
+ // (stale state), fall back to the mint step instead of failing mid-send.
+ if(PREPARE_URL&&!(B&&parseMac($('mac').value)===UID)){await tryMint();return}
  const manual=$('ip').value.trim();
  const candidates=manual?[manual]:${JSON.stringify(MDNS_PREFIXES)}.map(p=>p+'-'+UID+'.local').concat('192.168.33.1');
  IP='';
