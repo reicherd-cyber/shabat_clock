@@ -284,13 +284,14 @@ exit 1
 //  - universal:  the helper types the MAC; the page asks the server to mint that
 //    device's credentials at install time (GET prepareUrl&mac=..., authorized by the
 //    30-day installer token in the URL), then proceeds identically.
-function htmlPage(uid, b, statusUrl, prepareUrl = '') {
+function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '') {
   // Injected as JS string literals — the RPC bodies are JSON (no backticks/quotes issues
   // beyond '); JSON.stringify once more makes them safe literals.
   const inject = {
     uid: JSON.stringify(uid || ''),
     statusUrl: JSON.stringify(statusUrl || ''),
     prepareUrl: JSON.stringify(prepareUrl),
+    broker: JSON.stringify(broker),
     bodies: b ? JSON.stringify({ putCa: b.putCa, mqtt: b.mqtt, noVerify: b.mqttNoVerify, reboot: b.reboot, sntp: b.sntp }) : 'null',
   };
   return `<!doctype html>
@@ -365,8 +366,8 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
 <div class="box hidden" id="progress"><div id="log"></div><div id="verdict"></div><div id="actions"></div></div>
 <script>
 let UID=${inject.uid}, STATUS_URL=${inject.statusUrl}, B=${inject.bodies};
-const PREPARE_URL=${inject.prepareUrl};
-let IP='', sntpIdx=0;
+const PREPARE_URL=${inject.prepareUrl}, BROKER=${inject.broker};
+let IP='', sntpIdx=0, PROVISIONED=false, DEVIP='';
 const $=(id)=>document.getElementById(id);
 if(UID)$('uid').textContent=UID;
 if(PREPARE_URL){$('macFold').classList.remove('hidden');$('macHelp').classList.remove('hidden')}
@@ -386,16 +387,17 @@ const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 async function ping(ip){try{await fetch('http://'+ip+'/rpc/Shelly.GetDeviceInfo',{mode:'no-cors',cache:'no-store',signal:AbortSignal.timeout(4000)});return true}catch{return false}}
 // WebSocket RPC is the one readable channel: HTTP replies lack CORS headers (the
 // browser can send but never read them — the reason the MAC is typed by hand),
-// but ws://<ip>/rpc has no such restriction, so the page can ask the device for
-// its own MAC when the helper leaves the field empty.
-function wsMac(ip){return new Promise((res)=>{
+// but ws://<ip>/rpc has no such restriction, so the page can interrogate the
+// device: its MAC, and whether it is already provisioned for our broker.
+function wsRpc(ip,method){return new Promise((res)=>{
  let ws,done=false;const fin=(v)=>{if(done)return;done=true;try{ws&&ws.close()}catch(e){}res(v)};
  try{ws=new WebSocket('ws://'+ip+'/rpc')}catch(e){return res(null)}
  const t=setTimeout(()=>fin(null),5000);
- ws.onopen=()=>{try{ws.send(JSON.stringify({id:1,src:'installer',method:'Shelly.GetDeviceInfo'}))}catch(e){clearTimeout(t);fin(null)}};
- ws.onmessage=(e)=>{clearTimeout(t);try{const m=String(JSON.parse(e.data).result.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');fin(m.length===12?m:null)}catch(err){fin(null)}};
+ ws.onopen=()=>{try{ws.send(JSON.stringify({id:1,src:'installer',method:method}))}catch(e){clearTimeout(t);fin(null)}};
+ ws.onmessage=(e)=>{clearTimeout(t);try{fin(JSON.parse(e.data).result||null)}catch(err){fin(null)}};
  ws.onerror=()=>{clearTimeout(t);fin(null)};
 })}
+async function wsMac(ip){const r=await wsRpc(ip,'Shelly.GetDeviceInfo');if(!r)return null;const m=String(r.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');return m.length===12?m:null}
 async function rpc(body){await fetch('http://'+IP+'/rpc',{method:'POST',mode:'no-cors',cache:'no-store',body,signal:AbortSignal.timeout(10000)})}
 async function waitBack(){log('ממתין שהמכשיר יופעל מחדש...');await sleep(6000);for(let i=0;i<30;i++){if(await ping(IP))return true;await sleep(2000)}return false}
 async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok)return 'ok';if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
@@ -452,22 +454,48 @@ async function stageDetect(){
   log('מחפש את המכשיר ברשת...');
   for(const c of (manual0?[manual0,'192.168.33.1']:['192.168.33.1'])){
    const m=await wsMac(c);
-   if(m){mac=m;$('mac').value=m;break}
+   if(m){mac=m;$('mac').value=m;DEVIP=c;break}
   }
  }
  if(mac.length!==12){
   $('macFold').open=true;
   verdict('לא נמצא מכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הקלידו את הקוד ידנית בשדה שנפתח למעלה.','warn');
   return}
- $('foundMac').textContent=mac;
+ // Pre-provisioned unit (configured for our broker in advance, e.g. at the
+ // seller's desk): the on-site visit collapses to Wi-Fi-only — one network,
+ // no internet, no credential minting.
+ if(DEVIP&&BROKER){
+  const cfg=await wsRpc(DEVIP,'MQTT.GetConfig');
+  if(cfg&&cfg.enable&&cfg.server===BROKER)PROVISIONED=true;
+ }
+ $('foundMac').textContent=mac+(PROVISIONED?' · מוגדר מראש לשרת ✓':'');
  $('foundBox').classList.remove('hidden');
  $('wifiBlock').classList.remove('hidden');
- $('go').textContent='שלח הגדרות למכשיר ›';
- verdict('עכשיו מלאו את פרטי ה-Wi-Fi הביתי (או השאירו ריק אם המכשיר כבר מחובר) ולחצו "שלח הגדרות למכשיר".','ok');
+ if(PROVISIONED){
+  $('go').textContent='חבר ל-Wi-Fi ›';
+  verdict('המכשיר כבר מוגדר לשרת — נשאר רק לחבר אותו ל-Wi-Fi הביתי. מלאו את הפרטים ולחצו "חבר ל-Wi-Fi". (אין צורך באינטרנט בטלפון.)','ok');
+ }else{
+  $('go').textContent='שלח הגדרות למכשיר ›';
+  verdict('עכשיו מלאו את פרטי ה-Wi-Fi הביתי (או השאירו ריק אם המכשיר כבר מחובר) ולחצו "שלח הגדרות למכשיר".','ok');
+ }
  STAGE='install';
 }
 // Stage 2: mint credentials (internet) + send everything to the device (local).
 async function stageInstall(){
+ // Wi-Fi-only path for a pre-provisioned unit: everything is local, offline.
+ if(PROVISIONED){
+  const ssid=$('wifiSsid').value.trim(), wifiPass=$('wifiPass').value;
+  if(!ssid){verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה ולחצו שוב.','warn');return}
+  IP=(DEVIP&&await ping(DEVIP))?DEVIP:(await ping('192.168.33.1')?'192.168.33.1':'');
+  if(!IP){verdict('המכשיר לא נמצא — ודאו שהטלפון על הרשת שהמכשיר משדר (Shelly...) ולחצו שוב.','warn');return}
+  try{
+   log('שולח את פרטי ה-Wi-Fi למכשיר...');
+   await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}));
+   log('מאתחל את המכשיר...');
+   await rpc(JSON.stringify({id:8002,method:'Shelly.Reboot'})).catch(()=>{});
+  }catch(e){verdict('שגיאה בשליחה: '+e.message+' — ודאו שנשארתם על רשת המכשיר ונסו שוב.','bad');return}
+  verdict('נשלח ✓. המכשיר יתחבר לרשת '+ssid+' ולשרת בתוך כדקה — אין צורך בשום דבר נוסף כאן. אפשר לוודא במסך הניהול ("בדוק חיבור").','ok');
+  return}
  if(PREPARE_URL){
   const mac=parseMac($('mac').value);
   if(mac.length!==12){STAGE='detect';$('go').textContent='התחל התקנה';verdict('קוד המכשיר התרוקן — לחצו שוב לזיהוי מחדש.','warn');return}
@@ -560,7 +588,7 @@ export async function onboardShelly({ mac, statusBase = '' }) {
     script_ps: stamp + powershellScript(uid, bodies),
     // keep the shebang as line 1 — the stamp goes right after it
     script_sh: bashScript(uid, bodies).replace('\n', `\n${stamp}`),
-    script_html: htmlPage(uid, bodies, statusUrlFor(uid, statusBase)),
+    script_html: htmlPage(uid, bodies, statusUrlFor(uid, statusBase), '', `${env.deviceBroker.host}:${env.deviceBroker.port}`),
   };
 }
 
@@ -577,7 +605,7 @@ export function universalInstaller({ statusBase, adminId }) {
   }
   const token = jwt.sign({ p: 'shelly-onboard-any', adm: adminId }, env.jwtSecret, { expiresIn: INSTALLER_TTL });
   const prepareUrl = `${statusBase}/api/v1/shelly-onboard/prepare?token=${token}`;
-  return { script_html: htmlPage(null, null, null, prepareUrl), valid_days: 30 };
+  return { script_html: htmlPage(null, null, null, prepareUrl, `${env.deviceBroker.host}:${env.deviceBroker.port}`), valid_days: 30 };
 }
 
 // Called by the public prepare endpoint once the installer token is verified.
