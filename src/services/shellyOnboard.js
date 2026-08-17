@@ -490,8 +490,15 @@ async function stageInstall(){
  IP='';
  for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
  if(!IP){
+  // In the no-data flow this is the expected midpoint: creds were just minted on
+  // the internet network, and the device is a network hop away. Say that, not
+  // "not found" — a real install read the generic message as a failure.
+  if(PREPARE_URL&&B){
+   $('ip').classList.remove('hidden');
+   verdict('פרטי החיבור נוצרו ונשמרו ✓. עכשיו חברו את הטלפון לרשת שהמכשיר משדר (Shelly...) ולחצו שוב על "שלח הגדרות למכשיר" — זו הלחיצה האחרונה. (כבר על רשת המכשיר ועדיין לא נמצא? הזינו את כתובת ה-IP שלו בשדה שנפתח למעלה.)','ok');
+   return}
   $('ip').classList.remove('hidden');
-  verdict('המכשיר לא נמצא אוטומטית. אפשרויות: (1) התחברו לרשת שהמכשיר משדר (Shelly...) ולחצו שוב; (2) מצאו את כתובת ה-IP שלו באפליקציית Shelly (תחת Device Information) או ברשימת המכשירים בנתב, הזינו אותה בשדה שנפתח למעלה ולחצו שוב.','warn');
+  verdict('המכשיר לא נמצא. התחברו לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הזינו את כתובת ה-IP שלו (מאפליקציית Shelly או מהנתב) בשדה שנפתח למעלה.','warn');
   $('go').disabled=false;return}
  log('המכשיר נמצא ('+IP+'). שולח הגדרות...','ok');
  const ssid=$('wifiSsid').value.trim(), wifiPass=$('wifiPass').value;
