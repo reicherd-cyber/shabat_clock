@@ -433,10 +433,19 @@ async function routerCheck(){
  }
  verdict('מצוין — הנתב אינו מחובר דרך אף ערוץ דולק ('+on.map(c=>c.relay_no).join(', ')+'). המכשיר מוכן.','ok');
 }
+let finTries=0;
 async function finish(){
  const r=await serverCheck(90);
  if(r==='ok'){verdict('הצליח! המכשיר מחובר לשרת. אפשר לחזור למסך הניהול וללחוץ "בדוק חיבור".','ok');offerRouterCheck();return}
  if(r==='wrong'){verdict('מכשיר אחר התחבר עם ההגדרות האלה — כנראה הוזנה כתובת IP של Shelly אחר. בדקו את הכתובת והריצו שוב.','bad');return}
+ // First miss is usually just a slow first connect (reboot + clock sync + TLS
+ // can exceed the 90s window — seen on a real 4PM install). Encourage a retry
+ // before unloading the filtered-line suspicion.
+ finTries++;
+ if(finTries<2){
+  verdict('המכשיר עדיין לא התחבר — חיבור ראשון לוקח לפעמים כמה דקות (המכשיר מסנכרן שעון ומתחבר מוצפן). המתינו חצי דקה ולחצו "בדוק שוב מול השרת". אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו קודם ל-Wi-Fi רגיל.','warn');
+  actionBtn('בדוק שוב מול השרת',async()=>{await finish()},true);
+  return}
  verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> ככל הנראה הסינון חוסם את החיבור המוצפן של המכשיר. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את השרת 188.166.29.235 פורט 8883 (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.<br><br>בדיקה מלאה ממחשב Windows על אותו קו — הדביקו שורה אחת ב-PowerShell (בודקת פורט + יירוט הצפנה ומדפיסה פסק דין):<br><code dir="ltr" style="display:block;background:#efe9df;border-radius:8px;padding:6px 8px;margin-top:4px;text-align:left">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>','warn');
  actionBtn('בדוק שוב מול השרת',async()=>{await finish()},true);
  if(sntpIdx<B.sntp.length-1){actionBtn('נסה שרת זמן אחר (בעיית שעון נפוצה)',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true)}
