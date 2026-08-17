@@ -323,8 +323,8 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
  <ol style="margin:6px 0 0;padding-inline-start:18px">
   <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly). אם הטלפון שואל אם להישאר
    ברשת בלי אינטרנט — הישארו, והשאירו את חבילת הגלישה (נתונים) פעילה.</li>
-  <li>מלאו למטה את פרטי ה-Wi-Fi הביתי ולחצו "התחל התקנה" —
-   הדף מזהה את המכשיר לבד, יוצר פרטי חיבור ושולח את ההגדרות.</li>
+  <li>לחצו "התחל התקנה" — הדף מזהה את קוד המכשיר לבד. אחרי הזיהוי מלאו את
+   פרטי ה-Wi-Fi הביתי ולחצו "שלח הגדרות למכשיר".</li>
   <li>בסיום חזרו ל-Wi-Fi הרגיל ולחצו "בדוק מול השרת". אין לטלפון חבילת גלישה?
    הדף ינחה אתכם לעבור רשת בכל שלב שצריך.</li>
  </ol>
@@ -350,7 +350,10 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '') {
    <input id="mac" placeholder="שם הרשת שהמכשיר משדר או קוד המכשיר (MAC)" style="margin-top:6px">
   </details>
   <input id="ip" class="hidden" placeholder="כתובת IP של המכשיר">
-  <div style="margin-top:8px;font-size:14px">
+  <div id="foundBox" class="hidden" style="margin-top:8px;font-size:15px;font-weight:700;background:#e5f2e7;color:#3a7d44;border-radius:10px;padding:8px 12px">
+   ✓ קוד המכשיר זוהה: <b id="foundMac" dir="ltr"></b>
+  </div>
+  <div id="wifiBlock" class="hidden" style="margin-top:8px;font-size:14px">
    <b>פרטי ה-Wi-Fi הביתי</b> — יישלחו למכשיר עם שאר ההגדרות והוא יתחבר לרשת לבד.
    <input id="wifiSsid" placeholder="שם רשת ה-Wi-Fi הביתית" style="margin-top:6px">
    <input id="wifiPass" placeholder="סיסמת ה-Wi-Fi" style="margin-top:6px">
@@ -367,6 +370,10 @@ let IP='', sntpIdx=0;
 const $=(id)=>document.getElementById(id);
 if(UID)$('uid').textContent=UID;
 if(PREPARE_URL){$('macFold').classList.remove('hidden');$('macHelp').classList.remove('hidden')}
+else{$('wifiBlock').classList.remove('hidden')}
+// Two stages (universal mode): identify the device first, ask for Wi-Fi only after
+// "קוד המכשיר זוהה" — mixing both on one screen confused real installs.
+let STAGE=PREPARE_URL?'detect':'install';
 // Accepts any model's SSID ("ShellyPro2-80F3DAC8DCA8", "ShellyPro4PM-..."),
 // "80F3DAC8DCA8", or a colon-separated MAC — the part after the last dash wins
 // so the letters/digits of the model name don't pollute it.
@@ -434,29 +441,48 @@ async function finish(){
 }
 $('go').onclick=async()=>{
  $('go').disabled=true;$('progress').classList.remove('hidden');$('log').innerHTML='';$('verdict').innerHTML='';$('actions').innerHTML='';
- if(PREPARE_URL){
-  let mac=parseMac($('mac').value);
-  if(mac.length!==12){
-   const manual0=$('ip').value.trim();
-   log('לא הוזן קוד מכשיר — מנסה לזהות אותו מהמכשיר עצמו...');
-   for(const c of (manual0?[manual0,'192.168.33.1']:['192.168.33.1'])){
-    const m=await wsMac(c);
-    if(m){mac=m;$('mac').value=m;log('קוד המכשיר זוהה: '+m,'ok');break}
-   }
+ try{ if(STAGE==='detect'){await stageDetect()} else {await stageInstall()} }
+ finally{$('go').disabled=false}
+};
+// Stage 1: identify the device only. No server, no Wi-Fi questions yet.
+async function stageDetect(){
+ let mac=parseMac($('mac').value);
+ if(mac.length!==12){
+  const manual0=$('ip').value.trim();
+  log('מחפש את המכשיר ברשת...');
+  for(const c of (manual0?[manual0,'192.168.33.1']:['192.168.33.1'])){
+   const m=await wsMac(c);
+   if(m){mac=m;$('mac').value=m;break}
   }
-  if(mac.length!==12){$('macFold').open=true;verdict('קוד המכשיר לא זוהה. זיהוי אוטומטי עובד כשהטלפון על הרשת שהמכשיר משדר (Shelly...) — או הקלידו ידנית בשדה שנפתח למעלה: את שם הרשת המלא או 12 תווים מהמדבקה שעל המכשיר.','bad');$('go').disabled=false;return}
-  // Credentials already minted for this MAC on a previous press (e.g. before
-  // switching to the device hotspot, which has no internet) — reuse, don't re-mint:
-  // a re-mint would both fail offline AND rotate the password server-side.
-  if(B&&mac===UID){log('פרטי החיבור כבר נוצרו קודם — ממשיך.','ok')}
+ }
+ if(mac.length!==12){
+  $('macFold').open=true;
+  verdict('לא נמצא מכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הקלידו את הקוד ידנית בשדה שנפתח למעלה.','warn');
+  return}
+ $('foundMac').textContent=mac;
+ $('foundBox').classList.remove('hidden');
+ $('wifiBlock').classList.remove('hidden');
+ $('go').textContent='שלח הגדרות למכשיר ›';
+ verdict('עכשיו מלאו את פרטי ה-Wi-Fi הביתי (או השאירו ריק אם המכשיר כבר מחובר) ולחצו "שלח הגדרות למכשיר".','ok');
+ STAGE='install';
+}
+// Stage 2: mint credentials (internet) + send everything to the device (local).
+async function stageInstall(){
+ if(PREPARE_URL){
+  const mac=parseMac($('mac').value);
+  if(mac.length!==12){STAGE='detect';$('go').textContent='התחל התקנה';verdict('קוד המכשיר התרוקן — לחצו שוב לזיהוי מחדש.','warn');return}
+  // Credentials already minted for this MAC on a previous press (e.g. before a
+  // network hop) — reuse, don't re-mint: a re-mint would both fail offline AND
+  // rotate the password server-side.
+  if(B&&mac===UID){log('פרטי החיבור כבר נוצרו — ממשיך.','ok')}
   else{
-   log('יוצר פרטי חיבור למכשיר בשרת... (דורש אינטרנט)');
-   try{
-    const r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'});
-    if(!r.ok){const e=await r.json().catch(()=>null);throw new Error((e&&e.error&&e.error.message)||('HTTP '+r.status))}
-    const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
-    log('פרטי חיבור נוצרו.','ok');
-   }catch(e){verdict('יצירת פרטי החיבור דורשת אינטרנט ולטלפון אין כרגע ('+e.message+'). קוד המכשיר כבר מולא למעלה — עברו ל-Wi-Fi עם אינטרנט (או הפעילו גלישה), לחצו שוב עד "פרטי חיבור נוצרו", ואז חזרו לרשת המכשיר ולחצו שוב — הכל נשמר. אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');$('go').disabled=false;return}
+   log('יוצר פרטי חיבור בשרת (דרך האינטרנט)...');
+   let r=null;
+   try{r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'})}
+   catch(e){verdict('אין לטלפון אינטרנט כרגע. הפעילו גלישה (נתונים) ולחצו שוב — או עברו ל-Wi-Fi עם אינטרנט, לחצו שוב, וחזרו לרשת המכשיר ללחיצה אחרונה. הקוד שזוהה נשמר.','warn');return}
+   if(!r.ok){const e=await r.json().catch(()=>null);verdict('השרת לא אישר את הבקשה: '+((e&&e.error&&e.error.message)||('שגיאה '+r.status))+'. אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');return}
+   const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
+   log('פרטי חיבור נוצרו.','ok');
   }
  }
  const manual=$('ip').value.trim();
