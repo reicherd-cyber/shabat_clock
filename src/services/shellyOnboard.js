@@ -359,7 +359,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '') {
    <b>פרטי ה-Wi-Fi הביתי</b> — יישלחו למכשיר עם שאר ההגדרות והוא יתחבר לרשת לבד.
    <input id="wifiSsid" placeholder="שם רשת ה-Wi-Fi הביתית" style="margin-top:6px">
    <input id="wifiPass" placeholder="סיסמת ה-Wi-Fi" style="margin-top:6px">
-   <div style="margin-top:4px;color:#8a8377">המכשיר כבר מחובר ל-Wi-Fi הביתי? השאירו ריק.</div>
+   <div style="margin-top:4px;color:#8a8377">המכשיר כבר מחובר ל-Wi-Fi הביתי או בכבל רשת? השאירו ריק.</div>
   </div>
   <button id="go">התחל התקנה</button>
  </div>
@@ -537,7 +537,10 @@ async function stageWifi(){
  if(!ssid){
   const st=await wsRpc(DEVIP,'Wifi.GetStatus');
   if(st&&st.status==='got ip'&&st.sta_ip){STA_IP=st.sta_ip;afterWifi('');return}
-  verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה.','warn');return}
+  // Pro models take a network cable — a cabled device needs no Wi-Fi at all.
+  const eth=await wsRpc(DEVIP,'Eth.GetStatus');
+  if(eth&&eth.ip){STA_IP=eth.ip;log('המכשיר מחובר בכבל רשת ✓ (כתובת '+eth.ip+')','ok');afterWifi('');return}
+  verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה — או חברו למכשיר כבל רשת מהנתב, המתינו רגע ולחצו שוב בלי למלא כלום.','warn');return}
  IP=DEVIP;
  log('שולח את פרטי הרשת "'+ssid+'" למכשיר...');
  try{await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}))}
