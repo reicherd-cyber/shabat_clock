@@ -558,17 +558,29 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
               <span className={`text-sm font-medium ${p === 'on' ? 'text-on' : 'text-off'}`}>{p === 'on' ? 'הדלקה' : 'כיבוי'}</span>
               {form.repeat_type === 'weekly' && !form.daily && (
                 (form.mode === 'on' || form.mode === 'off') ? (
-                  // Single-action weekly: multi-day chips — one schedule per day.
-                  <div className="flex gap-1 flex-wrap">
-                    {Object.entries(DAY_NAMES).map(([v, n]) => (
-                      <Button key={v} variant={form.days.includes(Number(v)) ? 'primary' : 'ghost'} className="!px-2 !py-1 text-xs"
-                        onClick={() => setForm({
-                          ...form,
-                          days: form.days.includes(Number(v))
-                            ? form.days.filter((d) => d !== Number(v))
-                            : [...form.days, Number(v)],
-                        })}>{n}</Button>
-                    ))}
+                  // Single-action weekly: multi-day checkboxes (same style as the
+                  // holiday "באילו ימים" grid) — one schedule per chosen day.
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted">באילו ימים</span>
+                      <Button variant="ghost" className="!px-2 !py-0.5 text-xs"
+                        onClick={() => setForm({ ...form, days: form.days.length === 7 ? [] : [1, 2, 3, 4, 5, 6, 7] })}>
+                        {form.days.length === 7 ? 'נקה הכל' : 'בחר הכל'}
+                      </Button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                      {Object.entries(DAY_NAMES).map(([v, n]) => (
+                        <label key={v} className="flex items-center gap-1.5 text-sm">
+                          <input type="checkbox" checked={form.days.includes(Number(v))}
+                            onChange={() => setForm({
+                              ...form,
+                              days: form.days.includes(Number(v))
+                                ? form.days.filter((d) => d !== Number(v))
+                                : [...form.days, Number(v)],
+                            })} /> {n}
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <Select className="w-full" value={form[`${p}_day_of_week`]} onChange={(e) => setForm({ ...form, [`${p}_day_of_week`]: e.target.value })}>
