@@ -38,17 +38,24 @@ export const ANCHOR_NAMES = {
   alot: 'עלות השחר (לדעה המאוחרת)',
   misheyakir: 'זמן ציצית ותפילין',
   sunrise: 'זריחה (הנץ)',
-  sof_shma: 'סוף זמן קריאת שמע',
+  sof_shma_mga: 'סוף זמן קריאת שמע א׳ (מג״א)',
+  sof_shma: 'סוף זמן קריאת שמע ב׳ (גר״א)',
   sof_tfila: 'סוף זמן תפילה',
   chatzot: 'חצות היום',
   mincha_gedola: 'מנחה גדולה',
   mincha_ketana: 'מנחה קטנה',
   plag_mincha: 'פלג המנחה',
+  candles: 'כניסת שבת (הדלקת נרות)',
   sunset: 'שקיעה',
   tzeit: 'צאת הכוכבים',
   tzeit_rt: 'צאת הכוכבים (ר״ת)',
+  shabbat_end: 'צאת שבת',
+  shabbat_end_rt: 'צאת שבת (ר״ת)',
   chatzot_layla: 'חצות הלילה',
 };
+// כניסת שבת is meaningful on a Friday side, צאת שבת on a שבת side — weekly
+// schedules filter them by the chosen day(s); other types show everything.
+const dayOnlyAnchors = { candles: 6, shabbat_end: 7, shabbat_end_rt: 7 };
 
 // שבת/חג schedule: the selectable days (Israeli יום טוב), merged with adjacent
 // Shabbatot server-side so a חג touching שבת becomes one ON→OFF block.
@@ -597,7 +604,13 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
               )}
               <Select className="w-full" value={form[`${p}_kind`]} onChange={(e) => setForm({ ...form, [`${p}_kind`]: e.target.value })}>
                 <option value="clock">שעה קבועה</option>
-                {Object.entries(ANCHOR_NAMES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
+                {Object.entries(ANCHOR_NAMES).filter(([v]) => {
+                  const need = dayOnlyAnchors[v];
+                  if (!need || form.repeat_type !== 'weekly' || form.daily) return true;
+                  const days = (form.mode === 'on' || form.mode === 'off')
+                    ? form.days.map(Number) : [Number(form[`${p}_day_of_week`])];
+                  return days.includes(need) || form[`${p}_kind`] === v;
+                }).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
               </Select>
               {form[`${p}_kind`] === 'clock'
                 ? <TimeInput value={form[`${p}_time`]} onChange={(e) => setForm({ ...form, [`${p}_time`]: e.target.value })} />

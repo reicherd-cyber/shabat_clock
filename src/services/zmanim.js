@@ -18,6 +18,11 @@ export const DEFAULT_REGION = 'jerusalem';
 
 // misheyakir (זמן ציצית ותפילין) is degrees-based: sun 11.5° below the horizon.
 addTime(-11.5, 'misheyakir', 'misheyakirDusk');
+// מוצאי שבת (הגאונים): sun 8.5° below the horizon after sunset.
+addTime(-8.5, 'shabbatEndDawn', 'shabbatEnd');
+
+// כניסת שבת (candle lighting): fixed minutes before sunset, by local custom.
+const CANDLE_MIN = { jerusalem: 40, haifa: 30, tel_aviv: 18, beer_sheva: 18 };
 
 // Anchor shapes: `base`+`plus` = astronomical event + fixed minutes;
 // `deg` = a custom suncalc solar-angle event; `prop` = proportional minutes
@@ -28,15 +33,19 @@ const ANCHORS = {
   alot: { prop: -72 },            // עלות השחר, לדעה המאוחרת (72 דק׳ זמניות)
   misheyakir: { deg: 'misheyakir' },
   sunrise: { base: 'sunrise', plus: 0 },
-  sof_shma: { prop: 180 },        // סוף זמן ק"ש — 3 שעות זמניות
+  sof_shma_mga: { mga: 180 },     // סוף זמן ק"ש א׳ (מג"א) — 3 שעות זמניות של היום הארוך (עלות 72 → צאת 72)
+  sof_shma: { prop: 180 },        // סוף זמן ק"ש ב׳ (גר"א) — 3 שעות זמניות
   sof_tfila: { prop: 240 },       // סוף זמן תפילה — 4 שעות זמניות
   chatzot: { prop: 360 },
   mincha_gedola: { prop: 390 },
   mincha_ketana: { prop: 570 },
   plag_mincha: { prop: 645 },
+  candles: { candles: true },     // כניסת שבת — שקיעה פחות מנהג האזור (CANDLE_MIN)
   sunset: { base: 'sunset', plus: 0 },
   tzeit: { base: 'sunset', plus: 18 },
   tzeit_rt: { base: 'sunset', plus: 72 },
+  shabbat_end: { deg: 'shabbatEnd' },      // צאת שבת — 8.5° (הגאונים)
+  shabbat_end_rt: { base: 'sunset', plus: 72 }, // צאת שבת ר"ת
   chatzot_layla: { prop: 360, night: true },
 };
 
@@ -56,8 +65,15 @@ export function anchorMinutes(anchor, date, region, tz) {
   const minOf = (name) => { const p = localParts(times[name], tz); return p.hh * 60 + p.mm; };
   if (a.base) return minOf(a.base) + a.plus;
   if (a.deg) return minOf(a.deg);
+  if (a.candles) return minOf('sunset') - (CANDLE_MIN[region] ?? 18);
   const sunrise = minOf('sunrise');
   const sunset = minOf('sunset');
+  // מג"א proportional hours run over the extended day: עלות (72 before sunrise)
+  // to צאת ר"ת (72 after sunset).
+  if (a.mga) {
+    const start = sunrise - 72;
+    return Math.round(start + (a.mga * ((sunset + 72) - start)) / 720);
+  }
   let m = Math.round(sunrise + (a.prop * (sunset - sunrise)) / 720);
   if (a.night) m = (m + 720) % MINUTES_PER_DAY; // חצות הלילה — same civil date (±1 דק׳)
   return m;
