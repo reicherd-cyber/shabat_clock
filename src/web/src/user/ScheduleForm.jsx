@@ -13,7 +13,7 @@ export const emptyForm = {
   // Weekly single-action modes: multi-day chips — one schedule per chosen day,
   // the same one-row-per-selection pattern as relay_ids.
   days: [6],
-  mode: 'both', // 'both' | 'on' | 'off' — which side(s) the schedule performs
+  mode: 'on', // 'on' | 'off' | 'both' | 'offon' — which side(s) the schedule performs
   // Halachic anchors: 'clock' = fixed time; otherwise offset דק׳ לפני/אחרי the zman.
   on_kind: 'clock', on_offset: 20, on_dir: 'before',
   off_kind: 'clock', off_offset: 20, off_dir: 'after',
@@ -105,10 +105,10 @@ export const anchorText = (anchor, offsetMin) => {
 // 'offon' = reversed pair (turn OFF first, back ON later — a normally-on device);
 // weekly/once only: the holiday and yearly resolvers assume ON opens the range.
 const MODES = [
-  { v: 'both', label: 'הדלקה וכיבוי' },
-  { v: 'offon', label: 'כיבוי והדלקה' },
   { v: 'on', label: 'הדלקה בלבד' },
   { v: 'off', label: 'כיבוי בלבד' },
+  { v: 'both', label: 'הדלקה וכיבוי' },
+  { v: 'offon', label: 'כיבוי והדלקה' },
 ];
 
 // Quick duration chips (once mode only): OFF = ON + duration, rolling the date.
