@@ -335,8 +335,12 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
     }
     if (form.id) {
       await api.patch(`/schedules/${form.id}`, b);
-      // Extra chip days on an edited row become new sibling schedules (the row
-      // itself keeps the first day). POST bodies drop the PATCH's null-resets.
+      // Editing a merged group rebuilds it: the edited row keeps the first day,
+      // old siblings are dropped, remaining days become fresh siblings. A plain
+      // row edited onto extra days grows siblings the same way (group_ids empty).
+      for (const gid of (form.group_ids || [])) {
+        if (Number(gid) !== Number(form.id)) await api.del(`/schedules/${gid}`);
+      }
       if (multiDays && multiDays.length > 1) {
         const clean = Object.fromEntries(Object.entries(b).filter(([, v]) => v !== null));
         for (const d of multiDays.slice(1)) {

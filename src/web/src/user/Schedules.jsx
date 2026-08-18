@@ -25,13 +25,14 @@ export default function Schedules() {
   };
   useEffect(() => { refresh().catch(setError); }, []);
 
+  // A merged row acts on every schedule behind it (see mergeWeekly).
   const toggleEnabled = (s) => run(async () => {
-    await api.patch(`/schedules/${s.id}`, { is_enabled: !s.is_enabled });
+    for (const m of (s._group || [s])) await api.patch(`/schedules/${m.id}`, { is_enabled: !s.is_enabled });
     await refresh();
   });
 
   const remove = (s) => run(async () => {
-    await api.del(`/schedules/${s.id}`);
+    for (const m of (s._group || [s])) await api.del(`/schedules/${m.id}`);
     await refresh();
   });
 
@@ -140,6 +141,32 @@ export default function Schedules() {
   // Seeded from the RELAY list (not just schedules) so a relay with no schedules
   // still gets a table with its own add button; schedules of removed relays keep
   // their table too.
+  // Sibling single-action weekly rows (created by the form's day multi-select —
+  // same channel/side/time/anchor/exclusions/state, different day) merge into
+  // ONE display row carrying all their days. _group keeps the real rows so
+  // toggle/delete/edit act on all of them.
+  const mergeWeekly = (items) => {
+    const seen = new Map();
+    const out = [];
+    for (const s of items) {
+      const side = s.on_time && !s.off_time ? 'on' : (!s.on_time && s.off_time ? 'off' : null);
+      if (s.repeat_type !== 'weekly' || !side || s[`${side}_day_of_week`] == null) { out.push(s); continue; }
+      const anchored = s[`${side}_anchor`] && s[`${side}_anchor`] !== 'clock';
+      const key = JSON.stringify([s.relay_id, side, anchored ? null : s[`${side}_time`],
+        s[`${side}_anchor`], s[`${side}_offset_min`], s.is_enabled, s.sync_status,
+        s.excl_type, s.excl_days, s.excl_holidays, s.excl_calendar, s.excl_date, s.excl_end_date,
+        s.excl_heb_day, s.excl_heb_month, s.excl_end_heb_day, s.excl_end_heb_month]);
+      if (seen.has(key)) seen.get(key)._group.push(s);
+      else { const m = { ...s, _group: [s], _side: side }; seen.set(key, m); out.push(m); }
+    }
+    for (const m of out) {
+      if (!m._group || m._group.length < 2) continue;
+      m._daysText = m._group.map((x) => Number(x[`${m._side}_day_of_week`]))
+        .sort((a, b) => a - b).map((d) => DAY_NAMES[d]).join(', ');
+    }
+    return out;
+  };
+  const mergedKey = (s) => (s._group ? Math.min(...s._group.map(sortKey)) : sortKey(s));
   const groups = useMemo(() => {
     if (!schedules) return [];
     const byRelay = new Map();
@@ -149,8 +176,8 @@ export default function Schedules() {
       byRelay.get(s.relay_id).items.push(s);
     }
     return [...byRelay.values()]
-      .map((g) => ({ ...g, items: g.items.sort((a, b) => sortKey(a) - sortKey(b)) }))
-      .sort((a, b) => (g => g.items.length ? sortKey(g.items[0]) : Infinity)(a) - (g => g.items.length ? sortKey(g.items[0]) : Infinity)(b));
+      .map((g) => ({ ...g, items: mergeWeekly(g.items).sort((a, b) => mergedKey(a) - mergedKey(b)) }))
+      .sort((a, b) => (g => g.items.length ? mergedKey(g.items[0]) : Infinity)(a) - (g => g.items.length ? mergedKey(g.items[0]) : Infinity)(b));
   }, [schedules, relays]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reversed pair (כיבוי והדלקה): the OFF fires before the ON — pills must render
@@ -170,12 +197,12 @@ export default function Schedules() {
     : s.repeat_type === 'holiday' ? `בכניסה (${fmtDate(s.on_date)}) · ${sideTime(s, 'on')} · הדלקה`
       : s.repeat_type === 'yearly' ? `כל שנה — ${yearlyRange(s)} · הקרוב ${fmtDate(s.on_date)} · ${sideTime(s, 'on')} · הדלקה`
         : s.repeat_type === 'once' ? `${String(s.on_date).slice(0, 10)} ${sideTime(s, 'on')} · הדלקה`
-          : `${s.on_day_of_week == null ? 'כל יום' : DAY_NAMES[s.on_day_of_week]} ${sideTime(s, 'on')} · הדלקה`);
+          : `${s.on_day_of_week == null ? 'כל יום' : (s._daysText || DAY_NAMES[s.on_day_of_week])} ${sideTime(s, 'on')} · הדלקה`);
   const offLabel = (s) => (s.off_time == null ? null
     : s.repeat_type === 'holiday' ? `ביציאה (${fmtDate(s.off_date)}) · ${sideTime(s, 'off')} · כיבוי`
       : s.repeat_type === 'yearly' ? `${s.on_time == null ? `כל שנה — ${yearlyRange(s)} · ` : ''}${fmtDate(s.off_date)} · ${sideTime(s, 'off')} · כיבוי`
         : s.repeat_type === 'once' ? `${String(s.off_date).slice(0, 10)} ${sideTime(s, 'off')} · כיבוי`
-          : `${s.off_day_of_week == null ? 'כל יום' : DAY_NAMES[s.off_day_of_week]} ${sideTime(s, 'off')} · כיבוי`);
+          : `${s.off_day_of_week == null ? 'כל יום' : (s._daysText || DAY_NAMES[s.off_day_of_week])} ${sideTime(s, 'off')} · כיבוי`);
 
   if (!schedules) return <p className="text-muted">טוען…</p>;
   return (
@@ -200,7 +227,9 @@ export default function Schedules() {
               <p className="text-muted text-sm px-5 py-4">אין תזמונים לערוץ זה עדיין — הוסיפו עם הכפתור למעלה.</p>
             )}
             {g.items.map((s, i) => {
-              const chip = nextChip(s);
+              // Merged row: the chip reflects whichever member acts soonest.
+              const repr = s._group ? [...s._group].sort((a, b) => sortKey(a) - sortKey(b))[0] : s;
+              const chip = nextChip(repr);
               return (
                 <div key={s.id} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''} ${s.is_enabled ? '' : 'opacity-60'}`}>
                   <div className="min-w-[130px]">
@@ -234,7 +263,13 @@ export default function Schedules() {
                       title="החל את זמני השבת גם בחגים" onClick={() => setConvert(s)}><Sparkles size={17} /></button>
                   )}
                   <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-ink cursor-pointer'}`}
-                    title="עריכת התזמון" onClick={() => setFormInit(rowToForm(s))}><Pencil size={16} /></button>
+                    title="עריכת התזמון" onClick={() => setFormInit({
+                      ...rowToForm(s),
+                      ...(s._group && s._group.length > 1 ? {
+                        days: s._group.map((x) => Number(x[`${s._side}_day_of_week`])).sort((a, b) => a - b),
+                        group_ids: s._group.map((x) => x.id),
+                      } : {}),
+                    })}><Pencil size={16} /></button>
                   <Toggle checked={!!s.is_enabled} busy={busy} onChange={() => toggleEnabled(s)} />
                   <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`} title="מחק" onClick={() => remove(s)}><Trash2 size={17} /></button>
                 </div>
