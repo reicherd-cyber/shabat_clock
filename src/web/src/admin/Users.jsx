@@ -32,6 +32,19 @@ export default function Users() {
     setPinReset(null);
   });
 
+  // Phone manager: list a user's numbers + add one directly — admin-added
+  // numbers are verified immediately (no OTP), server-side add_phone path.
+  const [phoneMgr, setPhoneMgr] = useState(null); // {id, name, phones, new_phone}
+  const openPhones = (u) => run(async () => {
+    const full = await adminApi.get(`/users/${u.id}`);
+    setPhoneMgr({ id: u.id, name: u.full_name, phones: full.phones || [], new_phone: '' });
+  });
+  const addPhone = () => run(async () => {
+    await adminApi.patch(`/users/${phoneMgr.id}`, { add_phone: phoneMgr.new_phone.trim() });
+    const full = await adminApi.get(`/users/${phoneMgr.id}`);
+    setPhoneMgr({ ...phoneMgr, phones: full.phones || [], new_phone: '' });
+  });
+
   // Impersonate: open the user panel as them [D14] — token stored in the user slot.
   const impersonate = (u) => run(async () => {
     const { token } = await adminApi.post(`/users/${u.id}/impersonate`);
@@ -87,6 +100,7 @@ export default function Users() {
                 <td className="p-3 space-x-1 space-x-reverse whitespace-nowrap">
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => impersonate(u)}>כניסה בשמו</Button>
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setPinReset({ id: u.id, new_pin: '' })}>איפוס PIN</Button>
+                  <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => openPhones(u)}>טלפונים</Button>
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => toggleSuspend(u)}>
                     {u.status === 'active' ? 'השעה' : 'הפעל'}
                   </Button>
@@ -113,6 +127,31 @@ export default function Users() {
             </label>
             <ErrorNote error={error} />
             <Button className="w-full" disabled={busy} onClick={create}>צור משתמש</Button>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!phoneMgr} onClose={() => setPhoneMgr(null)} title={`טלפונים — ${phoneMgr?.name || ''}`}>
+        {phoneMgr && (
+          <div className="space-y-3">
+            {phoneMgr.phones.length === 0 && <p className="text-muted text-sm">אין מספרים משויכים למשתמש זה.</p>}
+            {phoneMgr.phones.map((p) => (
+              <div key={p.id} className="flex items-center gap-2 text-sm border border-line rounded-xl px-3 py-2">
+                <span dir="ltr" className="font-medium">{p.phone}</span>
+                {p.label && <span className="text-muted text-xs">{p.label}</span>}
+                {!!p.is_primary && <Badge ok>ראשי</Badge>}
+                <span className="ms-auto text-xs text-muted">{p.verified_at ? 'מאומת' : 'לא מאומת'}</span>
+              </div>
+            ))}
+            <div className="border-t border-line pt-3 space-y-2">
+              <Input dir="ltr" type="tel" placeholder="מספר חדש — יאומת מיידית, בלי קוד"
+                value={phoneMgr.new_phone} onChange={(e) => setPhoneMgr({ ...phoneMgr, new_phone: e.target.value })} />
+              <p className="text-muted text-xs">
+                המספר יתווסף כמאומת: המשתמש יוכל להתחבר ולהזדהות בקו מהמספר הזה מיד.
+              </p>
+              <ErrorNote error={error} />
+              <Button className="w-full" disabled={busy || !phoneMgr.new_phone.trim()} onClick={addPhone}>הוסף מספר</Button>
+            </div>
           </div>
         )}
       </Modal>
