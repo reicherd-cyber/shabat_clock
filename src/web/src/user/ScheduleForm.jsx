@@ -10,6 +10,9 @@ export const emptyForm = {
   relay_id: '', relay_ids: [], repeat_type: 'weekly',
   on_day_of_week: 6, on_time: '18:00', off_day_of_week: 7, off_time: '20:00',
   on_date: '', off_date: '', daily: false,
+  // Weekly single-action modes: multi-day chips — one schedule per chosen day,
+  // the same one-row-per-selection pattern as relay_ids.
+  days: [6],
   mode: 'both', // 'both' | 'on' | 'off' — which side(s) the schedule performs
   // Halachic anchors: 'clock' = fixed time; otherwise offset דק׳ לפני/אחרי the zman.
   on_kind: 'clock', on_offset: 20, on_dir: 'before',
@@ -158,6 +161,7 @@ export const rowToForm = (s) => ({
     && (s.on_time ? s.on_day_of_week == null : s.off_day_of_week == null),
   on_day_of_week: s.on_day_of_week ?? 6,
   off_day_of_week: s.off_day_of_week ?? 7,
+  days: [Number((s.on_time ? s.on_day_of_week : s.off_day_of_week) ?? 6)],
   on_time: s.on_time || '18:00',
   off_time: s.off_time || '20:00',
   on_date: s.repeat_type === 'yearly'
@@ -302,9 +306,15 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
       b[`${p}_anchor`] = form[`${p}_kind`];
       b[`${p}_offset_min`] = (form[`${p}_dir`] === 'before' ? -1 : 1) * Math.abs(Number(form[`${p}_offset`]) || 0);
     };
+    // Weekly single-action mode uses the multi-day chips: one schedule per day.
+    const sideKey = form.mode === 'on' ? 'on' : 'off';
+    const multiDays = form.repeat_type === 'weekly' && !form.daily
+      && (form.mode === 'on' || form.mode === 'off')
+      ? [...form.days].map(Number).sort((x, y) => x - y) : null;
+    if (multiDays && !multiDays.length) throw new Error('בחרו לפחות יום אחד');
     if (form.repeat_type === 'weekly') {
-      if (form.mode !== 'off') { side('on'); b.on_day_of_week = form.daily ? null : Number(form.on_day_of_week); }
-      if (form.mode !== 'on') { side('off'); b.off_day_of_week = form.daily ? null : Number(form.off_day_of_week); }
+      if (form.mode !== 'off') { side('on'); b.on_day_of_week = form.daily ? null : Number(multiDays ? multiDays[0] : form.on_day_of_week); }
+      if (form.mode !== 'on') { side('off'); b.off_day_of_week = form.daily ? null : Number(multiDays ? multiDays[0] : form.off_day_of_week); }
     } else if (form.repeat_type === 'holiday') {
       b.holidays = form.holidays; // the server computes the next שבת/חג block's dates
       if (form.mode !== 'off') side('on');
@@ -325,14 +335,27 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
     }
     if (form.id) {
       await api.patch(`/schedules/${form.id}`, b);
+      // Extra chip days on an edited row become new sibling schedules (the row
+      // itself keeps the first day). POST bodies drop the PATCH's null-resets.
+      if (multiDays && multiDays.length > 1) {
+        const clean = Object.fromEntries(Object.entries(b).filter(([, v]) => v !== null));
+        for (const d of multiDays.slice(1)) {
+          await api.post('/schedules', { ...clean, [`${sideKey}_day_of_week`]: d, relay_id: Number(form.relay_id) });
+        }
+      }
     } else {
-      // One schedule per selected channel — each relay gets its own row.
+      // One schedule per selected channel — each relay gets its own row; the
+      // weekly day chips multiply the same way (one row per day).
       delete b.relay_id;
       for (const rid of form.relay_ids) {
-        await api.post('/schedules', { ...b, relay_id: Number(rid) }).catch((e) => {
-          const r = relays.find((x) => Number(x.id) === Number(rid));
-          throw new Error(`${r ? `${r.name}: ` : ''}${e.message}`);
-        });
+        for (const d of (multiDays || [null])) {
+          const body = { ...b, relay_id: Number(rid) };
+          if (multiDays) body[`${sideKey}_day_of_week`] = d;
+          await api.post('/schedules', body).catch((e) => {
+            const r = relays.find((x) => Number(x.id) === Number(rid));
+            throw new Error(`${r ? `${r.name}: ` : ''}${e.message}`);
+          });
+        }
       }
     }
     await onSaved();
@@ -534,9 +557,24 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
             {(form.mode === 'offon' ? ['off', 'on'] : ['on', 'off']).map((p) => (form.mode !== (p === 'on' ? 'off' : 'on') && <div key={p} className="space-y-2">
               <span className={`text-sm font-medium ${p === 'on' ? 'text-on' : 'text-off'}`}>{p === 'on' ? 'הדלקה' : 'כיבוי'}</span>
               {form.repeat_type === 'weekly' && !form.daily && (
-                <Select className="w-full" value={form[`${p}_day_of_week`]} onChange={(e) => setForm({ ...form, [`${p}_day_of_week`]: e.target.value })}>
-                  {Object.entries(DAY_NAMES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
-                </Select>
+                (form.mode === 'on' || form.mode === 'off') ? (
+                  // Single-action weekly: multi-day chips — one schedule per day.
+                  <div className="flex gap-1 flex-wrap">
+                    {Object.entries(DAY_NAMES).map(([v, n]) => (
+                      <Button key={v} variant={form.days.includes(Number(v)) ? 'primary' : 'ghost'} className="!px-2 !py-1 text-xs"
+                        onClick={() => setForm({
+                          ...form,
+                          days: form.days.includes(Number(v))
+                            ? form.days.filter((d) => d !== Number(v))
+                            : [...form.days, Number(v)],
+                        })}>{n}</Button>
+                    ))}
+                  </div>
+                ) : (
+                  <Select className="w-full" value={form[`${p}_day_of_week`]} onChange={(e) => setForm({ ...form, [`${p}_day_of_week`]: e.target.value })}>
+                    {Object.entries(DAY_NAMES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
+                  </Select>
+                )
               )}
               {form.repeat_type === 'once' && form.once_calendar === 'greg' && (
                 <Input type="date" value={form[`${p}_date`]} onChange={(e) => setForm({ ...form, [`${p}_date`]: e.target.value })} />
@@ -694,6 +732,8 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
           <ErrorNote error={error} />
           <Button className="w-full"
             disabled={busy || (!form.id && !form.relay_ids.length)
+              || (form.repeat_type === 'weekly' && !form.daily
+                && (form.mode === 'on' || form.mode === 'off') && !form.days.length)
               || (form.repeat_type === 'yearly' && form.annual_calendar === 'greg'
                 && ((form.mode !== 'off' && !form.on_date) || (form.mode !== 'on' && !form.end_date)))
               || (form.repeat_type !== 'once' && form.excl_on && (
