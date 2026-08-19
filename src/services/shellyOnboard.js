@@ -494,8 +494,10 @@ async function stageDetect(){
  // on the user's own network — no coming back to the hotspot.
  if(DEVIP){
   $('wifiBlock').classList.remove('hidden');
-  $('go').textContent='חבר לרשת הביתית ›';
-  verdict((PROVISIONED?'המכשיר מוגדר מראש לשרת ✓. ':'')+'מלאו את פרטי ה-Wi-Fi הביתי ולחצו "חבר לרשת הביתית" — שלב זה כולו מקומי, בלי אינטרנט.','ok');
+  $('go').textContent=PROVISIONED?'חבר ל-Wi-Fi ›':'חבר לרשת הביתית (שלב 2 מתוך 3) ›';
+  verdict(PROVISIONED
+   ?'המכשיר מוגדר מראש לשרת ✓ — מלאו את פרטי ה-Wi-Fi הביתי ולחצו. זה השלב היחיד.'
+   :'שלב 1 מתוך 3 הושלם — המכשיר זוהה ✓. מלאו את פרטי ה-Wi-Fi הביתי ולחצו "חבר לרשת הביתית" (מקומי, בלי אינטרנט).','ok');
   STAGE='wifi';
   return}
  // Typed-MAC path (phone is NOT on the device's network): mint now, then a
@@ -560,8 +562,8 @@ function afterWifi(ssid){
   STAGE='done';$('go').textContent='סיום';
   verdict('סיימתם! המכשיר מחובר לרשת הביתית ומוגדר מראש לשרת — הוא יתקשר לבד תוך דקות ספורות. אפשר לוודא במסך הניהול ("בדוק חיבור").','ok');
   return}
- STAGE='complete';$('go').textContent='השלם התקנה ›';
- verdict('המכשיר התחבר לרשת הביתית ✓. עכשיו חברו את הטלפון ל-Wi-Fi הביתי ולחצו "השלם התקנה" — הכל ימשיך משם, בלי לחזור לרשת המכשיר.','ok');
+ STAGE='complete';$('go').textContent='השלם התקנה (שלב 3 מתוך 3) ›';
+ verdict('שלב 2 מתוך 3 הושלם — המכשיר על הרשת הביתית ✓. <b>ההתקנה עוד לא הסתיימה:</b> חברו את הטלפון ל-Wi-Fi הביתי ולחצו "השלם התקנה". בלי השלב הזה המכשיר לא יתחבר לשרת.','warn');
 }
 // Stage 'complete' (on the home network — phone and device now share a LAN):
 // mint creds, reach the device at its home address, send server config, verify.
