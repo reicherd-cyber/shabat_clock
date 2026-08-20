@@ -16,7 +16,7 @@ const Stat = ({ label, value, ok, to }) => {
     >
       <div className={`text-3xl font-bold ${ok === false ? 'text-off' : ok ? 'text-on' : ''}`}>{value}</div>
       <div className="text-muted text-sm">{label}</div>
-      {to && <div className="text-muted text-xs mt-1">פרטים ›</div>}
+      {to && <div className="text-accent-dk text-xs mt-1 underline underline-offset-2">פרטים ›</div>}
     </Card>
   );
 };
