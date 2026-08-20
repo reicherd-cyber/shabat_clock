@@ -192,8 +192,10 @@ export async function healthTick() {
   // Broker down → mqtt-transport probes would all fail and masquerade as device
   // incidents; the broker_down alert already covers them. LAN devices still probe.
   const devices = await query(
-    `SELECT id, name, device_uid, transport, ip_address, relay_count, is_online, mute_alerts
-     FROM devices WHERE device_type = 'shelly' AND is_enabled = TRUE AND device_uid IS NOT NULL`,
+    `SELECT d.id, CONCAT(u.full_name, ' — ', d.name) AS name, d.device_uid, d.transport,
+            d.ip_address, d.relay_count, d.is_online, d.mute_alerts
+     FROM devices d JOIN users u ON u.id = d.user_id
+     WHERE d.device_type = 'shelly' AND d.is_enabled = TRUE AND d.device_uid IS NOT NULL`,
   );
   const deviceHealth = [];
   for (const d of devices) {

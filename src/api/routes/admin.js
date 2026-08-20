@@ -335,7 +335,10 @@ adminRouter.get('/monitoring', async (req, res, next) => {
       query("SELECT COUNT(*) AS n FROM commands WHERE status = 'failed' AND requested_at > UTC_TIMESTAMP() - INTERVAL 24 HOUR"),
     ]);
     const syncErrors = await query(
-      "SELECT id, name, device_uid, sync_error, schedule_version, device_ack_version FROM devices WHERE sync_status = 'error' AND is_enabled = TRUE",
+      `SELECT d.id, CONCAT(u.full_name, ' — ', d.name) AS name, d.device_uid, d.sync_error,
+              d.schedule_version, d.device_ack_version
+       FROM devices d JOIN users u ON u.id = d.user_id
+       WHERE d.sync_status = 'error' AND d.is_enabled = TRUE`,
     );
     res.json({
       devices_online: online.n, devices_total: total.n,

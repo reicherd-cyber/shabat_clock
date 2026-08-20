@@ -182,7 +182,7 @@ export default function Devices() {
           </Select>
           <Select className="py-2 text-sm w-40" value={fDevice} onChange={(e) => setFDevice(e.target.value)}>
             <option value="">כל המכשירים</option>
-            {deviceOptions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            {deviceOptions.map((d) => <option key={d.id} value={d.id}>{d.owner_name} — {d.name}</option>)}
           </Select>
           <Select className="py-2 text-sm" value={fOnline} onChange={(e) => setFOnline(e.target.value)}>
             <option value="">מחובר ומנותק</option>
