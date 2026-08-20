@@ -219,7 +219,11 @@ export default function Devices() {
               <Fragment key={d.id}>
                 <tr className={`border-b border-line last:border-0 ${d.is_enabled ? '' : 'opacity-60'}`}>
                   <td className="p-3 whitespace-nowrap"><span className="inline-flex items-center gap-1.5"><OnlineDot online={d.is_online} />{d.is_online ? 'מחובר' : 'מנותק'}</span></td>
-                  <td className="p-3 font-semibold">{d.name} {!d.is_enabled && <Badge ok={false}>מושהה</Badge>}</td>
+                  <td className="p-3 font-semibold">
+                    {d.name}
+                    {!!d.mute_alerts && <span className="ms-1" title="התראות מייל מושתקות למכשיר זה">🔕</span>}
+                    {!d.is_enabled && <span className="ms-1"><Badge ok={false}>מושהה</Badge></span>}
+                  </td>
                   <td className="p-3">{d.owner_name}</td>
                   <td className="p-3 text-left">
                     <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setExpanded(expanded === d.id ? null : d.id)}>
@@ -241,6 +245,14 @@ export default function Devices() {
                         <Badge ok={d.sync_status === 'synced'}>{d.sync_status}</Badge>
                         <span className="whitespace-nowrap">v{d.schedule_version} / ack v{d.device_ack_version}</span>
                         <span className="flex gap-1 ms-auto">
+                          <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                            title="השתקה עוצרת מיילים על תקלות במכשיר הזה; התקלות עדיין נרשמות ביומן"
+                            onClick={() => run(async () => {
+                              await adminApi.patch(`/devices/${d.id}`, { mute_alerts: !d.mute_alerts });
+                              await refresh();
+                            })}>
+                            {d.mute_alerts ? '🔕 בטל השתקת מייל' : 'השתק מייל'}
+                          </Button>
                           {d.is_enabled
                             ? <Button variant="danger" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setSuspending(d)}>השהיה</Button>
                             : <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setEnabled(d, true)}>שחזר</Button>}

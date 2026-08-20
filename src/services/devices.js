@@ -194,6 +194,7 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
     const fields = {};
 
     if (patch.name !== undefined) fields.name = patch.name;
+    if (patch.mute_alerts !== undefined) fields.mute_alerts = Boolean(patch.mute_alerts);
     if (patch.is_enabled !== undefined) fields.is_enabled = Boolean(patch.is_enabled);
     const removing = fields.is_enabled === false && device.is_enabled;
     const recovering = fields.is_enabled === true && !device.is_enabled;
@@ -368,7 +369,7 @@ export async function listAllDevices() {
   return query(
     `SELECT d.id, d.user_id, u.full_name AS owner_name, d.device_uid, d.removed_uid, d.name, d.fw_version, d.timezone,
             d.relay_count, d.is_online, d.last_seen_at, d.schedule_version, d.device_ack_version,
-            d.sync_status, d.sync_error, d.created_at, d.is_enabled
+            d.sync_status, d.sync_error, d.created_at, d.is_enabled, d.mute_alerts
      FROM devices d JOIN users u ON u.id = d.user_id ORDER BY d.id`,
   );
 }

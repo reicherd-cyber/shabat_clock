@@ -76,6 +76,8 @@ async function checkShelly(device) {
   const st = deviceState.get(device.id) ?? { failures: 0, lastUptime: null, expectReboot: false, lastRebootAt: 0 };
   deviceState.set(device.id, st);
   const health = { id: device.id, name: device.name, reachable: false };
+  // Muted device: incidents and device_events still record; only email is silenced.
+  const alert = device.mute_alerts ? async () => {} : alertAdmins;
 
   let sys;
   try {
@@ -86,7 +88,7 @@ async function checkShelly(device) {
     if (st.failures === UNREACHABLE_AFTER) {
       recordIncident('unreachable', device.name, `no RPC answer x${st.failures}`);
       await deviceEvent(device.id, 'error', { kind: 'health_unreachable', failures: st.failures });
-      await alertAdmins(`unreachable:${device.id}`, `המכשיר "${device.name}" לא מגיב`,
+      await alert(`unreachable:${device.id}`, `המכשיר "${device.name}" לא מגיב`,
         `בדיקת הבריאות לא מצליחה להגיע למכשיר "${device.name}" (${device.device_uid}) כבר ${st.failures} דקות.`);
     }
     return health;
@@ -107,7 +109,7 @@ async function checkShelly(device) {
     } else {
       recordIncident('unexpected_reboot', device.name, `uptime ${st.lastUptime}s → ${sys.uptime}s`);
       await deviceEvent(device.id, 'boot', { kind: 'unexpected_reboot', uptime: sys.uptime, prev_uptime: st.lastUptime });
-      await alertAdmins(`reboot:${device.id}`, `המכשיר "${device.name}" אותחל באופן לא צפוי`,
+      await alert(`reboot:${device.id}`, `המכשיר "${device.name}" אותחל באופן לא צפוי`,
         `המכשיר "${device.name}" (${device.device_uid}) אותחל מעצמו (קריסה או הפסקת חשמל). המצב שוחזר אוטומטית (restore_last) — מומלץ לבדוק את יציבות החשמל/קושחה.`);
     }
   }
@@ -125,7 +127,7 @@ async function checkShelly(device) {
   if (hottest >= TEMP_CRITICAL_C) {
     recordIncident('high_temperature', device.name, `${hottest}°C`);
     await deviceEvent(device.id, 'error', { kind: 'high_temperature', tC: hottest });
-    await alertAdmins(`temp:${device.id}`, `חום גבוה במכשיר "${device.name}"`,
+    await alert(`temp:${device.id}`, `חום גבוה במכשיר "${device.name}"`,
       `טמפרטורת הממסר במכשיר "${device.name}" היא ${hottest}°C (סף: ${TEMP_CRITICAL_C}). בדקו עומס/אוורור.`);
   }
 
@@ -138,7 +140,7 @@ async function checkShelly(device) {
     recordIncident('auto_reboot', device.name, `ram_free ${sys.ram_free}B < ${RAM_CRITICAL_BYTES}B`);
     await deviceEvent(device.id, 'error', { kind: 'auto_reboot_low_ram', ram_free: sys.ram_free });
     await shellyCall(device, 'Shelly.Reboot').catch((e) => console.error('[health] reboot failed:', e.message));
-    await alertAdmins(`autoreboot:${device.id}`, `אתחול יזום למכשיר "${device.name}"`,
+    await alert(`autoreboot:${device.id}`, `אתחול יזום למכשיר "${device.name}"`,
       `זיכרון המכשיר "${device.name}" ירד ל-${sys.ram_free} בתים — בוצע אתחול יזום למניעת קריסה. המצב שוחזר אוטומטית.`);
     health.auto_rebooted = true;
   }
@@ -190,7 +192,7 @@ export async function healthTick() {
   // Broker down → mqtt-transport probes would all fail and masquerade as device
   // incidents; the broker_down alert already covers them. LAN devices still probe.
   const devices = await query(
-    `SELECT id, name, device_uid, transport, ip_address, relay_count, is_online
+    `SELECT id, name, device_uid, transport, ip_address, relay_count, is_online, mute_alerts
      FROM devices WHERE device_type = 'shelly' AND is_enabled = TRUE AND device_uid IS NOT NULL`,
   );
   const deviceHealth = [];
