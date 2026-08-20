@@ -108,14 +108,37 @@ export default function Devices() {
     setShelly((s) => (s ? { ...s, prepWifi: { ...s.prepWifi, saved: true } } : s));
     setTimeout(() => setShelly((s) => (s ? { ...s, prepWifi: { ...s.prepWifi, saved: false } } : s)), 2000);
   });
+  // Accepts the device's own network name ("ShellyPro4PM-E08CFE95DD48") or a bare
+  // MAC — the code rides in the SSID, so no sticker needed.
+  const parseMac = (v) => {
+    const s = String(v || '').trim().toLowerCase();
+    const tail = s.includes('-') ? s.slice(s.lastIndexOf('-') + 1) : s;
+    const hex = tail.replace(/[^0-9a-f]/g, '');
+    return hex.length === 12 ? hex : s.replace(/[^0-9a-f]/g, '');
+  };
+  // Ask the device itself over WebSocket (works when the panel isn't https-blocked
+  // from local addresses — e.g. localhost; production https may refuse).
+  const detectMac = () => run(async () => {
+    const mac = await new Promise((res) => {
+      let ws, done = false;
+      const fin = (v) => { if (!done) { done = true; try { ws && ws.close(); } catch { /* noop */ } res(v); } };
+      try { ws = new WebSocket('ws://192.168.33.1/rpc'); } catch { return res(null); }
+      const t = setTimeout(() => fin(null), 5000);
+      ws.onopen = () => { try { ws.send(JSON.stringify({ id: 1, src: 'panel', method: 'Shelly.GetDeviceInfo' })); } catch { clearTimeout(t); fin(null); } };
+      ws.onmessage = (e) => { clearTimeout(t); try { const m = String(JSON.parse(e.data).result.mac || '').toLowerCase().replace(/[^0-9a-f]/g, ''); fin(m.length === 12 ? m : null); } catch { fin(null); } };
+      ws.onerror = () => { clearTimeout(t); fin(null); };
+    });
+    if (mac) setShelly((s) => (s ? { ...s, mac } : s));
+    else throw new Error('לא זוהה אוטומטית — הקלידו את שם הרשת שהמכשיר משדר (...ShellyPro) בשדה, זה מספיק');
+  });
   const makePrepLinks = () => run(async () => {
-    const r = await adminApi.post('/shelly/prep', { mac: shelly.mac });
+    const r = await adminApi.post('/shelly/prep', { mac: parseMac(shelly.mac) });
     setShelly((s) => (s ? { ...s, mac: r.mac, prepLinks: r.links, prepState: null, copied: null } : s));
   });
   const checkPrep = () => run(async () => {
     // waiting → securing → ready; poll up to a minute per press.
     for (let i = 0; i < 15; i++) {
-      const st = await adminApi.post('/shelly/prep-status', { mac: shelly.mac });
+      const st = await adminApi.post('/shelly/prep-status', { mac: parseMac(shelly.mac) });
       setShelly((s) => (s ? { ...s, prepState: st } : s));
       if (st.status === 'ready' || st.status === 'error') return;
       await new Promise((r2) => setTimeout(r2, 4000));
@@ -229,9 +252,12 @@ export default function Devices() {
                     onChange={(e) => setShelly({ ...shelly, prepWifi: { ...shelly.prepWifi, pass: e.target.value } })} />
                   <Button variant="ghost" className="!px-2 text-xs" disabled={busy} onClick={savePrepWifi}>{shelly.prepWifi.saved ? '✓' : 'שמור'}</Button>
                 </div>
-                <p className="text-sm font-semibold">3. קוד המכשיר (MAC) מהמדבקה:</p>
-                <Input dir="ltr" placeholder="12 תווים, למשל e08cfe95dd48" value={shelly.mac}
-                  onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
+                <p className="text-sm font-semibold">3. קוד המכשיר — הקלידו את שם הרשת שהמכשיר משדר (הקוד נמצא בתוכו):</p>
+                <div className="flex gap-2">
+                  <Input dir="ltr" placeholder="ShellyPro4PM-E08CFE95DD48 או הקוד מהמדבקה" value={shelly.mac}
+                    onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
+                  <Button variant="ghost" className="!px-2 text-xs whitespace-nowrap" disabled={busy} onClick={detectMac}>זהה לבד</Button>
+                </div>
                 <Button className="w-full" disabled={busy || !shelly.mac} onClick={makePrepLinks}>צור קישורי הכנה ›</Button>
                 <p className="text-muted text-xs">יצירה חוזרת לאותו מכשיר מחליפה את הסיסמה — הקישורים הישנים יפסיקו לעבוד.</p>
                 {shelly.prepLinks && (
