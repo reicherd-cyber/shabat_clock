@@ -217,40 +217,11 @@ export default function Devices() {
         title={{ config: 'הגדרת Shelly חדש', 1: 'שיוך Shelly ללקוח', prep: 'הגדרת Shelly — סקריפטים למכשיר מסוים', 2: 'שיוך Shelly — הגדרת ערוצים', 3: 'שיוך Shelly — הושלם' }[shelly?.step] || 'Shelly'}>
         {shelly?.step === 'config' && (
           <div className="space-y-3">
-            <details className="border border-line rounded-xl p-3 text-sm">
-              <summary className="cursor-pointer font-medium text-accent-dk">המדריך המלא: חיבור Shelly חדש מאפס ›</summary>
-              <ol className="mt-2 space-y-1.5 ps-4 list-decimal">
-                <li><b>כאן:</b> בחרו את הלקוח, הורידו את "דף התקנה לנייד" ושלחו למי שנמצא באתר. אפשר לסגור את החלון — אין צורך בכם עד שההתקנה בשטח תסתיים.</li>
-                <li><b>באתר:</b> מחברים את ה-Shelly לחשמל ול-Wi-Fi הביתי (דרך אפליקציית Shelly, או ברשת שהוא משדר ← 192.168.33.1 ← הגדרות Wi-Fi).</li>
-                <li><b>באתר:</b> הטלפון על אותו Wi-Fi ביתי ← פותחים את הקובץ מההורדות ← מקלידים את ה-MAC מהמדבקה ← "התחל התקנה" ← ממתינים לירוק.</li>
-                <li><b>כאן:</b> מזינים למטה את אותו MAC ← "בדוק חיבור" ← שם למכשיר, שם וספרה לכל ערוץ ← סיום.</li>
-              </ol>
-              <p className="text-muted text-xs mt-2">
-                קו מסונן (נטפרי/אתרוג) והמכשיר לא מתחבר בסוף שלב 3? בדקו פעם אחת דרך נקודה
-                חמה של טלפון — אם התחבר, בקשו מספק הסינון לפתוח את 188.166.29.235 פורט 8883.
-              </p>
-              <p className="text-muted text-xs mt-1">
-                בדיקה מלאה ממחשב Windows על הקו החשוד — שורה אחת ב-PowerShell (בודקת גם פורט וגם יירוט הצפנה, עם פסק דין):{' '}
-                <code dir="ltr" className="bg-surface2 rounded px-1.5 py-0.5">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>
-              </p>
-            </details>
-            <div className="border border-line rounded-xl p-3 space-y-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm font-medium">מכשיר חדש? דף התקנה לנייד — כל מכשיר</span>
-                <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={downloadUniversal}>הורדה</Button>
-              </div>
-              <p className="text-muted text-xs">
-                שלחו את הקובץ למי שנמצא ליד המכשיר: פותחים בטלפון, מקלידים את ה-MAC מהמדבקה
-                ולוחצים התקנה. קובץ אחד לכל המכשירים, תקף 30 יום — לשלוח בערוץ פרטי.
-              </p>
-              <button className="text-xs text-accent-dk underline cursor-pointer"
-                onClick={() => setShelly({ ...shelly, step: 'prep', prep: null, copied: null })}>
-                אפשרויות נוספות: סקריפט מחשב / קובץ למכשיר מסוים ›
-              </button>
-            </div>
+            {!shelly.prepWifi?.loaded && <p className="text-muted text-sm">טוען... (זמין לסופר-אדמין בלבד)</p>}
             {shelly.prepWifi?.loaded && (
-              <div className="border border-accent/40 bg-[#E4EFFE]/40 rounded-xl p-3 space-y-2">
-                <p className="text-sm font-semibold">הכנת מכשיר בבית — בלי קובץ</p>
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">1. חברו את המכשיר לחשמל, והתחברו בטלפון לרשת שהוא משדר (...ShellyPro)</p>
+                <p className="text-sm font-semibold">2. רשת ה-Wi-Fi שהמכשיר יתחבר אליה:</p>
                 <div className="flex gap-2">
                   <Input placeholder="רשת ה-Wi-Fi הביתית" value={shelly.prepWifi.ssid}
                     onChange={(e) => setShelly({ ...shelly, prepWifi: { ...shelly.prepWifi, ssid: e.target.value } })} />
@@ -258,11 +229,11 @@ export default function Devices() {
                     onChange={(e) => setShelly({ ...shelly, prepWifi: { ...shelly.prepWifi, pass: e.target.value } })} />
                   <Button variant="ghost" className="!px-2 text-xs" disabled={busy} onClick={savePrepWifi}>{shelly.prepWifi.saved ? '✓' : 'שמור'}</Button>
                 </div>
-                <p className="text-muted text-xs">
-                  הזינו למטה את ה-MAC מהמדבקה ולחצו — תקבלו 3 קישורים. מתחברים לרשת שהמכשיר
-                  משדר (...ShellyPro) ומדביקים אותם בדפדפן לפי הסדר. יצירה חוזרת מחליפה סיסמה.
-                </p>
+                <p className="text-sm font-semibold">3. קוד המכשיר (MAC) מהמדבקה:</p>
+                <Input dir="ltr" placeholder="12 תווים, למשל e08cfe95dd48" value={shelly.mac}
+                  onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
                 <Button className="w-full" disabled={busy || !shelly.mac} onClick={makePrepLinks}>צור קישורי הכנה ›</Button>
+                <p className="text-muted text-xs">יצירה חוזרת לאותו מכשיר מחליפה את הסיסמה — הקישורים הישנים יפסיקו לעבוד.</p>
                 {shelly.prepLinks && (
                   <div className="space-y-1.5">
                     {[['1. הגדרת שרת', shelly.prepLinks.mqtt, 'l1'], ['2. חיבור ל-Wi-Fi', shelly.prepLinks.wifi, 'l2'], ['3. אתחול', shelly.prepLinks.reboot, 'l3']]
@@ -274,7 +245,8 @@ export default function Devices() {
                         </div>
                       ))}
                     <p className="text-muted text-xs">
-                      כל קישור מחזיר שורת אישור בדפדפן. בסיום חזרו ל-Wi-Fi הרגיל ולחצו:
+                      4. כשהטלפון על רשת המכשיר — הדביקו את שלושת הקישורים בדפדפן לפי הסדר
+                      (כל אחד מחזיר שורת אישור). 5. חזרו ל-Wi-Fi הרגיל ולחצו:
                     </p>
                     <Button className="w-full" disabled={busy} onClick={checkPrep}>בדוק והשלם הכנה ›</Button>
                     {shelly.prepState && (
