@@ -213,7 +213,7 @@ adminRouter.post('/shelly/universal-installer', requireWrite, async (req, res, n
 adminRouter.get('/shelly/prep-wifi', requireSuperadmin, async (req, res, next) => {
   try {
     const [row] = await query('SELECT default_wifi_ssid, default_wifi_pass FROM admins WHERE id = ?', [req.auth.adminId]);
-    res.json({ ssid: row?.default_wifi_ssid || '', pass: row?.default_wifi_pass || '' });
+    res.json({ admin_id: req.auth.adminId, ssid: row?.default_wifi_ssid || '', pass: row?.default_wifi_pass || '' });
   } catch (e) { next(e); }
 });
 
@@ -229,12 +229,13 @@ adminRouter.patch('/shelly/prep-wifi', requireSuperadmin, async (req, res, next)
 // Mint credentials + build the three paste-in-browser links (192.168.33.1).
 adminRouter.post('/shelly/prep', requireSuperadmin, async (req, res, next) => {
   try {
+    // The screen's current values win (per-device override); account default fills gaps.
     const [row] = await query('SELECT default_wifi_ssid, default_wifi_pass FROM admins WHERE id = ?', [req.auth.adminId]);
     const { prepLinks } = await import('../../services/shellyOnboard.js');
     const result = prepLinks({
       mac: req.body?.mac,
-      wifiSsid: row?.default_wifi_ssid || '',
-      wifiPass: row?.default_wifi_pass || '',
+      wifiSsid: String(req.body?.wifi_ssid ?? '') || row?.default_wifi_ssid || '',
+      wifiPass: String(req.body?.wifi_pass ?? '') || row?.default_wifi_pass || '',
     });
     await audit(req, 'prep_shelly', 'device', null, { after: { mac: result.mac } });
     res.json(result);

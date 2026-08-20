@@ -100,9 +100,20 @@ export default function Devices() {
   const loadPrepWifi = async () => {
     try {
       const w = await adminApi.get('/shelly/prep-wifi');
-      setShelly((s) => (s ? { ...s, prepWifi: { ...w, loaded: true } } : s));
+      // This browser's own last-used Wi-Fi (keyed per admin) beats the account
+      // default — desktop and mobile can hold different networks.
+      let local = null;
+      try { local = JSON.parse(localStorage.getItem(`prepWifi:${w.admin_id}`) || 'null'); } catch { /* noop */ }
+      setShelly((s) => (s ? { ...s, prepWifi: { ...(local || w), admin_id: w.admin_id, loaded: true } } : s));
     } catch { /* support admin — the section stays hidden */ }
   };
+  // Every edit persists to THIS device immediately; "שמור" sets the account default.
+  const setPrepWifi = (patch) => setShelly((s) => {
+    if (!s) return s;
+    const pw = { ...s.prepWifi, ...patch };
+    try { localStorage.setItem(`prepWifi:${pw.admin_id}`, JSON.stringify({ ssid: pw.ssid, pass: pw.pass })); } catch { /* noop */ }
+    return { ...s, prepWifi: pw };
+  });
   const savePrepWifi = () => run(async () => {
     await adminApi.patch('/shelly/prep-wifi', { ssid: shelly.prepWifi.ssid, pass: shelly.prepWifi.pass });
     setShelly((s) => (s ? { ...s, prepWifi: { ...s.prepWifi, saved: true } } : s));
@@ -132,7 +143,11 @@ export default function Devices() {
     else throw new Error('לא זוהה אוטומטית — הקלידו את שם הרשת שהמכשיר משדר (...ShellyPro) בשדה, זה מספיק');
   });
   const makePrepLinks = () => run(async () => {
-    const r = await adminApi.post('/shelly/prep', { mac: parseMac(shelly.mac) });
+    const r = await adminApi.post('/shelly/prep', {
+      mac: parseMac(shelly.mac),
+      wifi_ssid: shelly.prepWifi?.ssid || '',
+      wifi_pass: shelly.prepWifi?.pass || '',
+    });
     setShelly((s) => (s ? { ...s, mac: r.mac, prepLinks: r.links, prepState: null, copied: null } : s));
   });
   const checkPrep = () => run(async () => {
@@ -247,11 +262,14 @@ export default function Devices() {
                 <p className="text-sm font-semibold">2. רשת ה-Wi-Fi שהמכשיר יתחבר אליה:</p>
                 <div className="flex gap-2">
                   <Input placeholder="רשת ה-Wi-Fi הביתית" value={shelly.prepWifi.ssid}
-                    onChange={(e) => setShelly({ ...shelly, prepWifi: { ...shelly.prepWifi, ssid: e.target.value } })} />
+                    onChange={(e) => setPrepWifi({ ssid: e.target.value })} />
                   <Input dir="ltr" placeholder="סיסמה" value={shelly.prepWifi.pass}
-                    onChange={(e) => setShelly({ ...shelly, prepWifi: { ...shelly.prepWifi, pass: e.target.value } })} />
+                    onChange={(e) => setPrepWifi({ pass: e.target.value })} />
                   <Button variant="ghost" className="!px-2 text-xs" disabled={busy} onClick={savePrepWifi}>{shelly.prepWifi.saved ? '✓' : 'שמור'}</Button>
                 </div>
+                <p className="text-muted text-xs">
+                  שינויים נשמרים אוטומטית במכשיר הזה בלבד; "שמור" קובע ברירת מחדל לחשבון בכל המכשירים.
+                </p>
                 <p className="text-sm font-semibold">3. קוד המכשיר — הקלידו את שם הרשת שהמכשיר משדר (הקוד נמצא בתוכו):</p>
                 <div className="flex gap-2">
                   <Input dir="ltr" placeholder="ShellyPro4PM-E08CFE95DD48 או הקוד מהמדבקה" value={shelly.mac}
