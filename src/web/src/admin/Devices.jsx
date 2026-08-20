@@ -7,7 +7,6 @@ import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsy
 export default function Devices() {
   const [devices, setDevices] = useState(null);
   const [users, setUsers] = useState([]);
-  const [provForm, setProvForm] = useState(null);
   const [secretView, setSecretView] = useState(null); // {mqtt_secret, qr_png_base64, saved}
   const [relayForm, setRelayForm] = useState(null);   // {device, relay_no, name, ivr_digit}
   const [uidForm, setUidForm] = useState(null);       // {device, uid}
@@ -24,16 +23,6 @@ export default function Devices() {
     setUsers(u);
   };
   useEffect(() => { refresh().catch(setError); }, []);
-
-  const provision = () => run(async () => {
-    const res = await adminApi.post('/devices/provision', {
-      user_id: Number(provForm.user_id), name: provForm.name,
-      relay_count: Number(provForm.relay_count), device_uid: provForm.device_uid || null,
-    });
-    setProvForm(null);
-    setSecretView({ ...res, saved: false });
-    await refresh();
-  });
 
   const rotate = (d) => run(async () => {
     if (!confirm(`להחליף סוד ל-${d.name}? המכשיר יידרש צריבה מחדש.`)) return;
@@ -187,8 +176,8 @@ export default function Devices() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-muted text-sm">{visibleDevices.length} מכשירים{filtering ? ' (מסונן)' : ''}</p>
         <div className="flex gap-2">
-          <Button variant="ghost" onClick={() => { setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: users[0]?.id || '', name: '' }); loadPrepWifi(); }}>+ Shelly</Button>
-          <Button onClick={() => setProvForm({ user_id: users[0]?.id || '', name: '', relay_count: 2, device_uid: '' })}>+ הקצאת מכשיר</Button>
+          <Button onClick={() => { setShelly({ step: 'config', mac: '', name: '' }); loadPrepWifi(); }}>1. הגדרת Shelly חדש</Button>
+          <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: users[0]?.id || '', name: '' })}>2. שיוך Shelly ללקוח</Button>
         </div>
       </div>
       {visibleDevices.length === 0 && <Card className="text-muted">לא נמצאו מכשירים</Card>}
@@ -225,8 +214,8 @@ export default function Devices() {
       ))}
 
       <Modal open={!!shelly} onClose={() => setShelly(null)}
-        title={{ prep: 'הוספת Shelly — הכנת מכשיר מרוחק', 2: 'הוספת Shelly — הגדרת ערוצים', 3: 'הוספת Shelly — הושלם' }[shelly?.step] || 'הוספת Shelly'}>
-        {shelly?.step === 1 && (
+        title={{ config: 'הגדרת Shelly חדש', 1: 'שיוך Shelly ללקוח', prep: 'הגדרת Shelly — סקריפטים למכשיר מסוים', 2: 'שיוך Shelly — הגדרת ערוצים', 3: 'שיוך Shelly — הושלם' }[shelly?.step] || 'Shelly'}>
+        {shelly?.step === 'config' && (
           <div className="space-y-3">
             <details className="border border-line rounded-xl p-3 text-sm">
               <summary className="cursor-pointer font-medium text-accent-dk">המדריך המלא: חיבור Shelly חדש מאפס ›</summary>
@@ -245,9 +234,6 @@ export default function Devices() {
                 <code dir="ltr" className="bg-surface2 rounded px-1.5 py-0.5">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>
               </p>
             </details>
-            <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>
-              {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-            </Select>
             <div className="border border-line rounded-xl p-3 space-y-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-sm font-medium">מכשיר חדש? דף התקנה לנייד — כל מכשיר</span>
@@ -295,7 +281,7 @@ export default function Devices() {
                       <p className="text-sm font-medium">
                         {shelly.prepState.status === 'waiting' && 'ממתין שהמכשיר יתחבר לשרת... (עד דקה-שתיים אחרי האתחול; ודאו שהודבקו כל שלושת הקישורים)'}
                         {shelly.prepState.status === 'securing' && 'המכשיר התחבר — מתקין תעודת אבטחה ומאתחל... לחצו שוב בעוד דקה.'}
-                        {shelly.prepState.status === 'ready' && `מוכן ✓ ${shelly.prepState.model || ''} · fw ${shelly.prepState.fw || ''} — אפשר לשייך ללקוח עם "בדוק חיבור" למטה`}
+                        {shelly.prepState.status === 'ready' && `מוכן ✓ ${shelly.prepState.model || ''} · fw ${shelly.prepState.fw || ''} — המשיכו ל"שיוך Shelly ללקוח" (כפתור 2)`}
                         {shelly.prepState.status === 'error' && (shelly.prepState.message || 'שגיאה — נסו שוב')}
                       </p>
                     )}
@@ -303,7 +289,17 @@ export default function Devices() {
                 )}
               </div>
             )}
-            <p className="text-sm text-muted">המכשיר כבר חובר לשרת? הזינו את ה-MAC שלו ולחצו "בדוק חיבור".</p>
+            <ErrorNote error={error} />
+          </div>
+        )}
+        {shelly?.step === 1 && (
+          <div className="space-y-3">
+            <p className="text-sm text-muted">
+              מכשיר שהוגדר ומחובר לשרת — בחרו לקוח, הזינו את ה-MAC ולחצו "בדוק חיבור".
+            </p>
+            <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>
+              {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+            </Select>
             <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל 80f3dac7deec)" value={shelly.mac} onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
             <ErrorNote error={error} />
@@ -321,7 +317,7 @@ export default function Devices() {
               onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
             <ErrorNote error={error} />
             <div className="flex gap-2">
-              <Button variant="ghost" className="flex-1" onClick={() => setShelly({ ...shelly, step: 1 })}>‹ חזרה</Button>
+              <Button variant="ghost" className="flex-1" onClick={() => setShelly({ ...shelly, step: 'config' })}>‹ חזרה</Button>
               <Button className="flex-1" disabled={busy || !shelly.mac} onClick={shellyOnboard}>צור פרטי חיבור וסקריפט ›</Button>
             </div>
             <div className="border-t border-line pt-3">
@@ -448,24 +444,6 @@ export default function Devices() {
               <Button variant="ghost" className="flex-1" onClick={() => setSuspending(null)}>ביטול</Button>
               <Button variant="danger" className="flex-1" disabled={busy} onClick={() => setEnabled(suspending, false)}>השהה מכשיר</Button>
             </div>
-          </div>
-        )}
-      </Modal>
-
-      <Modal open={!!provForm} onClose={() => setProvForm(null)} title="הקצאת מכשיר חדש">
-        {provForm && (
-          <div className="space-y-3">
-            <Select className="w-full" value={provForm.user_id} onChange={(e) => setProvForm({ ...provForm, user_id: e.target.value })}>
-              {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-            </Select>
-            <Input placeholder="שם המכשיר (למשל: בית)" value={provForm.name} onChange={(e) => setProvForm({ ...provForm, name: e.target.value })} />
-            <label className="block text-sm">
-              מספר ממסרים (פרופיל חומרה)
-              <Input type="number" min="1" max="20" value={provForm.relay_count} onChange={(e) => setProvForm({ ...provForm, relay_count: e.target.value })} />
-            </label>
-            <Input dir="ltr" placeholder="MAC (אופציונלי — אפשר אחרי ההתקנה)" value={provForm.device_uid} onChange={(e) => setProvForm({ ...provForm, device_uid: e.target.value })} />
-            <ErrorNote error={error} />
-            <Button className="w-full" disabled={busy} onClick={provision}>הקצה</Button>
           </div>
         )}
       </Modal>
