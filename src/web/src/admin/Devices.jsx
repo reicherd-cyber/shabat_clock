@@ -7,9 +7,6 @@ import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsy
 export default function Devices() {
   const [devices, setDevices] = useState(null);
   const [users, setUsers] = useState([]);
-  const [secretView, setSecretView] = useState(null); // {mqtt_secret, qr_png_base64, saved}
-  const [relayForm, setRelayForm] = useState(null);   // {device, relay_no, name, ivr_digit}
-  const [uidForm, setUidForm] = useState(null);       // {device, uid}
   const [shelly, setShelly] = useState(null);         // wizard: {step, ip, user_id, name, probe, relays}
   const [suspending, setSuspending] = useState(null); // device pending suspension confirmation
   const [showRemoved, setShowRemoved] = useState(false);
@@ -27,18 +24,6 @@ export default function Devices() {
   };
   useEffect(() => { refresh().catch(setError); }, []);
 
-  const rotate = (d) => run(async () => {
-    if (!confirm(`להחליף סוד ל-${d.name}? המכשיר יידרש צריבה מחדש.`)) return;
-    const res = await adminApi.post(`/devices/${d.id}/rotate-secret`, {});
-    setSecretView({ ...res, saved: false });
-  });
-
-  const setUid = () => run(async () => {
-    await adminApi.patch(`/devices/${uidForm.device.id}`, { device_uid: uidForm.uid });
-    setUidForm(null);
-    await refresh();
-  });
-
   // Suspension is a total-recovery soft flip: everything is kept, but the UID and the
   // relays' IVR digits move to a stash so the hardware/digits are free for reuse.
   // Recovery restores them — unless another device claimed them meanwhile, which the
@@ -52,14 +37,6 @@ export default function Devices() {
         + recovery.lost_digits.map((x) => `• קוד IVR ${x.digit} (${x.relay})`).join('\n'));
     }
     setSuspending(null);
-    await refresh();
-  });
-
-  const addRelay = () => run(async () => {
-    await adminApi.post(`/devices/${relayForm.device.id}/relays`, {
-      relay_no: Number(relayForm.relay_no), name: relayForm.name, ivr_digit: Number(relayForm.ivr_digit),
-    });
-    setRelayForm(null);
     await refresh();
   });
 
@@ -264,9 +241,6 @@ export default function Devices() {
                         <Badge ok={d.sync_status === 'synced'}>{d.sync_status}</Badge>
                         <span className="whitespace-nowrap">v{d.schedule_version} / ack v{d.device_ack_version}</span>
                         <span className="flex gap-1 ms-auto">
-                          {d.is_enabled && !d.device_uid && <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setUidForm({ device: d, uid: '' })}>קביעת UID</Button>}
-                          <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setRelayForm({ device: d, relay_no: 1, name: '', ivr_digit: 1 })}>+ ממסר</Button>
-                          <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => rotate(d)}>החלפת סוד</Button>
                           {d.is_enabled
                             ? <Button variant="danger" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setSuspending(d)}>השהיה</Button>
                             : <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setEnabled(d, true)}>שחזר</Button>}
@@ -498,48 +472,6 @@ export default function Devices() {
         )}
       </Modal>
 
-      <Modal open={!!secretView} onClose={() => secretView?.saved && setSecretView(null)} title="סוד MQTT — מוצג פעם אחת בלבד" closable={secretView?.saved}>
-        {secretView && (
-          <div className="space-y-3">
-            <p className="text-off text-sm font-semibold">הסוד לא יוצג שוב לעולם. אובדן = החלפת סוד וצריבה מחדש.</p>
-            <code className="block bg-surface2 border border-line rounded-xl p-3 break-all select-all" dir="ltr">{secretView.mqtt_secret}</code>
-            <img alt="QR" className="mx-auto border border-line rounded-xl" src={`data:image/png;base64,${secretView.qr_png_base64}`} />
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={secretView.saved} onChange={(e) => setSecretView({ ...secretView, saved: e.target.checked })} />
-              שמרתי את הסוד ואת קוד ה-QR
-            </label>
-            <Button className="w-full" disabled={!secretView.saved} onClick={() => setSecretView(null)}>סגור</Button>
-          </div>
-        )}
-      </Modal>
-
-      <Modal open={!!uidForm} onClose={() => setUidForm(null)} title="קביעת UID (MAC מהפורטל)">
-        {uidForm && (
-          <div className="space-y-3">
-            <p className="text-sm text-muted">ה-MAC מוצג בעמוד הסטטוס של פורטל ההתקנה במכשיר.</p>
-            <Input dir="ltr" placeholder="aabbccddeeff" value={uidForm.uid} onChange={(e) => setUidForm({ ...uidForm, uid: e.target.value })} />
-            <ErrorNote error={error} />
-            <Button className="w-full" disabled={busy} onClick={setUid}>שמור</Button>
-          </div>
-        )}
-      </Modal>
-
-      <Modal open={!!relayForm} onClose={() => setRelayForm(null)} title={`ממסר חדש — ${relayForm?.device?.name || ''}`}>
-        {relayForm && (
-          <div className="space-y-3">
-            <label className="block text-sm">ערוץ פיזי (1–{relayForm.device.relay_count})
-              <Input type="number" min="1" max={relayForm.device.relay_count} value={relayForm.relay_no}
-                onChange={(e) => setRelayForm({ ...relayForm, relay_no: e.target.value })} />
-            </label>
-            <Input placeholder='שם (למשל: מטבח)' value={relayForm.name} onChange={(e) => setRelayForm({ ...relayForm, name: e.target.value })} />
-            <label className="block text-sm">קוד IVR (1–20)
-              <Input type="number" min="1" max="20" value={relayForm.ivr_digit} onChange={(e) => setRelayForm({ ...relayForm, ivr_digit: e.target.value })} />
-            </label>
-            <ErrorNote error={error} />
-            <Button className="w-full" disabled={busy} onClick={addRelay}>צור</Button>
-          </div>
-        )}
-      </Modal>
     </div>
   );
 }
