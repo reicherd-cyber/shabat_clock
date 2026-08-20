@@ -703,6 +703,48 @@ export function universalInstaller({ statusBase, adminId }) {
   return { script_html: htmlPage(null, null, null, prepareUrl, `${env.deviceBroker.host}:${env.deviceBroker.port}`), valid_days: 30 };
 }
 
+// ── Home-prep flow (superadmin, no file) ──
+// The Shelly answers RPCs as plain browser GETs, so the panel hands the admin
+// three ready-made 192.168.33.1 links to paste while on the device's hotspot:
+// server config (interim ssl "*" — the device holds no CA yet), the admin's
+// saved home Wi-Fi, and a reboot. Once the device dials in, prepStatus()
+// upgrades it over MQTT to the verified user_ca.pem config.
+export function prepLinks({ mac, wifiSsid, wifiPass }) {
+  const { uid, bodies } = mintDeviceCreds(mac);
+  const mqttCfg = JSON.parse(bodies.mqtt).params.config;
+  mqttCfg.ssl_ca = '*';
+  const base = 'http://192.168.33.1/rpc';
+  return {
+    mac: uid,
+    links: {
+      mqtt: `${base}/MQTT.SetConfig?config=${encodeURIComponent(JSON.stringify(mqttCfg))}`,
+      wifi: wifiSsid
+        ? `${base}/Wifi.SetConfig?config=${encodeURIComponent(JSON.stringify({ sta: { ssid: wifiSsid, pass: wifiPass || '', enable: true } }))}`
+        : null,
+      reboot: `${base}/Shelly.Reboot`,
+    },
+  };
+}
+
+export async function prepStatus({ mac }) {
+  const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
+  const { shellyMqttRpc } = await import('../mqtt/client.js');
+  const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 4000);
+  if (!info || info.error) return { status: 'waiting' };
+  const cfg = await shellyMqttRpc(uid, 'MQTT.GetConfig', undefined, 4000);
+  if (cfg?.result?.ssl_ca === 'user_ca.pem') {
+    return { status: 'ready', model: info.result?.model || null, fw: info.result?.ver || null };
+  }
+  // Connected on the interim no-verify config — push the CA and flip to verified.
+  const ca = fs.readFileSync(env.deviceBroker.caFile, 'utf8');
+  const put = await shellyMqttRpc(uid, 'Shelly.PutUserCA', { append: false, data: ca }, 8000);
+  if (!put || put.error) return { status: 'error', message: 'העלאת תעודת האבטחה נכשלה — נסו שוב' };
+  await shellyMqttRpc(uid, 'MQTT.SetConfig', { config: { ssl_ca: 'user_ca.pem' } }, 5000);
+  await shellyMqttRpc(uid, 'Shelly.Reboot', undefined, 3000).catch(() => {});
+  return { status: 'securing' };
+}
+
 // Called by the public prepare endpoint once the installer token is verified.
 export function prepareDevice({ mac, statusBase }) {
   const { uid, bodies } = mintDeviceCreds(mac);

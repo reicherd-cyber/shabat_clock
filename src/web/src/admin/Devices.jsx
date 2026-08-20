@@ -107,6 +107,32 @@ export default function Devices() {
     downloadHtml(`shelly-setup-${today()}.html`, script_html);
   });
 
+  // ── Home-prep (superadmin, no file): saved Wi-Fi + three paste-in-browser links ──
+  const loadPrepWifi = async () => {
+    try {
+      const w = await adminApi.get('/shelly/prep-wifi');
+      setShelly((s) => (s ? { ...s, prepWifi: { ...w, loaded: true } } : s));
+    } catch { /* support admin — the section stays hidden */ }
+  };
+  const savePrepWifi = () => run(async () => {
+    await adminApi.patch('/shelly/prep-wifi', { ssid: shelly.prepWifi.ssid, pass: shelly.prepWifi.pass });
+    setShelly((s) => (s ? { ...s, prepWifi: { ...s.prepWifi, saved: true } } : s));
+    setTimeout(() => setShelly((s) => (s ? { ...s, prepWifi: { ...s.prepWifi, saved: false } } : s)), 2000);
+  });
+  const makePrepLinks = () => run(async () => {
+    const r = await adminApi.post('/shelly/prep', { mac: shelly.mac });
+    setShelly((s) => (s ? { ...s, mac: r.mac, prepLinks: r.links, prepState: null, copied: null } : s));
+  });
+  const checkPrep = () => run(async () => {
+    // waiting → securing → ready; poll up to a minute per press.
+    for (let i = 0; i < 15; i++) {
+      const st = await adminApi.post('/shelly/prep-status', { mac: shelly.mac });
+      setShelly((s) => (s ? { ...s, prepState: st } : s));
+      if (st.status === 'ready' || st.status === 'error') return;
+      await new Promise((r2) => setTimeout(r2, 4000));
+    }
+  });
+
   const shellyProbe = () => run(async () => {
     const probe = await adminApi.post('/shelly/probe', { transport: shelly.transport, ip: shelly.ip, mac: shelly.mac });
     setShelly({
@@ -161,7 +187,7 @@ export default function Devices() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-muted text-sm">{visibleDevices.length} מכשירים{filtering ? ' (מסונן)' : ''}</p>
         <div className="flex gap-2">
-          <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: users[0]?.id || '', name: '' })}>+ Shelly</Button>
+          <Button variant="ghost" onClick={() => { setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: users[0]?.id || '', name: '' }); loadPrepWifi(); }}>+ Shelly</Button>
           <Button onClick={() => setProvForm({ user_id: users[0]?.id || '', name: '', relay_count: 2, device_uid: '' })}>+ הקצאת מכשיר</Button>
         </div>
       </div>
@@ -236,6 +262,47 @@ export default function Devices() {
                 אפשרויות נוספות: סקריפט מחשב / קובץ למכשיר מסוים ›
               </button>
             </div>
+            {shelly.prepWifi?.loaded && (
+              <div className="border border-accent/40 bg-[#E4EFFE]/40 rounded-xl p-3 space-y-2">
+                <p className="text-sm font-semibold">הכנת מכשיר בבית — בלי קובץ</p>
+                <div className="flex gap-2">
+                  <Input placeholder="רשת ה-Wi-Fi הביתית" value={shelly.prepWifi.ssid}
+                    onChange={(e) => setShelly({ ...shelly, prepWifi: { ...shelly.prepWifi, ssid: e.target.value } })} />
+                  <Input dir="ltr" placeholder="סיסמה" value={shelly.prepWifi.pass}
+                    onChange={(e) => setShelly({ ...shelly, prepWifi: { ...shelly.prepWifi, pass: e.target.value } })} />
+                  <Button variant="ghost" className="!px-2 text-xs" disabled={busy} onClick={savePrepWifi}>{shelly.prepWifi.saved ? '✓' : 'שמור'}</Button>
+                </div>
+                <p className="text-muted text-xs">
+                  הזינו למטה את ה-MAC מהמדבקה ולחצו — תקבלו 3 קישורים. מתחברים לרשת שהמכשיר
+                  משדר (...ShellyPro) ומדביקים אותם בדפדפן לפי הסדר. יצירה חוזרת מחליפה סיסמה.
+                </p>
+                <Button className="w-full" disabled={busy || !shelly.mac} onClick={makePrepLinks}>צור קישורי הכנה ›</Button>
+                {shelly.prepLinks && (
+                  <div className="space-y-1.5">
+                    {[['1. הגדרת שרת', shelly.prepLinks.mqtt, 'l1'], ['2. חיבור ל-Wi-Fi', shelly.prepLinks.wifi, 'l2'], ['3. אתחול', shelly.prepLinks.reboot, 'l3']]
+                      .filter(([, v]) => v).map(([label, url, k]) => (
+                        <div key={k} className="flex items-center gap-2 text-sm">
+                          <span className="w-24 shrink-0">{label}</span>
+                          <code dir="ltr" className="flex-1 truncate text-[11px] bg-surface2 rounded px-2 py-1">{url}</code>
+                          <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => copyScript(k, url)}>{shelly.copied === k ? 'הועתק ✓' : 'העתק'}</Button>
+                        </div>
+                      ))}
+                    <p className="text-muted text-xs">
+                      כל קישור מחזיר שורת אישור בדפדפן. בסיום חזרו ל-Wi-Fi הרגיל ולחצו:
+                    </p>
+                    <Button className="w-full" disabled={busy} onClick={checkPrep}>בדוק והשלם הכנה ›</Button>
+                    {shelly.prepState && (
+                      <p className="text-sm font-medium">
+                        {shelly.prepState.status === 'waiting' && 'ממתין שהמכשיר יתחבר לשרת... (עד דקה-שתיים אחרי האתחול; ודאו שהודבקו כל שלושת הקישורים)'}
+                        {shelly.prepState.status === 'securing' && 'המכשיר התחבר — מתקין תעודת אבטחה ומאתחל... לחצו שוב בעוד דקה.'}
+                        {shelly.prepState.status === 'ready' && `מוכן ✓ ${shelly.prepState.model || ''} · fw ${shelly.prepState.fw || ''} — אפשר לשייך ללקוח עם "בדוק חיבור" למטה`}
+                        {shelly.prepState.status === 'error' && (shelly.prepState.message || 'שגיאה — נסו שוב')}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <p className="text-sm text-muted">המכשיר כבר חובר לשרת? הזינו את ה-MAC שלו ולחצו "בדוק חיבור".</p>
             <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל 80f3dac7deec)" value={shelly.mac} onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />

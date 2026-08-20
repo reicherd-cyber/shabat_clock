@@ -209,6 +209,46 @@ adminRouter.post('/shelly/universal-installer', requireWrite, async (req, res, n
   } catch (e) { next(e); }
 });
 
+// ── Home-prep flow (superadmin): saved Wi-Fi + browser-link provisioning ──
+adminRouter.get('/shelly/prep-wifi', requireSuperadmin, async (req, res, next) => {
+  try {
+    const [row] = await query('SELECT default_wifi_ssid, default_wifi_pass FROM admins WHERE id = ?', [req.auth.adminId]);
+    res.json({ ssid: row?.default_wifi_ssid || '', pass: row?.default_wifi_pass || '' });
+  } catch (e) { next(e); }
+});
+
+adminRouter.patch('/shelly/prep-wifi', requireSuperadmin, async (req, res, next) => {
+  try {
+    await query('UPDATE admins SET default_wifi_ssid = ?, default_wifi_pass = ? WHERE id = ?',
+      [String(req.body?.ssid || '').slice(0, 64) || null, String(req.body?.pass || '').slice(0, 128) || null, req.auth.adminId]);
+    await audit(req, 'update', 'admin', req.auth.adminId, { after: { default_wifi_ssid: req.body?.ssid } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Mint credentials + build the three paste-in-browser links (192.168.33.1).
+adminRouter.post('/shelly/prep', requireSuperadmin, async (req, res, next) => {
+  try {
+    const [row] = await query('SELECT default_wifi_ssid, default_wifi_pass FROM admins WHERE id = ?', [req.auth.adminId]);
+    const { prepLinks } = await import('../../services/shellyOnboard.js');
+    const result = prepLinks({
+      mac: req.body?.mac,
+      wifiSsid: row?.default_wifi_ssid || '',
+      wifiPass: row?.default_wifi_pass || '',
+    });
+    await audit(req, 'prep_shelly', 'device', null, { after: { mac: result.mac } });
+    res.json(result);
+  } catch (e) { next(e); }
+});
+
+// Poll: waiting → (device dials in on interim config) → securing → ready.
+adminRouter.post('/shelly/prep-status', requireSuperadmin, async (req, res, next) => {
+  try {
+    const { prepStatus } = await import('../../services/shellyOnboard.js');
+    res.json(await prepStatus({ mac: req.body?.mac }));
+  } catch (e) { next(e); }
+});
+
 // ── Shelly wizard: probe (read-only reachability + identity) then register ──
 adminRouter.post('/shelly/probe', requireWrite, async (req, res, next) => {
   try {
