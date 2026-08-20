@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync } from '../ui.jsx';
 
@@ -17,6 +17,7 @@ export default function Devices() {
   const [fDevice, setFDevice] = useState('');
   const [fOnline, setFOnline] = useState('');
   const [q, setQ] = useState('');
+  const [expanded, setExpanded] = useState(null); // device id with its details row open
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -233,41 +234,52 @@ export default function Devices() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-3">מצב</th><th className="p-3">שם</th><th className="p-3">לקוח</th>
-              <th className="p-3">UID</th><th className="p-3">fw</th><th className="p-3">סנכרון</th>
-              <th className="p-3">גרסאות</th><th className="p-3">פעולות</th>
+              <th className="p-3">מצב</th><th className="p-3">שם</th><th className="p-3">לקוח</th><th className="p-3"></th>
             </tr>
           </thead>
           <tbody>
             {visibleDevices.map((d) => (
-              <tr key={d.id} className={`border-b border-line last:border-0 ${d.is_enabled ? '' : 'opacity-60'}`}>
-                <td className="p-3 whitespace-nowrap"><span className="inline-flex items-center gap-1.5"><OnlineDot online={d.is_online} />{d.is_online ? 'מחובר' : 'מנותק'}</span></td>
-                <td className="p-3 font-semibold">{d.name} {!d.is_enabled && <Badge ok={false}>מושהה</Badge>}</td>
-                <td className="p-3">{d.owner_name}</td>
-                <td className="p-3 text-xs" dir="ltr">
-                  {d.device_uid
-                    || (d.removed_uid
-                      ? <span className="line-through opacity-60" title="UID שמור בצד — ישוחזר עם המכשיר">{d.removed_uid}</span>
-                      : <Badge ok={false}>ללא UID</Badge>)}
-                </td>
-                <td className="p-3 text-xs text-muted">{d.fw_version || '—'}</td>
-                <td className="p-3">
-                  <Badge ok={d.sync_status === 'synced'}>{d.sync_status}</Badge>
-                  {d.sync_error && <div className="text-off text-xs mt-0.5">{d.sync_error}</div>}
-                </td>
-                <td className="p-3 text-xs text-muted whitespace-nowrap">v{d.schedule_version} / ack v{d.device_ack_version}</td>
-                <td className="p-3 whitespace-nowrap space-x-1 space-x-reverse">
-                  {d.is_enabled && !d.device_uid && <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setUidForm({ device: d, uid: '' })}>קביעת UID</Button>}
-                  <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setRelayForm({ device: d, relay_no: 1, name: '', ivr_digit: 1 })}>+ ממסר</Button>
-                  <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => rotate(d)}>החלפת סוד</Button>
-                  {d.is_enabled
-                    ? <Button variant="danger" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setSuspending(d)}>השהיה</Button>
-                    : <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setEnabled(d, true)}>שחזר</Button>}
-                </td>
-              </tr>
+              <Fragment key={d.id}>
+                <tr className={`border-b border-line last:border-0 ${d.is_enabled ? '' : 'opacity-60'}`}>
+                  <td className="p-3 whitespace-nowrap"><span className="inline-flex items-center gap-1.5"><OnlineDot online={d.is_online} />{d.is_online ? 'מחובר' : 'מנותק'}</span></td>
+                  <td className="p-3 font-semibold">{d.name} {!d.is_enabled && <Badge ok={false}>מושהה</Badge>}</td>
+                  <td className="p-3">{d.owner_name}</td>
+                  <td className="p-3 text-left">
+                    <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setExpanded(expanded === d.id ? null : d.id)}>
+                      {expanded === d.id ? 'סגור' : 'פרטים ›'}
+                    </Button>
+                  </td>
+                </tr>
+                {expanded === d.id && (
+                  <tr className="border-b border-line last:border-0 bg-surface2/50">
+                    <td colSpan={4} className="p-3">
+                      <div className="flex items-center gap-x-5 gap-y-2 flex-wrap text-xs text-muted">
+                        <span dir="ltr">
+                          UID: {d.device_uid
+                            || (d.removed_uid
+                              ? <span className="line-through opacity-60" title="UID שמור בצד — ישוחזר עם המכשיר">{d.removed_uid}</span>
+                              : '—')}
+                        </span>
+                        <span>fw {d.fw_version || '—'}</span>
+                        <Badge ok={d.sync_status === 'synced'}>{d.sync_status}</Badge>
+                        <span className="whitespace-nowrap">v{d.schedule_version} / ack v{d.device_ack_version}</span>
+                        <span className="flex gap-1 ms-auto">
+                          {d.is_enabled && !d.device_uid && <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setUidForm({ device: d, uid: '' })}>קביעת UID</Button>}
+                          <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setRelayForm({ device: d, relay_no: 1, name: '', ivr_digit: 1 })}>+ ממסר</Button>
+                          <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => rotate(d)}>החלפת סוד</Button>
+                          {d.is_enabled
+                            ? <Button variant="danger" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setSuspending(d)}>השהיה</Button>
+                            : <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setEnabled(d, true)}>שחזר</Button>}
+                        </span>
+                      </div>
+                      {d.sync_error && <div className="text-off text-xs mt-1">{d.sync_error}</div>}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
             {visibleDevices.length === 0 && (
-              <tr><td colSpan={8} className="p-6 text-center text-muted">לא נמצאו מכשירים</td></tr>
+              <tr><td colSpan={4} className="p-6 text-center text-muted">לא נמצאו מכשירים</td></tr>
             )}
           </tbody>
         </table>
