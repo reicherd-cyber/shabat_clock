@@ -15,6 +15,8 @@ export default function Devices() {
   const [showRemoved, setShowRemoved] = useState(false);
   const [fUser, setFUser] = useState('');
   const [fDevice, setFDevice] = useState('');
+  const [fOnline, setFOnline] = useState('');
+  const [q, setQ] = useState('');
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -181,10 +183,13 @@ export default function Devices() {
   // Removed devices (is_enabled=false) are hidden by default — a toggle reveals
   // them for inspection/restore.
   const removedCount = devices.filter((d) => !d.is_enabled).length;
+  const needle = q.trim().toLowerCase();
   const visibleDevices = devices.filter((d) => (d.is_enabled || showRemoved)
     && (!fUser || String(d.user_id) === fUser)
-    && (!fDevice || String(d.id) === fDevice));
-  const filtering = fUser || fDevice;
+    && (!fDevice || String(d.id) === fDevice)
+    && (!fOnline || (fOnline === 'on' ? d.is_online : !d.is_online))
+    && (!needle || `${d.name} ${d.owner_name} ${d.device_uid || ''} ${d.removed_uid || ''}`.toLowerCase().includes(needle)));
+  const filtering = fUser || fDevice || fOnline || needle;
   // Device options track the user filter, so the two dropdowns stay consistent.
   const deviceOptions = devices.filter((d) => !fUser || String(d.user_id) === fUser);
   return (
@@ -192,6 +197,7 @@ export default function Devices() {
       <div className="flex justify-between items-center flex-wrap gap-2">
         <h2 className="font-bold text-xl">מכשירים</h2>
         <div className="flex gap-2 items-center flex-wrap">
+          <Input className="w-44 py-2 text-sm" placeholder="חיפוש שם / לקוח / UID" value={q} onChange={(e) => setQ(e.target.value)} />
           <Select className="py-2 text-sm w-40" value={fUser} onChange={(e) => { setFUser(e.target.value); setFDevice(''); }}>
             <option value="">כל המשתמשים</option>
             {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
@@ -200,8 +206,13 @@ export default function Devices() {
             <option value="">כל המכשירים</option>
             {deviceOptions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </Select>
+          <Select className="py-2 text-sm" value={fOnline} onChange={(e) => setFOnline(e.target.value)}>
+            <option value="">מחובר ומנותק</option>
+            <option value="on">מחוברים</option>
+            <option value="off">מנותקים</option>
+          </Select>
           {filtering && (
-            <Button variant="ghost" onClick={() => { setFUser(''); setFDevice(''); }}>נקה סינון</Button>
+            <Button variant="ghost" onClick={() => { setFUser(''); setFDevice(''); setFOnline(''); setQ(''); }}>נקה סינון</Button>
           )}
           {removedCount > 0 && (
             <Button variant="ghost" onClick={() => setShowRemoved(!showRemoved)}>
@@ -218,38 +229,49 @@ export default function Devices() {
           <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: users[0]?.id || '', name: '' })}>2. שיוך Shelly ללקוח</Button>
         </div>
       </div>
-      {visibleDevices.length === 0 && <Card className="text-muted">לא נמצאו מכשירים</Card>}
-      {visibleDevices.map((d) => (
-        <Card key={d.id}>
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              <OnlineDot online={d.is_online} />
-              <b>{d.name}</b>
-              <span className="text-muted text-sm">של {d.owner_name}</span>
-              {d.device_uid
-                ? <span className="text-muted text-xs" dir="ltr">{d.device_uid}</span>
-                : d.removed_uid
-                  ? <span className="text-muted text-xs line-through opacity-60" dir="ltr" title="UID שמור בצד — ישוחזר עם המכשיר">{d.removed_uid}</span>
-                  : <Badge ok={false}>ללא UID</Badge>}
-              {!d.is_enabled && <Badge ok={false}>מושהה</Badge>}
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge ok={d.sync_status === 'synced'}>{d.sync_status}</Badge>
-              <span className="text-muted text-xs">v{d.schedule_version} / ack v{d.device_ack_version}</span>
-              {d.fw_version && <span className="text-muted text-xs">fw {d.fw_version}</span>}
-            </div>
-          </div>
-          {d.sync_error && <div className="text-off text-sm mt-1">{d.sync_error}</div>}
-          <div className="flex gap-2 mt-3 flex-wrap">
-            {d.is_enabled && !d.device_uid && <Button variant="ghost" onClick={() => setUidForm({ device: d, uid: '' })}>קביעת UID</Button>}
-            <Button variant="ghost" onClick={() => setRelayForm({ device: d, relay_no: 1, name: '', ivr_digit: 1 })}>+ ממסר</Button>
-            <Button variant="ghost" disabled={busy} onClick={() => rotate(d)}>החלפת סוד</Button>
-            {d.is_enabled
-              ? <Button variant="danger" disabled={busy} onClick={() => setSuspending(d)}>השהיית מכשיר</Button>
-              : <Button variant="ghost" disabled={busy} onClick={() => setEnabled(d, true)}>שחזר מכשיר</Button>}
-          </div>
-        </Card>
-      ))}
+      <Card flush className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-right text-muted border-b border-line">
+              <th className="p-3">מצב</th><th className="p-3">שם</th><th className="p-3">לקוח</th>
+              <th className="p-3">UID</th><th className="p-3">fw</th><th className="p-3">סנכרון</th>
+              <th className="p-3">גרסאות</th><th className="p-3">פעולות</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleDevices.map((d) => (
+              <tr key={d.id} className={`border-b border-line last:border-0 ${d.is_enabled ? '' : 'opacity-60'}`}>
+                <td className="p-3 whitespace-nowrap"><span className="inline-flex items-center gap-1.5"><OnlineDot online={d.is_online} />{d.is_online ? 'מחובר' : 'מנותק'}</span></td>
+                <td className="p-3 font-semibold">{d.name} {!d.is_enabled && <Badge ok={false}>מושהה</Badge>}</td>
+                <td className="p-3">{d.owner_name}</td>
+                <td className="p-3 text-xs" dir="ltr">
+                  {d.device_uid
+                    || (d.removed_uid
+                      ? <span className="line-through opacity-60" title="UID שמור בצד — ישוחזר עם המכשיר">{d.removed_uid}</span>
+                      : <Badge ok={false}>ללא UID</Badge>)}
+                </td>
+                <td className="p-3 text-xs text-muted">{d.fw_version || '—'}</td>
+                <td className="p-3">
+                  <Badge ok={d.sync_status === 'synced'}>{d.sync_status}</Badge>
+                  {d.sync_error && <div className="text-off text-xs mt-0.5">{d.sync_error}</div>}
+                </td>
+                <td className="p-3 text-xs text-muted whitespace-nowrap">v{d.schedule_version} / ack v{d.device_ack_version}</td>
+                <td className="p-3 whitespace-nowrap space-x-1 space-x-reverse">
+                  {d.is_enabled && !d.device_uid && <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setUidForm({ device: d, uid: '' })}>קביעת UID</Button>}
+                  <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setRelayForm({ device: d, relay_no: 1, name: '', ivr_digit: 1 })}>+ ממסר</Button>
+                  <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => rotate(d)}>החלפת סוד</Button>
+                  {d.is_enabled
+                    ? <Button variant="danger" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setSuspending(d)}>השהיה</Button>
+                    : <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setEnabled(d, true)}>שחזר</Button>}
+                </td>
+              </tr>
+            ))}
+            {visibleDevices.length === 0 && (
+              <tr><td colSpan={8} className="p-6 text-center text-muted">לא נמצאו מכשירים</td></tr>
+            )}
+          </tbody>
+        </table>
+      </Card>
 
       <Modal open={!!shelly} onClose={() => setShelly(null)}
         title={{ config: 'הגדרת Shelly חדש', 1: 'שיוך Shelly ללקוח', prep: 'הגדרת Shelly — סקריפטים למכשיר מסוים', 2: 'שיוך Shelly — הגדרת ערוצים', 3: 'שיוך Shelly — הושלם' }[shelly?.step] || 'Shelly'}>
