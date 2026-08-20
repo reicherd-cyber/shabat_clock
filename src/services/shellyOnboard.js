@@ -732,6 +732,13 @@ export async function prepStatus({ mac }) {
   const { shellyMqttRpc } = await import('../mqtt/client.js');
   const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 4000);
   if (!info || info.error) return { status: 'waiting' };
+  // Typo guard: the links carry a hand-typed MAC; the device connects with them
+  // regardless of its real identity. Catch the mismatch HERE, before the wrong
+  // name gets registered and server RPCs address a prefix nobody listens on.
+  const realMac = String(info.result?.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (realMac && realMac !== uid) {
+    return { status: 'error', message: `המכשיר שהתחבר הוא בעצם ${realMac} — הקוד שהוקלד (${uid}) שגוי. צרו קישורים מחדש עם הקוד הנכון והדביקו שוב.` };
+  }
   const cfg = await shellyMqttRpc(uid, 'MQTT.GetConfig', undefined, 4000);
   if (cfg?.result?.ssl_ca === 'user_ca.pem') {
     return { status: 'ready', model: info.result?.model || null, fw: info.result?.ver || null };
