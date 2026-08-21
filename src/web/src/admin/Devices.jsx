@@ -325,6 +325,17 @@ export default function Devices() {
                 )}
               </div>
             )}
+            <details className="border border-line rounded-xl p-3 text-sm">
+              <summary className="cursor-pointer font-medium text-accent-dk">דרך חלופית: קובץ התקנה להורדה (התהליך הישן) ›</summary>
+              <div className="mt-2 space-y-2">
+                <p className="text-muted text-xs">
+                  דף התקנה עצמאי לנייד — עושה את כל התהליך מקצה לקצה בלי הפאנל: פותחים
+                  אותו בטלפון, הוא מזהה את המכשיר, מחבר ל-Wi-Fi ולשרת ומוודא חיבור.
+                  קובץ אחד לכל המכשירים, תקף 30 יום — לשלוח בערוץ פרטי בלבד.
+                </p>
+                <Button variant="ghost" className="!px-3 !py-1.5 text-sm" disabled={busy} onClick={downloadUniversal}>הורדת קובץ התקנה</Button>
+              </div>
+            </details>
             <ErrorNote error={error} />
           </div>
         )}
