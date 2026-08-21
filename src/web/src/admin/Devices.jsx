@@ -391,8 +391,15 @@ export default function Devices() {
             {!shelly.prepWifi?.loaded && <p className="text-muted text-sm">טוען... (זמין לסופר-אדמין בלבד)</p>}
             {shelly.prepWifi?.loaded && (
               <div className="space-y-2">
-                <p className="text-sm font-semibold">1. חברו את המכשיר לחשמל. שם הרשת שהוא משדר (...ShellyPro) יופיע ברשימת ה-Wi-Fi — אין צורך להתחבר אליה עדיין.</p>
-                <p className="text-sm font-semibold">2. רשת ה-Wi-Fi שהמכשיר יתחבר אליה:</p>
+                <p className="text-sm font-semibold">1. חברו את המכשיר לחשמל, והתחברו בטלפון לרשת שהוא משדר (...ShellyPro) — כמו בקובץ ההתקנה.</p>
+                <p className="text-sm font-semibold">2. הקלידו את שם הרשת שאליה התחברתם (קוד המכשיר נמצא בתוכו):</p>
+                <div className="flex gap-2">
+                  <Input dir="ltr" placeholder="ShellyPro4PM-E08CFE95DD48 או הקוד מהמדבקה" value={shelly.mac}
+                    onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
+                  <Button variant="ghost" className="!px-2 text-xs whitespace-nowrap" disabled={busy} onClick={detectMac}>זהה לבד</Button>
+                </div>
+                {!shelly.prepLinks && shelly.prepMinting && <p className="text-sm font-medium">{shelly.prepMinting}</p>}
+                <p className="text-sm font-semibold">3. רשת ה-Wi-Fi שהמכשיר יתחבר אליה:</p>
                 <div className="flex gap-2">
                   <Input placeholder="רשת ה-Wi-Fi הביתית" value={shelly.prepWifi.ssid}
                     onChange={(e) => setPrepWifi({ ssid: e.target.value })} />
@@ -403,16 +410,9 @@ export default function Devices() {
                 <p className="text-muted text-xs">
                   שינויים נשמרים אוטומטית במכשיר הזה בלבד; "שמור" קובע ברירת מחדל לחשבון בכל המכשירים.
                 </p>
-                <p className="text-sm font-semibold">3. קוד המכשיר — העתיקו את שם הרשת מרשימת ה-Wi-Fi (הקוד נמצא בתוכו), והקישורים ייווצרו לבד:</p>
-                <div className="flex gap-2">
-                  <Input dir="ltr" placeholder="ShellyPro4PM-E08CFE95DD48 או הקוד מהמדבקה" value={shelly.mac}
-                    onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
-                  <Button variant="ghost" className="!px-2 text-xs whitespace-nowrap" disabled={busy} onClick={detectMac}>זהה לבד</Button>
-                </div>
-                {!shelly.prepLinks && shelly.prepMinting && <p className="text-sm font-medium">{shelly.prepMinting}</p>}
                 {shelly.prepLinks && (
                   <div className="space-y-1.5">
-                    <p className="text-sm font-semibold">4. התחברו לרשת שהמכשיר משדר, ואז:</p>
+                    <p className="text-sm font-semibold">4. שליחה למכשיר (ודאו שאתם עדיין על הרשת שהוא משדר):</p>
                     <Button className="w-full" onClick={sendPrepLinks}>שלח הכל למכשיר בלחיצה אחת ›</Button>
                     {shelly.prepSend && <p className="text-sm font-medium">{shelly.prepSend}</p>}
                     <details>
