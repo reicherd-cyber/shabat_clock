@@ -285,7 +285,7 @@ exit 1
 //  - universal:  the helper types the MAC; the page asks the server to mint that
 //    device's credentials at install time (GET prepareUrl&mac=..., authorized by the
 //    30-day installer token in the URL), then proceeds identically.
-function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '') {
+function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
   // Injected as JS string literals — the RPC bodies are JSON (no backticks/quotes issues
   // beyond '); JSON.stringify once more makes them safe literals.
   const inject = {
@@ -293,6 +293,8 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '') {
     statusUrl: JSON.stringify(statusUrl || ''),
     prepareUrl: JSON.stringify(prepareUrl),
     broker: JSON.stringify(broker),
+    wifiSsid: JSON.stringify(wifi.ssid || ''),
+    wifiPass: JSON.stringify(wifi.pass || ''),
     bodies: b ? JSON.stringify({ putCa: b.putCa, mqtt: b.mqtt, noVerify: b.mqttNoVerify, reboot: b.reboot, sntp: b.sntp }) : 'null',
   };
   return `<!doctype html>
@@ -374,6 +376,10 @@ const $=(id)=>document.getElementById(id);
 if(UID)$('uid').textContent=UID;
 if(PREPARE_URL){$('macFold').classList.remove('hidden');$('macHelp').classList.remove('hidden')}
 else{$('wifiBlock').classList.remove('hidden')}
+// The admin's saved home Wi-Fi rides the file as an editable prefill.
+const DEF_SSID=${inject.wifiSsid}, DEF_PASS=${inject.wifiPass};
+if(DEF_SSID&&!$('wifiSsid').value)$('wifiSsid').value=DEF_SSID;
+if(DEF_PASS&&!$('wifiPass').value)$('wifiPass').value=DEF_PASS;
 // Two stages (universal mode): identify the device first, ask for Wi-Fi only after
 // "קוד המכשיר זוהה" — mixing both on one screen confused real installs.
 let STAGE=PREPARE_URL?'detect':'install';
@@ -700,13 +706,17 @@ export async function onboardShelly({ mac, statusBase = '' }) {
 // per-device scripts. adm (the generating admin) is carried into the audit log.
 const INSTALLER_TTL = '30d';
 
-export function universalInstaller({ statusBase, adminId }) {
+export function universalInstaller({ statusBase, adminId, wifiSsid = '', wifiPass = '' }) {
   if (!env.deviceBroker.host) {
     throw errors.validation('חיבור מכשירים מרחוק אינו מוגדר בשרת זה (DEVICE_MQTT_HOST)');
   }
   const token = jwt.sign({ p: 'shelly-onboard-any', adm: adminId }, env.jwtSecret, { expiresIn: INSTALLER_TTL });
   const prepareUrl = `${statusBase}/api/v1/shelly-onboard/prepare?token=${token}`;
-  return { script_html: htmlPage(null, null, null, prepareUrl, `${env.deviceBroker.host}:${env.deviceBroker.port}`), valid_days: 30 };
+  return {
+    script_html: htmlPage(null, null, null, prepareUrl, `${env.deviceBroker.host}:${env.deviceBroker.port}`,
+      { ssid: wifiSsid, pass: wifiPass }),
+    valid_days: 30,
+  };
 }
 
 // ── Home-prep flow (superadmin, no file) ──

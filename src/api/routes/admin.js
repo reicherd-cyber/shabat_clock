@@ -202,8 +202,13 @@ adminRouter.post('/shelly/onboard', requireWrite, async (req, res, next) => {
 // page mints that device's credentials via the public prepare endpoint (30-day token).
 adminRouter.post('/shelly/universal-installer', requireWrite, async (req, res, next) => {
   try {
+    // The admin's saved home Wi-Fi rides the file as an editable prefill.
+    const [row] = await query('SELECT default_wifi_ssid, default_wifi_pass FROM admins WHERE id = ?', [req.auth.adminId]);
     const { universalInstaller } = await import('../../services/shellyOnboard.js');
-    const result = universalInstaller({ statusBase: `${req.protocol}://${req.get('host')}`, adminId: req.auth.adminId });
+    const result = universalInstaller({
+      statusBase: `${req.protocol}://${req.get('host')}`, adminId: req.auth.adminId,
+      wifiSsid: row?.default_wifi_ssid || '', wifiPass: row?.default_wifi_pass || '',
+    });
     await audit(req, 'universal_installer', 'device', null);
     res.json(result);
   } catch (e) { next(e); }
