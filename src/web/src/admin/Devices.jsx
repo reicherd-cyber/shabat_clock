@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync } from '../ui.jsx';
 
@@ -128,24 +128,37 @@ export default function Devices() {
     if (mac) setShelly((s) => (s ? { ...s, mac } : s));
     else throw new Error('לא זוהה אוטומטית — הקלידו את שם הרשת שהמכשיר משדר (...ShellyPro) בשדה, זה מספיק');
   });
-  const makePrepLinks = () => run(async () => {
-    let r;
-    try {
-      r = await adminApi.post('/shelly/prep', {
-        mac: parseMac(shelly.mac),
-        wifi_ssid: shelly.prepWifi?.ssid || '',
-        wifi_pass: shelly.prepWifi?.pass || '',
-      });
-    } catch (e) {
-      // "Failed to fetch" here almost always means the browser sits on the
-      // device's hotspot (no internet) — a real install hit exactly this.
-      if (/fetch/i.test(e.message)) {
-        throw new Error('אין חיבור לשרת — אם אתם על רשת המכשיר (ShellyPro...), חזרו לרשת עם אינטרנט, צרו את הקישורים, ורק אז עברו לרשת המכשיר להדבקה.');
+  // Links mint THEMSELVES once a valid code (and Wi-Fi) is on screen — no
+  // explicit "create" step, file-installer feel. Offline (typing while on the
+  // device hotspot) retries silently until internet returns.
+  const mintKeyRef = useRef('');
+  useEffect(() => {
+    if (!shelly || shelly.step !== 'config' || !shelly.prepWifi?.loaded) return undefined;
+    const mac = parseMac(shelly.mac || '');
+    if (mac.length !== 12) return undefined;
+    const key = `${mac}|${shelly.prepWifi.ssid}|${shelly.prepWifi.pass}`;
+    if (key === mintKeyRef.current) return undefined;
+    const t = setTimeout(async () => {
+      setShelly((s) => (s ? { ...s, prepMinting: 'יוצר קישורי הכנה...' } : s));
+      try {
+        const r = await adminApi.post('/shelly/prep', {
+          mac, wifi_ssid: shelly.prepWifi.ssid || '', wifi_pass: shelly.prepWifi.pass || '',
+        });
+        mintKeyRef.current = key;
+        setShelly((s) => (s ? { ...s, prepLinks: r.links, prepMinting: null, prepState: null, copied: null } : s));
+      } catch (e) {
+        const offline = /fetch/i.test(e.message);
+        setShelly((s) => (s ? {
+          ...s,
+          prepMinting: offline
+            ? 'אין אינטרנט כרגע (רשת המכשיר?) — הקישורים ייווצרו אוטומטית ברגע שיחזור חיבור...'
+            : `שגיאה ביצירת הקישורים: ${e.message}`,
+        } : s));
+        if (offline) setTimeout(() => { mintKeyRef.current = ''; setShelly((s) => (s ? { ...s } : s)); }, 6000);
       }
-      throw e;
-    }
-    setShelly((s) => (s ? { ...s, mac: r.mac, prepLinks: r.links, prepState: null, copied: null } : s));
-  });
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [shelly?.step, shelly?.mac, shelly?.prepWifi?.loaded, shelly?.prepWifi?.ssid, shelly?.prepWifi?.pass]); // eslint-disable-line react-hooks/exhaustive-deps
   // One-click send: an https page can't FETCH the device's local http address
   // (mixed content), but it may OPEN a tab there and keep navigating it — so we
   // drive one tab through the three commands, file-installer style.
@@ -390,17 +403,13 @@ export default function Devices() {
                 <p className="text-muted text-xs">
                   שינויים נשמרים אוטומטית במכשיר הזה בלבד; "שמור" קובע ברירת מחדל לחשבון בכל המכשירים.
                 </p>
-                <p className="text-sm font-semibold">3. קוד המכשיר — העתיקו את שם הרשת מרשימת ה-Wi-Fi (הקוד נמצא בתוכו):</p>
+                <p className="text-sm font-semibold">3. קוד המכשיר — העתיקו את שם הרשת מרשימת ה-Wi-Fi (הקוד נמצא בתוכו), והקישורים ייווצרו לבד:</p>
                 <div className="flex gap-2">
                   <Input dir="ltr" placeholder="ShellyPro4PM-E08CFE95DD48 או הקוד מהמדבקה" value={shelly.mac}
                     onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
                   <Button variant="ghost" className="!px-2 text-xs whitespace-nowrap" disabled={busy} onClick={detectMac}>זהה לבד</Button>
                 </div>
-                <Button className="w-full" disabled={busy || !shelly.mac} onClick={makePrepLinks}>צור קישורי הכנה ›</Button>
-                <p className="text-muted text-xs">
-                  היצירה דורשת אינטרנט — לחצו לפני שעוברים לרשת המכשיר. רק אחרי שהקישורים
-                  מופיעים: התחברו לרשת שהמכשיר משדר והדביקו אותם. יצירה חוזרת מחליפה סיסמה.
-                </p>
+                {!shelly.prepLinks && shelly.prepMinting && <p className="text-sm font-medium">{shelly.prepMinting}</p>}
                 {shelly.prepLinks && (
                   <div className="space-y-1.5">
                     <p className="text-sm font-semibold">4. התחברו לרשת שהמכשיר משדר, ואז:</p>
