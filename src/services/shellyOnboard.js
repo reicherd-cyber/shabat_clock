@@ -586,12 +586,13 @@ async function stageComplete(){
  // A stale config (wiped credentials) fails here and falls through to a full
  // re-provision instead of a false "done".
  if(PROVISIONED&&PREPARE_URL){
-  log('בודק מול השרת אם המכשיר מתחבר עם ההגדרות הקיימות...');
+  log('בודק מול השרת אם המכשיר מתחבר עם ההגדרות הקיימות... (עד כשתי דקות)');
   const mac=parseMac($('mac').value);
   let ok=false;
-  for(let i=0;i<20;i++){
-   try{const r=await(await fetch(PREPARE_URL+'&mac='+mac+'&check=1',{cache:'no-store'})).json();if(r.connected&&r.mac_ok){ok=true;break}}
+  for(let i=0;i<12;i++){
+   try{const r=await(await fetch(PREPARE_URL+'&mac='+mac+'&check=1',{cache:'no-store',signal:AbortSignal.timeout(6000)})).json();if(r.connected&&r.mac_ok){ok=true;break}}
    catch(e){log('אין אינטרנט כרגע — ודאו שהטלפון על ה-Wi-Fi הביתי...','warn')}
+   if(i%4===3)log('עדיין בודק... ('+(i+1)+'/12)','warn');
    await sleep(5000);
   }
   if(ok){verdict('סיימתם! המכשיר מחובר לשרת. אפשר לשייך אותו ללקוח במסך הניהול.','ok');STAGE='done';$('go').textContent='סיום';return}
