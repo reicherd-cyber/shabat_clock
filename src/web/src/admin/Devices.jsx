@@ -412,11 +412,14 @@ export default function Devices() {
                 <p className="text-muted text-xs">
                   שינויים נשמרים אוטומטית במכשיר הזה בלבד; "שמור" קובע ברירת מחדל לחשבון בכל המכשירים.
                 </p>
-                {shelly.prepLinks && (
-                  <div className="space-y-1.5">
-                    <p className="text-sm font-semibold">4. שליחה למכשיר (ודאו שאתם עדיין על הרשת שהוא משדר):</p>
-                    <Button className="w-full" onClick={sendPrepLinks}>שלח הכל למכשיר בלחיצה אחת ›</Button>
-                    {shelly.prepSend && <p className="text-sm font-medium">{shelly.prepSend}</p>}
+                <div className="space-y-1.5">
+                  <p className="text-sm font-semibold">4. שליחה למכשיר (ודאו שאתם עדיין על הרשת שהוא משדר):</p>
+                  <Button className="w-full" disabled={!shelly.prepLinks} onClick={sendPrepLinks}>
+                    {shelly.prepLinks ? 'שלח הכל למכשיר בלחיצה אחת ›'
+                      : parseMac(shelly.mac || '').length === 12 ? 'מכין קישורים...' : 'ממתין לקוד המכשיר (שלב 2)...'}
+                  </Button>
+                  {shelly.prepSend && <p className="text-sm font-medium">{shelly.prepSend}</p>}
+                  {shelly.prepLinks && (
                     <details>
                       <summary className="text-muted text-xs cursor-pointer">לא עובד? שליחה ידנית — פתחו או הדביקו כל קישור לפי הסדר ›</summary>
                       <div className="space-y-1.5 mt-1.5">
@@ -431,18 +434,18 @@ export default function Devices() {
                           ))}
                       </div>
                     </details>
-                    <p className="text-muted text-xs">5. חזרו ל-Wi-Fi הרגיל ולחצו:</p>
-                    <Button className="w-full" disabled={busy} onClick={checkPrep}>בדוק והשלם הכנה ›</Button>
-                    {shelly.prepState && (
+                  )}
+                  <p className="text-sm font-semibold">5. חזרו ל-Wi-Fi הרגיל ולחצו:</p>
+                  <Button className="w-full" disabled={busy || !shelly.prepLinks} onClick={checkPrep}>בדוק והשלם הכנה ›</Button>
+                  {shelly.prepState && (
                       <p className="text-sm font-medium">
                         {shelly.prepState.status === 'waiting' && 'ממתין שהמכשיר יתחבר לשרת... (עד דקה-שתיים אחרי האתחול; ודאו שהודבקו כל שלושת הקישורים)'}
                         {shelly.prepState.status === 'securing' && 'המכשיר התחבר — מתקין תעודת אבטחה ומאתחל... לחצו שוב בעוד דקה.'}
                         {shelly.prepState.status === 'ready' && `מוכן ✓ ${shelly.prepState.model || ''} · fw ${shelly.prepState.fw || ''} — המשיכו ל"שיוך Shelly ללקוח" (כפתור 2)`}
                         {shelly.prepState.status === 'error' && (shelly.prepState.message || 'שגיאה — נסו שוב')}
                       </p>
-                    )}
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             )}
             <details className="border border-line rounded-xl p-3 text-sm">
