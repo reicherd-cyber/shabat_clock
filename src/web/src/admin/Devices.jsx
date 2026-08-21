@@ -146,6 +146,32 @@ export default function Devices() {
     }
     setShelly((s) => (s ? { ...s, mac: r.mac, prepLinks: r.links, prepState: null, copied: null } : s));
   });
+  // One-click send: an https page can't FETCH the device's local http address
+  // (mixed content), but it may OPEN a tab there and keep navigating it — so we
+  // drive one tab through the three commands, file-installer style.
+  const sendPrepLinks = () => {
+    const L = shelly.prepLinks;
+    const seq = [
+      ['שולח את הגדרת השרת למכשיר...', L.mqtt],
+      L.wifi ? ['שולח את חיבור ה-Wi-Fi...', L.wifi] : null,
+      ['שולח פקודת אתחול...', L.reboot],
+    ].filter(Boolean);
+    const w = window.open(seq[0][1], 'shelly-prep');
+    if (!w) {
+      setError(new Error('הדפדפן חסם את החלון — אפשרו חלונות קופצים לאתר, או פתחו כל קישור ידנית לפי הסדר.'));
+      return;
+    }
+    setShelly((s) => (s ? { ...s, prepSend: seq[0][0] } : s));
+    seq.slice(1).forEach(([label, url], i) => setTimeout(() => {
+      try { w.location.href = url; } catch { /* cross-origin handle — navigation still lands */ }
+      setShelly((s) => (s ? { ...s, prepSend: label } : s));
+    }, (i + 1) * 3500));
+    setTimeout(() => {
+      try { w.close(); } catch { /* some browsers refuse — harmless */ }
+      setShelly((s) => (s ? { ...s, prepSend: 'נשלח הכל ✓ — חזרו ל-Wi-Fi הרגיל ולחצו "בדוק והשלם הכנה".' } : s));
+    }, seq.length * 3500 + 2000);
+  };
+
   const checkPrep = () => run(async () => {
     // waiting → securing → ready; poll up to a minute per press.
     for (let i = 0; i < 15; i++) {
@@ -377,18 +403,24 @@ export default function Devices() {
                 </p>
                 {shelly.prepLinks && (
                   <div className="space-y-1.5">
-                    {[['1. הגדרת שרת', shelly.prepLinks.mqtt, 'l1'], ['2. חיבור ל-Wi-Fi', shelly.prepLinks.wifi, 'l2'], ['3. אתחול', shelly.prepLinks.reboot, 'l3']]
-                      .filter(([, v]) => v).map(([label, url, k]) => (
-                        <div key={k} className="flex items-center gap-2 text-sm">
-                          <span className="w-24 shrink-0">{label}</span>
-                          <code dir="ltr" className="flex-1 truncate text-[11px] bg-surface2 rounded px-2 py-1">{url}</code>
-                          <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => copyScript(k, url)}>{shelly.copied === k ? 'הועתק ✓' : 'העתק'}</Button>
-                        </div>
-                      ))}
-                    <p className="text-muted text-xs">
-                      4. כשהטלפון על רשת המכשיר — הדביקו את שלושת הקישורים בדפדפן לפי הסדר
-                      (כל אחד מחזיר שורת אישור). 5. חזרו ל-Wi-Fi הרגיל ולחצו:
-                    </p>
+                    <p className="text-sm font-semibold">4. התחברו לרשת שהמכשיר משדר, ואז:</p>
+                    <Button className="w-full" onClick={sendPrepLinks}>שלח הכל למכשיר בלחיצה אחת ›</Button>
+                    {shelly.prepSend && <p className="text-sm font-medium">{shelly.prepSend}</p>}
+                    <details>
+                      <summary className="text-muted text-xs cursor-pointer">לא עובד? שליחה ידנית — פתחו או הדביקו כל קישור לפי הסדר ›</summary>
+                      <div className="space-y-1.5 mt-1.5">
+                        {[['1. הגדרת שרת', shelly.prepLinks.mqtt, 'l1'], ['2. חיבור ל-Wi-Fi', shelly.prepLinks.wifi, 'l2'], ['3. אתחול', shelly.prepLinks.reboot, 'l3']]
+                          .filter(([, v]) => v).map(([label, url, k]) => (
+                            <div key={k} className="flex items-center gap-2 text-sm">
+                              <span className="w-24 shrink-0">{label}</span>
+                              <code dir="ltr" className="flex-1 truncate text-[11px] bg-surface2 rounded px-2 py-1">{url}</code>
+                              <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => window.open(url, '_blank')}>פתח</Button>
+                              <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => copyScript(k, url)}>{shelly.copied === k ? 'הועתק ✓' : 'העתק'}</Button>
+                            </div>
+                          ))}
+                      </div>
+                    </details>
+                    <p className="text-muted text-xs">5. חזרו ל-Wi-Fi הרגיל ולחצו:</p>
                     <Button className="w-full" disabled={busy} onClick={checkPrep}>בדוק והשלם הכנה ›</Button>
                     {shelly.prepState && (
                       <p className="text-sm font-medium">
