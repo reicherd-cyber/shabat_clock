@@ -176,49 +176,74 @@ export default function Devices() {
     }, 1000);
     return () => clearTimeout(t);
   }, [shelly?.step, shelly?.mac, shelly?.prepWifi?.loaded, shelly?.prepWifi?.ssid, shelly?.prepWifi?.pass]); // eslint-disable-line react-hooks/exhaustive-deps
-  // One-click send: an https page can't FETCH the device's local http address
-  // (mixed content), but it may OPEN a tab there and keep navigating it — so we
-  // drive one tab through the three commands, file-installer style.
-  const sendPrepLinks = () => {
-    const L = shelly.prepLinks;
-    const seq = [
-      ['שולח את הגדרת השרת למכשיר...', L.mqtt],
-      L.wifi ? ['שולח את חיבור ה-Wi-Fi...', L.wifi] : null,
-      ['שולח פקודת אתחול...', L.reboot],
-    ].filter(Boolean);
-    const w = window.open(seq[0][1], 'shelly-prep');
-    if (!w) {
-      prepLog('הדפדפן חסם את החלון — אפשרו חלונות קופצים לאתר, או פתחו כל קישור ידנית לפי הסדר.', 'bad');
-      return;
-    }
-    prepLog(seq[0][0]);
-    seq.slice(1).forEach(([label, url], i) => setTimeout(() => {
-      try { w.location.href = url; } catch { /* cross-origin handle — navigation still lands */ }
-      prepLog(label);
-    }, (i + 1) * 3500));
-    setTimeout(() => {
-      try { w.close(); } catch { /* some browsers refuse — harmless */ }
-      prepLog('נשלח הכל למכשיר ✓ — חזרו ל-Wi-Fi הרגיל ולחצו "בדוק והשלם הכנה".', 'ok');
-    }, seq.length * 3500 + 2000);
-  };
-
-  const checkPrep = () => run(async () => {
-    // waiting → securing → ready; poll up to a minute per press.
-    prepLog('בודק מול השרת אם המכשיר התחבר...');
-    for (let i = 0; i < 15; i++) {
-      const st = await adminApi.post('/shelly/prep-status', { mac: parseMac(shelly.mac) });
-      if (st.status === 'ready') {
-        prepLog(`מוכן ✓ ${st.model || ''} · fw ${st.fw || ''} — נרשם במלאי; המשיכו ל"שיוך Shelly ללקוח" (כפתור 2)`, 'ok');
-        setShelly((s) => (s ? { ...s, prepState: st } : s));
-        return;
+  // ONE button runs the whole thing, exactly like the downloaded file: wait for
+  // the links (auto-mint), drive a tab through the three device commands (an
+  // https page can't fetch local http, but it may navigate a tab there), ride
+  // out the user's hop back to internet, and poll the server to מוכן ✓ — all
+  // narrated in the log. Re-pressing restarts the chain safely.
+  const shellyRef = useRef(null);
+  useEffect(() => { shellyRef.current = shelly; });
+  const prepRunRef = useRef(0);
+  const sleep = (ms) => new Promise((r2) => setTimeout(r2, ms));
+  const startPrep = () => {
+    // The tab must open inside the click (popup rules) — navigated later.
+    const w = window.open('about:blank', 'shelly-prep');
+    if (!w) { prepLog('הדפדפן חסם את החלון — אפשרו חלונות קופצים לאתר ונסו שוב.', 'bad'); return; }
+    prepRunRef.current += 1;
+    const runId = prepRunRef.current;
+    const alive = () => prepRunRef.current === runId;
+    (async () => {
+      // 1. Links (the auto-mint effect produces them; we narrate and wait).
+      if (!shellyRef.current?.prepLinks) prepLog('ממתין ליצירת קישורי ההכנה...');
+      for (let i = 0; !shellyRef.current?.prepLinks; i++) {
+        if (!alive()) { try { w.close(); } catch { /* noop */ } return; }
+        if (i > 200) { prepLog('הקישורים לא נוצרו — בדקו שהוקלד קוד ושיש אינטרנט, ולחצו שוב.', 'bad'); try { w.close(); } catch { /* noop */ } return; }
+        await sleep(1500);
       }
-      if (st.status === 'error') { prepLog(st.message || 'שגיאה — נסו שוב', 'bad'); return; }
-      if (st.status === 'securing') prepLog('המכשיר התחבר ✓ — מתקין תעודת אבטחה ומאתחל...', 'ok');
-      else prepLog('המכשיר עדיין לא התחבר — ממשיך להמתין... (חיבור ראשון לוקח עד כמה דקות)', 'warn');
-      await new Promise((r2) => setTimeout(r2, 4000));
-    }
-    prepLog('עדיין לא התחבר — המתינו דקה ולחצו "בדוק והשלם הכנה" שוב.', 'warn');
-  });
+      // 2. Send the three commands through the tab.
+      const L = shellyRef.current.prepLinks;
+      const seq = [
+        ['שולח את הגדרת השרת למכשיר...', L.mqtt],
+        L.wifi ? ['שולח את חיבור ה-Wi-Fi למכשיר...', L.wifi] : null,
+        ['שולח פקודת אתחול...', L.reboot],
+      ].filter(Boolean);
+      for (const [label, url] of seq) {
+        if (!alive()) return;
+        prepLog(label);
+        try { w.location.href = url; } catch { /* cross-origin handle — navigation still lands */ }
+        await sleep(3500);
+      }
+      try { w.close(); } catch { /* some browsers refuse — harmless */ }
+      prepLog('ההגדרות נשלחו ✓ — אם אתם על רשת המכשיר, חזרו עכשיו ל-Wi-Fi הרגיל; הבדיקה תמשיך לבד.', 'ok');
+      await sleep(6000);
+      // 3. Verify with the server — tolerating the no-internet window while the
+      // user hops networks, exactly like the file's verdict stage.
+      prepLog('בודק מול השרת אם המכשיר התחבר...');
+      const deadline = Date.now() + 5 * 60_000;
+      while (Date.now() < deadline) {
+        if (!alive()) return;
+        let st = null;
+        try {
+          st = await adminApi.post('/shelly/prep-status', { mac: parseMac(shellyRef.current.mac) });
+        } catch {
+          prepLog('אין אינטרנט כרגע — ממתין שתחזרו ל-Wi-Fi הרגיל...', 'warn');
+          await sleep(5000);
+          continue;
+        }
+        if (st.status === 'ready') {
+          prepLog(`מוכן ✓ ${st.model || ''} · fw ${st.fw || ''} — המכשיר נרשם במלאי. המשיכו ל"שיוך Shelly ללקוח" (כפתור 2).`, 'ok');
+          setShelly((s) => (s ? { ...s, prepState: st } : s));
+          await refresh().catch(() => {});
+          return;
+        }
+        if (st.status === 'error') { prepLog(st.message || 'שגיאה — נסו שוב', 'bad'); return; }
+        if (st.status === 'securing') prepLog('המכשיר התחבר ✓ — מתקין תעודת אבטחה ומאתחל...', 'ok');
+        else prepLog('המכשיר עדיין לא התחבר — ממשיך להמתין... (חיבור ראשון לוקח עד כמה דקות)', 'warn');
+        await sleep(4000);
+      }
+      prepLog('לא הושלם תוך 5 דקות — לחצו "התחל התקנה" שוב, או בדקו קו מסונן (נטפרי/אתרוג/רימון).', 'warn');
+    })();
+  };
 
   const shellyProbe = () => run(async () => {
     const probe = await adminApi.post('/shelly/probe', { transport: shelly.transport, ip: shelly.ip, mac: shelly.mac });
@@ -435,10 +460,8 @@ export default function Devices() {
                   שינויים נשמרים אוטומטית במכשיר הזה בלבד; "שמור" קובע ברירת מחדל לחשבון בכל המכשירים.
                 </p>
                 <div className="space-y-1.5">
-                  <p className="text-sm font-semibold">4. שליחה למכשיר (ודאו שאתם עדיין על הרשת שהוא משדר):</p>
-                  <Button className="w-full" disabled={!shelly.prepLinks} onClick={sendPrepLinks}>
-                    {shelly.prepLinks ? 'שלח הכל למכשיר בלחיצה אחת ›'
-                      : parseMac(shelly.mac || '').length === 12 ? 'מכין קישורים...' : 'ממתין לקוד המכשיר (שלב 2)...'}
+                  <Button className="w-full" disabled={parseMac(shelly.mac || '').length !== 12} onClick={startPrep}>
+                    {parseMac(shelly.mac || '').length === 12 ? 'התחל התקנה ›' : 'הקלידו את קוד המכשיר (שלב 2) כדי להתחיל'}
                   </Button>
                   {shelly.prepLinks && (
                     <details>
@@ -456,8 +479,6 @@ export default function Devices() {
                       </div>
                     </details>
                   )}
-                  <p className="text-sm font-semibold">5. חזרו ל-Wi-Fi הרגיל ולחצו:</p>
-                  <Button className="w-full" disabled={busy || !shelly.prepLinks} onClick={checkPrep}>בדוק והשלם הכנה ›</Button>
                   {(shelly.prepLog || []).length > 0 && (
                     <div className="border border-line rounded-xl p-3 bg-surface2/40 space-y-0.5 text-sm">
                       {shelly.prepLog.map((l, i) => (
