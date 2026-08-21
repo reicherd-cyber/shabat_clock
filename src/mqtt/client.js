@@ -84,16 +84,19 @@ async function handleShellyMessage(topic, buf) {
     if (!device) {
       // A prepared-but-unregistered unit dialing in (e.g. the file installer
       // finished without its final check) — the inventory records it the moment
-      // it touches the system, enriched with model/fw on first sighting.
+      // it touches the system. Births can be RETAINED echoes of a dead session
+      // (redelivered on every resubscribe), so only a unit that answers a live
+      // RPC gets logged — the answer also supplies model/fw.
       const uid = online[1].slice(online[1].lastIndexOf('-') + 1);
       if (text === 'true' && /^[0-9a-f]{12}$/.test(uid)) {
-        const res = await query('INSERT IGNORE INTO prepared_devices (mac) VALUES (?)', [uid]).catch(() => null);
-        if (res && res.affectedRows === 1) {
-          const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 4000).catch(() => null);
-          if (info?.result) {
-            await query('UPDATE prepared_devices SET model = ?, fw_version = ? WHERE mac = ?',
-              [info.result.model || null, info.result.ver || null, uid]).catch(() => { /* best-effort */ });
-          }
+        const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 4000).catch(() => null);
+        if (info?.result) {
+          await query(
+            `INSERT INTO prepared_devices (mac, model, fw_version) VALUES (?,?,?)
+             ON DUPLICATE KEY UPDATE model = COALESCE(VALUES(model), model),
+                                     fw_version = COALESCE(VALUES(fw_version), fw_version)`,
+            [uid, info.result.model || null, info.result.ver || null],
+          ).catch(() => { /* best-effort */ });
         }
       }
       return;
