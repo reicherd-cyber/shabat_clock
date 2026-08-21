@@ -15,6 +15,7 @@ export default function Devices() {
   const [fOnline, setFOnline] = useState('');
   const [q, setQ] = useState('');
   const [expanded, setExpanded] = useState(null); // device id with its details row open
+  const [transferForm, setTransferForm] = useState(null); // {device, user_id}
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -246,6 +247,8 @@ export default function Devices() {
                         <span className="whitespace-nowrap">v{d.schedule_version} / ack v{d.device_ack_version}</span>
                         <span className="flex gap-1 ms-auto">
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                            onClick={() => setTransferForm({ device: d, user_id: '' })}>העבר ללקוח</Button>
+                          <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             title="השתקה עוצרת מיילים על תקלות במכשיר הזה; התקלות עדיין נרשמות ביומן"
                             onClick={() => run(async () => {
                               await adminApi.patch(`/devices/${d.id}`, { mute_alerts: !d.mute_alerts });
@@ -470,6 +473,33 @@ export default function Devices() {
             <p><b>{shelly.name}</b> נוסף בהצלחה (מכשיר מספר {shelly.result.id}, {shelly.result.relays} ממסרים).</p>
             <p className="text-sm text-muted">הממסרים זמינים עכשיו בלוח הבקרה של המשתמש ובתפריט הטלפוני.</p>
             <Button className="w-full" onClick={() => setShelly(null)}>סגור</Button>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!transferForm} onClose={() => setTransferForm(null)} title={`העברת "${transferForm?.device?.name || ''}" ללקוח אחר`}>
+        {transferForm && (
+          <div className="space-y-3">
+            <p className="text-sm text-muted">
+              המכשיר יעבור עם כל הערוצים והתזמונים שלו. קודי ה-IVR נשמרים — אם קוד תפוס
+              אצל הלקוח החדש, ההעברה תיעצר ותציג אילו קודים מתנגשים.
+            </p>
+            <Select className="w-full" value={transferForm.user_id}
+              onChange={(e) => setTransferForm({ ...transferForm, user_id: e.target.value })}>
+              <option value="">בחרו לקוח יעד…</option>
+              {users.filter((u) => u.id !== transferForm.device.user_id).map((u) => (
+                <option key={u.id} value={u.id}>{u.full_name}</option>
+              ))}
+            </Select>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setTransferForm(null)}>ביטול</Button>
+              <Button className="flex-1" disabled={busy || !transferForm.user_id} onClick={() => run(async () => {
+                await adminApi.post(`/devices/${transferForm.device.id}/transfer`, { user_id: Number(transferForm.user_id) });
+                setTransferForm(null);
+                await refresh();
+              })}>העבר</Button>
+            </div>
           </div>
         )}
       </Modal>

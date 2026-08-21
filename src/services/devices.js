@@ -365,6 +365,37 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
   });
 }
 
+// Move a device (with its relays and their schedules) to another user. The
+// composite FKs (relays→devices(id,user_id), schedules→relays(id,user_id)) are
+// ON UPDATE CASCADE, so flipping devices.user_id propagates through both.
+// Zmanim schedules re-resolve with the new owner's region on the next refresh.
+export async function transferDevice(deviceId, targetUserId, { actor = null } = {}) {
+  return withTransaction(async (conn) => {
+    const [dRows] = await conn.query('SELECT * FROM devices WHERE id = ? FOR UPDATE', [deviceId]);
+    const device = dRows[0];
+    if (!device) throw errors.notFound('NOT_FOUND', 'Device not found');
+    if (Number(device.user_id) === Number(targetUserId)) return { moved: false };
+    const [uRows] = await conn.query('SELECT id, max_devices FROM users WHERE id = ? FOR UPDATE', [targetUserId]);
+    if (!uRows[0]) throw errors.notFound('NOT_FOUND', 'משתמש היעד לא נמצא');
+    if (device.is_enabled) {
+      const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_enabled = TRUE', [targetUserId]);
+      if (dCount[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'משתמש היעד הגיע למכסת המכשירים שלו');
+    }
+    const [conf] = await conn.query(
+      `SELECT DISTINCT r.ivr_digit FROM relays r
+       WHERE r.device_id = ? AND r.deleted_at IS NULL
+         AND EXISTS (SELECT 1 FROM relays t WHERE t.user_id = ? AND t.ivr_digit = r.ivr_digit AND t.deleted_at IS NULL)`,
+      [deviceId, targetUserId],
+    );
+    if (conf.length) {
+      throw errors.conflict('IVR_DIGIT_TAKEN',
+        `קודי IVR ${conf.map((c) => c.ivr_digit).join(', ')} כבר תפוסים אצל משתמש היעד — שנו אותם לפני ההעברה`);
+    }
+    await conn.query('UPDATE devices SET user_id = ?, updated_by = ? WHERE id = ?', [targetUserId, actor, deviceId]);
+    return { moved: true };
+  });
+}
+
 export async function listAllDevices() {
   return query(
     `SELECT d.id, d.user_id, u.full_name AS owner_name, d.device_uid, d.removed_uid, d.name, d.fw_version, d.timezone,

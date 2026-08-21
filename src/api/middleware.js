@@ -58,7 +58,10 @@ export function requireSuperadmin(req, res, next) {
 const limited = (opts) => rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req, res) => res.status(429).json({ error: { code: 'RATE_LIMITED', message: 'Too many requests' } }),
+  // ACAO on the rejection too — the file:// installer page reads these public
+  // endpoints cross-origin, and a CORS-less 429 shows up as "no internet".
+  handler: (req, res) => res.set('Access-Control-Allow-Origin', '*')
+    .status(429).json({ error: { code: 'RATE_LIMITED', message: 'יותר מדי בקשות — המתינו כמה דקות ונסו שוב' } }),
   ...opts,
 });
 
@@ -76,4 +79,6 @@ export const adminLoginLimiter = limited({ windowMs: 15 * 60_000, limit: 5 });
 // The phone onboarding page polls its verdict every ~4s for up to ~90s per attempt.
 export const onboardStatusLimiter = limited({ windowMs: 60_000, limit: 30 });
 // Credential minting writes broker passwd/ACL entries — keep it slow.
-export const onboardPrepareLimiter = limited({ windowMs: 10 * 60_000, limit: 10 });
+// Batch prep sessions (several devices back-to-back, with the page's own
+// retries) blew the old 10/10min and read as "no internet" on the phone.
+export const onboardPrepareLimiter = limited({ windowMs: 10 * 60_000, limit: 30 });

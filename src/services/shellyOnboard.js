@@ -510,9 +510,14 @@ async function mintCreds(){
  const mac=parseMac($('mac').value);
  if(B&&mac===UID)return true;
  log('יוצר פרטי חיבור בשרת (דרך האינטרנט)...');
+ // Right after hopping back from the device hotspot the phone needs a few
+ // seconds to re-establish routes — retry quietly before complaining.
  let r=null;
- try{r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'})}
- catch(e){verdict('אין לטלפון אינטרנט כרגע. ודאו שהטלפון חזר ל-Wi-Fi הביתי (או הפעילו גלישה) ולחצו שוב.','warn');return false}
+ for(let i=0;i<4&&!r;i++){
+  if(i)await sleep(3000);
+  try{r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'})}catch(e){r=null}
+ }
+ if(!r){verdict('אין חיבור לשרת. אם הרגע עברתם רשת — המתינו כמה שניות ולחצו שוב; אחרת ודאו שהטלפון על Wi-Fi עם אינטרנט (או הפעילו גלישה).','warn');return false}
  if(!r.ok){
   const e=await r.json().catch(()=>null);
   verdict('השרת לא אישר את הבקשה: '+((e&&e.error&&e.error.message)||('שגיאה '+r.status))+'. אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');
