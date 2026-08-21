@@ -116,6 +116,17 @@ authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, async (req, res
       throw errors.unauthenticated('קובץ ההתקנה פג תוקף — יש לבקש קובץ חדש');
     }
     if (claims.p !== 'shelly-onboard-any') throw errors.unauthenticated();
+    // check=1: no minting — just "is this device connected to the broker right
+    // now?", so the installer can validate a seemingly-provisioned unit before
+    // trusting its stored config (stale credentials look identical on-device).
+    if (String(req.query.check || '') === '1') {
+      const uid = String(req.query.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+      if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
+      const { shellyMqttRpc } = await import('../../mqtt/client.js');
+      const reply = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 4000);
+      const mac = reply?.result?.mac ? String(reply.result.mac).toLowerCase().replace(/[^0-9a-f]/g, '') : null;
+      return res.json({ connected: !!mac, mac_ok: mac === uid });
+    }
     const { prepareDevice } = await import('../../services/shellyOnboard.js');
     const result = prepareDevice({ mac: String(req.query.mac || ''), statusBase: `${req.protocol}://${req.get('host')}` });
     const { auditLog } = await import('../../services/audit.js');

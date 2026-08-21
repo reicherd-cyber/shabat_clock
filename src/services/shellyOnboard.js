@@ -570,16 +570,34 @@ async function stageWifi(){
 }
 function afterWifi(ssid){
  log('המכשיר מחובר לרשת הביתית ✓ (כתובת '+STA_IP+')','ok');
- if(PROVISIONED){
-  STAGE='done';$('go').textContent='סיום';
-  verdict('סיימתם! המכשיר מחובר לרשת הביתית ומוגדר מראש לשרת — הוא יתקשר לבד תוך דקות ספורות. אפשר לוודא במסך הניהול ("בדוק חיבור").','ok');
-  return}
+ // Even a seemingly-provisioned unit goes through the completion stage — its
+ // stored config may carry dead credentials (looks identical on-device), so
+ // "done" is declared only after the server confirms a live connection.
  STAGE='complete';$('go').textContent='השלם התקנה (שלב 3 מתוך 3) ›';
- verdict('שלב 2 מתוך 3 הושלם — המכשיר על הרשת הביתית ✓. <b>ההתקנה עוד לא הסתיימה:</b> חברו את הטלפון ל-Wi-Fi הביתי ולחצו "השלם התקנה". בלי השלב הזה המכשיר לא יתחבר לשרת.','warn');
+ verdict((PROVISIONED
+  ?'שלב 2 מתוך 3 הושלם — המכשיר מוגדר מראש, ונוודא מול השרת שהוא באמת מתחבר. '
+  :'שלב 2 מתוך 3 הושלם — המכשיר על הרשת הביתית ✓. <b>ההתקנה עוד לא הסתיימה:</b> ')
+  +'חברו את הטלפון ל-Wi-Fi הביתי ולחצו "השלם התקנה".','warn');
 }
 // Stage 'complete' (on the home network — phone and device now share a LAN):
 // mint creds, reach the device at its home address, send server config, verify.
 async function stageComplete(){
+ // Provisioned unit: trust, but verify — poll the server for a live connection.
+ // A stale config (wiped credentials) fails here and falls through to a full
+ // re-provision instead of a false "done".
+ if(PROVISIONED&&PREPARE_URL){
+  log('בודק מול השרת אם המכשיר מתחבר עם ההגדרות הקיימות...');
+  const mac=parseMac($('mac').value);
+  let ok=false;
+  for(let i=0;i<20;i++){
+   try{const r=await(await fetch(PREPARE_URL+'&mac='+mac+'&check=1',{cache:'no-store'})).json();if(r.connected&&r.mac_ok){ok=true;break}}
+   catch(e){log('אין אינטרנט כרגע — ודאו שהטלפון על ה-Wi-Fi הביתי...','warn')}
+   await sleep(5000);
+  }
+  if(ok){verdict('סיימתם! המכשיר מחובר לשרת. אפשר לשייך אותו ללקוח במסך הניהול.','ok');STAGE='done';$('go').textContent='סיום';return}
+  log('המכשיר לא מצליח להתחבר עם ההגדרות הקיימות — מגדיר אותו מחדש...','warn');
+  PROVISIONED=false;
+ }
  if(PREPARE_URL&&!(B&&parseMac($('mac').value)===UID)){if(!(await mintCreds()))return}
  const manual=$('ip').value.trim();
  const candidates=[...new Set([manual,STA_IP,DEVIP].filter(Boolean))]
