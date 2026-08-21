@@ -147,14 +147,16 @@ export default function Devices() {
         mintKeyRef.current = key;
         setShelly((s) => (s ? { ...s, prepLinks: r.links, prepMinting: null, prepState: null, copied: null } : s));
       } catch (e) {
-        const offline = /fetch/i.test(e.message);
+        // Network failure OR a transient server error (deploy window) — both
+        // retry quietly; only a definitive rejection shows as an error.
+        const retryable = /fetch/i.test(e.message) || /internal server error/i.test(e.message);
         setShelly((s) => (s ? {
           ...s,
-          prepMinting: offline
-            ? 'אין אינטרנט כרגע (רשת המכשיר?) — הקישורים ייווצרו אוטומטית ברגע שיחזור חיבור...'
+          prepMinting: retryable
+            ? 'אין חיבור לשרת כרגע — הקישורים ייווצרו אוטומטית ברגע שיחזור...'
             : `שגיאה ביצירת הקישורים: ${e.message}`,
         } : s));
-        if (offline) setTimeout(() => { mintKeyRef.current = ''; setShelly((s) => (s ? { ...s } : s)); }, 6000);
+        if (retryable) setTimeout(() => { mintKeyRef.current = ''; setShelly((s) => (s ? { ...s } : s)); }, 6000);
       }
     }, 1000);
     return () => clearTimeout(t);
