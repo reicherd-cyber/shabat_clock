@@ -115,16 +115,17 @@ export default function Devices() {
   };
   // Ask the device itself over WebSocket (works when the panel isn't https-blocked
   // from local addresses — e.g. localhost; production https may refuse).
+  const wsDetect = () => new Promise((res) => {
+    let ws, done = false;
+    const fin = (v) => { if (!done) { done = true; try { ws && ws.close(); } catch { /* noop */ } res(v); } };
+    try { ws = new WebSocket('ws://192.168.33.1/rpc'); } catch { return res(null); }
+    const t = setTimeout(() => fin(null), 5000);
+    ws.onopen = () => { try { ws.send(JSON.stringify({ id: 1, src: 'panel', method: 'Shelly.GetDeviceInfo' })); } catch { clearTimeout(t); fin(null); } };
+    ws.onmessage = (e) => { clearTimeout(t); try { const m = String(JSON.parse(e.data).result.mac || '').toLowerCase().replace(/[^0-9a-f]/g, ''); fin(m.length === 12 ? m : null); } catch { fin(null); } };
+    ws.onerror = () => { clearTimeout(t); fin(null); };
+  });
   const detectMac = () => run(async () => {
-    const mac = await new Promise((res) => {
-      let ws, done = false;
-      const fin = (v) => { if (!done) { done = true; try { ws && ws.close(); } catch { /* noop */ } res(v); } };
-      try { ws = new WebSocket('ws://192.168.33.1/rpc'); } catch { return res(null); }
-      const t = setTimeout(() => fin(null), 5000);
-      ws.onopen = () => { try { ws.send(JSON.stringify({ id: 1, src: 'panel', method: 'Shelly.GetDeviceInfo' })); } catch { clearTimeout(t); fin(null); } };
-      ws.onmessage = (e) => { clearTimeout(t); try { const m = String(JSON.parse(e.data).result.mac || '').toLowerCase().replace(/[^0-9a-f]/g, ''); fin(m.length === 12 ? m : null); } catch { fin(null); } };
-      ws.onerror = () => { clearTimeout(t); fin(null); };
-    });
+    const mac = await wsDetect();
     if (mac) setShelly((s) => (s ? { ...s, mac } : s));
     else throw new Error('לא זוהה אוטומטית — הקלידו את שם הרשת שהמכשיר משדר (...ShellyPro) בשדה, זה מספיק');
   });
@@ -193,6 +194,27 @@ export default function Devices() {
     const runId = prepRunRef.current;
     const alive = () => prepRunRef.current === runId;
     (async () => {
+      // 0. Identify — auto first (like the file), typed network name as the
+      // guided fallback; the chain simply waits for it and continues alone.
+      let mac0 = parseMac(shellyRef.current?.mac || '');
+      if (mac0.length !== 12) {
+        prepLog('מזהה את המכשיר...');
+        const m = await wsDetect();
+        if (m) {
+          setShelly((s) => (s ? { ...s, mac: m } : s));
+          prepLog(`קוד המכשיר זוהה: ${m} ✓`, 'ok');
+        } else {
+          prepLog('לא זוהה אוטומטית — הקלידו למעלה את שם הרשת שהמכשיר משדר (...Shelly), וההתקנה תמשיך לבד.', 'warn');
+          setShelly((s) => (s ? { ...s, macFoldOpen: true } : s));
+          for (let i = 0; parseMac(shellyRef.current?.mac || '').length !== 12; i++) {
+            if (!alive()) { try { w.close(); } catch { /* noop */ } return; }
+            if (i > 400) { prepLog('לא הוזן קוד — לחצו "התחל התקנה" שוב כשתהיו מוכנים.', 'bad'); try { w.close(); } catch { /* noop */ } return; }
+            await sleep(1500);
+          }
+          prepLog('הקוד התקבל ✓', 'ok');
+        }
+        mac0 = parseMac(shellyRef.current?.mac || '');
+      }
       // 1. Links (the auto-mint effect produces them; we narrate and wait).
       if (!shellyRef.current?.prepLinks) prepLog('ממתין ליצירת קישורי ההכנה...');
       for (let i = 0; !shellyRef.current?.prepLinks; i++) {
@@ -444,12 +466,14 @@ export default function Devices() {
                 <div className="border border-line rounded-xl p-3 text-sm space-y-1.5">
                   <p className="font-semibold">איך מתקינים:</p>
                   <ol className="ps-4 list-decimal space-y-1">
-                    <li>חברו את המכשיר לחשמל, התחברו בטלפון לרשת שהוא משדר (...Shelly) והקלידו למטה
-                      את שם הרשת. (אם הטלפון שואל אם להישאר ברשת בלי אינטרנט — הישארו.)</li>
-                    <li>ודאו את פרטי ה-Wi-Fi הביתי ולחצו "התחל התקנה" — הדף שולח הכל למכשיר
-                      ומלווה אתכם ביומן למטה.</li>
-                    <li>כשהיומן מבקש — חזרו ל-Wi-Fi הביתי; הבדיקה מול השרת תושלם לבד עד "מוכן ✓".
-                      מעבר אחד לכל כיוון, בלי לחזור לרשת המכשיר.</li>
+                    <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly) ולחצו "התחל התקנה" —
+                      הדף מזהה את המכשיר לבד. (אם הטלפון שואל אם להישאר ברשת בלי
+                      אינטרנט — הישארו.)</li>
+                    <li>ודאו את פרטי ה-Wi-Fi הביתי — הדף שולח את ההגדרות למכשיר ומלווה
+                      אתכם ביומן למטה, כשקל לתקן.</li>
+                    <li>כשהיומן מבקש — חזרו ל-Wi-Fi הביתי; יצירת פרטי החיבור והבדיקה מול
+                      השרת רצות משם לבד עד "מוכן ✓". מעבר אחד לכל כיוון, בלי לחזור לרשת
+                      המכשיר.</li>
                   </ol>
                   <p className="text-xs" style={{ color: '#b3372f' }}>
                     ⚠ <b>חשוב:</b> אל תחברו את הנתב (ראוטר) לחשמל דרך ערוצי המכשיר — כל כיבוי של
@@ -461,12 +485,18 @@ export default function Devices() {
                     כדאי לבקש את ההחרגה מראש.
                   </p>
                 </div>
-                <p className="text-sm font-semibold">שם הרשת שהמכשיר משדר (קוד המכשיר נמצא בתוכו):</p>
-                <div className="flex gap-2">
-                  <Input dir="ltr" placeholder="ShellyPro4PM-E08CFE95DD48 או הקוד מהמדבקה" value={shelly.mac}
-                    onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
-                  <Button variant="ghost" className="!px-2 text-xs whitespace-nowrap" disabled={busy} onClick={detectMac}>זהה לבד</Button>
-                </div>
+                <p className="text-sm">
+                  <b>מחוברים לרשת שהמכשיר משדר?</b> פשוט לחצו "התחל התקנה" — הדף יזהה את
+                  קוד המכשיר לבד, ואם לא יצליח יבקש אותו ביומן.
+                </p>
+                <details open={shelly.macFoldOpen || undefined}>
+                  <summary className="text-sm font-medium text-accent-dk cursor-pointer">הקלדת קוד המכשיר ידנית (שם הרשת שהוא משדר) ›</summary>
+                  <div className="flex gap-2 mt-1.5">
+                    <Input dir="ltr" placeholder="ShellyPro4PM-E08CFE95DD48 או הקוד מהמדבקה" value={shelly.mac}
+                      onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
+                    <Button variant="ghost" className="!px-2 text-xs whitespace-nowrap" disabled={busy} onClick={detectMac}>זהה לבד</Button>
+                  </div>
+                </details>
                 <p className="text-sm font-semibold">רשת ה-Wi-Fi שהמכשיר יתחבר אליה:</p>
                 <div className="flex gap-2">
                   <Input placeholder="רשת ה-Wi-Fi הביתית" value={shelly.prepWifi.ssid}
@@ -479,9 +509,7 @@ export default function Devices() {
                   שינויים נשמרים אוטומטית במכשיר הזה בלבד; "שמור" קובע ברירת מחדל לחשבון בכל המכשירים.
                 </p>
                 <div className="space-y-1.5">
-                  <Button className="w-full" disabled={parseMac(shelly.mac || '').length !== 12} onClick={startPrep}>
-                    {parseMac(shelly.mac || '').length === 12 ? 'התחל התקנה ›' : 'הקלידו את שם הרשת של המכשיר כדי להתחיל'}
-                  </Button>
+                  <Button className="w-full" onClick={startPrep}>התחל התקנה ›</Button>
                   {shelly.prepLinks && (
                     <details>
                       <summary className="text-muted text-xs cursor-pointer">לא עובד? שליחה ידנית — פתחו או הדביקו כל קישור לפי הסדר ›</summary>
