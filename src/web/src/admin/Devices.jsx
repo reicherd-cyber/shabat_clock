@@ -16,12 +16,17 @@ export default function Devices() {
   const [q, setQ] = useState('');
   const [expanded, setExpanded] = useState(null); // device id with its details row open
   const [transferForm, setTransferForm] = useState(null); // {device, user_id}
+  const [inventory, setInventory] = useState([]);         // prepared_devices rows
+  const [showActivated, setShowActivated] = useState(false);
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
-    const [d, u] = await Promise.all([adminApi.get('/devices'), adminApi.get('/users')]);
+    const [d, u, inv] = await Promise.all([
+      adminApi.get('/devices'), adminApi.get('/users'), adminApi.get('/shelly/inventory'),
+    ]);
     setDevices(d);
     setUsers(u);
+    setInventory(inv);
   };
   useEffect(() => { refresh().catch(setError); }, []);
 
@@ -269,6 +274,62 @@ export default function Devices() {
             ))}
             {visibleDevices.length === 0 && (
               <tr><td colSpan={4} className="p-6 text-center text-muted">לא נמצאו מכשירים</td></tr>
+            )}
+          </tbody>
+        </table>
+      </Card>
+
+      {/* Prepared-devices inventory: every unit that completed the prep process. */}
+      <div className="flex items-center justify-between flex-wrap gap-2 mt-6">
+        <h3 className="font-bold">
+          מלאי מכשירים שהוכנו
+          <span className="text-muted text-sm font-normal ms-2">
+            {inventory.filter((p) => p.status === 'prepared').length} ממתינים להפעלה
+          </span>
+        </h3>
+        <label className="flex items-center gap-1.5 text-sm">
+          <input type="checkbox" checked={showActivated} onChange={(e) => setShowActivated(e.target.checked)} />
+          הצג גם מופעלים ({inventory.filter((p) => p.status === 'activated').length})
+        </label>
+      </div>
+      <Card flush className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-right text-muted border-b border-line">
+              <th className="p-3">MAC</th><th className="p-3">דגם</th><th className="p-3">fw</th>
+              <th className="p-3">הוכן בתאריך</th><th className="p-3">סטטוס</th><th className="p-3">פעולות</th>
+            </tr>
+          </thead>
+          <tbody>
+            {inventory.filter((p) => showActivated || p.status === 'prepared').map((p) => (
+              <tr key={p.id} className="border-b border-line last:border-0">
+                <td className="p-3 text-xs" dir="ltr">{p.mac}</td>
+                <td className="p-3 text-xs">{p.model || '—'}</td>
+                <td className="p-3 text-xs text-muted">{p.fw_version || '—'}</td>
+                <td className="p-3 text-xs">{String(p.prepared_at).slice(0, 10)}</td>
+                <td className="p-3">
+                  {p.status === 'prepared'
+                    ? <Badge ok>מוכן להפעלה</Badge>
+                    : <span className="text-xs">הופעל ל{p.activated_user_name || '—'} · {p.activated_at ? String(p.activated_at).slice(0, 10) : ''}</span>}
+                </td>
+                <td className="p-3 whitespace-nowrap space-x-1 space-x-reverse">
+                  {p.status === 'prepared' && (
+                    <Button variant="ghost" className="!px-2 !py-1 text-xs"
+                      onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: p.mac, user_id: users[0]?.id || '', name: '' })}>
+                      הפעל ללקוח ›
+                    </Button>
+                  )}
+                  <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                    onClick={() => run(async () => {
+                      if (!confirm(`למחוק את ${p.mac} מהמלאי? (לא נוגע במכשיר עצמו)`)) return;
+                      await adminApi.del(`/shelly/inventory/${p.id}`);
+                      await refresh();
+                    })}>מחק</Button>
+                </td>
+              </tr>
+            ))}
+            {inventory.filter((p) => showActivated || p.status === 'prepared').length === 0 && (
+              <tr><td colSpan={6} className="p-6 text-center text-muted">אין מכשירים מוכנים במלאי — הכינו מכשיר עם "הגדרת Shelly חדש"</td></tr>
             )}
           </tbody>
         </table>

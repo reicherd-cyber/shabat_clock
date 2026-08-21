@@ -361,6 +361,13 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
       await shellySetRestoreLast({ transport, ip_address: ip, device_uid: probe.mac }, c.relay_no)
         .catch((e) => console.error(`restore_last relay ${c.relay_no} of shelly ${probe.mac}:`, e.message));
     }
+    // Inventory: registration is the activation moment for a prepared unit.
+    await query(
+      `UPDATE prepared_devices
+       SET status = 'activated', activated_at = UTC_TIMESTAMP(), activated_user_id = ?, device_id = ?, model = COALESCE(model, ?)
+       WHERE mac = ?`,
+      [userId, result.id, probe.model || null, probe.mac],
+    ).catch((e) => console.error('prepared_devices activate:', e.message));
     return result;
   });
 }

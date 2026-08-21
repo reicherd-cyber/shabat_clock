@@ -82,6 +82,13 @@ authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, 
     const reply = await shellyMqttRpc(claims.uid, 'Shelly.GetDeviceInfo', undefined, 4000);
     const mac = reply?.result?.mac ? String(reply.result.mac).toLowerCase().replace(/[^0-9a-f]/g, '') : null;
     const out = { connected: !!mac, mac_ok: mac === claims.uid };
+    // A verified connection means the file-installer flow completed for this
+    // unit — log it in the prepared-devices inventory (first sighting only;
+    // this endpoint is polled, so no churn).
+    if (out.connected && out.mac_ok) {
+      query('INSERT IGNORE INTO prepared_devices (mac) VALUES (?)', [claims.uid])
+        .catch(() => {});
+    }
     // ?channels=1: per-channel on/off states, for the installer's router-check step
     // (it must only cycle channels that are already ON — flipping an off channel
     // could power someone's boiler).

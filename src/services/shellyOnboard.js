@@ -10,6 +10,7 @@ import { execSync } from 'node:child_process';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import { errors } from '../config/errors.js';
+import { query } from '../db/pool.js';
 import { mosquittoPasswdHash, writeBrokerPasswdEntry } from './devices.js';
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -731,7 +732,7 @@ export function prepLinks({ mac, wifiSsid, wifiPass }) {
   };
 }
 
-export async function prepStatus({ mac }) {
+export async function prepStatus({ mac, adminId = null }) {
   const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
   const { shellyMqttRpc } = await import('../mqtt/client.js');
@@ -746,6 +747,13 @@ export async function prepStatus({ mac }) {
   }
   const cfg = await shellyMqttRpc(uid, 'MQTT.GetConfig', undefined, 4000);
   if (cfg?.result?.ssl_ca === 'user_ca.pem') {
+    // Fully prepared — log/refresh it in the inventory.
+    await query(
+      `INSERT INTO prepared_devices (mac, model, fw_version, prepared_by)
+       VALUES (?,?,?,?)
+       ON DUPLICATE KEY UPDATE model = VALUES(model), fw_version = VALUES(fw_version)`,
+      [uid, info.result?.model || null, info.result?.ver || null, adminId ? `admin:${adminId}` : null],
+    ).catch((e) => console.error('prepared_devices upsert:', e.message));
     return { status: 'ready', model: info.result?.model || null, fw: info.result?.ver || null };
   }
   // Connected on the interim no-verify config — push the CA and flip to verified.

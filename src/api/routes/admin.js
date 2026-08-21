@@ -246,7 +246,7 @@ adminRouter.post('/shelly/prep', requireSuperadmin, async (req, res, next) => {
 adminRouter.post('/shelly/prep-status', requireSuperadmin, async (req, res, next) => {
   try {
     const { prepStatus } = await import('../../services/shellyOnboard.js');
-    res.json(await prepStatus({ mac: req.body?.mac }));
+    res.json(await prepStatus({ mac: req.body?.mac, adminId: req.auth.adminId }));
   } catch (e) { next(e); }
 });
 
@@ -291,6 +291,25 @@ adminRouter.patch('/devices/:id', requireWrite, async (req, res, next) => {
     const recovery = await patchDevice(Number(req.params.id), req.body || {}, { actor: adminActor(req) });
     await audit(req, 'update', 'device', Number(req.params.id), { after: req.body });
     res.json({ ok: true, recovery });
+  } catch (e) { next(e); }
+});
+
+// Prepared-devices inventory: prepared units awaiting activation + history.
+adminRouter.get('/shelly/inventory', async (req, res, next) => {
+  try {
+    res.json(await query(
+      `SELECT p.*, u.full_name AS activated_user_name
+       FROM prepared_devices p LEFT JOIN users u ON u.id = p.activated_user_id
+       ORDER BY (p.status = 'prepared') DESC, COALESCE(p.activated_at, p.prepared_at) DESC`,
+    ));
+  } catch (e) { next(e); }
+});
+
+adminRouter.delete('/shelly/inventory/:id', requireWrite, async (req, res, next) => {
+  try {
+    await query('DELETE FROM prepared_devices WHERE id = ?', [req.params.id]);
+    await audit(req, 'delete', 'prepared_device', Number(req.params.id));
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
