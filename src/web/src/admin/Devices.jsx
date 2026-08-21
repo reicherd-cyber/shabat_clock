@@ -129,11 +129,21 @@ export default function Devices() {
     else throw new Error('לא זוהה אוטומטית — הקלידו את שם הרשת שהמכשיר משדר (...ShellyPro) בשדה, זה מספיק');
   });
   const makePrepLinks = () => run(async () => {
-    const r = await adminApi.post('/shelly/prep', {
-      mac: parseMac(shelly.mac),
-      wifi_ssid: shelly.prepWifi?.ssid || '',
-      wifi_pass: shelly.prepWifi?.pass || '',
-    });
+    let r;
+    try {
+      r = await adminApi.post('/shelly/prep', {
+        mac: parseMac(shelly.mac),
+        wifi_ssid: shelly.prepWifi?.ssid || '',
+        wifi_pass: shelly.prepWifi?.pass || '',
+      });
+    } catch (e) {
+      // "Failed to fetch" here almost always means the browser sits on the
+      // device's hotspot (no internet) — a real install hit exactly this.
+      if (/fetch/i.test(e.message)) {
+        throw new Error('אין חיבור לשרת — אם אתם על רשת המכשיר (ShellyPro...), חזרו לרשת עם אינטרנט, צרו את הקישורים, ורק אז עברו לרשת המכשיר להדבקה.');
+      }
+      throw e;
+    }
     setShelly((s) => (s ? { ...s, mac: r.mac, prepLinks: r.links, prepState: null, copied: null } : s));
   });
   const checkPrep = () => run(async () => {
@@ -342,7 +352,7 @@ export default function Devices() {
             {!shelly.prepWifi?.loaded && <p className="text-muted text-sm">טוען... (זמין לסופר-אדמין בלבד)</p>}
             {shelly.prepWifi?.loaded && (
               <div className="space-y-2">
-                <p className="text-sm font-semibold">1. חברו את המכשיר לחשמל, והתחברו בטלפון לרשת שהוא משדר (...ShellyPro)</p>
+                <p className="text-sm font-semibold">1. חברו את המכשיר לחשמל. שם הרשת שהוא משדר (...ShellyPro) יופיע ברשימת ה-Wi-Fi — אין צורך להתחבר אליה עדיין.</p>
                 <p className="text-sm font-semibold">2. רשת ה-Wi-Fi שהמכשיר יתחבר אליה:</p>
                 <div className="flex gap-2">
                   <Input placeholder="רשת ה-Wi-Fi הביתית" value={shelly.prepWifi.ssid}
@@ -354,14 +364,17 @@ export default function Devices() {
                 <p className="text-muted text-xs">
                   שינויים נשמרים אוטומטית במכשיר הזה בלבד; "שמור" קובע ברירת מחדל לחשבון בכל המכשירים.
                 </p>
-                <p className="text-sm font-semibold">3. קוד המכשיר — הקלידו את שם הרשת שהמכשיר משדר (הקוד נמצא בתוכו):</p>
+                <p className="text-sm font-semibold">3. קוד המכשיר — העתיקו את שם הרשת מרשימת ה-Wi-Fi (הקוד נמצא בתוכו):</p>
                 <div className="flex gap-2">
                   <Input dir="ltr" placeholder="ShellyPro4PM-E08CFE95DD48 או הקוד מהמדבקה" value={shelly.mac}
                     onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
                   <Button variant="ghost" className="!px-2 text-xs whitespace-nowrap" disabled={busy} onClick={detectMac}>זהה לבד</Button>
                 </div>
                 <Button className="w-full" disabled={busy || !shelly.mac} onClick={makePrepLinks}>צור קישורי הכנה ›</Button>
-                <p className="text-muted text-xs">יצירה חוזרת לאותו מכשיר מחליפה את הסיסמה — הקישורים הישנים יפסיקו לעבוד.</p>
+                <p className="text-muted text-xs">
+                  היצירה דורשת אינטרנט — לחצו לפני שעוברים לרשת המכשיר. רק אחרי שהקישורים
+                  מופיעים: התחברו לרשת שהמכשיר משדר והדביקו אותם. יצירה חוזרת מחליפה סיסמה.
+                </p>
                 {shelly.prepLinks && (
                   <div className="space-y-1.5">
                     {[['1. הגדרת שרת', shelly.prepLinks.mqtt, 'l1'], ['2. חיבור ל-Wi-Fi', shelly.prepLinks.wifi, 'l2'], ['3. אתחול', shelly.prepLinks.reboot, 'l3']]
