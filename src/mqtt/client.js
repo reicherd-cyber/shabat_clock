@@ -81,7 +81,23 @@ async function handleShellyMessage(topic, buf) {
   const online = /^([\w.-]+)\/online$/.exec(topic);
   if (online) {
     const device = await shellyDeviceByPrefix(online[1]);
-    if (!device) return;
+    if (!device) {
+      // A prepared-but-unregistered unit dialing in (e.g. the file installer
+      // finished without its final check) — the inventory records it the moment
+      // it touches the system, enriched with model/fw on first sighting.
+      const uid = online[1].slice(online[1].lastIndexOf('-') + 1);
+      if (text === 'true' && /^[0-9a-f]{12}$/.test(uid)) {
+        const res = await query('INSERT IGNORE INTO prepared_devices (mac) VALUES (?)', [uid]).catch(() => null);
+        if (res && res.affectedRows === 1) {
+          const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 4000).catch(() => null);
+          if (info?.result) {
+            await query('UPDATE prepared_devices SET model = ?, fw_version = ? WHERE mac = ?',
+              [info.result.model || null, info.result.ver || null, uid]).catch(() => { /* best-effort */ });
+          }
+        }
+      }
+      return;
+    }
     const isOnline = text === 'true';
     await query(
       'UPDATE devices SET is_online = ?, last_seen_at = UTC_TIMESTAMP() WHERE id = ?',
