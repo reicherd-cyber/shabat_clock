@@ -441,14 +441,33 @@ export default function Devices() {
             {!shelly.prepWifi?.loaded && <p className="text-muted text-sm">טוען... (זמין לסופר-אדמין בלבד)</p>}
             {shelly.prepWifi?.loaded && (
               <div className="space-y-2">
-                <p className="text-sm font-semibold">1. חברו את המכשיר לחשמל, והתחברו בטלפון לרשת שהוא משדר (...ShellyPro) — כמו בקובץ ההתקנה.</p>
-                <p className="text-sm font-semibold">2. הקלידו את שם הרשת שאליה התחברתם (קוד המכשיר נמצא בתוכו):</p>
+                <div className="border border-line rounded-xl p-3 text-sm space-y-1.5">
+                  <p className="font-semibold">איך מתקינים:</p>
+                  <ol className="ps-4 list-decimal space-y-1">
+                    <li>חברו את המכשיר לחשמל, התחברו בטלפון לרשת שהוא משדר (...Shelly) והקלידו למטה
+                      את שם הרשת. (אם הטלפון שואל אם להישאר ברשת בלי אינטרנט — הישארו.)</li>
+                    <li>ודאו את פרטי ה-Wi-Fi הביתי ולחצו "התחל התקנה" — הדף שולח הכל למכשיר
+                      ומלווה אתכם ביומן למטה.</li>
+                    <li>כשהיומן מבקש — חזרו ל-Wi-Fi הביתי; הבדיקה מול השרת תושלם לבד עד "מוכן ✓".
+                      מעבר אחד לכל כיוון, בלי לחזור לרשת המכשיר.</li>
+                  </ol>
+                  <p className="text-xs" style={{ color: '#b3372f' }}>
+                    ⚠ <b>חשוב:</b> אל תחברו את הנתב (ראוטר) לחשמל דרך ערוצי המכשיר — כל כיבוי של
+                    הערוץ ינתק את הבית מהאינטרנט ואת המכשיר מהשרת.
+                  </p>
+                  <p className="text-xs" style={{ color: '#a06a00' }}>
+                    ⚠ <b>קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> ההתקנה תיראה תקינה אבל
+                    המכשיר לא יתחבר לשרת עד שספק הסינון יחריג את 188.166.29.235 פורט 8883.
+                    כדאי לבקש את ההחרגה מראש.
+                  </p>
+                </div>
+                <p className="text-sm font-semibold">שם הרשת שהמכשיר משדר (קוד המכשיר נמצא בתוכו):</p>
                 <div className="flex gap-2">
                   <Input dir="ltr" placeholder="ShellyPro4PM-E08CFE95DD48 או הקוד מהמדבקה" value={shelly.mac}
                     onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
                   <Button variant="ghost" className="!px-2 text-xs whitespace-nowrap" disabled={busy} onClick={detectMac}>זהה לבד</Button>
                 </div>
-                <p className="text-sm font-semibold">3. רשת ה-Wi-Fi שהמכשיר יתחבר אליה:</p>
+                <p className="text-sm font-semibold">רשת ה-Wi-Fi שהמכשיר יתחבר אליה:</p>
                 <div className="flex gap-2">
                   <Input placeholder="רשת ה-Wi-Fi הביתית" value={shelly.prepWifi.ssid}
                     onChange={(e) => setPrepWifi({ ssid: e.target.value })} />
@@ -461,7 +480,7 @@ export default function Devices() {
                 </p>
                 <div className="space-y-1.5">
                   <Button className="w-full" disabled={parseMac(shelly.mac || '').length !== 12} onClick={startPrep}>
-                    {parseMac(shelly.mac || '').length === 12 ? 'התחל התקנה ›' : 'הקלידו את קוד המכשיר (שלב 2) כדי להתחיל'}
+                    {parseMac(shelly.mac || '').length === 12 ? 'התחל התקנה ›' : 'הקלידו את שם הרשת של המכשיר כדי להתחיל'}
                   </Button>
                   {shelly.prepLinks && (
                     <details>
