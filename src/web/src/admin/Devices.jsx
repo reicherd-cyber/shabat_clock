@@ -128,10 +128,20 @@ export default function Devices() {
     if (mac) setShelly((s) => (s ? { ...s, mac } : s));
     else throw new Error('לא זוהה אוטומטית — הקלידו את שם הרשת שהמכשיר משדר (...ShellyPro) בשדה, זה מספיק');
   });
+  // Running process log, file-installer style: lines accumulate with ok/warn/bad
+  // coloring; identical consecutive lines collapse (retry loops don't spam).
+  const prepLog = (t, cls) => setShelly((s) => {
+    if (!s) return s;
+    const lg = s.prepLog || [];
+    if (lg.length && lg[lg.length - 1].t === t) return s;
+    return { ...s, prepLog: [...lg, { t, cls }] };
+  });
+
   // Links mint THEMSELVES once a valid code (and Wi-Fi) is on screen — no
   // explicit "create" step, file-installer feel. Offline (typing while on the
   // device hotspot) retries silently until internet returns.
   const mintKeyRef = useRef('');
+  const mintRetryRef = useRef(0);
   useEffect(() => {
     if (!shelly || shelly.step !== 'config' || !shelly.prepWifi?.loaded) return undefined;
     const mac = parseMac(shelly.mac || '');
@@ -139,24 +149,29 @@ export default function Devices() {
     const key = `${mac}|${shelly.prepWifi.ssid}|${shelly.prepWifi.pass}`;
     if (key === mintKeyRef.current) return undefined;
     const t = setTimeout(async () => {
-      setShelly((s) => (s ? { ...s, prepMinting: 'יוצר קישורי הכנה...' } : s));
+      prepLog(`מזהה את המכשיר ${mac} ויוצר קישורי הכנה...`);
       try {
         const r = await adminApi.post('/shelly/prep', {
           mac, wifi_ssid: shelly.prepWifi.ssid || '', wifi_pass: shelly.prepWifi.pass || '',
         });
         mintKeyRef.current = key;
-        setShelly((s) => (s ? { ...s, prepLinks: r.links, prepMinting: null, prepState: null, copied: null } : s));
+        mintRetryRef.current = 0;
+        prepLog('קישורי ההכנה מוכנים ✓', 'ok');
+        setShelly((s) => (s ? { ...s, prepLinks: r.links, prepState: null, copied: null } : s));
       } catch (e) {
         // Network failure OR a transient server error (deploy window) — both
         // retry quietly; only a definitive rejection shows as an error.
         const retryable = /fetch/i.test(e.message) || /internal server error/i.test(e.message);
-        setShelly((s) => (s ? {
-          ...s,
-          prepMinting: retryable
-            ? 'אין חיבור לשרת כרגע — הקישורים ייווצרו אוטומטית ברגע שיחזור...'
-            : `שגיאה ביצירת הקישורים: ${e.message}`,
-        } : s));
-        if (retryable) setTimeout(() => { mintKeyRef.current = ''; setShelly((s) => (s ? { ...s } : s)); }, 6000);
+        if (retryable) {
+          prepLog('אין חיבור לשרת כרגע (רשת המכשיר?) — ננסה שוב אוטומטית...', 'warn');
+          mintRetryRef.current += 1;
+          if (mintRetryRef.current === 5) {
+            prepLog('עדיין אין חיבור. אם אין לטלפון חבילת גלישה — עברו רגע לרשת עם אינטרנט; הקישורים ייווצרו מיד, ואז חזרו לרשת המכשיר.', 'warn');
+          }
+          setTimeout(() => { mintKeyRef.current = ''; setShelly((s) => (s ? { ...s } : s)); }, 6000);
+        } else {
+          prepLog(`שגיאה ביצירת הקישורים: ${e.message}`, 'bad');
+        }
       }
     }, 1000);
     return () => clearTimeout(t);
@@ -173,28 +188,36 @@ export default function Devices() {
     ].filter(Boolean);
     const w = window.open(seq[0][1], 'shelly-prep');
     if (!w) {
-      setError(new Error('הדפדפן חסם את החלון — אפשרו חלונות קופצים לאתר, או פתחו כל קישור ידנית לפי הסדר.'));
+      prepLog('הדפדפן חסם את החלון — אפשרו חלונות קופצים לאתר, או פתחו כל קישור ידנית לפי הסדר.', 'bad');
       return;
     }
-    setShelly((s) => (s ? { ...s, prepSend: seq[0][0] } : s));
+    prepLog(seq[0][0]);
     seq.slice(1).forEach(([label, url], i) => setTimeout(() => {
       try { w.location.href = url; } catch { /* cross-origin handle — navigation still lands */ }
-      setShelly((s) => (s ? { ...s, prepSend: label } : s));
+      prepLog(label);
     }, (i + 1) * 3500));
     setTimeout(() => {
       try { w.close(); } catch { /* some browsers refuse — harmless */ }
-      setShelly((s) => (s ? { ...s, prepSend: 'נשלח הכל ✓ — חזרו ל-Wi-Fi הרגיל ולחצו "בדוק והשלם הכנה".' } : s));
+      prepLog('נשלח הכל למכשיר ✓ — חזרו ל-Wi-Fi הרגיל ולחצו "בדוק והשלם הכנה".', 'ok');
     }, seq.length * 3500 + 2000);
   };
 
   const checkPrep = () => run(async () => {
     // waiting → securing → ready; poll up to a minute per press.
+    prepLog('בודק מול השרת אם המכשיר התחבר...');
     for (let i = 0; i < 15; i++) {
       const st = await adminApi.post('/shelly/prep-status', { mac: parseMac(shelly.mac) });
-      setShelly((s) => (s ? { ...s, prepState: st } : s));
-      if (st.status === 'ready' || st.status === 'error') return;
+      if (st.status === 'ready') {
+        prepLog(`מוכן ✓ ${st.model || ''} · fw ${st.fw || ''} — נרשם במלאי; המשיכו ל"שיוך Shelly ללקוח" (כפתור 2)`, 'ok');
+        setShelly((s) => (s ? { ...s, prepState: st } : s));
+        return;
+      }
+      if (st.status === 'error') { prepLog(st.message || 'שגיאה — נסו שוב', 'bad'); return; }
+      if (st.status === 'securing') prepLog('המכשיר התחבר ✓ — מתקין תעודת אבטחה ומאתחל...', 'ok');
+      else prepLog('המכשיר עדיין לא התחבר — ממשיך להמתין... (חיבור ראשון לוקח עד כמה דקות)', 'warn');
       await new Promise((r2) => setTimeout(r2, 4000));
     }
+    prepLog('עדיין לא התחבר — המתינו דקה ולחצו "בדוק והשלם הכנה" שוב.', 'warn');
   });
 
   const shellyProbe = () => run(async () => {
@@ -400,7 +423,6 @@ export default function Devices() {
                     onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
                   <Button variant="ghost" className="!px-2 text-xs whitespace-nowrap" disabled={busy} onClick={detectMac}>זהה לבד</Button>
                 </div>
-                {!shelly.prepLinks && shelly.prepMinting && <p className="text-sm font-medium">{shelly.prepMinting}</p>}
                 <p className="text-sm font-semibold">3. רשת ה-Wi-Fi שהמכשיר יתחבר אליה:</p>
                 <div className="flex gap-2">
                   <Input placeholder="רשת ה-Wi-Fi הביתית" value={shelly.prepWifi.ssid}
@@ -418,7 +440,6 @@ export default function Devices() {
                     {shelly.prepLinks ? 'שלח הכל למכשיר בלחיצה אחת ›'
                       : parseMac(shelly.mac || '').length === 12 ? 'מכין קישורים...' : 'ממתין לקוד המכשיר (שלב 2)...'}
                   </Button>
-                  {shelly.prepSend && <p className="text-sm font-medium">{shelly.prepSend}</p>}
                   {shelly.prepLinks && (
                     <details>
                       <summary className="text-muted text-xs cursor-pointer">לא עובד? שליחה ידנית — פתחו או הדביקו כל קישור לפי הסדר ›</summary>
@@ -437,13 +458,14 @@ export default function Devices() {
                   )}
                   <p className="text-sm font-semibold">5. חזרו ל-Wi-Fi הרגיל ולחצו:</p>
                   <Button className="w-full" disabled={busy || !shelly.prepLinks} onClick={checkPrep}>בדוק והשלם הכנה ›</Button>
-                  {shelly.prepState && (
-                      <p className="text-sm font-medium">
-                        {shelly.prepState.status === 'waiting' && 'ממתין שהמכשיר יתחבר לשרת... (עד דקה-שתיים אחרי האתחול; ודאו שהודבקו כל שלושת הקישורים)'}
-                        {shelly.prepState.status === 'securing' && 'המכשיר התחבר — מתקין תעודת אבטחה ומאתחל... לחצו שוב בעוד דקה.'}
-                        {shelly.prepState.status === 'ready' && `מוכן ✓ ${shelly.prepState.model || ''} · fw ${shelly.prepState.fw || ''} — המשיכו ל"שיוך Shelly ללקוח" (כפתור 2)`}
-                        {shelly.prepState.status === 'error' && (shelly.prepState.message || 'שגיאה — נסו שוב')}
-                      </p>
+                  {(shelly.prepLog || []).length > 0 && (
+                    <div className="border border-line rounded-xl p-3 bg-surface2/40 space-y-0.5 text-sm">
+                      {shelly.prepLog.map((l, i) => (
+                        <div key={i} className={l.cls === 'ok' ? 'text-on font-medium' : l.cls === 'bad' ? 'text-off font-medium' : l.cls === 'warn' ? 'text-[#B45309]' : ''}>
+                          {l.t}
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>
