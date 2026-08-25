@@ -27,7 +27,8 @@ import { shellyCall } from './shelly.js';
 import { timeToMinutes, localParts, dowOfDate } from './time.js';
 import { inExclusionRange } from './holidays.js';
 
-const MAX_SHELLY_JOBS = 20; // Gen2 firmware cap on Schedule jobs
+const MAX_SHELLY_JOBS = 20;      // Gen2 firmware: "limit of 20 schedule instances per device"
+const MAX_CALLS_PER_JOB = 5;     // Gen2 firmware: "limit of 5 calls per schedule job"
 
 // A dev server's broker is local — mqtt-transport devices never dial it, so only
 // production (or HEALTH_ACTIVE=1, the same switch the health monitor uses) may
@@ -116,7 +117,16 @@ export function buildShellyJobs(rows, today) {
     const set = new Set([...dowOf(cur.timespec).split(','), ...dowOf(j.timespec).split(',')].map(Number));
     cur.timespec = `0 ${f[1]} ${f[2]} * * ${set.size === 7 ? '*' : [...set].sort((a, b) => a - b).join(',')}`;
   }
-  return out;
+  // Firmware caps a job at 5 calls — a busier same-minute merge splits into
+  // sibling jobs on the same timespec (each counts toward the 20-job cap).
+  return out.flatMap((j) => {
+    if (j.calls.length <= MAX_CALLS_PER_JOB) return [j];
+    const chunks = [];
+    for (let i = 0; i < j.calls.length; i += MAX_CALLS_PER_JOB) {
+      chunks.push({ ...j, calls: j.calls.slice(i, i + MAX_CALLS_PER_JOB) });
+    }
+    return chunks;
+  });
 }
 
 // The device's live schedule rows expanded into Shelly jobs.

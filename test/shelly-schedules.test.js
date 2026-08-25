@@ -95,6 +95,14 @@ test('per-day rows from the multi-day form collapse into one DOW-list job', () =
   assert.equal(buildShellyJobs(all, TODAY)[0].timespec, '0 30 18 * * *');
 });
 
+test('a merge beyond 5 calls splits into sibling jobs (firmware call cap)', () => {
+  const rows = [1, 2, 3, 4, 5, 6].map((relay_no) => weekly({ relay_no, off_time: null }));
+  const jobs = buildShellyJobs(rows, TODAY);
+  assert.equal(jobs.length, 2);
+  assert.deepEqual(jobs.map((j) => j.calls.length), [5, 1]);
+  assert.equal(jobs[0].timespec, jobs[1].timespec);
+});
+
 test('over the 20-job cap: weekly kept, date jobs rotate in soonest-first', () => {
   const w = (i) => ({ enable: true, timespec: `0 ${i} 6 * * *`, calls: [] });
   const d = (day, mo) => ({ enable: true, timespec: `0 0 12 ${day} ${mo} *`, calls: [] });
