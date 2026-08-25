@@ -13,7 +13,8 @@ export default function Settings() {
   const [removingPhone, setRemovingPhone] = useState(null); // phone row pending removal confirmation
   const [pinForm, setPinForm] = useState(null);
   const [nameEdit, setNameEdit] = useState(null); // null = display mode; string = editing value
-  const [emailEdit, setEmailEdit] = useState(null); // null = display mode; string = editing value
+  const [emailAdd, setEmailAdd] = useState(null); // null = closed; string = new-address input value
+  const [removingEmail, setRemovingEmail] = useState(null); // email row pending removal confirmation
   const [deleting, setDeleting] = useState(null); // relay pending removal confirmation
   const [disablingDevice, setDisablingDevice] = useState(null); // device pending "disable all" confirmation
   const [removingDevice, setRemovingDevice] = useState(null); // device pending removal confirmation
@@ -69,11 +70,22 @@ export default function Settings() {
     await refresh();
   });
 
-  // Email works like the name: pencil → input; empty = remove the address.
-  const saveEmail = () => run(async () => {
-    const email = emailEdit.trim();
-    if (email !== (me.user.email || '')) await api.patch('/me', { email });
-    setEmailEdit(null);
+  // Emails: several per account; every address is globally unique (one account
+  // per address — the server refuses one that exists anywhere in the system).
+  const addEmail = () => run(async () => {
+    await api.post('/me/emails', { email: emailAdd.trim() });
+    setEmailAdd(null);
+    await refresh();
+  });
+
+  const makePrimaryEmail = (em) => run(async () => {
+    await api.post(`/me/emails/${em.id}/primary`);
+    await refresh();
+  });
+
+  const removeEmail = () => run(async () => {
+    await api.del(`/me/emails/${removingEmail.id}`);
+    setRemovingEmail(null);
     await refresh();
   });
 
@@ -151,30 +163,39 @@ export default function Settings() {
           <span className="text-muted text-sm">· קוד משתמש לטלפון: <b dir="ltr">{me.user.ivr_code}</b></span>
         </div>
         <p className="text-muted text-xs mt-1">השם נשמע בברכת הפתיחה בשיחות הטלפון.</p>
-        <div className="flex items-center gap-2 flex-wrap mt-3">
-          <span className="text-sm">אימייל:</span>
-          {emailEdit == null ? (
-            <>
-              {me.user.email
-                ? <span dir="ltr" className="text-sm">{me.user.email}</span>
-                : <span className="text-muted text-sm">לא הוגדר</span>}
-              <button title="עריכת אימייל" className="text-muted hover:text-ink cursor-pointer"
-                onClick={() => setEmailEdit(me.user.email || '')}><Pencil size={14} /></button>
-            </>
+        <div className="mt-3 space-y-1.5">
+          <span className="text-sm">כתובות אימייל:</span>
+          {(me.emails || []).map((em) => (
+            <div key={em.id} className="flex items-center gap-2 flex-wrap border border-line rounded-xl px-3 py-1.5">
+              <span dir="ltr" className="text-sm">{em.email}</span>
+              {!!em.is_primary && me.emails.length > 1 && <Badge ok>ראשי</Badge>}
+              {!em.is_primary && (
+                <Button variant="ghost" disabled={busy} onClick={() => makePrimaryEmail(em)}>קבע כראשי</Button>
+              )}
+              <button disabled={busy} title="הסרת האימייל"
+                className={`ms-auto text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
+                onClick={() => setRemovingEmail(em)}><Trash2 size={15} /></button>
+            </div>
+          ))}
+          {emailAdd == null ? (
+            <Button variant="ghost" onClick={() => setEmailAdd('')}>
+              <span className="inline-flex items-center gap-1"><Plus size={15} />הוספת אימייל</span>
+            </Button>
           ) : (
-            <>
+            <div className="flex items-center gap-2 flex-wrap">
               <Input autoFocus dir="ltr" type="email" className="w-64" placeholder="name@example.com"
-                value={emailEdit} onChange={(e) => setEmailEdit(e.target.value)}
+                value={emailAdd} onChange={(e) => setEmailAdd(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') saveEmail();
-                  if (e.key === 'Escape') setEmailEdit(null);
+                  if (e.key === 'Enter') addEmail();
+                  if (e.key === 'Escape') setEmailAdd(null);
                 }} />
-              <Button disabled={busy} onClick={saveEmail}>שמור</Button>
-              <Button variant="ghost" onClick={() => setEmailEdit(null)}>ביטול</Button>
-            </>
+              <Button disabled={busy || !emailAdd.trim()} onClick={addEmail}>הוסף</Button>
+              <Button variant="ghost" onClick={() => setEmailAdd(null)}>ביטול</Button>
+            </div>
           )}
+          {emailAdd != null && <ErrorNote error={error} />}
         </div>
-        <p className="text-muted text-xs mt-1">אימייל מאפשר לקבל קוד כניסה גם בדוא״ל, לא רק בשיחת טלפון. השאירו ריק להסרה.</p>
+        <p className="text-muted text-xs mt-1">אימייל מאפשר לקבל קוד כניסה גם בדוא״ל; הקוד נשלח לכתובת הראשית. כל כתובת יכולה להשתייך לחשבון אחד בלבד במערכת.</p>
         <div className="flex items-center gap-2 flex-wrap mt-3">
           <span className="text-sm">אזור לחישוב זמנים:</span>
           <Select value={me.user.zmanim_region || 'jerusalem'} disabled={busy}
@@ -326,6 +347,21 @@ export default function Settings() {
               onChange={(e) => setVerifying({ ...verifying, code: e.target.value })} />
             <ErrorNote error={error} />
             <Button className="w-full" disabled={busy || verifying.code.length !== 6} onClick={verifyPhone}>אמת</Button>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!removingEmail} onClose={() => setRemovingEmail(null)} title="הסרת כתובת אימייל">
+        {removingEmail && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              להסיר את הכתובת <b dir="ltr">{removingEmail.email}</b> מהחשבון? לא יישלחו אליה יותר קודי כניסה ולא ניתן יהיה להתחבר איתה.
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setRemovingEmail(null)}>ביטול</Button>
+              <Button variant="danger" className="flex-1" disabled={busy} onClick={removeEmail}>הסר כתובת</Button>
+            </div>
           </div>
         )}
       </Modal>

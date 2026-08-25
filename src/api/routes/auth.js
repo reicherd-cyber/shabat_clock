@@ -47,17 +47,19 @@ authRouter.post('/admin/auth/google', adminLoginLimiter, async (req, res, next) 
   } catch (e) { next(e); }
 });
 
-// "Sign in with Google" for users — an alternative to phone-OTP for users whose
-// (admin-registered) email is a Google account. No self-signup: unknown email = 401.
+// "Sign in with Google" for users — an alternative to phone-OTP. ANY of the
+// account's addresses (user_emails) signs in; the global one-address-one-account
+// rule guarantees a single match. No self-signup: unknown email = 401.
 authRouter.post('/auth/google', adminLoginLimiter, async (req, res, next) => {
   try {
     const claims = await verifyGoogleCredential(String(req.body?.credential || ''));
     const rows = await query(
-      "SELECT id, full_name FROM users WHERE email = ? AND status = 'active'", [claims.email],
+      `SELECT u.id, u.full_name FROM user_emails e
+       JOIN users u ON u.id = e.user_id
+       WHERE e.email = ? AND e.deleted_at IS NULL AND u.status = 'active'`,
+      [String(claims.email || '').toLowerCase()],
     );
     if (rows.length === 0) throw errors.unauthenticated('אימייל זה אינו רשום במערכת');
-    // users.email is not unique; refuse rather than guess which account was meant.
-    if (rows.length > 1) throw errors.conflict('CONFLICT', 'אימייל זה רשום ליותר ממשתמש אחד — יש להתחבר עם קוד טלפוני');
     const u = rows[0];
     res.json({ token: signUserToken(u.id), user: { id: Number(u.id), full_name: u.full_name } });
   } catch (e) { next(e); }

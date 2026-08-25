@@ -3,7 +3,7 @@ import { Router, raw } from 'express';
 import { query } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireAdmin, requireWrite, requireSuperadmin, signUserToken } from '../middleware.js';
-import { createUser, getUser, setPin, bcryptHash, normalizeEmail } from '../../services/users.js';
+import { createUser, getUser, setPin, bcryptHash, setUserEmailAdmin } from '../../services/users.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
@@ -128,11 +128,17 @@ adminRouter.patch('/users/:id', requireWrite, async (req, res, next) => {
     for (const k of ['full_name', 'require_pin', 'status', 'max_devices', 'notes']) {
       if (req.body?.[k] !== undefined) fields[k] = req.body[k];
     }
-    if (req.body?.email !== undefined) fields.email = normalizeEmail(req.body.email);
     if (Object.keys(fields).length) {
       fields.updated_by = adminActor(req);
       const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
       await query(`UPDATE users SET ${sets} WHERE id = ?`, [...Object.values(fields), req.params.id]);
+    }
+    // The admin's single email field manages the user's PRIMARY address in
+    // user_emails (global one-address-one-account rule enforced inside; the
+    // users.email mirror column is written there, never directly here).
+    if (req.body?.email !== undefined) {
+      await setUserEmailAdmin({ userId: Number(req.params.id), email: req.body.email, actor: adminActor(req) });
+      fields.email = req.body.email; // audit-diff visibility only
     }
     // Add a verified phone directly (admin path).
     if (req.body?.add_phone) {

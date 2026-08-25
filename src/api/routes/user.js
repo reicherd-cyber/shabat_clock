@@ -4,7 +4,7 @@ import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireUser } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { getUser, verifyPin, setPin, normalizeEmail } from '../../services/users.js';
+import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, setPrimaryUserEmail } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { patchDevice } from '../../services/devices.js';
@@ -34,12 +34,13 @@ userRouter.get('/me', async (req, res, next) => {
       'SELECT id, phone, label, is_primary, verified_at FROM user_phones WHERE user_id = ? AND deleted_at IS NULL',
       [req.auth.userId],
     );
-    res.json({ user, phones });
+    const emails = await listUserEmails(req.auth.userId);
+    res.json({ user, phones, emails });
   } catch (e) { next(e); }
 });
 
-// Display name (heard in the IVR greeting) and/or email (enables login codes by
-// email). The login session suffices; unlike phones, no PIN gate.
+// Display name (heard in the IVR greeting) and preferences. Emails moved to
+// their own /me/emails routes. The login session suffices; no PIN gate.
 userRouter.patch('/me', async (req, res, next) => {
   try {
     const fields = {};
@@ -50,7 +51,6 @@ userRouter.patch('/me', async (req, res, next) => {
       }
       fields.full_name = full_name;
     }
-    if (req.body?.email !== undefined) fields.email = normalizeEmail(req.body.email);
     if (req.body?.zmanim_region !== undefined) {
       const region = String(req.body.zmanim_region);
       if (!REGIONS[region]) throw errors.validation('unknown region', { zmanim_region: Object.keys(REGIONS).join('|') });
@@ -74,6 +74,35 @@ userRouter.post('/me/pin', async (req, res, next) => {
     if (!verifyPin(user, String(old_pin || ''))) throw errors.unauthenticated('Wrong PIN');
     await setPin(req.auth.userId, new_pin, actorStr(actorOf(req)));
     await act(req, 'pin_reset', 'user', req.auth.userId);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ── emails: several per account, ONE account per address; login codes by
+// email go to the primary. No verification step (same trust as the old single
+// email field) and no PIN gate — the login session suffices.
+userRouter.post('/me/emails', async (req, res, next) => {
+  try {
+    const row = await addUserEmail({ userId: req.auth.userId, email: req.body?.email, actor: actorStr(actorOf(req)) });
+    await act(req, 'create', 'user_email', row.id, { after: { email: row.email } });
+    res.status(201).json(row);
+  } catch (e) { next(e); }
+});
+
+// Soft remove — the row/history stays, mirroring phones; a primary removal
+// hands primary (and the login-code destination) to the oldest remaining address.
+userRouter.delete('/me/emails/:id', async (req, res, next) => {
+  try {
+    const { removed } = await removeUserEmail({ userId: req.auth.userId, emailId: Number(req.params.id), actor: actorStr(actorOf(req)) });
+    await act(req, 'delete', 'user_email', Number(req.params.id), { before: { email: removed } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+userRouter.post('/me/emails/:id/primary', async (req, res, next) => {
+  try {
+    await setPrimaryUserEmail({ userId: req.auth.userId, emailId: Number(req.params.id), actor: actorStr(actorOf(req)) });
+    await act(req, 'update', 'user_email', Number(req.params.id), { after: { is_primary: true } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
