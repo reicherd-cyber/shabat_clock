@@ -473,6 +473,21 @@ adminRouter.get('/billing/balances', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// The admin typed in the CURRENT Anthropic credit balance (read off the console
+// billing page); real spend after this moment is subtracted live from it.
+adminRouter.put('/billing/anthropic-balance', requireWrite, async (req, res, next) => {
+  try {
+    const usd = Number(req.body?.usd);
+    if (!Number.isFinite(usd) || usd < 0 || usd > 1e6) {
+      throw errors.validation('יתרה לא תקינה — נדרש מספר בדולרים', { usd: 'number' });
+    }
+    const { setAnthropicBalance } = await import('../../services/billing.js');
+    await setAnthropicBalance(usd);
+    await audit(req, 'update', 'anthropic_balance', null, { after: { usd } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 // Per-voice-order cost table: Yemot STT charges (live from their API) matched to
 // Anthropic usage rows. from/to are optional UTC bounds, same as /call-logs.
 adminRouter.get('/voice-costs', async (req, res, next) => {

@@ -54,6 +54,7 @@ export default function VoiceCosts() {
   const [refresh, setRefresh] = useState(0);
   const [live, setLive] = useState(null); // real provider balances (Yemot units, Anthropic spend)
   const [liveBusy, setLiveBusy] = useState(false);
+  const [balDraft, setBalDraft] = useState(null); // null = closed; string = balance being typed
   const { busy, error, run, setError } = useAsync();
 
   useEffect(() => { adminApi.get('/users').then(setUsers).catch(setError); }, []);
@@ -64,6 +65,14 @@ export default function VoiceCosts() {
     try { setLive(await adminApi.get('/billing/balances?refresh=1')); } catch (e) { setError(e); }
     setLiveBusy(false);
   };
+
+  // The admin reads the current credit balance off the Anthropic billing page
+  // and types it here; from that moment real spend is subtracted from it live.
+  const saveBalance = () => run(async () => {
+    await adminApi.put('/billing/anthropic-balance', { usd: Number(balDraft) });
+    setBalDraft(null);
+    await refreshLive();
+  });
 
   useEffect(() => {
     // Debounce the keystroke filters (phone/search); selects fire immediately.
@@ -164,18 +173,46 @@ export default function VoiceCosts() {
             <Card className="text-center">
               {live.anthropic?.ok ? (
                 <>
-                  <div className="text-3xl font-bold" style={{ color: C_EXPENSE }}>
-                    <span dir="ltr">${live.anthropic.month_usd.toFixed(2)}</span>
-                  </div>
+                  {live.anthropic.balance_usd != null ? (
+                    <div className="text-3xl font-bold"><span dir="ltr">${live.anthropic.balance_usd.toFixed(2)}</span></div>
+                  ) : (
+                    <div className="text-3xl font-bold text-muted">—</div>
+                  )}
                   <div className="text-muted text-sm">
-                    הוצאות Anthropic החודש (מהחשבון בפועל)
-                    {data?.usd_rate > 0 && <> <span dir="ltr">(≈ ₪{(live.anthropic.month_usd * data.usd_rate).toFixed(2)})</span></>}
+                    {live.anthropic.balance_usd != null ? 'יתרה ב-Anthropic (משוערת)' : 'יתרת Anthropic — נדרשת הזנה ראשונית'}
+                    {' · '}
+                    <span style={{ color: C_EXPENSE }} dir="ltr">הוצאות החודש: ${live.anthropic.month_usd.toFixed(2)}</span>
+                  </div>
+                  <div className="flex items-center justify-center gap-2 mt-1 flex-wrap text-sm">
+                    {balDraft == null ? (
+                      <>
+                        <Button variant="ghost" onClick={() => setBalDraft(live.anthropic.balance_usd != null ? live.anthropic.balance_usd.toFixed(2) : '')}>
+                          עדכון יתרה
+                        </Button>
+                        <a className="underline text-accent" href="https://platform.claude.com/settings/billing" target="_blank" rel="noreferrer">
+                          טעינת יתרה ב-Anthropic ›
+                        </a>
+                      </>
+                    ) : (
+                      <>
+                        <span dir="ltr">$</span>
+                        <Input autoFocus type="number" min="0" step="0.01" dir="ltr" className="w-24 py-1 text-sm"
+                          placeholder="0.00" value={balDraft} onChange={(e) => setBalDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveBalance();
+                            if (e.key === 'Escape') setBalDraft(null);
+                          }} />
+                        <Button disabled={busy || !(Number(balDraft) >= 0) || balDraft === ''} onClick={saveBalance}>שמור</Button>
+                        <Button variant="ghost" onClick={() => setBalDraft(null)}>ביטול</Button>
+                        <span className="text-muted text-xs">היתרה הנוכחית מדף החיוב של Anthropic</span>
+                      </>
+                    )}
                   </div>
                 </>
               ) : (
                 <div className="text-sm text-muted py-2">
                   {live.anthropic?.configured === false
-                    ? 'להצגת ההוצאות בפועל יש להגדיר ANTHROPIC_ADMIN_KEY בשרת (מפתח Admin מהקונסולה של Anthropic)'
+                    ? 'להצגת היתרה יש להגדיר ANTHROPIC_ADMIN_KEY בשרת (מפתח Admin מהקונסולה של Anthropic)'
                     : (live.anthropic?.error || 'לא זמין')}
                 </div>
               )}
