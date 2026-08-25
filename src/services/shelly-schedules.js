@@ -95,7 +95,28 @@ export function buildShellyJobs(rows, today) {
       })
       .sort((a, b) => (a.params.id - b.params.id) || (Number(b.params.on) - Number(a.params.on)));
   }
-  return [...bySpec.values()];
+  // Second pass: weekly jobs that differ ONLY by day collapse into one job with
+  // a DOW list — the multi-day schedule form creates one row per chosen day, so
+  // "19:00 on Sun+Mon+Tue" otherwise burns three of the twenty slots.
+  const out = [];
+  const weeklyByKey = new Map();
+  for (const j of bySpec.values()) {
+    const f = j.timespec.split(' ');
+    if (f[3] !== '*') { out.push(j); continue; } // date job
+    const key = `${f[1]} ${f[2]}|${JSON.stringify(j.calls)}`;
+    const cur = weeklyByKey.get(key);
+    if (!cur) {
+      weeklyByKey.set(key, j);
+      out.push(j);
+      continue;
+    }
+    const dowOf = (spec) => spec.split(' ')[5];
+    if (dowOf(cur.timespec) === '*') continue; // already every day
+    if (dowOf(j.timespec) === '*') { cur.timespec = j.timespec; continue; }
+    const set = new Set([...dowOf(cur.timespec).split(','), ...dowOf(j.timespec).split(',')].map(Number));
+    cur.timespec = `0 ${f[1]} ${f[2]} * * ${set.size === 7 ? '*' : [...set].sort((a, b) => a - b).join(',')}`;
+  }
+  return out;
 }
 
 // The device's live schedule rows expanded into Shelly jobs.

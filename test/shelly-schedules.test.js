@@ -81,6 +81,20 @@ test('same-timespec jobs merge into one job with multiple calls (the 20-cap coun
   assert.ok(jobs[0].calls.every((c) => c.params.on === true));
 });
 
+test('per-day rows from the multi-day form collapse into one DOW-list job', () => {
+  // Same time, same action, same relay — days Sunday/Monday/Wednesday (1,2,4)
+  const rows = [1, 2, 4].map((d) => weekly({ on_day_of_week: d, off_time: null }));
+  const jobs = buildShellyJobs(rows, TODAY);
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].timespec, '0 30 18 * * 0,1,3');
+  // ...but different calls at the same time stay separate jobs
+  const mixed = [weekly({ on_day_of_week: 1, off_time: null }), weekly({ on_day_of_week: 2, off_time: null, relay_no: 2 })];
+  assert.equal(buildShellyJobs(mixed, TODAY).length, 2);
+  // ...and all seven days become '*'
+  const all = [1, 2, 3, 4, 5, 6, 7].map((d) => weekly({ on_day_of_week: d, off_time: null }));
+  assert.equal(buildShellyJobs(all, TODAY)[0].timespec, '0 30 18 * * *');
+});
+
 test('over the 20-job cap: weekly kept, date jobs rotate in soonest-first', () => {
   const w = (i) => ({ enable: true, timespec: `0 ${i} 6 * * *`, calls: [] });
   const d = (day, mo) => ({ enable: true, timespec: `0 0 12 ${day} ${mo} *`, calls: [] });
