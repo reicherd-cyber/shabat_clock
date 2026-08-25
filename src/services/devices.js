@@ -184,6 +184,7 @@ async function recoverRemovedDevice(conn, device) {
 export async function patchDevice(deviceId, patch, { userId = null, actor = null } = {}) {
   let recovery;
   let passwdEntry = null;
+  let shellyWipe = null;
   await withTransaction(async (conn) => {
     const [rows] = await conn.query(
       `SELECT * FROM devices WHERE id = ? ${userId != null ? 'AND user_id = ?' : ''} FOR UPDATE`,
@@ -199,8 +200,22 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
     const removing = fields.is_enabled === false && device.is_enabled;
     const recovering = fields.is_enabled === true && !device.is_enabled;
     const applyEnabledTransition = async () => {
-      if (removing) await stashRemovedDevice(conn, deviceId);
-      if (recovering) ({ recovery, passwdEntry } = await recoverRemovedDevice(conn, device));
+      if (removing) {
+        await stashRemovedDevice(conn, deviceId);
+        // A removed Shelly must also stop firing its mirrored local Schedule
+        // jobs — capture the pre-stash identity for a post-commit wipe.
+        if (device.device_type === 'shelly') {
+          shellyWipe = { transport: device.transport, ip_address: device.ip_address, device_uid: device.device_uid };
+        }
+      }
+      if (recovering) {
+        ({ recovery, passwdEntry } = await recoverRemovedDevice(conn, device));
+        // A recovered Shelly's local jobs were wiped (or went stale) — hand it
+        // to the scheduler's resync loop.
+        if (device.device_type === 'shelly') {
+          await conn.query("UPDATE devices SET sync_status = 'pending' WHERE id = ?", [deviceId]);
+        }
+      }
     };
 
     if (userId != null) {
@@ -255,6 +270,15 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
     if (fields.device_uid) writeBrokerPasswdEntry(fields.device_uid, device.mqtt_passwd_hash);
   });
   if (passwdEntry) writeBrokerPasswdEntry(passwdEntry.uid, passwdEntry.hash);
+  if (shellyWipe) {
+    // Best-effort, off the request path: unreachable now = ghost jobs keep
+    // firing until this hardware is reached again (re-registration syncs a
+    // fresh, empty table).
+    import('./shelly-schedules.js')
+      .then(({ wipeShellyLocalSchedules, shellySyncFromHere }) => (
+        shellySyncFromHere(shellyWipe) ? wipeShellyLocalSchedules(shellyWipe) : null))
+      .catch((e) => console.error(`shelly ${deviceId} local schedule wipe:`, e.message));
+  }
   return recovery;
 }
 
@@ -333,14 +357,14 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     );
     if (taken.length) throw errors.conflict('IVR_DIGIT_TAKEN', `קוד IVR כבר תפוס אצל משתמש זה: ${taken.map((t) => t.ivr_digit).join(', ')}`);
 
-    // sync_status='synced' from birth: Shellys hold no schedule store (the server
-    // executes their schedules), so the push/ack handshake never runs — the column
-    // default 'pending' would stick forever on a schedule-less device.
+    // sync_status='pending' from birth: the scheduler's resync loop writes the
+    // (initially empty) local Schedule table on its first pass — which also
+    // wipes ghost jobs left over from a previous registration of this hardware.
     const [d] = await conn.query(
       `INSERT INTO devices
          (user_id, device_uid, device_type, transport, ip_address, name,
           mqtt_secret_hash, mqtt_passwd_hash, relay_count, is_online, fw_version, sync_status, created_by)
-       VALUES (?,?, 'shelly', ?,?,?, '', '', ?, TRUE, ?, 'synced', ?)`,
+       VALUES (?,?, 'shelly', ?,?,?, '', '', ?, TRUE, ?, 'pending', ?)`,
       [userId, probe.mac, transport, transport === 'lan' ? ip : null,
         name || `Shelly (${probe.model})`, probe.channels.length, probe.fw_version, actor ?? null],
     );

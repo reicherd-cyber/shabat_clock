@@ -125,8 +125,10 @@ async function fireBackupCommand(occ, executionRow) {
   });
   await repointCommand(executionRow.id, commandId);
 
-  // Shelly holds no schedules — the server IS the executor: RPC over the device's
-  // transport, the reply is the ack, and we own the relay-state write.
+  // Shelly: the server is the PRIMARY executor — RPC over the device's transport,
+  // the reply is the ack, and we own the relay-state write. The device also holds
+  // mirrored local Schedule jobs (shelly-schedules.js) as the offline fallback;
+  // both firing is harmless — Switch.Set is absolute.
   if (s.device_type === 'shelly') {
     try {
       const { shellyDispatch } = await import('../services/shelly.js');
@@ -212,6 +214,17 @@ export async function tick(now = new Date()) {
 
   await retryFailed(schedules);
   await autoCompleteOnce();
+  await resyncShellyDevices();
+}
+
+// Shelly local-job sync retry: devices whose mirrored Schedule jobs are behind
+// (bumped while unreachable, or the last write failed) get one attempt per tick
+// until it takes. Removed devices are excluded by their stashed (NULL) UID.
+async function resyncShellyDevices() {
+  const rows = await query(
+    "SELECT id FROM devices WHERE device_type = 'shelly' AND device_uid IS NOT NULL AND sync_status <> 'synced'",
+  );
+  for (const { id } of rows) pushScheduleToDevice(id).catch(() => {});
 }
 
 // Failed rows < 60 min old retried each tick while the device is online (§5.4).
@@ -347,6 +360,12 @@ let timer = null;
 let lastZmanimDay = null;
 export function startScheduler() {
   if (timer) return;
+  // Shellys registered before local-job mirroring existed sit on 'synced' without
+  // ever having been written — one boot-time nudge routes every live Shelly
+  // through the resync loop (a no-change sync is read-only on the device).
+  query(
+    "UPDATE devices SET sync_status = 'pending' WHERE device_type = 'shelly' AND device_uid IS NOT NULL AND is_enabled = TRUE",
+  ).catch((e) => console.error('shelly sync kick:', e.message));
   startupScan().catch((e) => console.error('startup scan:', e));
   const loop = async () => {
     try { await tick(); } catch (e) { console.error('scheduler tick:', e); }

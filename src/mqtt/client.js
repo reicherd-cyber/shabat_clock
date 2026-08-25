@@ -262,16 +262,38 @@ async function handleStatus(uid, st) {
 // ── schedule sync (§5.3) ────────────────────────────────────
 
 export async function pushScheduleToDevice(deviceId) {
-  const [device] = await query('SELECT id, device_uid, device_type, schedule_version, is_online FROM devices WHERE id = ?', [deviceId]);
+  const [device] = await query(
+    `SELECT id, device_uid, device_type, transport, ip_address, timezone, is_enabled,
+            schedule_version, is_online
+     FROM devices WHERE id = ?`,
+    [deviceId],
+  );
   if (!device || !device.device_uid) return; // unflashed [D31]: stays pending until UID set
 
-  // Shelly holds no schedule store — the server executes its schedules (scheduler
-  // tick), so there is nothing to push and the version is satisfied by definition.
+  // Shelly: mirror the schedules into the device's OWN Schedule cron jobs so
+  // occurrences fire even when the server/site internet is down; the server
+  // stays the primary executor (scheduler tick). A failed write leaves
+  // sync_status pending/error and the scheduler retries every tick.
   if (device.device_type === 'shelly') {
-    await query(
-      "UPDATE devices SET sync_status = 'synced', device_ack_version = schedule_version, sync_error = NULL WHERE id = ?",
-      [deviceId],
-    );
+    const { syncShellyLocalSchedules, shellySyncFromHere } = await import('../services/shelly-schedules.js');
+    if (!shellySyncFromHere(device)) return; // dev server: leave 'pending' for prod to claim
+    const target = Number(device.schedule_version);
+    try {
+      await syncShellyLocalSchedules(device);
+      await query(
+        `UPDATE devices SET device_ack_version = GREATEST(device_ack_version, ?),
+           sync_status = IF(schedule_version <= ?, 'synced', sync_status),
+           sync_error  = IF(schedule_version <= ?, NULL, sync_error),
+           last_pushed_at = UTC_TIMESTAMP()
+         WHERE id = ?`,
+        [target, target, target, deviceId],
+      );
+    } catch (e) {
+      await query(
+        "UPDATE devices SET sync_status = 'error', sync_error = ? WHERE id = ?",
+        [`shelly local sync: ${e.message}`.slice(0, 250), deviceId],
+      );
+    }
     return;
   }
 
