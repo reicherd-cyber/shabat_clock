@@ -52,9 +52,18 @@ export default function VoiceCosts() {
   const [ilsDraft, setIlsDraft] = useState(null);
   const [usdDraft, setUsdDraft] = useState(null);
   const [refresh, setRefresh] = useState(0);
+  const [live, setLive] = useState(null); // real provider balances (Yemot units, Anthropic spend)
+  const [liveBusy, setLiveBusy] = useState(false);
   const { busy, error, run, setError } = useAsync();
 
   useEffect(() => { adminApi.get('/users').then(setUsers).catch(setError); }, []);
+  useEffect(() => { adminApi.get('/billing/balances').then(setLive).catch(() => {}); }, []);
+
+  const refreshLive = async () => {
+    setLiveBusy(true);
+    try { setLive(await adminApi.get('/billing/balances?refresh=1')); } catch (e) { setError(e); }
+    setLiveBusy(false);
+  };
 
   useEffect(() => {
     // Debounce the keystroke filters (phone/search); selects fire immediately.
@@ -129,6 +138,51 @@ export default function VoiceCosts() {
         </div>
       </div>
       <ErrorNote error={error} />
+
+      {live && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <h3 className="font-bold text-sm">יתרות בזמן אמת (מהספקים עצמם)</h3>
+            <Button variant="ghost" disabled={liveBusy} onClick={refreshLive}>{liveBusy ? 'מרענן…' : 'רענון'}</Button>
+            <span className="text-muted text-xs">עודכן {new Date(live.fetched_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Card className="text-center">
+              {live.yemot?.ok ? (
+                <>
+                  <div className="text-3xl font-bold">{live.yemot.units.toFixed(2)}</div>
+                  <div className="text-muted text-sm">
+                    יתרת יחידות בימות המשיח
+                    {rate && <> <span dir="ltr">(≈ ₪{(live.yemot.units * rate.ils / rate.units).toFixed(2)})</span></>}
+                    {live.yemot.expires_at && <> · בתוקף עד {new Date(live.yemot.expires_at).toLocaleDateString('he-IL')}</>}
+                  </div>
+                </>
+              ) : (
+                <div className="text-sm text-muted py-2">{live.yemot?.error || 'לא זמין'}</div>
+              )}
+            </Card>
+            <Card className="text-center">
+              {live.anthropic?.ok ? (
+                <>
+                  <div className="text-3xl font-bold" style={{ color: C_EXPENSE }}>
+                    <span dir="ltr">${live.anthropic.month_usd.toFixed(2)}</span>
+                  </div>
+                  <div className="text-muted text-sm">
+                    הוצאות Anthropic החודש (מהחשבון בפועל)
+                    {data?.usd_rate > 0 && <> <span dir="ltr">(≈ ₪{(live.anthropic.month_usd * data.usd_rate).toFixed(2)})</span></>}
+                  </div>
+                </>
+              ) : (
+                <div className="text-sm text-muted py-2">
+                  {live.anthropic?.configured === false
+                    ? 'להצגת ההוצאות בפועל יש להגדיר ANTHROPIC_ADMIN_KEY בשרת (מפתח Admin מהקונסולה של Anthropic)'
+                    : (live.anthropic?.error || 'לא זמין')}
+                </div>
+              )}
+            </Card>
+          </div>
+        </div>
+      )}
 
       {t && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

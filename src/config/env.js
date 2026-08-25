@@ -85,5 +85,9 @@ export const env = {
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY || '',
     model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
+    // Admin API key (sk-ant-admin01-…) for the org cost report — a DIFFERENT
+    // key type than apiKey; created in the Anthropic Console under Admin keys.
+    // Empty = the live-spend tile in the admin panel shows a setup hint.
+    adminKey: process.env.ANTHROPIC_ADMIN_KEY || '',
   },
 };

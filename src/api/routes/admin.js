@@ -464,6 +464,15 @@ adminRouter.post('/finance/:id/restore', requireWrite, async (req, res, next) =>
   } catch (e) { next(e); }
 });
 
+// Live provider balances: real Yemot units left on the line + real Anthropic
+// month-to-date spend, fetched from the providers (5-min cache; ?refresh=1 busts).
+adminRouter.get('/billing/balances', async (req, res, next) => {
+  try {
+    const { getLiveBalances } = await import('../../services/billing.js');
+    res.json(await getLiveBalances({ force: req.query.refresh === '1' }));
+  } catch (e) { next(e); }
+});
+
 // Per-voice-order cost table: Yemot STT charges (live from their API) matched to
 // Anthropic usage rows. from/to are optional UTC bounds, same as /call-logs.
 adminRouter.get('/voice-costs', async (req, res, next) => {
