@@ -106,6 +106,19 @@ export function sortDue(due) {
   });
 }
 
+// True when the Shelly channel's live output already matches the wanted action.
+// null-safe: unreachable / malformed reply → false (the backup path takes over).
+async function shellyStateIs(s, action) {
+  try {
+    const { shellyCall } = await import('../services/shelly.js');
+    const st = await shellyCall(s, 'Switch.GetStatus', { id: Number(s.relay_no) - 1 });
+    if (typeof st?.output !== 'boolean') return false;
+    return (st.output ? 'on' : 'off') === action;
+  } catch {
+    return false;
+  }
+}
+
 async function existingRow(scheduleId, occurrenceUtc, action) {
   const [row] = await query(
     'SELECT * FROM schedule_executions WHERE schedule_id = ? AND occurrence_utc = ? AND action = ?',
@@ -125,10 +138,9 @@ async function fireBackupCommand(occ, executionRow) {
   });
   await repointCommand(executionRow.id, commandId);
 
-  // Shelly: the server is the PRIMARY executor — RPC over the device's transport,
-  // the reply is the ack, and we own the relay-state write. The device also holds
-  // mirrored local Schedule jobs (shelly-schedules.js) as the offline fallback;
-  // both firing is harmless — Switch.Set is absolute.
+  // Shelly BACKUP send — reached only after state verification found the local
+  // job didn't (or couldn't) fire: RPC over the device's transport, the reply
+  // is the ack, and we own the relay-state write.
   if (s.device_type === 'shelly') {
     try {
       const { shellyDispatch } = await import('../services/shelly.js');
@@ -177,17 +189,14 @@ async function fireBackupCommand(occ, executionRow) {
 
 export async function tick(now = new Date()) {
   const nowM = floorMinute(now);
-  // ESP32: grace elapsed — the device executes locally first, we only back it up.
+  // Both families execute locally FIRST (ESP32: its schedule store; Shelly: the
+  // mirrored local Schedule jobs) — the server steps in only after the grace.
   // Due window [now−3min, now−2min).
   const winStart = new Date(nowM.getTime() - (BACKUP_GRACE_MIN + 1) * 60000);
   const winEnd = new Date(nowM.getTime() - BACKUP_GRACE_MIN * 60000);
-  // Shelly: no local executor — the server fires at the occurrence minute itself.
-  const shellyEnd = new Date(nowM.getTime() + 60000);
 
   const schedules = await loadActiveSchedules();
-  const due = sortDue(schedules.flatMap((s) => (s.device_type === 'shelly'
-    ? occurrencesInWindow(s, nowM, shellyEnd)
-    : occurrencesInWindow(s, winStart, winEnd)))
+  const due = sortDue(schedules.flatMap((s) => occurrencesInWindow(s, winStart, winEnd))
     .filter((occ) => !inExclusionRange(occ.schedule, occ.localKey.slice(0, 10))));
 
   for (const occ of due) {
@@ -202,6 +211,17 @@ export async function tick(now = new Date()) {
         scheduleId: s.id, occurrenceUtc: occ.occurrenceUtc, occurrenceLocal: occ.occurrenceLocal,
         action: occ.action, executedBy: null, status: 'unverified_offline',
       });
+      continue;
+    }
+
+    // Shelly (no exec reports): the mirrored local job normally already fired —
+    // verify the actual channel state; a match is a device execution, no command.
+    if (s.device_type === 'shelly' && await shellyStateIs(s, occ.action)) {
+      await insertOccurrenceRow({
+        scheduleId: s.id, occurrenceUtc: occ.occurrenceUtc, occurrenceLocal: occ.occurrenceLocal,
+        action: occ.action, executedBy: 'device', status: 'executed',
+      });
+      await query('UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?', [occ.action, s.relay_id]);
       continue;
     }
 
@@ -238,6 +258,17 @@ async function retryFailed(schedules) {
   for (const row of failed) {
     const s = byId.get(Number(row.schedule_id));
     if (!s || !s.is_online || !s.device_uid) continue;
+    // Shelly: the failure may have been blindness, not a miss — if the channel
+    // state already matches (local job fired during the blackout), settle the
+    // row instead of re-commanding.
+    if (s.device_type === 'shelly' && await shellyStateIs(s, row.action)) {
+      await query(
+        "UPDATE schedule_executions SET status = 'executed', executed_by = 'device' WHERE id = ? AND status = 'failed'",
+        [row.id],
+      );
+      await query('UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?', [row.action, s.relay_id]);
+      continue;
+    }
     await fireBackupCommand(
       { schedule: s, action: row.action, occurrenceUtc: row.occurrence_utc, occurrenceLocal: row.occurrence_local },
       row,

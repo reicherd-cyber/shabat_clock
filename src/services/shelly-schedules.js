@@ -136,3 +136,25 @@ export async function syncShellyLocalSchedules(device) {
 export async function wipeShellyLocalSchedules(target) {
   await shellyCall(target, 'Schedule.DeleteAll');
 }
+
+// After an outage: read the true channel states, refresh relays.current_state
+// (change notifications were lost while the link was down), and settle the
+// occurrences recorded as unverified_offline while the mirrored local jobs
+// carried the schedule [D21]. Best-effort — callers catch.
+export async function reconcileShellyDevice(device) {
+  const states = [];
+  for (let no = 1; no <= (device.relay_count || 2); no++) {
+    const st = await shellyCall(device, 'Switch.GetStatus', { id: no - 1 }).catch(() => null);
+    if (!st || typeof st.output !== 'boolean') break;
+    states.push({ no, state: st.output ? 'on' : 'off' });
+  }
+  for (const r of states) {
+    await query(
+      `UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP()
+       WHERE device_id = ? AND relay_no = ? AND deleted_at IS NULL AND current_state <> ?`,
+      [r.state, device.id, r.no, r.state],
+    );
+  }
+  const { reconcileDevice } = await import('./executions.js');
+  await reconcileDevice(device.id, states);
+}

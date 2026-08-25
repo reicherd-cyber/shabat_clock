@@ -112,6 +112,12 @@ async function handleShellyMessage(topic, buf) {
         [device.id, isOnline ? 'online' : 'offline', JSON.stringify({ via: 'mqtt' })],
       );
     }
+    // Back from an outage: pull the true channel states and settle the
+    // occurrences the mirrored local jobs handled while we couldn't see them.
+    if (isOnline && !device.is_online) {
+      const { reconcileShellyDevice } = await import('../services/shelly-schedules.js');
+      reconcileShellyDevice(device).catch((e) => console.error('shelly reconcile:', e.message));
+    }
     return;
   }
 

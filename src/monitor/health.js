@@ -91,6 +91,14 @@ async function checkShelly(device) {
       await alert(`unreachable:${device.id}`, `המכשיר "${device.name}" לא מגיב`,
         `בדיקת הבריאות לא מצליחה להגיע למכשיר "${device.name}" (${device.device_uid}) כבר ${st.failures} דקות.`);
     }
+    // The mirrored local Schedule jobs carry the schedule through an outage —
+    // blind-firing into it only piles up failed commands. Flag it offline so
+    // the scheduler records occurrences honestly (unverified_offline); self-heal
+    // 2 below flips it back and reconciles on the first answer.
+    if (st.failures >= UNREACHABLE_AFTER && device.is_online && active()) {
+      await query('UPDATE devices SET is_online = FALSE WHERE id = ?', [device.id]);
+      await deviceEvent(device.id, 'offline', { via: 'health_probe', failures: st.failures });
+    }
     return health;
   }
 
@@ -146,11 +154,15 @@ async function checkShelly(device) {
   }
 
   // Self-heal 2: it answered, so an offline flag is stale (missed birth message)
-  // — and a stale flag silently stops its schedules from firing.
+  // — and a stale flag silently stops its schedules from firing. Recovery also
+  // reconciles: the true channel states settle the occurrences recorded as
+  // unverified_offline while the local jobs carried the schedule.
   if (wasOffline && active()) {
     await query('UPDATE devices SET is_online = TRUE, last_seen_at = UTC_TIMESTAMP() WHERE id = ?', [device.id]);
     await deviceEvent(device.id, 'online', { via: 'health_probe' });
     recordIncident('online_flag_healed', device.name, 'reachable while flagged offline');
+    const { reconcileShellyDevice } = await import('../services/shelly-schedules.js');
+    await reconcileShellyDevice(device).catch((e) => console.error('[health] reconcile:', e.message));
   }
 
   return health;
