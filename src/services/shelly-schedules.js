@@ -117,6 +117,27 @@ async function desiredJobs(device) {
   return buildShellyJobs(rows, `${p.y}-${pad(p.mo)}-${pad(p.d)}`);
 }
 
+// Rolling-horizon fit for the 20-job cap: weekly cron jobs are the recurring
+// backbone and are always kept; date jobs (once/yearly/holiday) fill the rest
+// soonest-first — a dropped far-future date regains its slot on a later daily
+// sync as it draws near. Pure (exported for tests).
+export function fitShellyJobs(jobs, today) {
+  if (jobs.length <= MAX_SHELLY_JOBS) return { jobs, dropped: 0 };
+  const weekly = jobs.filter((j) => j.timespec.split(' ')[3] === '*');
+  const dated = jobs.filter((j) => j.timespec.split(' ')[3] !== '*');
+  const [ty, tm, td] = today.split('-').map(Number);
+  const nextKey = (j) => {
+    const f = j.timespec.split(' ');
+    const d = Number(f[3]);
+    const mo = Number(f[4]);
+    const y = mo > tm || (mo === tm && d >= td) ? ty : ty + 1;
+    return `${y}-${pad(mo)}-${pad(d)} ${f[2].padStart(2, '0')}:${f[1].padStart(2, '0')}`;
+  };
+  dated.sort((a, b) => (nextKey(a) < nextKey(b) ? -1 : 1));
+  const kept = [...weekly, ...dated.slice(0, Math.max(0, MAX_SHELLY_JOBS - weekly.length))];
+  return { jobs: kept, dropped: jobs.length - kept.length };
+}
+
 // Job identity for the change check — only the fields we author. Calls are
 // re-sorted defensively so ordering quirks in Schedule.List can't force writes.
 const canonical = (j) => JSON.stringify({
@@ -132,13 +153,17 @@ const canonical = (j) => JSON.stringify({
 // Make the device's Schedule table match its rows in the DB. Throws when the
 // device is unreachable or rejects a call — the caller records sync_status.
 export async function syncShellyLocalSchedules(device) {
-  const desired = await desiredJobs(device);
+  const tz = device.timezone || 'Asia/Jerusalem';
+  const p = localParts(new Date(), tz);
+  const fit = fitShellyJobs(await desiredJobs(device), `${p.y}-${pad(p.mo)}-${pad(p.d)}`);
+  const desired = fit.jobs;
   if (desired.length > MAX_SHELLY_JOBS) {
-    throw new Error(`${desired.length} schedule jobs exceed the Shelly limit of ${MAX_SHELLY_JOBS}`);
+    // Only weekly jobs left and still over — nothing to rotate; needs human
+    // consolidation of the schedules themselves.
+    throw new Error(`${desired.length} weekly schedule jobs exceed the Shelly limit of ${MAX_SHELLY_JOBS}`);
   }
   // Cron runs on the device's local clock — pin its timezone to the device row's
   // (a wrong auto-detected tz would silently shift every local firing).
-  const tz = device.timezone || 'Asia/Jerusalem';
   const cfg = await shellyCall(device, 'Sys.GetConfig');
   if (cfg?.location?.tz !== tz) {
     await shellyCall(device, 'Sys.SetConfig', { config: { location: { tz } } });
@@ -150,6 +175,14 @@ export async function syncShellyLocalSchedules(device) {
   if (same) return { changed: false, jobs: desired.length };
   await shellyCall(device, 'Schedule.DeleteAll');
   for (const j of desired) await shellyCall(device, 'Schedule.Create', j);
+  if (fit.dropped) {
+    // Visible trace that the horizon is truncated — only on an actual rewrite,
+    // so a stably over-full device doesn't spam an event every daily sync.
+    await query(
+      "INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
+      [device.id, JSON.stringify({ kind: 'shelly_schedule_cap', kept: desired.length, dropped: fit.dropped })],
+    ).catch(() => {});
+  }
   return { changed: true, jobs: desired.length };
 }
 

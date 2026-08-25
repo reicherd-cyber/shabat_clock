@@ -1,7 +1,7 @@
 import './helpers/env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildShellyJobs } from '../src/services/shelly-schedules.js';
+import { buildShellyJobs, fitShellyJobs } from '../src/services/shelly-schedules.js';
 
 // A Tuesday, outside any exclusion used below unless stated.
 const TODAY = '2026-08-25';
@@ -79,6 +79,23 @@ test('same-timespec jobs merge into one job with multiple calls (the 20-cap coun
   assert.equal(jobs.length, 2);
   assert.deepEqual(jobs[0].calls.map((c) => c.params.id), [0, 1, 2]);
   assert.ok(jobs[0].calls.every((c) => c.params.on === true));
+});
+
+test('over the 20-job cap: weekly kept, date jobs rotate in soonest-first', () => {
+  const w = (i) => ({ enable: true, timespec: `0 ${i} 6 * * *`, calls: [] });
+  const d = (day, mo) => ({ enable: true, timespec: `0 0 12 ${day} ${mo} *`, calls: [] });
+  // 18 weekly + 4 dated (two before today's date → next YEAR, two upcoming this year)
+  const jobs = [...Array.from({ length: 18 }, (_, i) => w(i)), d(1, 1), d(30, 12), d(1, 9), d(26, 8)];
+  const { jobs: kept, dropped } = fitShellyJobs(jobs, '2026-08-25');
+  assert.equal(kept.length, 20);
+  assert.equal(dropped, 2);
+  const datedKept = kept.filter((j) => j.timespec.split(' ')[3] !== '*').map((j) => j.timespec);
+  assert.deepEqual(datedKept, ['0 0 12 26 8 *', '0 0 12 1 9 *']); // the two soonest
+});
+
+test('under the cap nothing is dropped or reordered', () => {
+  const jobs = [{ enable: true, timespec: '0 0 12 1 1 *', calls: [] }];
+  assert.deepEqual(fitShellyJobs(jobs, '2026-08-25'), { jobs, dropped: 0 });
 });
 
 test('merge dedupes identical calls and orders an exact ON/OFF tie to end OFF', () => {
