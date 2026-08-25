@@ -159,12 +159,19 @@ export default function VoiceCosts() {
             <Card className="text-center">
               {live.yemot?.ok ? (
                 <>
-                  <div className="text-3xl font-bold">{live.yemot.units.toFixed(2)}</div>
+                  <div className="text-3xl font-bold" style={live.yemot.units < 10 ? { color: C_EXPENSE } : undefined}>
+                    {live.yemot.units.toFixed(2)}
+                  </div>
                   <div className="text-muted text-sm">
                     יתרת יחידות בימות המשיח
                     {rate && <> <span dir="ltr">(≈ ₪{(live.yemot.units * rate.ils / rate.units).toFixed(2)})</span></>}
                     {live.yemot.expires_at && <> · בתוקף עד {new Date(live.yemot.expires_at).toLocaleDateString('he-IL')}</>}
                   </div>
+                  {live.yemot.units < 10 && (
+                    <div className="text-sm font-semibold mt-1" style={{ color: C_EXPENSE }}>
+                      ⚠ היתרה נמוכה — מומלץ לטעון יחידות בימות המשיח
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="text-sm text-muted py-2">{live.yemot?.error || 'לא זמין'}</div>
@@ -174,9 +181,16 @@ export default function VoiceCosts() {
               {live.anthropic?.ok ? (
                 <>
                   {live.anthropic.balance_usd != null ? (
-                    <div className="text-3xl font-bold"><span dir="ltr">${live.anthropic.balance_usd.toFixed(2)}</span></div>
+                    <div className="text-3xl font-bold" style={live.anthropic.balance_usd < 5 ? { color: C_EXPENSE } : undefined}>
+                      <span dir="ltr">${live.anthropic.balance_usd.toFixed(2)}</span>
+                    </div>
                   ) : (
                     <div className="text-3xl font-bold text-muted">—</div>
+                  )}
+                  {live.anthropic.balance_usd != null && live.anthropic.balance_usd < 5 && (
+                    <div className="text-sm font-semibold" style={{ color: C_EXPENSE }}>
+                      ⚠ היתרה נמוכה — כדאי לטעון עכשיו, אחרת הפקודות הקוליות יפסיקו לעבוד
+                    </div>
                   )}
                   <div className="text-muted text-sm">
                     {live.anthropic.balance_usd != null ? 'יתרה ב-Anthropic (משוערת)' : 'יתרת Anthropic — נדרשת הזנה ראשונית'}
