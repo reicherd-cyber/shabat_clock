@@ -107,6 +107,17 @@ test('over the 20-job cap: weekly kept, date jobs rotate in soonest-first', () =
   assert.deepEqual(datedKept, ['0 0 12 26 8 *', '0 0 12 1 9 *']); // the two soonest
 });
 
+test('all-weekly overflow keeps the 20 soonest-firing events', () => {
+  // TODAY (2026-08-25) is a Tuesday → cron dow 2; Monday (dow 1) is 6 days out.
+  const at = (hh, dow) => ({ enable: true, timespec: `0 0 ${hh} * * ${dow}`, calls: [] });
+  const jobs = [...Array.from({ length: 21 }, (_, i) => at(i + 1, '2')), at(9, '1'), at(10, '1'), at(11, '1'), at(12, '1')];
+  const { jobs: kept, dropped } = fitShellyJobs(jobs, '2026-08-25');
+  assert.equal(dropped, 5);
+  assert.equal(kept.length, 20);
+  assert.ok(kept.every((j) => j.timespec.endsWith(' 2'))); // Monday's 4 all dropped
+  assert.equal(Math.max(...kept.map((j) => Number(j.timespec.split(' ')[2]))), 20); // and today's latest
+});
+
 test('under the cap nothing is dropped or reordered', () => {
   const jobs = [{ enable: true, timespec: '0 0 12 1 1 *', calls: [] }];
   assert.deepEqual(fitShellyJobs(jobs, '2026-08-25'), { jobs, dropped: 0 });

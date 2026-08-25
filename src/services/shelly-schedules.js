@@ -24,7 +24,7 @@
 import { query } from '../db/pool.js';
 import { env } from '../config/env.js';
 import { shellyCall } from './shelly.js';
-import { timeToMinutes, localParts } from './time.js';
+import { timeToMinutes, localParts, dowOfDate } from './time.js';
 import { inExclusionRange } from './holidays.js';
 
 const MAX_SHELLY_JOBS = 20; // Gen2 firmware cap on Schedule jobs
@@ -138,25 +138,33 @@ async function desiredJobs(device) {
   return buildShellyJobs(rows, `${p.y}-${pad(p.mo)}-${pad(p.d)}`);
 }
 
-// Rolling-horizon fit for the 20-job cap: weekly cron jobs are the recurring
-// backbone and are always kept; date jobs (once/yearly/holiday) fill the rest
-// soonest-first — a dropped far-future date regains its slot on a later daily
-// sync as it draws near. Pure (exported for tests).
+// Rolling-horizon fit for the 20-job cap: keep the 20 jobs whose NEXT firing is
+// soonest — that's exactly what offline resilience needs. The window slides on
+// every re-sync (zmanim devices re-push daily; boot kicks re-pend everyone), so
+// dropped jobs regain their slot as their moment draws near. A real fleet
+// device holds 25 distinct weekly switch-moments — over-cap is a normal state,
+// not an error. Pure (exported for tests).
 export function fitShellyJobs(jobs, today) {
   if (jobs.length <= MAX_SHELLY_JOBS) return { jobs, dropped: 0 };
-  const weekly = jobs.filter((j) => j.timespec.split(' ')[3] === '*');
-  const dated = jobs.filter((j) => j.timespec.split(' ')[3] !== '*');
   const [ty, tm, td] = today.split('-').map(Number);
-  const nextKey = (j) => {
+  const todayDow = dowOfDate({ y: ty, mo: tm, d: td }) - 1; // cron 0–6
+  const daysUntil = (j) => {
     const f = j.timespec.split(' ');
+    if (f[3] === '*') { // weekly: nearest of its days (today counts as 0)
+      if (f[5] === '*') return 0;
+      return Math.min(...f[5].split(',').map((d) => (Number(d) - todayDow + 7) % 7));
+    }
     const d = Number(f[3]);
     const mo = Number(f[4]);
     const y = mo > tm || (mo === tm && d >= td) ? ty : ty + 1;
-    return `${y}-${pad(mo)}-${pad(d)} ${f[2].padStart(2, '0')}:${f[1].padStart(2, '0')}`;
+    return Math.round((Date.UTC(y, mo - 1, d) - Date.UTC(ty, tm - 1, td)) / 86400000);
   };
-  dated.sort((a, b) => (nextKey(a) < nextKey(b) ? -1 : 1));
-  const kept = [...weekly, ...dated.slice(0, Math.max(0, MAX_SHELLY_JOBS - weekly.length))];
-  return { jobs: kept, dropped: jobs.length - kept.length };
+  const key = (j) => {
+    const f = j.timespec.split(' ');
+    return daysUntil(j) * 100000 + Number(f[2]) * 100 + Number(f[1]);
+  };
+  const ranked = jobs.map((j) => [key(j), j]).sort((a, b) => a[0] - b[0]);
+  return { jobs: ranked.slice(0, MAX_SHELLY_JOBS).map(([, j]) => j), dropped: jobs.length - MAX_SHELLY_JOBS };
 }
 
 // Job identity for the change check — only the fields we author. Calls are
@@ -178,11 +186,6 @@ export async function syncShellyLocalSchedules(device) {
   const p = localParts(new Date(), tz);
   const fit = fitShellyJobs(await desiredJobs(device), `${p.y}-${pad(p.mo)}-${pad(p.d)}`);
   const desired = fit.jobs;
-  if (desired.length > MAX_SHELLY_JOBS) {
-    // Only weekly jobs left and still over — nothing to rotate; needs human
-    // consolidation of the schedules themselves.
-    throw new Error(`${desired.length} weekly schedule jobs exceed the Shelly limit of ${MAX_SHELLY_JOBS}`);
-  }
   // Cron runs on the device's local clock — pin its timezone to the device row's
   // (a wrong auto-detected tz would silently shift every local firing).
   const cfg = await shellyCall(device, 'Sys.GetConfig');
