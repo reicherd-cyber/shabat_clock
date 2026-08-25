@@ -71,3 +71,23 @@ test('one-sided schedule emits a single job', () => {
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].calls[0].params.on, false);
 });
+
+test('same-timespec jobs merge into one job with multiple calls (the 20-cap counts jobs)', () => {
+  // 3 channels switching together: 6 raw events → 2 jobs (one ON, one OFF)
+  const rows = [1, 2, 3].map((relay_no) => weekly({ relay_no }));
+  const jobs = buildShellyJobs(rows, TODAY);
+  assert.equal(jobs.length, 2);
+  assert.deepEqual(jobs[0].calls.map((c) => c.params.id), [0, 1, 2]);
+  assert.ok(jobs[0].calls.every((c) => c.params.on === true));
+});
+
+test('merge dedupes identical calls and orders an exact ON/OFF tie to end OFF', () => {
+  const rows = [
+    weekly({ off_time: null }),                       // ON 18:30 relay 1
+    weekly({ off_time: null }),                       // duplicate
+    weekly({ on_time: null, off_time: '18:30' }),     // OFF 18:30 relay 1 — exact tie
+  ];
+  const jobs = buildShellyJobs(rows, TODAY);
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(jobs[0].calls.map((c) => c.params.on), [true, false]); // ON runs first → ends OFF
+});

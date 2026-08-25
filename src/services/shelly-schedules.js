@@ -74,7 +74,28 @@ export function buildShellyJobs(rows, today) {
       }
     }
   }
-  return jobs;
+  // The 20-job firmware cap counts JOBS, not calls — everything firing on the
+  // same timespec merges into one job with multiple Switch.Set calls (a site
+  // switching 3 channels together costs 1 job, not 3). Duplicate calls drop;
+  // an exact ON/OFF tie on one channel runs ON first so it ends OFF — the same
+  // tie rule as the server scheduler (sortDue).
+  const bySpec = new Map();
+  for (const j of jobs) {
+    const cur = bySpec.get(j.timespec);
+    if (cur) cur.calls.push(...j.calls); else bySpec.set(j.timespec, j);
+  }
+  for (const j of bySpec.values()) {
+    const seen = new Set();
+    j.calls = j.calls
+      .filter((c) => {
+        const k = `${c.params.id}|${c.params.on}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .sort((a, b) => (a.params.id - b.params.id) || (Number(b.params.on) - Number(a.params.on)));
+  }
+  return [...bySpec.values()];
 }
 
 // The device's live schedule rows expanded into Shelly jobs.
@@ -96,7 +117,8 @@ async function desiredJobs(device) {
   return buildShellyJobs(rows, `${p.y}-${pad(p.mo)}-${pad(p.d)}`);
 }
 
-// Job identity for the change check — only the fields we author.
+// Job identity for the change check — only the fields we author. Calls are
+// re-sorted defensively so ordering quirks in Schedule.List can't force writes.
 const canonical = (j) => JSON.stringify({
   enable: j.enable !== false,
   timespec: j.timespec,
@@ -104,7 +126,7 @@ const canonical = (j) => JSON.stringify({
     method: String(c.method || '').toLowerCase(),
     id: c.params?.id,
     on: c.params?.on,
-  })),
+  })).sort((a, b) => (a.id - b.id) || (Number(b.on) - Number(a.on))),
 });
 
 // Make the device's Schedule table match its rows in the DB. Throws when the
