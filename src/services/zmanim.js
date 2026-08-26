@@ -50,9 +50,10 @@ const ANCHORS = {
 };
 
 export const ANCHOR_KEYS = ['clock', ...Object.keys(ANCHORS)];
-// A generous cap — enough for any candle-lighting custom, small enough that the
-// resolved event can't wander onto another calendar day (guarded below anyway).
-export const MAX_OFFSET_MIN = 240;
+// A generous cap (6.5 hours) — resolveForDate still rejects any combination
+// whose computed time would cross the civil-day boundary, so a large offset can
+// never wander onto another calendar day; it just fails loudly instead.
+export const MAX_OFFSET_MIN = 390;
 
 // Minutes-since-midnight (device-local, truncated to the minute) of `anchor` on
 // local date {y,mo,d}. The probe instant is local ~noon, so suncalc returns that
@@ -85,7 +86,7 @@ export function validateSide(anchor, offsetMin, side) {
   }
   const off = Number(offsetMin ?? 0);
   if (!Number.isInteger(off) || Math.abs(off) > MAX_OFFSET_MIN) {
-    throw errors.validation(`offset must be an integer within ±${MAX_OFFSET_MIN} minutes`, { [`${side}_offset_min`]: `±${MAX_OFFSET_MIN}` });
+    throw errors.validation(`המרחק מהזמן ההלכתי חייב להיות מספר שלם של דקות, עד ${MAX_OFFSET_MIN} דקות לפני או אחרי`, { [`${side}_offset_min`]: `±${MAX_OFFSET_MIN}` });
   }
   return off;
 }

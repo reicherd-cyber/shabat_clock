@@ -333,9 +333,11 @@ export async function startupScan(now = new Date()) {
 
 // Halachic anchors + holiday blocks: stored on_time/off_time (and for holiday
 // schedules on_date/off_date) hold the resolved NEXT occurrence; re-resolve once
-// per local day and re-push devices whose values moved. Zmanim events can never
-// land near midnight (offsets are capped), so a post-00:05 refresh cannot
-// collide with the backup windows above.
+// per local day and re-push devices whose values moved. Resolution rejects any
+// time that would cross the civil-day boundary (OFFSET_OUT_OF_DAY), so events
+// can't wander onto another date; with large offsets (cap ±390) an event CAN sit
+// shortly after midnight, so a failed row is skipped (keeps yesterday's time)
+// rather than aborting the whole refresh.
 async function refreshAnchoredTimes(now = new Date()) {
   const rows = await query(
     `SELECT s.id, s.repeat_type, s.holidays,
@@ -366,20 +368,27 @@ async function refreshAnchoredTimes(now = new Date()) {
       const yesterday = fmt(shiftDate({ y: p.y, mo: p.mo, d: p.d }, -1));
       if (inExclusionRange(row, today) !== inExclusionRange(row, yesterday)) deviceIds.add(Number(row.device_id));
     }
-    if (row.repeat_type === 'holiday' || row.repeat_type === 'yearly') {
-      const fresh = row.repeat_type === 'holiday' ? freshHolidayFor(row, now) : freshYearlyFor(row, now);
-      if ((fresh.on_time ?? null) === (row.on_time ?? null) && (fresh.off_time ?? null) === (row.off_time ?? null)
-        && (fresh.on_date ?? null) === (row.on_date ?? null) && (fresh.off_date ?? null) === (row.off_date ?? null)) continue;
-      await query('UPDATE schedules SET on_date = ?, on_time = ?, off_date = ?, off_time = ? WHERE id = ?',
-        [fresh.on_date, fresh.on_time, fresh.off_date, fresh.off_time, row.id]);
-    } else if (row.on_anchor !== 'clock' || row.off_anchor !== 'clock') {
-      const fresh = freshTimesFor(row, now);
-      if ((fresh.on_time ?? null) === (row.on_time ?? null) && (fresh.off_time ?? null) === (row.off_time ?? null)) continue;
-      await query('UPDATE schedules SET on_time = ?, off_time = ? WHERE id = ?', [fresh.on_time, fresh.off_time, row.id]);
-    } else {
-      continue; // clock-only weekly row selected for its החרגה alone — nothing to refresh
+    try {
+      if (row.repeat_type === 'holiday' || row.repeat_type === 'yearly') {
+        const fresh = row.repeat_type === 'holiday' ? freshHolidayFor(row, now) : freshYearlyFor(row, now);
+        if ((fresh.on_time ?? null) === (row.on_time ?? null) && (fresh.off_time ?? null) === (row.off_time ?? null)
+          && (fresh.on_date ?? null) === (row.on_date ?? null) && (fresh.off_date ?? null) === (row.off_date ?? null)) continue;
+        await query('UPDATE schedules SET on_date = ?, on_time = ?, off_date = ?, off_time = ? WHERE id = ?',
+          [fresh.on_date, fresh.on_time, fresh.off_date, fresh.off_time, row.id]);
+      } else if (row.on_anchor !== 'clock' || row.off_anchor !== 'clock') {
+        const fresh = freshTimesFor(row, now);
+        if ((fresh.on_time ?? null) === (row.on_time ?? null) && (fresh.off_time ?? null) === (row.off_time ?? null)) continue;
+        await query('UPDATE schedules SET on_time = ?, off_time = ? WHERE id = ?', [fresh.on_time, fresh.off_time, row.id]);
+      } else {
+        continue; // clock-only weekly row selected for its החרגה alone — nothing to refresh
+      }
+      deviceIds.add(Number(row.device_id));
+    } catch (e) {
+      // A seasonal shift can push an anchored time past the day boundary
+      // (OFFSET_OUT_OF_DAY) — keep yesterday's resolved time for this row and
+      // let the rest of the refresh proceed.
+      console.error(`zmanim refresh schedule ${row.id}:`, e.message);
     }
-    deviceIds.add(Number(row.device_id));
   }
   if (!deviceIds.size) return;
   const ids = [...deviceIds];
