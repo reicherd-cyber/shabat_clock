@@ -14,6 +14,7 @@ export default function Schedules() {
   const [schedules, setSchedules] = useState(null);
   const [relays, setRelays] = useState([]);
   const [formInit, setFormInit] = useState(null);
+  const [tab, setTab] = useState('channels'); // 'channels' | 'plans'
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -152,7 +153,7 @@ export default function Schedules() {
       const side = s.on_time && !s.off_time ? 'on' : (!s.on_time && s.off_time ? 'off' : null);
       if (s.repeat_type !== 'weekly' || !side || s[`${side}_day_of_week`] == null) { out.push(s); continue; }
       const anchored = s[`${side}_anchor`] && s[`${side}_anchor`] !== 'clock';
-      const key = JSON.stringify([s.relay_id, side, anchored ? null : s[`${side}_time`],
+      const key = JSON.stringify([s.plan_id, s.relay_id, side, anchored ? null : s[`${side}_time`],
         s[`${side}_anchor`], s[`${side}_offset_min`], s.is_enabled, s.sync_status,
         s.excl_type, s.excl_days, s.excl_holidays, s.excl_calendar, s.excl_date, s.excl_end_date,
         s.excl_heb_day, s.excl_heb_month, s.excl_end_heb_day, s.excl_end_heb_month]);
@@ -172,7 +173,8 @@ export default function Schedules() {
     const byRelay = new Map();
     for (const r of relays) byRelay.set(r.id, { relayId: r.id, relay: r.name, device: r.device, items: [] });
     for (const s of schedules) {
-      if (s.plan_id) continue; // תוכניות live in their own section above
+      // תוכנית member rows appear in their channel's card too, marked as such;
+      // actions on them run through the whole plan (see the row render).
       if (!byRelay.has(s.relay_id)) byRelay.set(s.relay_id, { relayId: s.relay_id, relay: s.relay_name, device: s.device_name, items: [] });
       byRelay.get(s.relay_id).items.push(s);
     }
@@ -207,6 +209,16 @@ export default function Schedules() {
     }).sort((a, b) => Math.min(...a.members.map(sortKey)) - Math.min(...b.members.map(sortKey)));
   }, [schedules]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Open the plan editor — the same init whether entered from the plans tab or
+  // from a member row inside a channel card.
+  const planEditInit = (p) => ({
+    ...rowToForm(p.repr),
+    relay_ids: p.relayIds,
+    plan_id: p.pid,
+    plan_member_ids: p.members.map((m) => m.id),
+    ...(p.daysSet.length > 1 ? { days: p.daysSet } : {}),
+  });
+
   // Reversed pair (כיבוי והדלקה): the OFF fires before the ON — pills must render
   // in the true order. Daily pairs are cyclic, so they stay ON→OFF.
   const isReversed = (s) => {
@@ -237,7 +249,16 @@ export default function Schedules() {
       <SectionHead title="תזמונים" />
       <ErrorNote error={error} />
 
-      {/* תוכניות — cross-channel schedules, separate from the per-channel tables */}
+      <div className="flex gap-2 mb-4">
+        <Button variant={tab === 'channels' ? 'primary' : 'ghost'} onClick={() => setTab('channels')}>לפי ערוץ</Button>
+        <Button variant={tab === 'plans' ? 'primary' : 'ghost'} onClick={() => setTab('plans')}>
+          תוכניות{plans.length ? ` (${plans.length})` : ''}
+        </Button>
+      </div>
+
+      {/* תוכניות — cross-channel schedules; the member rows also show inside
+          their channel cards, where every action still runs on the whole plan */}
+      {tab === 'plans' && (
       <div className="mb-7">
         <Card flush className="overflow-hidden border-accent/30">
           <div className="flex items-center gap-2.5 px-5 py-3 bg-[#E4EFFE]/70 border-b-2 border-accent/40">
@@ -304,9 +325,10 @@ export default function Schedules() {
           })}
         </Card>
       </div>
+      )}
 
-      {groups.length === 0 && <Card>אין ערוצים פעילים בחשבון.</Card>}
-      {groups.map((g) => (
+      {tab === 'channels' && groups.length === 0 && <Card>אין ערוצים פעילים בחשבון.</Card>}
+      {tab === 'channels' && groups.map((g) => (
         <div key={`${g.device}·${g.relay}`} className="mb-7">
           <Card flush className="overflow-hidden border-accent/30">
             {/* relay band — every relay (מטבח, סלון…) is its own clearly-bounded table */}
@@ -326,10 +348,17 @@ export default function Schedules() {
               // Merged row: the chip reflects whichever member acts soonest.
               const repr = s._group ? [...s._group].sort((a, b) => sortKey(a) - sortKey(b))[0] : s;
               const chip = nextChip(repr);
+              // A תוכנית member: every action here runs on the WHOLE plan.
+              const plan = s.plan_id ? plans.find((x) => x.pid === s.plan_id) : null;
               return (
                 <div key={s.id} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''} ${s.is_enabled ? '' : 'opacity-60'}`}>
                   <div className="min-w-[130px]">
-                    {s.name && <div className="font-semibold text-[13.5px] mb-0.5">{s.name}</div>}
+                    {s.name && (
+                      <div className="font-semibold text-[13.5px] mb-0.5">
+                        {s.name}
+                        {plan && <span className="text-accent font-normal text-[11.5px]"> · <Layers size={11} className="inline -mt-0.5" /> תוכנית</span>}
+                      </div>
+                    )}
                     <small className={`flex w-fit items-center font-medium text-[11.5px] rounded-full px-2 py-px whitespace-nowrap ${chip.cls}`}>{chip.text}</small>
                     {s.repeat_type === 'holiday' && (
                       <small className="block font-normal text-muted text-[12.5px] mt-0.5">{holidaySummary(s.holidays)}</small>
@@ -355,20 +384,24 @@ export default function Schedules() {
                       ? <span className="inline-flex items-center gap-1"><Check size={13} />מסונכרן</span>
                       : <span className="inline-flex items-center gap-1"><RefreshCw size={13} />ממתין לסנכרון</span>}
                   </SyncNote>
-                  {isShabbatPair(s) && (
+                  {!plan && isShabbatPair(s) && (
                     <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-accent cursor-pointer'}`}
                       title="החל את זמני השבת גם בחגים" onClick={() => setConvert(s)}><Sparkles size={17} /></button>
                   )}
                   <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-ink cursor-pointer'}`}
-                    title="עריכת התזמון" onClick={() => setFormInit({
+                    title={plan ? 'עריכת התוכנית (חלה על כל הערוצים)' : 'עריכת התזמון'}
+                    onClick={() => setFormInit(plan ? planEditInit(plan) : {
                       ...rowToForm(s),
                       ...(s._group && s._group.length > 1 ? {
                         days: s._group.map((x) => Number(x[`${s._side}_day_of_week`])).sort((a, b) => a - b),
                         group_ids: s._group.map((x) => x.id),
                       } : {}),
                     })}><Pencil size={16} /></button>
-                  <Toggle checked={!!s.is_enabled} busy={busy} onChange={() => toggleEnabled(s)} />
-                  <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`} title="מחק" onClick={() => remove(s)}><Trash2 size={17} /></button>
+                  <Toggle checked={!!s.is_enabled} busy={busy}
+                    onChange={() => toggleEnabled(plan ? { ...s, _group: plan.members } : s)} />
+                  <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
+                    title={plan ? 'מחק את התוכנית מכל הערוצים' : 'מחק'}
+                    onClick={() => remove(plan ? { ...s, _group: plan.members } : s)}><Trash2 size={17} /></button>
                 </div>
               );
             })}
