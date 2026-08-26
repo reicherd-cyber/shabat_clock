@@ -7,7 +7,11 @@ import { Check, ChevronDown, Trash2 } from 'lucide-react';
 // the תזמונים page and the לוח — adding from the calendar stays in the calendar.
 
 export const emptyForm = {
-  name: '', // empty → the server numbers it ("תזמון 3") per channel
+  name: '', // empty → the server numbers it ("תזמון 3" per channel / "תוכנית 2")
+  // תוכנית: plan=true opens the multi-channel create; plan_id/plan_member_ids
+  // carry an existing plan into edit (the edit rebuilds ALL member rows).
+  // lock_relay pins a create to one channel (the per-channel button).
+  plan: false, lock_relay: false, plan_id: null, plan_member_ids: [],
   relay_id: '', relay_ids: [], repeat_type: 'weekly',
   on_day_of_week: 6, on_time: '18:00', off_day_of_week: 7, off_time: '20:00',
   on_date: '', off_date: '', daily: false,
@@ -344,7 +348,26 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
       if (form.mode !== 'off') { side('on'); b.on_date = form.on_date; }
       if (form.mode !== 'on') { side('off'); b.off_date = form.off_date; }
     }
-    if (form.id) {
+    if (form.id && form.plan_id) {
+      // תוכנית: the edit applies to EVERY member row — PATCH one surviving row,
+      // drop the rest, and recreate the remaining (channel × day) combinations
+      // (same rebuild pattern as the day-sibling group below).
+      const keepFirst = form.relay_ids.map(Number).includes(Number(form.relay_id));
+      if (keepFirst) await api.patch(`/schedules/${form.id}`, b);
+      for (const mid of (form.plan_member_ids || [])) {
+        if (keepFirst && Number(mid) === Number(form.id)) continue;
+        await api.del(`/schedules/${mid}`);
+      }
+      const clean = Object.fromEntries(Object.entries(b).filter(([, v]) => v !== null));
+      for (const rid of form.relay_ids.map(Number)) {
+        for (const d of (multiDays || [null])) {
+          if (keepFirst && rid === Number(form.relay_id) && (!multiDays || d === multiDays[0])) continue;
+          const body = { ...clean, relay_id: rid, plan_id: form.plan_id };
+          if (multiDays && d != null) body[`${sideKey}_day_of_week`] = d;
+          await api.post('/schedules', body);
+        }
+      }
+    } else if (form.id) {
       await api.patch(`/schedules/${form.id}`, b);
       // Editing a merged group rebuilds it: the edited row keeps the first day,
       // old siblings are dropped, remaining days become fresh siblings. A plain
@@ -360,8 +383,12 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
       }
     } else {
       // One schedule per selected channel — each relay gets its own row; the
-      // weekly day chips multiply the same way (one row per day).
+      // weekly day chips multiply the same way (one row per day). A תוכנית
+      // create mints one shared plan_id so the rows stay bound together.
       delete b.relay_id;
+      const planId = form.plan
+        ? `p${Date.now().toString(36)}${Math.floor(Math.random() * 1e9).toString(36)}` : null;
+      if (planId) b.plan_id = planId;
       for (const rid of form.relay_ids) {
         for (const d of (multiDays || [null])) {
           const body = { ...b, relay_id: Number(rid) };
@@ -407,27 +434,39 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
   };
 
   return (
-    <Modal open={!!form} onClose={onClose} title={form?.id ? 'עריכת תזמון' : 'תזמון חדש'}>
+    <Modal open={!!form} onClose={onClose}
+      title={(form?.plan || form?.plan_id)
+        ? (form?.id ? 'עריכת תוכנית' : 'תוכנית חדשה')
+        : (form?.id ? 'עריכת תזמון' : 'תזמון חדש')}>
       {form && (
         <div className="space-y-3">
-          {form.id ? (
+          {form.id && !form.plan_id ? (
             <label className="block">
               <span className="text-sm text-muted">מכשיר</span>
               <Select className="w-full" value={form.relay_id} disabled>
                 {relays.map((r) => <option key={r.id} value={r.id}>{r.name} — {r.device}</option>)}
               </Select>
             </label>
+          ) : form.lock_relay ? (
+            <label className="block">
+              <span className="text-sm text-muted">ערוץ</span>
+              <Select className="w-full" value={form.relay_ids[0]} disabled>
+                {relays.map((r) => <option key={r.id} value={r.id}>{r.name} — {r.device}</option>)}
+              </Select>
+            </label>
           ) : (
             <div className="space-y-1">
-              <span className="text-sm text-muted">ערוצים (אפשר לבחור כמה)</span>
+              <span className="text-sm text-muted">
+                {form.plan || form.plan_id ? 'ערוצי התוכנית (אפשר לבחור כמה)' : 'ערוצים (אפשר לבחור כמה)'}
+              </span>
               <RelayMultiSelect relays={relays} selected={form.relay_ids}
                 onChange={(relay_ids) => setForm({ ...form, relay_ids })} />
             </div>
           )}
           <label className="block">
-            <span className="text-sm text-muted">שם התזמון</span>
+            <span className="text-sm text-muted">{form.plan || form.plan_id ? 'שם התוכנית' : 'שם התזמון'}</span>
             <Input className="w-full" maxLength={100}
-              placeholder='ריק = שם אוטומטי ("תזמון 1")'
+              placeholder={form.plan || form.plan_id ? 'ריק = שם אוטומטי ("תוכנית 1")' : 'ריק = שם אוטומטי ("תזמון 1")'}
               value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </label>
           <div className="flex gap-2 items-center flex-wrap">
@@ -771,6 +810,7 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
           <ErrorNote error={error} />
           <Button className="w-full"
             disabled={busy || (!form.id && !form.relay_ids.length)
+              || (!!form.plan_id && !form.relay_ids.length)
               || (form.repeat_type === 'weekly' && !form.daily
                 && (form.mode === 'on' || form.mode === 'off') && !form.days.length)
               || (form.repeat_type === 'yearly' && form.annual_calendar === 'greg'
@@ -788,10 +828,18 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
               className={`w-full flex items-center justify-center gap-1.5 text-sm py-1 cursor-pointer
                 ${armDelete ? 'text-off font-bold' : 'text-muted hover:text-off'}`}
               onClick={armDelete
-                ? () => run(async () => { await api.del(`/schedules/${form.id}`); await onSaved(); })
+                ? () => run(async () => {
+                  // A תוכנית delete removes every member row, not just the opened one.
+                  for (const mid of (form.plan_member_ids?.length ? form.plan_member_ids : [form.id])) {
+                    await api.del(`/schedules/${mid}`);
+                  }
+                  await onSaved();
+                })
                 : () => setArmDelete(true)}>
               <Trash2 size={14} />
-              {armDelete ? 'בטוחים? לחיצה נוספת תמחק את התזמון' : 'מחק תזמון'}
+              {armDelete
+                ? `בטוחים? לחיצה נוספת תמחק את ה${form.plan_id ? 'תוכנית' : 'תזמון'}`
+                : form.plan_id ? 'מחק תוכנית' : 'מחק תזמון'}
             </button>
           )}
         </div>

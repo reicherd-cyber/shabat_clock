@@ -264,10 +264,20 @@ export async function createSchedule({ userId, relayId, createdVia, actingUserId
   const deviceIds = [];
   let name = String(fields.name ?? '').trim().slice(0, 100);
   delete fields.name;
+  // תוכנית membership: a client-minted token shared by all the plan's rows.
+  const planId = /^[A-Za-z0-9_-]{1,32}$/.test(String(fields.plan_id ?? '')) ? String(fields.plan_id) : null;
+  delete fields.plan_id;
   const result = await withTransaction(async (conn) => {
     const relay = await requireRelay(conn, relayId, actingUserId);
-    // No name given → numbered default per relay ("תזמון 3" for its 3rd schedule).
-    if (!name) {
+    // No name given → numbered default: plans count the user's OTHER plans
+    // (stable across the member-row loop), plain rows count per relay.
+    if (!name && planId) {
+      const [cntRows] = await conn.query(
+        'SELECT COUNT(DISTINCT plan_id) AS n FROM schedules WHERE user_id = ? AND plan_id IS NOT NULL AND plan_id <> ? AND deleted_at IS NULL',
+        [relay.user_id, planId],
+      );
+      name = `תוכנית ${Number(cntRows[0].n) + 1}`;
+    } else if (!name) {
       const [cntRows] = await conn.query(
         'SELECT COUNT(*) AS n FROM schedules WHERE relay_id = ? AND deleted_at IS NULL',
         [relayId],
@@ -280,11 +290,11 @@ export async function createSchedule({ userId, relayId, createdVia, actingUserId
     resolveSchedule(fields, { region: await regionOf(conn, relay.user_id), tz: relay.timezone });
     const s = validateScheduleRules(fields, { tz: relay.timezone });
     const res = await conn.query(
-      `INSERT INTO schedules (name, user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
+      `INSERT INTO schedules (name, plan_id, user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
         off_day_of_week, off_time, off_anchor, off_offset_min,
         repeat_type, holidays, annual_date, annual_end_date, annual_calendar, excl_type, excl_date, excl_end_date, excl_calendar, excl_holidays, excl_days, on_date, off_date, is_enabled, created_via, created_by, updated_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
-      [name, relay.user_id, relayId, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
+      [name, planId, relay.user_id, relayId, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
         s.off_day_of_week, s.off_time, s.off_anchor, s.off_offset_min,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
@@ -395,7 +405,7 @@ export async function deleteSchedule({ userId, scheduleId, actor = null }) {
 
 export async function listSchedules({ userId }) {
   const rows = await query(
-    `SELECT s.id, s.name, s.relay_id, r.name AS relay_name, d.id AS device_id, d.name AS device_name, d.sync_status,
+    `SELECT s.id, s.name, s.plan_id, s.relay_id, r.name AS relay_name, d.id AS device_id, d.name AS device_name, d.sync_status,
             s.user_id, u.full_name AS user_name,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, SectionHead, Modal, ErrorNote, useAsync, DAY_NAMES, Toggle, SyncNote } from '../ui.jsx';
-import { House, Trash2, Plus, Check, RefreshCw, Sparkles, Pencil } from 'lucide-react';
+import { House, Layers, Trash2, Plus, Check, RefreshCw, Sparkles, Pencil } from 'lucide-react';
 import {
   ScheduleFormModal, emptyForm, rowToForm, anchorText, holidaySummary, fmtDate,
   HEB_DAYS, hebMonthLabel, ALL_HOLIDAYS,
@@ -172,6 +172,7 @@ export default function Schedules() {
     const byRelay = new Map();
     for (const r of relays) byRelay.set(r.id, { relayId: r.id, relay: r.name, device: r.device, items: [] });
     for (const s of schedules) {
+      if (s.plan_id) continue; // תוכניות live in their own section above
       if (!byRelay.has(s.relay_id)) byRelay.set(s.relay_id, { relayId: s.relay_id, relay: s.relay_name, device: s.device_name, items: [] });
       byRelay.get(s.relay_id).items.push(s);
     }
@@ -179,6 +180,32 @@ export default function Schedules() {
       .map((g) => ({ ...g, items: mergeWeekly(g.items).sort((a, b) => mergedKey(a) - mergedKey(b)) }))
       .sort((a, b) => (g => g.items.length ? mergedKey(g.items[0]) : Infinity)(a) - (g => g.items.length ? mergedKey(g.items[0]) : Infinity)(b));
   }, [schedules, relays]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // תוכניות — one logical schedule across several channels: member rows share a
+  // plan_id; the displayed row represents all of them and every action (edit /
+  // toggle / delete) applies to the whole group.
+  const plans = useMemo(() => {
+    if (!schedules) return [];
+    const byPlan = new Map();
+    for (const s of schedules) {
+      if (!s.plan_id) continue;
+      if (!byPlan.has(s.plan_id)) byPlan.set(s.plan_id, []);
+      byPlan.get(s.plan_id).push(s);
+    }
+    return [...byPlan.entries()].map(([pid, members]) => {
+      const repr = [...members].sort((a, b) => sortKey(a) - sortKey(b))[0];
+      const side = repr.on_time && !repr.off_time ? 'on' : (!repr.on_time && repr.off_time ? 'off' : null);
+      const daysSet = side
+        ? [...new Set(members.map((m) => m[`${side}_day_of_week`]).filter((v) => v != null).map(Number))].sort((a, b) => a - b)
+        : [];
+      return {
+        pid, members, repr, daysSet,
+        relayIds: [...new Set(members.map((m) => m.relay_id))],
+        channels: [...new Set(members.map((m) => m.relay_name))].join(', '),
+        pseudo: { ...repr, _daysText: daysSet.length > 1 ? daysSet.map((d) => DAY_NAMES[d]).join(', ') : undefined },
+      };
+    }).sort((a, b) => Math.min(...a.members.map(sortKey)) - Math.min(...b.members.map(sortKey)));
+  }, [schedules]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reversed pair (כיבוי והדלקה): the OFF fires before the ON — pills must render
   // in the true order. Daily pairs are cyclic, so they stay ON→OFF.
@@ -209,6 +236,75 @@ export default function Schedules() {
     <>
       <SectionHead title="תזמונים" />
       <ErrorNote error={error} />
+
+      {/* תוכניות — cross-channel schedules, separate from the per-channel tables */}
+      <div className="mb-7">
+        <Card flush className="overflow-hidden border-accent/30">
+          <div className="flex items-center gap-2.5 px-5 py-3 bg-[#E4EFFE]/70 border-b-2 border-accent/40">
+            <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><Layers size={16} /></span>
+            <h3 className="font-bold text-[17px]">תוכניות — כמה ערוצים יחד</h3>
+            <span className="text-muted text-sm ms-auto">{plans.length === 0 ? '' : plans.length === 1 ? 'תוכנית אחת' : `${plans.length} תוכניות`}</span>
+            <Button className="!py-1 !px-3 text-sm" disabled={busy}
+              onClick={() => setFormInit({ ...emptyForm, plan: true, relay_ids: [] })}>
+              <span className="inline-flex items-center gap-1"><Plus size={14} />תוכנית חדשה</span>
+            </Button>
+          </div>
+          {plans.length === 0 && (
+            <p className="text-muted text-sm px-5 py-4">
+              תוכנית מפעילה כמה ערוצים יחד באותם זמנים — עריכה אחת משנה את כולם.
+            </p>
+          )}
+          {plans.map((p, i) => {
+            const s = { ...p.pseudo, _group: p.members };
+            const chip = nextChip(p.repr);
+            const synced = p.members.every((m) => m.sync_status === 'synced');
+            return (
+              <div key={p.pid} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''} ${p.repr.is_enabled ? '' : 'opacity-60'}`}>
+                <div className="min-w-[130px]">
+                  {p.repr.name && <div className="font-semibold text-[13.5px] mb-0.5">{p.repr.name}</div>}
+                  <small className={`flex w-fit items-center font-medium text-[11.5px] rounded-full px-2 py-px whitespace-nowrap ${chip.cls}`}>{chip.text}</small>
+                  <small className="block font-normal text-muted text-[12.5px] mt-0.5">{p.channels}</small>
+                  {p.repr.repeat_type === 'holiday' && (
+                    <small className="block font-normal text-muted text-[12.5px] mt-0.5">{holidaySummary(p.repr.holidays)}</small>
+                  )}
+                  {p.repr.excl_type && (
+                    <small className="block font-normal text-[12.5px] mt-0.5" style={{ color: '#B45309' }}
+                      title="בזמני ההחרגה התוכנית לא תפעל">
+                      החרגה: {exclRange(p.repr)}
+                    </small>
+                  )}
+                </div>
+                <div className="flex-1 flex items-center gap-2.5 flex-wrap">
+                  {(isReversed(s)
+                    ? [offLabel(s) && <span key="off" className="pill off-p">{offLabel(s)}</span>,
+                      onLabel(s) && offLabel(s) && <span key="arr" className="text-muted">←</span>,
+                      onLabel(s) && <span key="on" className="pill on-p">{onLabel(s)}</span>]
+                    : [onLabel(s) && <span key="on" className="pill on-p">{onLabel(s)}</span>,
+                      onLabel(s) && offLabel(s) && <span key="arr" className="text-muted">←</span>,
+                      offLabel(s) && <span key="off" className="pill off-p">{offLabel(s)}</span>])}
+                </div>
+                <SyncNote ok={synced}>
+                  {synced
+                    ? <span className="inline-flex items-center gap-1"><Check size={13} />מסונכרן</span>
+                    : <span className="inline-flex items-center gap-1"><RefreshCw size={13} />ממתין לסנכרון</span>}
+                </SyncNote>
+                <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-ink cursor-pointer'}`}
+                  title="עריכת התוכנית (חלה על כל הערוצים)" onClick={() => setFormInit({
+                    ...rowToForm(p.repr),
+                    relay_ids: p.relayIds,
+                    plan_id: p.pid,
+                    plan_member_ids: p.members.map((m) => m.id),
+                    ...(p.daysSet.length > 1 ? { days: p.daysSet } : {}),
+                  })}><Pencil size={16} /></button>
+                <Toggle checked={!!p.repr.is_enabled} busy={busy} onChange={() => toggleEnabled({ ...p.repr, _group: p.members })} />
+                <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
+                  title="מחק את התוכנית מכל הערוצים" onClick={() => remove({ ...p.repr, _group: p.members })}><Trash2 size={17} /></button>
+              </div>
+            );
+          })}
+        </Card>
+      </div>
+
       {groups.length === 0 && <Card>אין ערוצים פעילים בחשבון.</Card>}
       {groups.map((g) => (
         <div key={`${g.device}·${g.relay}`} className="mb-7">
@@ -219,7 +315,7 @@ export default function Schedules() {
               <h3 className="font-bold text-[17px]">{g.relay}</h3>
               <span className="text-muted text-sm ms-auto">{g.items.length === 0 ? '' : g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`}</span>
               <Button className="!py-1 !px-3 text-sm" disabled={busy}
-                onClick={() => setFormInit({ ...emptyForm, relay_ids: [g.relayId] })}>
+                onClick={() => setFormInit({ ...emptyForm, relay_ids: [g.relayId], lock_relay: true })}>
                 <span className="inline-flex items-center gap-1"><Plus size={14} />תזמון חדש</span>
               </Button>
             </div>
