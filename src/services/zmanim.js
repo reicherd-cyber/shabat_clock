@@ -50,10 +50,9 @@ const ANCHORS = {
 };
 
 export const ANCHOR_KEYS = ['clock', ...Object.keys(ANCHORS)];
-// A generous cap (6.5 hours) — resolveForDate still rejects any combination
-// whose computed time would cross the civil-day boundary, so a large offset can
-// never wander onto another calendar day; it just fails loudly instead.
-export const MAX_OFFSET_MIN = 390;
+// A generous cap — enough for any candle-lighting custom, small enough that the
+// resolved event can't wander onto another calendar day (guarded below anyway).
+export const MAX_OFFSET_MIN = 240;
 
 // Minutes-since-midnight (device-local, truncated to the minute) of `anchor` on
 // local date {y,mo,d}. The probe instant is local ~noon, so suncalc returns that

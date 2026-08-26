@@ -333,11 +333,11 @@ export async function startupScan(now = new Date()) {
 
 // Halachic anchors + holiday blocks: stored on_time/off_time (and for holiday
 // schedules on_date/off_date) hold the resolved NEXT occurrence; re-resolve once
-// per local day and re-push devices whose values moved. Resolution rejects any
-// time that would cross the civil-day boundary (OFFSET_OUT_OF_DAY), so events
-// can't wander onto another date; with large offsets (cap ±390) an event CAN sit
-// shortly after midnight, so a failed row is skipped (keeps yesterday's time)
-// rather than aborting the whole refresh.
+// per local day and re-push devices whose values moved. Zmanim events can never
+// land near midnight (offsets are capped, and resolution rejects any time that
+// would cross the civil-day boundary), so a post-00:05 refresh cannot collide
+// with the backup windows above; a row whose resolution ever fails is skipped
+// (keeps yesterday's time) rather than aborting the whole refresh.
 async function refreshAnchoredTimes(now = new Date()) {
   const rows = await query(
     `SELECT s.id, s.repeat_type, s.holidays,

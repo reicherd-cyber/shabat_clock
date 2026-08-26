@@ -615,7 +615,7 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
               {form[`${p}_kind`] === 'clock'
                 ? <TimeInput value={form[`${p}_time`]} onChange={(e) => setForm({ ...form, [`${p}_time`]: e.target.value })} />
                 : <div className="flex gap-1.5 items-center">
-                  <Input type="number" min="0" max="390" className="w-16 text-center" value={form[`${p}_offset`]}
+                  <Input type="number" min="0" max="240" className="w-16 text-center" value={form[`${p}_offset`]}
                     onChange={(e) => setForm({ ...form, [`${p}_offset`]: e.target.value })} />
                   <Select className="flex-1" value={form[`${p}_dir`]} onChange={(e) => setForm({ ...form, [`${p}_dir`]: e.target.value })}>
                     <option value="before">דק׳ לפני</option>
