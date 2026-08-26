@@ -416,35 +416,65 @@ export default function Devices() {
         {transferForm && (
           <div className="space-y-3">
             <p className="text-sm text-muted">
-              המכשיר יעבור עם כל הערוצים והתזמונים שלו. קודי ה-IVR נשמרים — אם קוד תפוס
-              אצל הלקוח החדש, ההעברה תיעצר ותציע להחליף אוטומטית לקודים הפנויים הנמוכים ביותר.
+              המכשיר יעבור עם כל הערוצים והתזמונים שלו. אם קוד IVR תפוס אצל הלקוח החדש,
+              יופיעו כאן הערוצים עם הקודים הפנויים הנמוכים ביותר כברירת מחדל — אפשר לשנות לפני ההעברה.
             </p>
             <Select className="w-full" value={transferForm.user_id}
-              onChange={(e) => setTransferForm({ ...transferForm, user_id: e.target.value })}>
+              onChange={(e) => {
+                const user_id = e.target.value;
+                setTransferForm({ ...transferForm, user_id, preview: null, codes: {} });
+                if (!user_id) return;
+                run(async () => {
+                  const preview = await adminApi.get(`/devices/${transferForm.device.id}/transfer-preview?user_id=${user_id}`);
+                  setTransferForm((f) => (f ? {
+                    ...f, user_id, preview,
+                    codes: Object.fromEntries(preview.channels.map((c) => [c.relay_id, c.proposed ?? ''])),
+                  } : f));
+                });
+              }}>
               <option value="">בחרו לקוח יעד…</option>
               {users.filter((u) => u.id !== transferForm.device.user_id).map((u) => (
                 <option key={u.id} value={u.id}>{u.full_name}</option>
               ))}
             </Select>
-            <ErrorNote error={error} />
-            {error && String(error.message || error).includes('תפוסים') && (
-              <Button className="w-full" disabled={busy || !transferForm.user_id} onClick={() => run(async () => {
-                const res = await adminApi.post(`/devices/${transferForm.device.id}/transfer`, {
-                  user_id: Number(transferForm.user_id), reassign_conflicts: true,
-                });
-                setTransferForm(null);
-                await refresh();
-                if (res.reassigned?.length) {
-                  alert(`המכשיר הועבר. קודים שהוחלפו לקודים פנויים:\n${res.reassigned.map((x) => `${x.relay}: ${x.from} ← ${x.to}`).join('\n')}`);
-                }
-              })}>העבר והחלף אוטומטית לקודים פנויים</Button>
+            {transferForm.preview?.conflicts && (
+              <div className="space-y-2 border border-line rounded-xl p-3">
+                <p className="text-sm font-medium" style={{ color: '#B45309' }}>
+                  קודים תפוסים אצל היעד: {transferForm.preview.taken.join(', ')} — לערוצים המתנגשים הוצעו הקודים הפנויים הנמוכים ביותר:
+                </p>
+                {transferForm.preview.channels.map((c) => (
+                  <div key={c.relay_id} className="flex items-center gap-2">
+                    <span className="flex-1 text-sm">{c.name}</span>
+                    <span className="text-muted text-xs whitespace-nowrap">נוכחי: {c.current}</span>
+                    <Input type="number" min="1" max="20" dir="ltr" className="w-16 py-1 text-sm"
+                      value={transferForm.codes[c.relay_id] ?? ''}
+                      onChange={(e) => setTransferForm({
+                        ...transferForm,
+                        codes: { ...transferForm.codes, [c.relay_id]: e.target.value },
+                      })} />
+                    {c.conflict
+                      ? <span className="text-xs w-10" style={{ color: '#B45309' }}>תפוס</span>
+                      : <span className="text-xs w-10 text-muted">פנוי</span>}
+                  </div>
+                ))}
+              </div>
             )}
+            <ErrorNote error={error} />
             <div className="flex gap-2">
               <Button variant="ghost" className="flex-1" onClick={() => setTransferForm(null)}>ביטול</Button>
               <Button className="flex-1" disabled={busy || !transferForm.user_id} onClick={() => run(async () => {
-                await adminApi.post(`/devices/${transferForm.device.id}/transfer`, { user_id: Number(transferForm.user_id) });
+                const body = { user_id: Number(transferForm.user_id) };
+                if (transferForm.preview?.conflicts) {
+                  body.codes = Object.fromEntries(
+                    Object.entries(transferForm.codes).map(([k, v]) => [k, Number(v)]),
+                  );
+                }
+                const res = await adminApi.post(`/devices/${transferForm.device.id}/transfer`, body);
                 setTransferForm(null);
                 await refresh();
+                if (res.reassigned?.length) {
+                  alert(`המכשיר הועבר. קודים שהשתנו:\n${res.reassigned.map((x) => `${x.relay}: ${x.from} ← ${x.to}`).join('\n')}`);
+                }
               })}>העבר</Button>
             </div>
           </div>

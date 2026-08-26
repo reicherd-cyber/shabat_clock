@@ -5,7 +5,7 @@ import { errors } from '../../config/errors.js';
 import { requireAdmin, requireWrite, requireSuperadmin, signUserToken } from '../middleware.js';
 import { createUser, getUser, setPin, bcryptHash, setUserEmailAdmin } from '../../services/users.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice } from '../../services/devices.js';
+import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
@@ -325,10 +325,17 @@ adminRouter.delete('/shelly/inventory/:id', requireWrite, async (req, res, next)
 });
 
 // Move a device (relays + schedules ride along) to another user.
+// The channel/code proposal the transfer modal shows (registration-style list).
+adminRouter.get('/devices/:id/transfer-preview', async (req, res, next) => {
+  try {
+    res.json(await transferPreview(Number(req.params.id), Number(req.query.user_id)));
+  } catch (e) { next(e); }
+});
+
 adminRouter.post('/devices/:id/transfer', requireWrite, async (req, res, next) => {
   try {
     const result = await transferDevice(Number(req.params.id), Number(req.body?.user_id), {
-      actor: adminActor(req), reassignConflicts: req.body?.reassign_conflicts === true,
+      actor: adminActor(req), codes: req.body?.codes && typeof req.body.codes === 'object' ? req.body.codes : null,
     });
     await audit(req, 'transfer', 'device', Number(req.params.id), {
       after: { user_id: Number(req.body?.user_id), reassigned: result.reassigned?.length ? result.reassigned : undefined },
