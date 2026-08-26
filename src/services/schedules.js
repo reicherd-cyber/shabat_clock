@@ -262,19 +262,29 @@ async function regionOf(conn, userId) {
 
 export async function createSchedule({ userId, relayId, createdVia, actingUserId = userId, actor = null, ...fields }) {
   const deviceIds = [];
+  let name = String(fields.name ?? '').trim().slice(0, 100);
+  delete fields.name;
   const result = await withTransaction(async (conn) => {
     const relay = await requireRelay(conn, relayId, actingUserId);
+    // No name given → numbered default per relay ("תזמון 3" for its 3rd schedule).
+    if (!name) {
+      const [cntRows] = await conn.query(
+        'SELECT COUNT(*) AS n FROM schedules WHERE relay_id = ? AND deleted_at IS NULL',
+        [relayId],
+      );
+      name = `תזמון ${Number(cntRows[0].n) + 1}`;
+    }
     // Anchored sides (sunset±offset…) and holiday blocks resolve to concrete wall
     // times/dates first, so the clock-time rules below apply unchanged.
     normalizeExclusionFields(fields, { tz: relay.timezone });
     resolveSchedule(fields, { region: await regionOf(conn, relay.user_id), tz: relay.timezone });
     const s = validateScheduleRules(fields, { tz: relay.timezone });
     const res = await conn.query(
-      `INSERT INTO schedules (user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
+      `INSERT INTO schedules (name, user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
         off_day_of_week, off_time, off_anchor, off_offset_min,
         repeat_type, holidays, annual_date, annual_end_date, annual_calendar, excl_type, excl_date, excl_end_date, excl_calendar, excl_holidays, excl_days, on_date, off_date, is_enabled, created_via, created_by, updated_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
-      [relay.user_id, relayId, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
+      [name, relay.user_id, relayId, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
         s.off_day_of_week, s.off_time, s.off_anchor, s.off_offset_min,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
@@ -340,12 +350,14 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
     const s = onlyToggle ? merged : validateScheduleRules(merged, { tz: existing.timezone });
     const is_enabled = patch.is_enabled !== undefined ? (patch.is_enabled ? 1 : 0) : existing.is_enabled;
 
+    // Rename: a non-empty patch.name replaces the stored name; empty/absent keeps it.
+    const newName = patch.name !== undefined ? String(patch.name ?? '').trim().slice(0, 100) : '';
     await conn.query(
-      `UPDATE schedules SET on_day_of_week=?, on_time=?, on_anchor=?, on_offset_min=?,
+      `UPDATE schedules SET name = COALESCE(?, name), on_day_of_week=?, on_time=?, on_anchor=?, on_offset_min=?,
         off_day_of_week=?, off_time=?, off_anchor=?, off_offset_min=?,
         repeat_type=?, holidays=?, annual_date=?, annual_end_date=?, annual_calendar=?, excl_type=?, excl_date=?, excl_end_date=?, excl_calendar=?, excl_holidays=?, excl_days=?, on_date=?, off_date=?, is_enabled=?, updated_by = COALESCE(?, updated_by)
        WHERE id = ?`,
-      [s.on_day_of_week, s.on_time, s.on_anchor ?? 'clock', s.on_offset_min ?? 0,
+      [newName || null, s.on_day_of_week, s.on_time, s.on_anchor ?? 'clock', s.on_offset_min ?? 0,
         s.off_day_of_week, s.off_time, s.off_anchor ?? 'clock', s.off_offset_min ?? 0,
         s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
         s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
@@ -383,7 +395,7 @@ export async function deleteSchedule({ userId, scheduleId, actor = null }) {
 
 export async function listSchedules({ userId }) {
   const rows = await query(
-    `SELECT s.id, s.relay_id, r.name AS relay_name, d.id AS device_id, d.name AS device_name, d.sync_status,
+    `SELECT s.id, s.name, s.relay_id, r.name AS relay_name, d.id AS device_id, d.name AS device_name, d.sync_status,
             s.user_id, u.full_name AS user_name,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,
@@ -477,7 +489,9 @@ export function describeScheduleHe(row) {
   ].filter(Boolean).join(', ');
   const disabled = row.is_enabled ? '' : ' (מושבת)';
   // Comma, not colon, after the name — Yemot rejects reads with non-time colons.
-  return `תזמון ${type} לממסר ${row.relay_name}, ${sides}${excl}${disabled}`;
+  // A custom name leads the readout so the caller recognizes their own labels.
+  const label = row.name && !/^תזמון \d+$/.test(row.name) ? `${row.name}, ` : '';
+  return `${label}תזמון ${type} לממסר ${row.relay_name}, ${sides}${excl}${disabled}`;
 }
 
 function ymdOf(v) {

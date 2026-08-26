@@ -308,6 +308,7 @@ userRouter.post('/schedules', async (req, res, next) => {
       userId: req.auth.userId, actingUserId: req.auth.userId,
       actor: actorStr(actorOf(req)),
       relayId: Number(b.relay_id), createdVia: 'web',
+      name: b.name ?? null,
       repeat_type: b.repeat_type || 'weekly', holidays: b.holidays ?? null,
       excl_type: b.excl_type ?? null, excl_holidays: b.excl_holidays ?? null, excl_days: b.excl_days ?? null,
       excl_calendar: b.excl_calendar ?? null, excl_date: b.excl_date ?? null, excl_end_date: b.excl_end_date ?? null,

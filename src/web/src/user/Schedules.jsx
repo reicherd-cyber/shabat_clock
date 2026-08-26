@@ -233,6 +233,7 @@ export default function Schedules() {
               return (
                 <div key={s.id} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''} ${s.is_enabled ? '' : 'opacity-60'}`}>
                   <div className="min-w-[130px]">
+                    {s.name && <div className="font-semibold text-[13.5px] mb-0.5">{s.name}</div>}
                     <small className={`flex w-fit items-center font-medium text-[11.5px] rounded-full px-2 py-px whitespace-nowrap ${chip.cls}`}>{chip.text}</small>
                     {s.repeat_type === 'holiday' && (
                       <small className="block font-normal text-muted text-[12.5px] mt-0.5">{holidaySummary(s.holidays)}</small>

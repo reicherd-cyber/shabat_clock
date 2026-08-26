@@ -7,6 +7,7 @@ import { Check, ChevronDown, Trash2 } from 'lucide-react';
 // the תזמונים page and the לוח — adding from the calendar stays in the calendar.
 
 export const emptyForm = {
+  name: '', // empty → the server numbers it ("תזמון 3") per channel
   relay_id: '', relay_ids: [], repeat_type: 'weekly',
   on_day_of_week: 6, on_time: '18:00', off_day_of_week: 7, off_time: '20:00',
   on_date: '', off_date: '', daily: false,
@@ -131,6 +132,7 @@ export const nowHm = () => { const d = new Date(Date.now() + 60000); return `${p
 export const rowToForm = (s) => ({
   ...emptyForm,
   id: s.id,
+  name: s.name || '',
   relay_id: s.relay_id,
   repeat_type: s.repeat_type,
   annual_calendar: s.annual_calendar || 'heb',
@@ -268,6 +270,8 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
         off_time: null, off_day_of_week: null, off_date: null, off_anchor: 'clock', off_offset_min: 0,
       }
       : { relay_id: Number(form.relay_id), repeat_type: form.repeat_type };
+    // Name rides along when given; empty on create = the server numbers it.
+    if (form.name.trim()) b.name = form.name.trim();
     // Per-schedule החרגה: send the chosen type's fields; editing with the fold
     // closed sends an explicit null type so the server clears the whole group.
     if (form.repeat_type !== 'once' && form.excl_on) {
@@ -420,6 +424,12 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
                 onChange={(relay_ids) => setForm({ ...form, relay_ids })} />
             </div>
           )}
+          <label className="block">
+            <span className="text-sm text-muted">שם התזמון</span>
+            <Input className="w-full" maxLength={100}
+              placeholder='ריק = שם אוטומטי ("תזמון 1")'
+              value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          </label>
           <div className="flex gap-2 items-center flex-wrap">
             <Button variant={form.repeat_type === 'weekly' ? 'primary' : 'ghost'} onClick={() => setForm({ ...form, repeat_type: 'weekly' })}>שבועי</Button>
             <Button variant={form.repeat_type === 'once' ? 'primary' : 'ghost'}
