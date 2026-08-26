@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Button, Input, TimeInput, Select, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
-import { Check, ChevronDown, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, House, Trash2 } from 'lucide-react';
 
 // The schedule create/edit form, extracted so it can open as a modal on BOTH
 // the תזמונים page and the לוח — adding from the calendar stays in the calendar.
@@ -138,6 +138,7 @@ export const rowToForm = (s) => ({
   id: s.id,
   name: s.name || '',
   relay_id: s.relay_id,
+  relay_name: s.relay_name || '',
   repeat_type: s.repeat_type,
   annual_calendar: s.annual_calendar || 'heb',
   once_calendar: 'greg', // stored once rows always carry concrete dates
@@ -440,21 +441,17 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
         : (form?.id ? 'עריכת תזמון' : 'תזמון חדש')}>
       {form && (
         <div className="space-y-3">
-          {form.id && !form.plan_id ? (
-            <label className="block">
-              <span className="text-sm text-muted">מכשיר</span>
-              <Select className="w-full" value={form.relay_id} disabled>
-                {relays.map((r) => <option key={r.id} value={r.id}>{r.name} — {r.device}</option>)}
-              </Select>
-            </label>
-          ) : form.lock_relay ? (
-            <label className="block">
-              <span className="text-sm text-muted">ערוץ</span>
-              <Select className="w-full" value={form.relay_ids[0]} disabled>
-                {relays.map((r) => <option key={r.id} value={r.id}>{r.name} — {r.device}</option>)}
-              </Select>
-            </label>
-          ) : (
+          {(form.id && !form.plan_id) || form.lock_relay ? (() => {
+            // The channel is fixed here — a plain headline, nothing to change.
+            const rid = Number(form.id && !form.plan_id ? form.relay_id : form.relay_ids[0]);
+            const r = relays.find((x) => Number(x.id) === rid);
+            return (
+              <div className="flex items-center gap-2 font-bold text-[17px]">
+                <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><House size={16} /></span>
+                {r ? `${r.name} — ${r.device}` : (form.relay_name || 'ערוץ')}
+              </div>
+            );
+          })() : (
             <div className="space-y-1">
               <span className="text-sm text-muted">
                 {form.plan || form.plan_id ? 'ערוצי התוכנית (אפשר לבחור כמה)' : 'ערוצים (אפשר לבחור כמה)'}
