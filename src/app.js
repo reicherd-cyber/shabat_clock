@@ -47,6 +47,16 @@ export function createApp() {
     },
   }]));
 
+  // Android app sideload link — the signed TWA APK lives in data/ on the server
+  // (untracked, survives deploys; re-upload after rebuilding the app). Sent as a
+  // download so phones install it instead of the SPA catch-all swallowing the path.
+  app.get('/app.apk', (req, res) => {
+    const file = path.join(__dirname, '..', 'data', 'app-release-signed.apk');
+    res.download(file, 'shabat-clock.apk', (err) => {
+      if (err && !res.headersSent) res.status(404).send('APK not uploaded to data/');
+    });
+  });
+
   // Limiter scoped to /ivr ONLY — a pathless app.use(ivrLimiter) counted EVERY app
   // request (dashboard polling included) toward the 30/min bucket; on one IP
   // (localhost, or pre-proxy prod) that 429'd normal API traffic.
