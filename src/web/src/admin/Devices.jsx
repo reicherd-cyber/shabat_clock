@@ -417,7 +417,7 @@ export default function Devices() {
           <div className="space-y-3">
             <p className="text-sm text-muted">
               המכשיר יעבור עם כל הערוצים והתזמונים שלו. קודי ה-IVR נשמרים — אם קוד תפוס
-              אצל הלקוח החדש, ההעברה תיעצר ותציג אילו קודים מתנגשים.
+              אצל הלקוח החדש, ההעברה תיעצר ותציע להחליף אוטומטית לקודים הפנויים הנמוכים ביותר.
             </p>
             <Select className="w-full" value={transferForm.user_id}
               onChange={(e) => setTransferForm({ ...transferForm, user_id: e.target.value })}>
@@ -427,6 +427,18 @@ export default function Devices() {
               ))}
             </Select>
             <ErrorNote error={error} />
+            {error && String(error.message || error).includes('תפוסים') && (
+              <Button className="w-full" disabled={busy || !transferForm.user_id} onClick={() => run(async () => {
+                const res = await adminApi.post(`/devices/${transferForm.device.id}/transfer`, {
+                  user_id: Number(transferForm.user_id), reassign_conflicts: true,
+                });
+                setTransferForm(null);
+                await refresh();
+                if (res.reassigned?.length) {
+                  alert(`המכשיר הועבר. קודים שהוחלפו לקודים פנויים:\n${res.reassigned.map((x) => `${x.relay}: ${x.from} ← ${x.to}`).join('\n')}`);
+                }
+              })}>העבר והחלף אוטומטית לקודים פנויים</Button>
+            )}
             <div className="flex gap-2">
               <Button variant="ghost" className="flex-1" onClick={() => setTransferForm(null)}>ביטול</Button>
               <Button className="flex-1" disabled={busy || !transferForm.user_id} onClick={() => run(async () => {

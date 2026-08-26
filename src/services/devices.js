@@ -400,7 +400,7 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
 // composite FKs (relays→devices(id,user_id), schedules→relays(id,user_id)) are
 // ON UPDATE CASCADE, so flipping devices.user_id propagates through both.
 // Zmanim schedules re-resolve with the new owner's region on the next refresh.
-export async function transferDevice(deviceId, targetUserId, { actor = null } = {}) {
+export async function transferDevice(deviceId, targetUserId, { actor = null, reassignConflicts = false } = {}) {
   return withTransaction(async (conn) => {
     const [dRows] = await conn.query('SELECT * FROM devices WHERE id = ? FOR UPDATE', [deviceId]);
     const device = dRows[0];
@@ -418,12 +418,44 @@ export async function transferDevice(deviceId, targetUserId, { actor = null } = 
          AND EXISTS (SELECT 1 FROM relays t WHERE t.user_id = ? AND t.ivr_digit = r.ivr_digit AND t.deleted_at IS NULL)`,
       [deviceId, targetUserId],
     );
-    if (conf.length) {
+    const reassigned = [];
+    if (conf.length && !reassignConflicts) {
       throw errors.conflict('IVR_DIGIT_TAKEN',
-        `קודי IVR ${conf.map((c) => c.ivr_digit).join(', ')} כבר תפוסים אצל משתמש היעד — שנו אותם לפני ההעברה`);
+        `קודי IVR ${conf.map((c) => c.ivr_digit).join(', ')} כבר תפוסים אצל משתמש היעד — שנו אותם, או העבירו עם החלפה אוטומטית לקודים פנויים`);
+    }
+    if (conf.length) {
+      // Auto-renumber: each conflicting channel takes the lowest free digit at
+      // the TARGET user (1–20, counting the digits the device brings along).
+      // The digit is released (NULL) BEFORE the user_id flip so the cascade
+      // can never trip the per-user unique key, and re-granted right after.
+      const [tRows] = await conn.query(
+        'SELECT ivr_digit FROM relays WHERE user_id = ? AND ivr_digit IS NOT NULL AND deleted_at IS NULL',
+        [targetUserId],
+      );
+      const taken = new Set(tRows.map((r) => Number(r.ivr_digit)));
+      const [mine] = await conn.query(
+        'SELECT id, name, ivr_digit FROM relays WHERE device_id = ? AND deleted_at IS NULL AND ivr_digit IS NOT NULL ORDER BY ivr_digit',
+        [deviceId],
+      );
+      const conflicting = mine.filter((r) => taken.has(Number(r.ivr_digit)));
+      for (const r of mine) taken.add(Number(r.ivr_digit)); // kept digits occupy their slots too
+      let next = 1;
+      for (const r of conflicting) {
+        while (taken.has(next)) next++;
+        if (next > 20) throw errors.conflict('IVR_DIGIT_TAKEN', 'אין מספיק קודי IVR פנויים (1–20) אצל משתמש היעד');
+        taken.add(next);
+        reassigned.push({ relay_id: r.id, relay: r.name, from: Number(r.ivr_digit), to: next });
+      }
+      await conn.query(
+        `UPDATE relays SET ivr_digit = NULL WHERE id IN (${conflicting.map(() => '?').join(',')})`,
+        conflicting.map((r) => r.id),
+      );
     }
     await conn.query('UPDATE devices SET user_id = ?, updated_by = ? WHERE id = ?', [targetUserId, actor, deviceId]);
-    return { moved: true };
+    for (const r of reassigned) {
+      await conn.query('UPDATE relays SET ivr_digit = ?, updated_by = ? WHERE id = ?', [r.to, actor, r.relay_id]);
+    }
+    return { moved: true, reassigned };
   });
 }
 

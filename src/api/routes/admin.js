@@ -327,8 +327,12 @@ adminRouter.delete('/shelly/inventory/:id', requireWrite, async (req, res, next)
 // Move a device (relays + schedules ride along) to another user.
 adminRouter.post('/devices/:id/transfer', requireWrite, async (req, res, next) => {
   try {
-    const result = await transferDevice(Number(req.params.id), Number(req.body?.user_id), { actor: adminActor(req) });
-    await audit(req, 'transfer', 'device', Number(req.params.id), { after: { user_id: Number(req.body?.user_id) } });
+    const result = await transferDevice(Number(req.params.id), Number(req.body?.user_id), {
+      actor: adminActor(req), reassignConflicts: req.body?.reassign_conflicts === true,
+    });
+    await audit(req, 'transfer', 'device', Number(req.params.id), {
+      after: { user_id: Number(req.body?.user_id), reassigned: result.reassigned?.length ? result.reassigned : undefined },
+    });
     res.json(result);
   } catch (e) { next(e); }
 });
