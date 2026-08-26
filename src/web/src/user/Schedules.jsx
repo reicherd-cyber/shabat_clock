@@ -200,10 +200,12 @@ export default function Schedules() {
       const daysSet = side
         ? [...new Set(members.map((m) => m[`${side}_day_of_week`]).filter((v) => v != null).map(Number))].sort((a, b) => a - b)
         : [];
+      const chanMap = new Map();
+      for (const m of members) if (!chanMap.has(m.relay_id)) chanMap.set(m.relay_id, { name: m.relay_name, device: m.device_name });
       return {
         pid, members, repr, daysSet,
-        relayIds: [...new Set(members.map((m) => m.relay_id))],
-        channels: [...new Set(members.map((m) => m.relay_name))].join(', '),
+        relayIds: [...chanMap.keys()],
+        channelList: [...chanMap.values()],
         pseudo: { ...repr, _daysText: daysSet.length > 1 ? daysSet.map((d) => DAY_NAMES[d]).join(', ') : undefined },
       };
     }).sort((a, b) => Math.min(...a.members.map(sortKey)) - Math.min(...b.members.map(sortKey)));
@@ -282,9 +284,8 @@ export default function Schedules() {
             return (
               <div key={p.pid} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''} ${p.repr.is_enabled ? '' : 'opacity-60'}`}>
                 <div className="min-w-[130px]">
-                  {p.repr.name && <div className="font-semibold text-[13.5px] mb-0.5">{p.repr.name}</div>}
+                  {p.repr.name && <div className="font-bold text-[15px] mb-0.5">{p.repr.name}</div>}
                   <small className={`flex w-fit items-center font-medium text-[11.5px] rounded-full px-2 py-px whitespace-nowrap ${chip.cls}`}>{chip.text}</small>
-                  <small className="block font-normal text-muted text-[12.5px] mt-0.5">{p.channels}</small>
                   {p.repr.repeat_type === 'holiday' && (
                     <small className="block font-normal text-muted text-[12.5px] mt-0.5">{holidaySummary(p.repr.holidays)}</small>
                   )}
@@ -320,6 +321,15 @@ export default function Schedules() {
                 <Toggle checked={!!p.repr.is_enabled} busy={busy} onChange={() => toggleEnabled({ ...p.repr, _group: p.members })} />
                 <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
                   title="מחק את התוכנית מכל הערוצים" onClick={() => remove({ ...p.repr, _group: p.members })}><Trash2 size={17} /></button>
+                {/* channel chips — a full-width line of their own, wraps cleanly at 20 channels */}
+                <div className="w-full flex flex-wrap gap-1.5">
+                  {p.channelList.map((c) => (
+                    <span key={`${c.device}·${c.name}`} title={c.device}
+                      className="inline-flex items-center gap-1 rounded-lg bg-[#E4EFFE] text-accent-dk font-bold text-[13px] px-2.5 py-1">
+                      <House size={12} />{c.name}
+                    </span>
+                  ))}
+                </div>
               </div>
             );
           })}
