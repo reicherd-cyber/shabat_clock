@@ -423,7 +423,9 @@ export default function Calendar() {
     ...(stateColors
       ? (seg.gap
         ? { backgroundColor: 'rgba(227,73,72,0.13)', borderInlineStart: '3px dashed #e34948' }
-        : { backgroundColor: `${colorOf(relayId)}2e`, borderInlineStart: `3px solid ${colorOf(relayId)}` })
+        // Opaque pastel (mix with white), not an alpha fill — the column's red
+        // "off" tint sits underneath and would muddy a translucent color.
+        : { backgroundColor: `color-mix(in srgb, ${colorOf(relayId)} 22%, white)`, borderInlineStart: `3px solid ${colorOf(relayId)}` })
       : {
         backgroundColor: seg.gap ? 'rgba(107,114,128,0.14)' : `${colorOf(relayId)}24`,
         borderInlineStart: `3px ${seg.gap ? 'dashed' : 'solid'} ${colorOf(relayId)}`,
@@ -475,7 +477,7 @@ export default function Calendar() {
     // שבת/חג daytime that runs on until its כיבוי in the evening — but drop the
     // pre-dawn orphans (overnight tails ending before 06:00, like 00:00–00:59).
     return segs.filter((s) => s.from || s.endMin > 360)
-      .map((s) => ({ ...s, lane: 0, lanes: 1, relay_name: relay.name, device_name: relay.device }));
+      .map((s) => ({ ...s, lane: 0, lanes: 1, relay_id: relay.id, relay_name: relay.name, device_name: relay.device }));
   };
 
   // One time-axis column: night shading, gridlines, blocks, now-line. Shared by
@@ -582,7 +584,7 @@ export default function Calendar() {
         <span className="inline-flex items-center gap-1.5">
           <span className="flex">
             {(shownColors.length ? shownColors : ['#008300']).map((c, i) => (
-              <span key={i} className="w-3 h-3 rounded-sm" style={{ backgroundColor: `${c}59`, borderInlineStart: `3px solid ${c}`, ...(i > 0 ? { marginInlineStart: 2 } : {}) }} />
+              <span key={i} className="w-3 h-3 rounded-sm" style={{ backgroundColor: `color-mix(in srgb, ${c} 35%, white)`, borderInlineStart: `3px solid ${c}`, ...(i > 0 ? { marginInlineStart: 2 } : {}) }} />
             ))}
           </span>
           דולק — בצבע הערוץ
@@ -678,7 +680,7 @@ export default function Calendar() {
                           title={`${segLabel(s)} · ${r.name} — לחיצה לעריכה`}
                           style={{
                             top, height: h, insetInlineStart: 2, insetInlineEnd: 2,
-                            backgroundColor: `${colorOf(r.id)}38`,
+                            backgroundColor: `color-mix(in srgb, ${colorOf(r.id)} 25%, white)`,
                             borderInlineStart: `3px solid ${colorOf(r.id)}`,
                           }}>
                           {h >= 15 && <div className="text-[10.5px] font-bold truncate leading-tight">{segLabel(s)}</div>}
