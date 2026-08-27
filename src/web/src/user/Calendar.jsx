@@ -165,7 +165,12 @@ function chipsByDay(intervals) {
       }
       continue;
     }
-    if (!iv.start) continue; // a bare switch-off (state carried from outside the range) — noise, skip
+    if (!iv.start) {
+      // Bare switch-off: keep real continuations (כיבוי after 06:00, e.g. מוצאי
+      // שבת), drop pre-dawn orphan stubs (00:59-style overnight tails).
+      if (toMin(iv.end.time) > 360) add(iv.end.date, { ...base, text: `כיבוי ${iv.end.time}`, sort: iv.end.time });
+      continue;
+    }
     if (!iv.end) { add(iv.start.date, { ...base, text: `הדלקה ${iv.start.time}` }); continue; }
     if (iv.start.date === iv.end.date) {
       add(iv.start.date, { ...base, text: `${iv.start.time}–${iv.end.time}` });
@@ -478,9 +483,10 @@ export default function Calendar() {
     if (cur) {
       segs.push({ ...cur, endMin: 1440, cont: cur.cont === 'up' ? 'both' : 'down', label: cur.from ? `הדלקה ${cur.from}` : 'דולק כל היום' });
     }
-    // Blocks whose only event is a switch-off (state carried in from a previous
-    // day, no הדלקה on this day) are dropped — the user reads them as noise.
-    return segs.filter((s) => s.from)
+    // Carried-in blocks (no הדלקה on this day): keep the real continuations —
+    // שבת/חג daytime that runs on until its כיבוי in the evening — but drop the
+    // pre-dawn orphans (overnight tails ending before 06:00, like 00:00–00:59).
+    return segs.filter((s) => s.from || s.endMin > 360)
       .map((s) => ({ ...s, lane: 0, lanes: 1, relay_name: relay.name, device_name: relay.device }));
   };
 
