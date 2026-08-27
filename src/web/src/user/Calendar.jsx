@@ -165,7 +165,7 @@ function chipsByDay(intervals) {
       }
       continue;
     }
-    if (!iv.start) { add(iv.end.date, { ...base, text: `כיבוי ${iv.end.time}`, sort: iv.end.time }); continue; }
+    if (!iv.start) continue; // a bare switch-off (state carried from outside the range) — noise, skip
     if (!iv.end) { add(iv.start.date, { ...base, text: `הדלקה ${iv.start.time}` }); continue; }
     if (iv.start.date === iv.end.date) {
       add(iv.start.date, { ...base, text: `${iv.start.time}–${iv.end.time}` });
@@ -478,7 +478,10 @@ export default function Calendar() {
     if (cur) {
       segs.push({ ...cur, endMin: 1440, cont: cur.cont === 'up' ? 'both' : 'down', label: cur.from ? `הדלקה ${cur.from}` : 'דולק כל היום' });
     }
-    return segs.map((s) => ({ ...s, lane: 0, lanes: 1, relay_name: relay.name, device_name: relay.device }));
+    // Blocks whose only event is a switch-off (state carried in from a previous
+    // day, no הדלקה on this day) are dropped — the user reads them as noise.
+    return segs.filter((s) => s.from)
+      .map((s) => ({ ...s, lane: 0, lanes: 1, relay_name: relay.name, device_name: relay.device }));
   };
 
   // One time-axis column: night shading, gridlines, blocks, now-line. Shared by
