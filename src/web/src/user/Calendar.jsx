@@ -423,9 +423,17 @@ export default function Calendar() {
 
   // gap (כבוי window of a כיבוי-והדלקה schedule): grey fill, dashed relay-color
   // edge — the relay keeps its identity but the block clearly reads "resting".
-  const blockStyle = (relayId, seg = {}) => ({
-    backgroundColor: seg.gap ? 'rgba(107,114,128,0.14)' : `${colorOf(relayId)}24`,
-    borderInlineStart: `3px ${seg.gap ? 'dashed' : 'solid'} ${colorOf(relayId)}`,
+  // stateColors (day matrix): the column already names the channel, so color
+  // carries STATE instead — green = דולק, soft red dashed = כבוי window.
+  const blockStyle = (relayId, seg = {}, stateColors = false) => ({
+    ...(stateColors
+      ? (seg.gap
+        ? { backgroundColor: 'rgba(227,73,72,0.13)', borderInlineStart: '3px dashed #e34948' }
+        : { backgroundColor: 'rgba(0,131,0,0.15)', borderInlineStart: '3px solid #008300' })
+      : {
+        backgroundColor: seg.gap ? 'rgba(107,114,128,0.14)' : `${colorOf(relayId)}24`,
+        borderInlineStart: `3px ${seg.gap ? 'dashed' : 'solid'} ${colorOf(relayId)}`,
+      }),
     ...(seg.cont === 'down' || seg.cont === 'both' ? { borderBottomLeftRadius: 0, borderBottomRightRadius: 0 } : {}),
     ...(seg.cont === 'up' || seg.cont === 'both' ? { borderTopLeftRadius: 0, borderTopRightRadius: 0 } : {}),
   });
@@ -447,7 +455,7 @@ export default function Calendar() {
 
   // One time-axis column: night shading, gridlines, blocks, now-line. Shared by
   // the week view (column = a date) and the day view (column = a channel).
-  const TimeColumn = ({ date, segs, minW, onEmptyClick, blockSub }) => {
+  const TimeColumn = ({ date, segs, minW, onEmptyClick, blockSub, stateColors }) => {
     const sun = sunFor(date);
     return (
       <div className={`flex-1 relative border-line border-s ${minW || 'min-w-0'} cursor-pointer`}
@@ -483,7 +491,7 @@ export default function Calendar() {
                 height: h,
                 insetInlineStart: `calc(${s.lane * laneW}% + 2px)`,
                 width: `calc(${laneW}% - 5px)`,
-                ...blockStyle(s.relay_id, s),
+                ...blockStyle(s.relay_id, s, stateColors),
               }}>
               <div className="text-[13px] font-bold leading-snug truncate">{s.label}</div>
               {h >= 44 && blockSub && (
@@ -562,6 +570,17 @@ export default function Calendar() {
     const daySegs = gridSegs.get(dayDate) || [];
     return (
       <Card flush className="overflow-hidden">
+        {/* state legend — in the day matrix color means STATE, not channel */}
+        <div className="flex items-center gap-4 px-4 py-1.5 border-b border-line text-xs text-muted">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(0,131,0,0.35)', borderInlineStart: '3px solid #008300' }} />
+            דולק
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(227,73,72,0.3)', borderInlineStart: '3px dashed #e34948' }} />
+            כבוי (חלון כיבוי מתוזמן)
+          </span>
+        </div>
         <div className="overflow-x-auto">
           <div style={{ minWidth: Math.max(0, shownRelays.length * 104 + 56) }}>
             <div className="flex border-b border-line bg-surface2/60">
@@ -584,7 +603,7 @@ export default function Calendar() {
               <div className="flex" style={{ height: 24 * HOUR_PX }}>
                 <HourGutter />
                 {shownRelays.map((r) => (
-                  <TimeColumn key={r.id} date={dayDate} minW="min-w-[96px]"
+                  <TimeColumn key={r.id} date={dayDate} minW="min-w-[96px]" stateColors
                     segs={assignLanes(daySegs.filter((s) => s.relay_id === r.id))}
                     onEmptyClick={(t) => openSched(dayDate, t, r.id)} />
                 ))}
