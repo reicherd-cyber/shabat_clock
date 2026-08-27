@@ -496,7 +496,7 @@ export default function Calendar() {
           onEmptyClick(`${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`);
         }}>
         {/* state view: the whole column is "off" (soft red) unless a green block covers it */}
-        {offTint && <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.06)' }} />}
+        {offTint && <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />}
         {/* night shading + שקיעה line — the day literally darkens where lights matter */}
         <div className="absolute inset-x-0 top-0 pointer-events-none" style={{ height: (sun.sunrise / 60) * HOUR_PX, background: NIGHT }} />
         <div className="absolute inset-x-0 bottom-0 pointer-events-none" style={{ height: ((1440 - sun.sunset) / 60) * HOUR_PX, background: NIGHT }} />
