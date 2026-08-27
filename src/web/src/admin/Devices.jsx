@@ -17,6 +17,7 @@ export default function Devices() {
   const [q, setQ] = useState('');
   const [expanded, setExpanded] = useState(null); // device id with its details row open
   const [transferForm, setTransferForm] = useState(null); // {device, user_id}
+  const [diagnosis, setDiagnosis] = useState(null);       // {device, loading} → {device, verdict, text, evidence} | {device, error}
   const [inventory, setInventory] = useState([]);         // prepared_devices rows
   const [showActivated, setShowActivated] = useState(false);
   const { busy, error, run, setError } = useAsync();
@@ -191,6 +192,16 @@ export default function Devices() {
                         <Badge ok={d.sync_status === 'synced'}>{d.sync_status}</Badge>
                         <span className="whitespace-nowrap">v{d.schedule_version} / ack v{d.device_ack_version}</span>
                         <span className="flex gap-1 ms-auto">
+                          {!!d.device_uid && (
+                            <Button variant="ghost" className="!px-2 !py-1 text-xs"
+                              title="מדוע המכשיר מנותק? חסימת סינון, הפסקת חשמל או נפילת אינטרנט"
+                              onClick={() => {
+                                setDiagnosis({ device: d, loading: true });
+                                adminApi.get(`/devices/${d.id}/diagnosis`)
+                                  .then((r) => setDiagnosis((x) => (x?.device?.id === d.id ? { device: d, ...r } : x)))
+                                  .catch((e) => setDiagnosis((x) => (x?.device?.id === d.id ? { device: d, error: e.message } : x)));
+                              }}>אבחון</Button>
+                          )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             onClick={() => setTransferForm({ device: d, user_id: '' })}>העבר ללקוח</Button>
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
@@ -412,6 +423,39 @@ export default function Devices() {
         )}
       </Modal>
 
+      <Modal open={!!diagnosis} onClose={() => setDiagnosis(null)} title={`אבחון חיבור — "${diagnosis?.device?.name || ''}"`}>
+        {diagnosis?.loading && <p className="text-sm text-muted py-4 text-center">בודק את יומן הברוקר ואת הקו של הלקוח…</p>}
+        {diagnosis?.error && <ErrorNote error={diagnosis.error} />}
+        {diagnosis?.text && (
+          <div className="space-y-3">
+            <p className="text-sm font-semibold">{diagnosis.text}</p>
+            {diagnosis.evidence && (
+              <div className="text-xs text-muted space-y-1 border-t border-line pt-3">
+                {diagnosis.evidence.answers_now !== 'unavailable' && (
+                  <DiagRow label="בדיקה חיה כעת" value={diagnosis.evidence.answers_now ? 'מגיב ✓' : 'לא מגיב'} />
+                )}
+                <DiagRow label="מצב נוכחי" value={diagnosis.evidence.is_online ? 'מחובר' : 'מנותק'} />
+                {diagnosis.evidence.last_connect_min_ago != null && (
+                  <DiagRow label="התחברות אחרונה לברוקר" value={fmtAgo(diagnosis.evidence.last_connect_min_ago)} />
+                )}
+                <DiagRow label="התחברויות ב-24 שעות" value={diagnosis.evidence.connects_24h} />
+                {diagnosis.evidence.median_session_s != null && (
+                  <DiagRow label="אורך חיבור חציוני" value={`${diagnosis.evidence.median_session_s} שניות`} />
+                )}
+                {diagnosis.evidence.failed_tls_attempts_24h > 0 && (
+                  <DiagRow label="ניסיונות שנחסמו ב-24 שעות" value={diagnosis.evidence.failed_tls_attempts_24h} />
+                )}
+                <DiagRow label="ניתוקים וחיבורים ביומן (24 ש')" value={diagnosis.evidence.flaps_24h} />
+                {diagnosis.evidence.last_public_ip && (
+                  <DiagRow label="כתובת אינטרנט אחרונה של הבית" value={<span dir="ltr">{diagnosis.evidence.last_public_ip}</span>} />
+                )}
+                <DiagRow label="פינג לבית הלקוח" value={{ answered: 'עונה ✓', no_answer: 'לא עונה', unavailable: 'לא זמין' }[diagnosis.evidence.ping] || '—'} />
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
       <Modal open={!!transferForm} onClose={() => setTransferForm(null)} title={`העברת "${transferForm?.device?.name || ''}" ללקוח אחר`}>
         {transferForm && (
           <div className="space-y-3">
@@ -504,4 +548,14 @@ export default function Devices() {
 
     </div>
   );
+}
+
+function DiagRow({ label, value }) {
+  return <div className="flex justify-between gap-3"><span>{label}</span><span className="font-semibold text-ink">{value}</span></div>;
+}
+
+function fmtAgo(min) {
+  if (min < 60) return `לפני ${min} דקות`;
+  if (min < 48 * 60) return `לפני ${Math.round(min / 60)} שעות`;
+  return `לפני ${Math.round(min / 1440)} ימים`;
 }

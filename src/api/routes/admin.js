@@ -324,6 +324,15 @@ adminRouter.delete('/shelly/inventory/:id', requireWrite, async (req, res, next)
   } catch (e) { next(e); }
 });
 
+// Offline-device diagnosis: broker-log + ping evidence → a Hebrew verdict
+// (filter block vs. power/internet outage at the customer's home).
+adminRouter.get('/devices/:id/diagnosis', async (req, res, next) => {
+  try {
+    const { diagnoseDevice } = await import('../../services/device-diagnosis.js');
+    res.json(await diagnoseDevice(Number(req.params.id)));
+  } catch (e) { next(e); }
+});
+
 // Move a device (relays + schedules ride along) to another user.
 // The channel/code proposal the transfer modal shows (registration-style list).
 adminRouter.get('/devices/:id/transfer-preview', async (req, res, next) => {
