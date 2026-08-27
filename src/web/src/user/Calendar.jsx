@@ -632,9 +632,9 @@ export default function Calendar() {
                   {cells.map((c, i) => {
                     const hi = hebInfo(c.date);
                     return (
-                      <div key={c.date} className={`absolute inset-x-0 text-center border-line ${i > 0 ? 'border-t-2' : ''}
+                      <div key={c.date} className={`absolute inset-x-0 text-center
                         ${c.date === todayStr ? 'bg-[#E4EFFE]' : hi.chag ? 'bg-[#FBF3DC]' : ''}`}
-                        style={{ top: i * BAND_H, height: BAND_H }}>
+                        style={{ top: i * BAND_H, height: BAND_H, ...(i > 0 ? { borderTop: '3px solid rgba(43,58,103,0.45)' } : {}) }}>
                         <div className="pt-2.5 text-[11.5px] text-muted leading-tight">{DAY_NAMES[c.dow]}</div>
                         <div className={`mx-auto mt-0.5 min-w-6 h-6 px-1 grid place-items-center rounded-full text-[13px] font-bold
                           ${c.date === todayStr ? 'bg-accent text-white' : ''}`}>
@@ -666,7 +666,7 @@ export default function Calendar() {
                       const top = i * BAND_H;
                       return (
                         <div key={c.date} className="absolute inset-x-0 pointer-events-none" style={{ top, height: BAND_H }}>
-                          {i > 0 && <div className="absolute inset-x-0 top-0 border-t-2 border-line" />}
+                          {i > 0 && <div className="absolute inset-x-0 top-0" style={{ borderTop: '3px solid rgba(43,58,103,0.45)' }} />}
                           <div className="absolute inset-x-0 top-0" style={{ height: (sun.sunrise / 1440) * BAND_H, background: NIGHT }} />
                           <div className="absolute inset-x-0 bottom-0" style={{ height: ((1440 - sun.sunset) / 1440) * BAND_H, background: NIGHT }} />
                           <div className="absolute inset-x-0 border-t border-dashed" style={{ top: (sun.sunset / 1440) * BAND_H, borderColor: 'rgba(237,161,0,0.65)' }} />
