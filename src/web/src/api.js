@@ -44,11 +44,48 @@ async function call(method, path, body, token, scope = null) {
   return data;
 }
 
+// ── Impersonation guard: when an admin runs the user panel via "כניסה בשמו"
+// (the token carries `imp`), every mutation must be confirmed before it is
+// sent — the change lands on someone else's account. The React shell registers
+// a modal-based confirmer; window.confirm is the fallback so the guard can
+// never silently fail open. One confirmation covers the burst of requests a
+// single click can fan out into (e.g. deleting a merged schedule group) via a
+// short sliding grace window.
+let confirmMutation = null;
+export const registerMutationConfirm = (fn) => { confirmMutation = fn; };
+
+export const isImpersonating = () => {
+  try {
+    return !!JSON.parse(atob(tokens.user.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).imp;
+  } catch { return false; }
+};
+
+let guardOkUntil = 0;
+async function guardedCall(method, path, body) {
+  if (isImpersonating()) {
+    if (Date.now() > guardOkUntil) {
+      const ok = confirmMutation
+        ? await confirmMutation()
+        : window.confirm('מצב התחזות — השינוי יחול על חשבון המשתמש. להמשיך?');
+      if (!ok) {
+        const err = new Error('הפעולה בוטלה');
+        err.code = 'IMPERSONATION_CANCELLED';
+        throw err;
+      }
+    }
+    guardOkUntil = Date.now() + 2500;
+    try {
+      return await call(method, path, body, tokens.user, 'user');
+    } finally { guardOkUntil = Date.now() + 2500; }
+  }
+  return call(method, path, body, tokens.user, 'user');
+}
+
 export const api = {
   get: (p) => call('GET', p, undefined, tokens.user, 'user'),
-  post: (p, b) => call('POST', p, b, tokens.user, 'user'),
-  patch: (p, b) => call('PATCH', p, b, tokens.user, 'user'),
-  del: (p) => call('DELETE', p, undefined, tokens.user, 'user'),
+  post: (p, b) => guardedCall('POST', p, b),
+  patch: (p, b) => guardedCall('PATCH', p, b),
+  del: (p) => guardedCall('DELETE', p),
 };
 
 export const adminApi = {

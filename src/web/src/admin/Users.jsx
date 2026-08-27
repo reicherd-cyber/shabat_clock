@@ -22,8 +22,12 @@ export default function Users() {
     await refresh();
   });
 
-  const toggleSuspend = (u) => run(async () => {
+  // Suspend/reactivate flips someone's whole account — confirm modal first.
+  const [suspending, setSuspending] = useState(null);
+  const toggleSuspend = () => run(async () => {
+    const u = suspending;
     await adminApi.patch(`/users/${u.id}`, { status: u.status === 'active' ? 'suspended' : 'active' });
+    setSuspending(null);
     await refresh();
   });
 
@@ -101,7 +105,7 @@ export default function Users() {
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => impersonate(u)}>כניסה בשמו</Button>
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setPinReset({ id: u.id, new_pin: '' })}>איפוס PIN</Button>
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => openPhones(u)}>טלפונים</Button>
-                  <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => toggleSuspend(u)}>
+                  <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setSuspending(u)}>
                     {u.status === 'active' ? 'השעה' : 'הפעל'}
                   </Button>
                 </td>
@@ -151,6 +155,26 @@ export default function Users() {
               </p>
               <ErrorNote error={error} />
               <Button className="w-full" disabled={busy || !phoneMgr.new_phone.trim()} onClick={addPhone}>הוסף מספר</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!suspending} onClose={() => setSuspending(null)}
+        title={suspending?.status === 'active' ? 'השעיית משתמש' : 'הפעלת משתמש'}>
+        {suspending && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              {suspending.status === 'active'
+                ? <>להשעות את <b>{suspending.full_name}</b>? המשתמש לא יוכל להתחבר עד שיופעל מחדש.</>
+                : <>להפעיל מחדש את <b>{suspending.full_name}</b>?</>}
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" disabled={busy} onClick={() => setSuspending(null)}>ביטול</Button>
+              <Button variant={suspending.status === 'active' ? 'danger' : 'primary'} disabled={busy} onClick={toggleSuspend}>
+                {suspending.status === 'active' ? 'השעה' : 'הפעל'}
+              </Button>
             </div>
           </div>
         )}

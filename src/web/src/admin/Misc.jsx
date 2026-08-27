@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Badge, ErrorNote, useAsync, useInterval, DAY_NAMES } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES } from '../ui.jsx';
 import { UserRound, House } from 'lucide-react';
 
 // `to` makes the tile a clickable drill-down into the underlying data.
@@ -363,8 +363,16 @@ export function AdminSchedules() {
   const { busy, error, run, setError } = useAsync();
   const refresh = async () => setSchedules(await adminApi.get('/schedules'));
   useEffect(() => { refresh().catch(setError); }, []);
-  const toggle = (s) => run(async () => { await adminApi.patch(`/schedules/${s.id}`, { is_enabled: !s.is_enabled }); await refresh(); });
-  const remove = (s) => run(async () => { await adminApi.del(`/schedules/${s.id}`); await refresh(); });
+  // Admin changes to a user's schedule go through a confirm modal — the schedule
+  // belongs to someone else, so nothing applies on a bare click.
+  const [confirming, setConfirming] = useState(null); // {action:'toggle'|'remove', s}
+  const applyConfirmed = () => run(async () => {
+    const { action, s } = confirming;
+    if (action === 'remove') await adminApi.del(`/schedules/${s.id}`);
+    else await adminApi.patch(`/schedules/${s.id}`, { is_enabled: !s.is_enabled });
+    setConfirming(null);
+    await refresh();
+  });
 
   // Dropdown options come from the full list; the rows filter client-side.
   const all = schedules || [];
@@ -441,8 +449,8 @@ export function AdminSchedules() {
                     <div className="flex items-center gap-2">
                       <Badge ok={s.sync_status === 'synced'}>{s.sync_status}</Badge>
                       <Badge ok={!!s.is_enabled}>{s.is_enabled ? 'פעיל' : 'מושבת'}</Badge>
-                      <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => toggle(s)}>{s.is_enabled ? 'השבת' : 'הפעל'}</Button>
-                      <Button variant="danger" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => remove(s)}>מחק</Button>
+                      <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setConfirming({ action: 'toggle', s, user: u.name })}>{s.is_enabled ? 'השבת' : 'הפעל'}</Button>
+                      <Button variant="danger" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setConfirming({ action: 'remove', s, user: u.name })}>מחק</Button>
                     </div>
                   </div>
                 ))}
@@ -451,6 +459,26 @@ export function AdminSchedules() {
           </div>
         ));
       })()}
+
+      <Modal open={!!confirming} onClose={() => setConfirming(null)}
+        title={confirming?.action === 'remove' ? 'מחיקת תזמון' : (confirming?.s.is_enabled ? 'השבתת תזמון' : 'הפעלת תזמון')}>
+        {confirming && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              {confirming.action === 'remove' ? 'למחוק את התזמון של ' : (confirming.s.is_enabled ? 'להשבית את התזמון של ' : 'להפעיל את התזמון של ')}
+              <b>{confirming.user}</b> ({confirming.s.relay_name} — {confirming.s.device_name})?
+              {confirming.action === 'remove' && ' פעולה זו אינה ניתנת לשחזור.'}
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" disabled={busy} onClick={() => setConfirming(null)}>ביטול</Button>
+              <Button variant={confirming.action === 'remove' ? 'danger' : 'primary'} disabled={busy} onClick={applyConfirmed}>
+                {confirming.action === 'remove' ? 'מחק' : (confirming.s.is_enabled ? 'השבת' : 'הפעל')}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

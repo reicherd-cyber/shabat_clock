@@ -1,6 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom';
-import { api, adminApi, tokens } from './api.js';
+import { api, adminApi, tokens, isImpersonating, registerMutationConfirm } from './api.js';
 import Login from './user/Login.jsx';
 import Dashboard from './user/Dashboard.jsx';
 import Schedules from './user/Schedules.jsx';
@@ -21,18 +21,32 @@ import VoiceCosts from './admin/VoiceCosts.jsx';
 import Finance from './admin/Finance.jsx';
 import { SupportInbox } from './admin/Support.jsx';
 import { Crm } from './admin/Crm.jsx';
-import { Logo, Wordmark, useInterval } from './ui.jsx';
+import { Logo, Wordmark, useInterval, Modal, Button } from './ui.jsx';
 import {
   LayoutGrid, CalendarClock, CalendarDays, History as HistoryIcon, Settings as SettingsIcon,
   Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
   ShieldCheck, ScrollText, ChevronDown, AudioLines, LifeBuoy, Inbox, Handshake,
 } from 'lucide-react';
 
-// Decode a JWT payload client-side (base64url) — used only to detect impersonation.
-function tokenPayload(t) {
-  try {
-    return JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-  } catch { return {}; }
+// While impersonating, api.js blocks every mutation until this modal approves it
+// (registerMutationConfirm) — an admin change to someone else's account must be
+// deliberate, whatever screen it comes from.
+function ImpersonationGuard() {
+  const [pending, setPending] = useState(null); // {resolve} of the awaiting mutation
+  useEffect(() => {
+    registerMutationConfirm(() => new Promise((resolve) => setPending({ resolve })));
+    return () => registerMutationConfirm(null);
+  }, []);
+  const answer = (ok) => { pending?.resolve(ok); setPending(null); };
+  return (
+    <Modal open={!!pending} onClose={() => answer(false)} title="אישור פעולה — מצב התחזות">
+      <p className="text-sm mb-4">אתה פועל בחשבון של משתמש אחר. השינוי יחול על החשבון שלו — להמשיך?</p>
+      <div className="flex gap-2 justify-end">
+        <Button variant="ghost" onClick={() => answer(false)}>ביטול</Button>
+        <Button onClick={() => answer(true)}>אישור</Button>
+      </div>
+    </Modal>
+  );
 }
 
 // ── user panel shell per the mockup: sticky topbar (brand ✦ + user chip),
@@ -54,7 +68,7 @@ function UserLayout() {
   if (!tokens.user) return <Navigate to="/login" replace />;
 
   // When an admin is impersonating, the user token carries `imp` (the admin's id).
-  const impersonating = !!tokenPayload(tokens.user).imp;
+  const impersonating = isImpersonating();
 
   const deskCls = ({ isActive }) =>
     `px-3 py-1.5 rounded-[10px] text-sm font-medium ${isActive ? 'bg-[#E4EFFE] text-accent-dk font-bold' : 'text-muted hover:text-ink'}`;
@@ -63,6 +77,7 @@ function UserLayout() {
 
   return (
     <div className="min-h-screen pb-[84px] md:pb-10">
+      {impersonating && <ImpersonationGuard />}
       {impersonating && (
         <div className="bg-ink text-white text-sm px-6 py-2 flex items-center justify-between gap-3">
           <span>מצב התחזות{name ? ` — צופה כ${name}` : ''}</span>
