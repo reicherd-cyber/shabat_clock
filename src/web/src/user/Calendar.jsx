@@ -318,12 +318,12 @@ export default function Calendar() {
 
   // Open the shared schedule form right here — no page hop; the Hebrew-date
   // fields default to the clicked day's Hebrew date.
-  const openSched = (date, time) => {
+  const openSched = (date, time, relayId) => {
     if (!relays.length) return;
     const hd = hebInfo(date).hd;
     setSchedForm({
       ...emptyForm,
-      relay_ids: [relays[0].id],
+      relay_ids: [relayId ?? relays[0].id],
       repeat_type: 'once',
       on_date: date,
       off_date: date,
@@ -430,7 +430,93 @@ export default function Calendar() {
     ...(seg.cont === 'up' || seg.cont === 'both' ? { borderTopLeftRadius: 0, borderTopRightRadius: 0 } : {}),
   });
 
-  // ── time grid (week/day): whole day visible, four 6-hour sections ──
+  // Per-column lane assignment — the day view recomputes lanes WITHIN each
+  // channel's own column (the global assignment mixes channels together).
+  const assignLanes = (list) => {
+    const segs = [...list].sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin).map((s) => ({ ...s }));
+    const laneEnds = [];
+    for (const s of segs) {
+      let lane = laneEnds.findIndex((end) => end <= s.startMin);
+      if (lane === -1) { lane = laneEnds.length; laneEnds.push(0); }
+      laneEnds[lane] = s.endMin;
+      s.lane = lane;
+    }
+    for (const s of segs) s.lanes = laneEnds.length || 1;
+    return segs;
+  };
+
+  // One time-axis column: night shading, gridlines, blocks, now-line. Shared by
+  // the week view (column = a date) and the day view (column = a channel).
+  const TimeColumn = ({ date, segs, minW, onEmptyClick, blockSub }) => {
+    const sun = sunFor(date);
+    return (
+      <div className={`flex-1 relative border-line border-s ${minW || 'min-w-0'} cursor-pointer`}
+        title="לחיצה: תזמון חדש בשעה זו"
+        onClick={(e) => {
+          // Clicked hour (rounded to the half hour) prefills the new schedule.
+          const rect = e.currentTarget.getBoundingClientRect();
+          const min = Math.min(1410, Math.max(0, Math.round(((e.clientY - rect.top) / HOUR_PX) * 60 / 30) * 30));
+          onEmptyClick(`${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`);
+        }}>
+        {/* night shading + שקיעה line — the day literally darkens where lights matter */}
+        <div className="absolute inset-x-0 top-0 pointer-events-none" style={{ height: (sun.sunrise / 60) * HOUR_PX, background: NIGHT }} />
+        <div className="absolute inset-x-0 bottom-0 pointer-events-none" style={{ height: ((1440 - sun.sunset) / 60) * HOUR_PX, background: NIGHT }} />
+        <div className="absolute inset-x-0 pointer-events-none border-t border-dashed" style={{ top: (sun.sunset / 60) * HOUR_PX, borderColor: 'rgba(237,161,0,0.65)' }} title="שקיעה" />
+        {/* section lines (bold) + 3h lines (faint) */}
+        {SECTIONS.map((h) => (
+          <div key={h} className="absolute inset-x-0 border-t-2 border-line pointer-events-none" style={{ top: h * HOUR_PX }} />
+        ))}
+        {[3, 9, 15, 21].map((h) => (
+          <div key={h} className="absolute inset-x-0 border-t border-line/60 pointer-events-none" style={{ top: h * HOUR_PX }} />
+        ))}
+        {/* blocks */}
+        {segs.map((s, j) => {
+          const laneW = 100 / s.lanes;
+          const h = Math.max(24, ((s.endMin - s.startMin) / 60) * HOUR_PX - 2);
+          return (
+            <div key={j}
+              className="absolute rounded-md px-2 py-0.5 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50"
+              onClick={(e) => { e.stopPropagation(); openEdit(s.sid); }}
+              title={`${s.label} · ${s.relay_name} · ${s.device_name} — לחיצה לעריכה`}
+              style={{
+                top: (s.startMin / 60) * HOUR_PX,
+                height: h,
+                insetInlineStart: `calc(${s.lane * laneW}% + 2px)`,
+                width: `calc(${laneW}% - 5px)`,
+                ...blockStyle(s.relay_id, s),
+              }}>
+              <div className="text-[13px] font-bold leading-snug truncate">{s.label}</div>
+              {h >= 44 && blockSub && (
+                <div className="text-xs text-muted leading-snug truncate">{blockSub(s)}</div>
+              )}
+            </div>
+          );
+        })}
+        {/* now line */}
+        {date === todayStr && (
+          <div className="absolute inset-x-0 pointer-events-none z-10" style={{ top: (nowMin / 60) * HOUR_PX }}>
+            <div className="border-t-2 border-[#e34948]" />
+            <div className="w-2.5 h-2.5 rounded-full bg-[#e34948] -mt-[7px] me-[-5px] ms-auto" />
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const HourGutter = () => (
+    <div className="w-14 shrink-0 relative sticky start-0 bg-surface z-20">
+      {SECTIONS.map((h) => (
+        <div key={h} className="absolute w-full text-center text-[12.5px] font-bold text-ink -translate-y-1/2 select-none"
+          style={{ top: h * HOUR_PX }}>{pad2(h)}:00</div>
+      ))}
+      {[3, 9, 15, 21].map((h) => (
+        <div key={h} className="absolute w-full text-center text-[11px] text-muted -translate-y-1/2 select-none"
+          style={{ top: h * HOUR_PX }}>{pad2(h)}:00</div>
+      ))}
+    </div>
+  );
+
+  // ── time grid (week): whole day visible, four 6-hour sections ──
   const TimeGrid = () => (
     <Card flush className="overflow-hidden">
       <div className="flex border-b border-line bg-surface2/60">
@@ -457,77 +543,58 @@ export default function Calendar() {
         <p className="text-muted p-8 text-center">טוען…</p>
       ) : (
         <div className="flex" style={{ height: 24 * HOUR_PX }}>
-          {/* hour gutter — section boundaries + light 3h marks */}
-          <div className="w-14 shrink-0 relative">
-            {SECTIONS.map((h) => (
-              <div key={h} className="absolute w-full text-center text-[12.5px] font-bold text-ink -translate-y-1/2 select-none"
-                style={{ top: h * HOUR_PX }}>{pad2(h)}:00</div>
-            ))}
-            {[3, 9, 15, 21].map((h) => (
-              <div key={h} className="absolute w-full text-center text-[11px] text-muted -translate-y-1/2 select-none"
-                style={{ top: h * HOUR_PX }}>{pad2(h)}:00</div>
-            ))}
-          </div>
-          {cells.map((c) => {
-            const sun = sunFor(c.date);
-            const segs = gridSegs.get(c.date) || [];
-            return (
-              <div key={c.date} className="flex-1 relative border-line border-s min-w-0 cursor-pointer"
-                title="לחיצה: תזמון חדש בשעה זו"
-                onClick={(e) => {
-                  // Clicked hour (rounded to the half hour) prefills the new schedule.
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const min = Math.min(1410, Math.max(0, Math.round(((e.clientY - rect.top) / HOUR_PX) * 60 / 30) * 30));
-                  openSched(c.date, `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`);
-                }}>
-                {/* night shading + שקיעה line — the day literally darkens where lights matter */}
-                <div className="absolute inset-x-0 top-0 pointer-events-none" style={{ height: (sun.sunrise / 60) * HOUR_PX, background: NIGHT }} />
-                <div className="absolute inset-x-0 bottom-0 pointer-events-none" style={{ height: ((1440 - sun.sunset) / 60) * HOUR_PX, background: NIGHT }} />
-                <div className="absolute inset-x-0 pointer-events-none border-t border-dashed" style={{ top: (sun.sunset / 60) * HOUR_PX, borderColor: 'rgba(237,161,0,0.65)' }} title="שקיעה" />
-                {/* section lines (bold) + 3h lines (faint) */}
-                {SECTIONS.map((h) => (
-                  <div key={h} className="absolute inset-x-0 border-t-2 border-line pointer-events-none" style={{ top: h * HOUR_PX }} />
-                ))}
-                {[3, 9, 15, 21].map((h) => (
-                  <div key={h} className="absolute inset-x-0 border-t border-line/60 pointer-events-none" style={{ top: h * HOUR_PX }} />
-                ))}
-                {/* blocks */}
-                {segs.map((s, j) => {
-                  const laneW = 100 / s.lanes;
-                  const h = Math.max(24, ((s.endMin - s.startMin) / 60) * HOUR_PX - 2);
-                  return (
-                    <div key={j}
-                      className="absolute rounded-md px-2 py-0.5 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50"
-                      onClick={(e) => { e.stopPropagation(); openEdit(s.sid); }}
-                      title={`${s.label} · ${s.relay_name} · ${s.device_name} — לחיצה לעריכה`}
-                      style={{
-                        top: (s.startMin / 60) * HOUR_PX,
-                        height: h,
-                        insetInlineStart: `calc(${s.lane * laneW}% + 2px)`,
-                        width: `calc(${laneW}% - 5px)`,
-                        ...blockStyle(s.relay_id, s),
-                      }}>
-                      <div className="text-[13px] font-bold leading-snug truncate">{s.label}</div>
-                      {h >= 44 && (
-                        <div className="text-xs text-muted leading-snug truncate">{s.relay_name}{view === 'day' ? ` · ${s.device_name}` : ''}</div>
-                      )}
-                    </div>
-                  );
-                })}
-                {/* now line */}
-                {c.date === todayStr && (
-                  <div className="absolute inset-x-0 pointer-events-none z-10" style={{ top: (nowMin / 60) * HOUR_PX }}>
-                    <div className="border-t-2 border-[#e34948]" />
-                    <div className="w-2.5 h-2.5 rounded-full bg-[#e34948] -mt-[7px] me-[-5px] ms-auto" />
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          <HourGutter />
+          {cells.map((c) => (
+            <TimeColumn key={c.date} date={c.date} segs={gridSegs.get(c.date) || []}
+              onEmptyClick={(t) => openSched(c.date, t)}
+              blockSub={(s) => s.relay_name} />
+          ))}
         </div>
       )}
     </Card>
   );
+
+  // ── day matrix: EVERY channel is its own column across the full 0–24 axis —
+  // the whole house at a glance; many channels scroll horizontally. ──
+  const DayGrid = () => {
+    const dayDate = cells[0].date;
+    const shownRelays = relays.filter((r) => !hiddenRelays.has(r.id));
+    const daySegs = gridSegs.get(dayDate) || [];
+    return (
+      <Card flush className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <div style={{ minWidth: Math.max(0, shownRelays.length * 104 + 56) }}>
+            <div className="flex border-b border-line bg-surface2/60">
+              <div className="w-14 shrink-0 sticky start-0 bg-surface2 z-20" />
+              {shownRelays.map((r) => (
+                <div key={r.id} className="flex-1 min-w-[96px] text-center py-2 px-1 border-line border-s">
+                  <span className="inline-flex items-center gap-1.5 max-w-full">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colorOf(r.id) }} />
+                    <span className="font-bold text-[13.5px] truncate">{r.name}</span>
+                  </span>
+                  <div className="text-[11px] text-muted truncate">{r.device}</div>
+                </div>
+              ))}
+            </div>
+            {events == null ? (
+              <p className="text-muted p-8 text-center">טוען…</p>
+            ) : shownRelays.length === 0 ? (
+              <p className="text-muted p-8 text-center">אין ערוצים להצגה — בחרו ערוצים בסינון למעלה.</p>
+            ) : (
+              <div className="flex" style={{ height: 24 * HOUR_PX }}>
+                <HourGutter />
+                {shownRelays.map((r) => (
+                  <TimeColumn key={r.id} date={dayDate} minW="min-w-[96px]"
+                    segs={assignLanes(daySegs.filter((s) => s.relay_id === r.id))}
+                    onEmptyClick={(t) => openSched(dayDate, t, r.id)} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </Card>
+    );
+  };
 
   // ── month grid ──
   const MonthGrid = () => (
@@ -623,7 +690,7 @@ export default function Calendar() {
       </div>
       <ErrorNote error={error} />
 
-      {view === 'month' ? <MonthGrid /> : <TimeGrid />}
+      {view === 'month' ? <MonthGrid /> : view === 'day' ? <DayGrid /> : <TimeGrid />}
 
       <Modal open={!!dayModal} onClose={() => setDayModal(null)}
         title={dayModal ? `${DAY_NAMES[new Date(`${dayModal}T12:00:00`).getDay() + 1]}, ${Number(dayModal.slice(8, 10))} ב${MONTHS[Number(dayModal.slice(5, 7)) - 1]} · ${hebFullDate(hebInfo(dayModal).hd)}${hebInfo(dayModal).holiday ? ` · ${hebInfo(dayModal).holiday}` : ''}` : ''}>
