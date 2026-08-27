@@ -590,16 +590,18 @@ export default function Calendar() {
     </div>
   );
 
-  const StateLegend = () => (
+  const StateLegend = ({ showOff = true }) => (
     <div className="flex items-center gap-4 px-4 py-1.5 border-b border-line text-xs text-muted">
       <span className="inline-flex items-center gap-1.5">
         <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(0,131,0,0.35)', borderInlineStart: '3px solid #008300' }} />
         דולק
       </span>
-      <span className="inline-flex items-center gap-1.5">
-        <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(227,73,72,0.18)' }} />
-        כבוי
-      </span>
+      {showOff && (
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(227,73,72,0.18)' }} />
+          כבוי
+        </span>
+      )}
     </div>
   );
 
@@ -612,7 +614,7 @@ export default function Calendar() {
     const segLabel = (s) => (s.from && s.to ? `${s.from}–${s.to}` : s.to ? `כיבוי ${s.to}` : s.from ? `הדלקה ${s.from}` : 'דולק');
     return (
       <Card flush className="overflow-hidden">
-        <StateLegend />
+        <StateLegend showOff={false} />
         <div className="overflow-x-auto">
           <div style={{ minWidth: Math.max(0, shownRelays.length * 104 + 56) }}>
             <div className="flex border-b border-line bg-surface2/60">
@@ -664,8 +666,6 @@ export default function Calendar() {
                       const min = Math.min(1410, Math.max(0, Math.round((((y - idx * BAND_H) / BAND_H) * 1440) / 30) * 30));
                       openSched(cells[idx].date, `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`, r.id);
                     }}>
-                    {/* off background across the whole week */}
-                    <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />
                     {/* per-band decorations: night shading, day separators, שקיעה line */}
                     {cells.map((c, i) => {
                       const sun = sunFor(c.date);
