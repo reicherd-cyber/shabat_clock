@@ -594,51 +594,117 @@ export default function Calendar() {
     </div>
   );
 
-  // ── time grid (week): whole day visible, four 6-hour sections ──
-  const TimeGrid = () => (
-    <Card flush className="overflow-hidden">
-      <StateLegend />
-      <div className="flex border-b border-line bg-surface2/60">
-        <div className="w-14 shrink-0" />
-        {cells.map((c) => {
-          const hi = hebInfo(c.date);
-          return (
-            <div key={c.date} className={`flex-1 min-w-0 text-center py-2 border-line border-s
-              ${c.date === todayStr ? 'bg-[#E4EFFE]/60' : hi.chag ? 'bg-[#FBF3DC]/70' : ''}`}>
-              <div className="text-[13px] text-muted">{DAY_NAMES[c.dow]}</div>
-              <div className={`mx-auto mt-0.5 min-w-8 h-8 px-1 grid place-items-center rounded-full text-base font-bold
-                ${c.date === todayStr ? 'bg-accent text-white' : ''}`}>
-                {calMode === 'heb' ? hi.day : c.day}
-              </div>
-              <div className="text-[11px] text-muted truncate px-0.5">
-                {calMode === 'heb' ? `${c.day}.${Number(c.date.slice(5, 7))}` : hi.day}
-                {hi.holiday && <span className="font-medium" style={{ color: '#B45309' }}> · {hi.holiday}</span>}
-              </div>
+  // ── week matrix: channels are COLUMNS (like the day view), days are ROWS —
+  // inside each cell a horizontal 0→24h state ribbon (time runs LTR). ──
+  const WeekGrid = () => {
+    const ROW_H = 68;
+    const shownRelays = relays.filter((r) => !hiddenRelays.has(r.id));
+    const segLabel = (s) => (s.from && s.to ? `${s.from}–${s.to}` : s.to ? `כיבוי ${s.to}` : s.from ? `הדלקה ${s.from}` : 'דולק');
+    return (
+      <Card flush className="overflow-hidden">
+        <StateLegend />
+        <div className="overflow-x-auto">
+          <div style={{ minWidth: Math.max(0, shownRelays.length * 148 + 64) }}>
+            {/* header: day gutter + channel names */}
+            <div className="flex border-b border-line bg-surface2/60">
+              <div className="w-16 shrink-0 sticky start-0 bg-surface2 z-20" />
+              {shownRelays.map((r) => (
+                <div key={r.id} className="flex-1 min-w-[140px] text-center py-2 px-1 border-line border-s">
+                  <span className="inline-flex items-center gap-1.5 max-w-full">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colorOf(r.id) }} />
+                    <span className="font-bold text-[13.5px] truncate">{r.name}</span>
+                  </span>
+                  <div className="text-[11px] text-muted truncate">{r.device}</div>
+                </div>
+              ))}
             </div>
-          );
-        })}
-      </div>
-      {events == null ? (
-        <p className="text-muted p-8 text-center">טוען…</p>
-      ) : (
-        <div className="flex" style={{ height: 24 * HOUR_PX }}>
-          <HourGutter />
-          {cells.map((c) => {
-            // Same state treatment as the day matrix: each visible channel gets
-            // a fixed lane in the day's column — green where on, red where off.
-            const laneRelays = relays.filter((r) => !hiddenRelays.has(r.id));
-            return (
-              <TimeColumn key={c.date} date={c.date} stateColors offTint
-                laneCount={laneRelays.length || 1}
-                segs={laneRelays.flatMap((r, i) => stateSegsFor(r, c.date)
-                  .map((s) => ({ ...s, lane: i, lanes: laneRelays.length })))}
-                onEmptyClick={(t, idx) => openSched(c.date, t, laneRelays[idx]?.id)} />
-            );
-          })}
+            {/* hour scale — every channel column shares the same 0→24 axis */}
+            <div className="flex border-b border-line text-[9.5px] text-muted select-none">
+              <div className="w-16 shrink-0 sticky start-0 bg-surface z-20" />
+              {shownRelays.map((r) => (
+                <div key={r.id} dir="ltr" className="flex-1 min-w-[140px] relative h-4 border-line border-s">
+                  {[0, 6, 12, 18].map((h) => (
+                    <span key={h} className="absolute top-0" style={{ left: `calc(${(h / 24) * 100}% + 2px)` }}>{pad2(h)}</span>
+                  ))}
+                </div>
+              ))}
+            </div>
+            {events == null ? (
+              <p className="text-muted p-8 text-center">טוען…</p>
+            ) : shownRelays.length === 0 ? (
+              <p className="text-muted p-8 text-center">אין ערוצים להצגה — בחרו ערוצים בסינון למעלה.</p>
+            ) : cells.map((c) => {
+              const hi = hebInfo(c.date);
+              const sun = sunFor(c.date);
+              return (
+                <div key={c.date} className="flex border-b border-line" style={{ height: ROW_H }}>
+                  {/* day gutter */}
+                  <div className={`w-16 shrink-0 sticky start-0 z-20 text-center py-1.5 border-line
+                    ${c.date === todayStr ? 'bg-[#E4EFFE]' : hi.chag ? 'bg-[#FBF3DC]' : 'bg-surface'}`}>
+                    <div className="text-[11.5px] text-muted leading-tight">{DAY_NAMES[c.dow]}</div>
+                    <div className={`mx-auto mt-0.5 min-w-6 h-6 px-1 grid place-items-center rounded-full text-[13px] font-bold
+                      ${c.date === todayStr ? 'bg-accent text-white' : ''}`}>
+                      {calMode === 'heb' ? hi.day : c.day}
+                    </div>
+                    {hi.holiday && (
+                      <div className="text-[9px] leading-tight truncate px-0.5" style={{ color: '#B45309' }} title={hi.holiday}>{hi.holiday}</div>
+                    )}
+                  </div>
+                  {shownRelays.map((r) => {
+                    const segs = stateSegsFor(r, c.date);
+                    return (
+                      <div key={r.id} dir="ltr" className="flex-1 min-w-[140px] relative border-line border-s cursor-pointer"
+                        title="לחיצה: תזמון חדש בשעה זו"
+                        onClick={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const min = Math.min(1410, Math.max(0, Math.round(((e.clientX - rect.left) / rect.width) * 1440 / 30) * 30));
+                          openSched(c.date, `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`, r.id);
+                        }}>
+                        {/* off background + night shading + hour ticks + שקיעה */}
+                        <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />
+                        <div className="absolute inset-y-0 left-0 pointer-events-none" style={{ width: `${(sun.sunrise / 1440) * 100}%`, background: NIGHT }} />
+                        <div className="absolute inset-y-0 right-0 pointer-events-none" style={{ width: `${((1440 - sun.sunset) / 1440) * 100}%`, background: NIGHT }} />
+                        {[360, 720, 1080].map((m) => (
+                          <div key={m} className="absolute inset-y-0 border-l border-line/70 pointer-events-none" style={{ left: `${(m / 1440) * 100}%` }} />
+                        ))}
+                        <div className="absolute inset-y-0 border-l border-dashed pointer-events-none" style={{ left: `${(sun.sunset / 1440) * 100}%`, borderColor: 'rgba(237,161,0,0.65)' }} />
+                        {/* green state ribbons — the ON edge is the solid border */}
+                        {segs.map((s, j) => {
+                          const left = (s.startMin / 1440) * 100;
+                          const w = Math.max(((s.endMin - s.startMin) / 1440) * 100, 1.2);
+                          return (
+                            <div key={j} dir="rtl" className="absolute inset-y-1 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50"
+                              onClick={(e) => { e.stopPropagation(); openEdit(s.sid); }}
+                              title={`${segLabel(s)} · ${r.name} — לחיצה לעריכה`}
+                              style={{
+                                left: `${left}%`, width: `${w}%`,
+                                backgroundColor: 'rgba(0,131,0,0.15)',
+                                borderLeft: s.cont === 'up' || s.cont === 'both' ? 'none' : '3px solid #008300',
+                              }}>
+                              {w >= 13 && (
+                                <div className="text-[10.5px] font-bold px-1 pt-0.5 truncate leading-tight">{segLabel(s)}</div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {/* now line — vertical, inside today's row */}
+                        {c.date === todayStr && (
+                          <div className="absolute inset-y-0 z-10 pointer-events-none border-l-2 border-[#e34948]"
+                            style={{ left: `${(nowMin / 1440) * 100}%` }}>
+                            <div className="w-2.5 h-2.5 rounded-full bg-[#e34948] -ml-[7px]" />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
         </div>
-      )}
-    </Card>
-  );
+      </Card>
+    );
+  };
 
   // ── day matrix: EVERY channel is its own column across the full 0–24 axis —
   // the whole house at a glance; many channels scroll horizontally. ──
@@ -776,7 +842,7 @@ export default function Calendar() {
       </div>
       <ErrorNote error={error} />
 
-      {view === 'month' ? <MonthGrid /> : view === 'day' ? <DayGrid /> : <TimeGrid />}
+      {view === 'month' ? <MonthGrid /> : view === 'day' ? <DayGrid /> : <WeekGrid />}
 
       <Modal open={!!dayModal} onClose={() => setDayModal(null)}
         title={dayModal ? `${DAY_NAMES[new Date(`${dayModal}T12:00:00`).getDay() + 1]}, ${Number(dayModal.slice(8, 10))} ב${MONTHS[Number(dayModal.slice(5, 7)) - 1]} · ${hebFullDate(hebInfo(dayModal).hd)}${hebInfo(dayModal).holiday ? ` · ${hebInfo(dayModal).holiday}` : ''}` : ''}>
