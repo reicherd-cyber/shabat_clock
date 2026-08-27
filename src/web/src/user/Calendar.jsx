@@ -253,6 +253,11 @@ function sunFor(dateStr) {
 }
 
 const NIGHT = 'rgba(43, 58, 103, 0.07)';
+// "off" background: calm neutral slate — off is merely inactive, so it must not
+// read as an alarm and must not fight the channel-colored ON pastels (it also
+// keeps the red now-line clearly visible).
+const OFF_BG = 'rgba(100,116,139,0.10)';
+const OFF_EDGE = '#64748b';
 const SECTIONS = [6, 12, 18]; // the 0–6 / 6–12 / 12–18 / 18–24 boundaries
 
 // One multi-select dropdown for channels — colored dot per option, checkbox
@@ -418,12 +423,12 @@ export default function Calendar() {
   // edge — the relay keeps its identity but the block clearly reads "resting".
   // stateColors (day/week/month matrix): active time is painted in the CHANNEL's
   // color — the same color the channel carries everywhere in the app — over the
-  // soft-red "off" column background; a כבוי window keeps the red dashed edge.
+  // neutral slate "off" column background; a כבוי window gets a dashed slate edge.
   const blockStyle = (relayId, seg = {}, stateColors = false) => ({
     ...(stateColors
       ? (seg.gap
-        ? { backgroundColor: 'rgba(227,73,72,0.13)', borderInlineStart: '3px dashed #e34948' }
-        // Opaque pastel (mix with white), not an alpha fill — the column's red
+        ? { backgroundColor: 'rgba(100,116,139,0.16)', borderInlineStart: `3px dashed ${OFF_EDGE}` }
+        // Opaque pastel (mix with white), not an alpha fill — the column's
         // "off" tint sits underneath and would muddy a translucent color.
         : { backgroundColor: `color-mix(in srgb, ${colorOf(relayId)} 22%, white)`, borderInlineStart: `3px solid ${colorOf(relayId)}` })
       : {
@@ -498,7 +503,7 @@ export default function Calendar() {
           onEmptyClick(`${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`, idx);
         }}>
         {/* state view: the whole column is "off" (soft red) unless a green block covers it */}
-        {offTint && <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />}
+        {offTint && <div className="absolute inset-0 pointer-events-none" style={{ background: OFF_BG }} />}
         {/* section lines (bold) + 3h lines (faint) */}
         {SECTIONS.map((h) => (
           <div key={h} className="absolute inset-x-0 border-t-2 border-line pointer-events-none" style={{ top: h * HOUR_PX }} />
@@ -591,7 +596,7 @@ export default function Calendar() {
         </span>
         {showOff && (
           <span className="inline-flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(227,73,72,0.18)' }} />
+            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(100,116,139,0.18)' }} />
             כבוי
           </span>
         )}
@@ -663,7 +668,7 @@ export default function Calendar() {
                       openSched(days[idx].date, `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`, r.id);
                     }}>
                     {/* off background — the single state color behind the green blocks */}
-                    <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />
+                    <div className="absolute inset-0 pointer-events-none" style={{ background: OFF_BG }} />
                     {/* per-band decorations: day separators only */}
                     {days.map((c, i) => (
                       <div key={c.date} className="absolute inset-x-0 pointer-events-none" style={{ top: i * BAND_H, height: BAND_H }}>
