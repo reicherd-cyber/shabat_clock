@@ -224,6 +224,7 @@ export default function Devices() {
                   <tr className="border-b border-line last:border-0 bg-surface2/50">
                     <td colSpan={withReason ? 4 : 3} className="p-3">
                       <div className="flex items-center gap-x-5 gap-y-2 flex-wrap text-xs text-muted">
+                        <span>מזהה: {d.id}</span>
                         <span dir="ltr">
                           UID: {d.device_uid
                             || (d.removed_uid
