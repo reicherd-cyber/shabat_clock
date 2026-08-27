@@ -493,7 +493,6 @@ export default function Calendar() {
   // One time-axis column: night shading, gridlines, blocks, now-line. Shared by
   // the week view (column = a date) and the day view (column = a channel).
   const TimeColumn = ({ date, segs, minW, onEmptyClick, blockSub, stateColors, offTint, laneCount = 1 }) => {
-    const sun = sunFor(date);
     return (
       <div className={`flex-1 relative border-line border-s ${minW || 'min-w-0'} cursor-pointer`}
         title="לחיצה: תזמון חדש בשעה זו"
@@ -510,8 +509,6 @@ export default function Calendar() {
         }}>
         {/* state view: the whole column is "off" (soft red) unless a green block covers it */}
         {offTint && <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />}
-        {/* שקיעה line (the off tint is the ONLY background color — no night shading) */}
-        <div className="absolute inset-x-0 pointer-events-none border-t border-dashed" style={{ top: (sun.sunset / 60) * HOUR_PX, borderColor: 'rgba(237,161,0,0.65)' }} title="שקיעה" />
         {/* section lines (bold) + 3h lines (faint) */}
         {SECTIONS.map((h) => (
           <div key={h} className="absolute inset-x-0 border-t-2 border-line pointer-events-none" style={{ top: h * HOUR_PX }} />
@@ -666,17 +663,12 @@ export default function Calendar() {
                     }}>
                     {/* off background — the single state color behind the green blocks */}
                     <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />
-                    {/* per-band decorations: day separators + שקיעה line (no night shading) */}
-                    {cells.map((c, i) => {
-                      const sun = sunFor(c.date);
-                      const top = i * BAND_H;
-                      return (
-                        <div key={c.date} className="absolute inset-x-0 pointer-events-none" style={{ top, height: BAND_H }}>
-                          {i > 0 && <div className="absolute inset-x-0 top-0" style={{ borderTop: '3px solid rgba(43,58,103,0.45)' }} />}
-                          <div className="absolute inset-x-0 border-t border-dashed" style={{ top: (sun.sunset / 1440) * BAND_H, borderColor: 'rgba(237,161,0,0.65)' }} />
-                        </div>
-                      );
-                    })}
+                    {/* per-band decorations: day separators only */}
+                    {cells.map((c, i) => (
+                      <div key={c.date} className="absolute inset-x-0 pointer-events-none" style={{ top: i * BAND_H, height: BAND_H }}>
+                        {i > 0 && <div className="absolute inset-x-0 top-0" style={{ borderTop: '3px solid rgba(43,58,103,0.45)' }} />}
+                      </div>
+                    ))}
                     {/* green state blocks — time scales inside the day band */}
                     {cells.flatMap((c, i) => stateSegsFor(r, c.date).map((s, j) => {
                       const top = i * BAND_H + (s.startMin / 1440) * BAND_H;
