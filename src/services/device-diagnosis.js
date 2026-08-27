@@ -115,13 +115,26 @@ export async function diagnoseDevice(deviceId) {
   const failedAttempts = lastIp ? Math.max(0, attempts24 - (connectsByIp.get(lastIp) || 0)) : 0;
   const houseUp = await pingHouse(lastIp);
 
+  // Before blaming the customer: if OUR broker link is down, every device
+  // looks dead — that's a service-side outage, full stop.
+  const prodHere = env.nodeEnv === 'production' || process.env.HEALTH_ACTIVE === '1';
+  if (prodHere) {
+    const { brokerConnected } = await import('../mqtt/client.js');
+    if (!brokerConnected()) {
+      return {
+        verdict: 'service_down', category: 'service',
+        text: 'השרת מנותק מהברוקר — כל המכשירים ייראו מנותקים. זו תקלה בשירות שלנו, לא אצל הלקוח.',
+        evidence: {},
+      };
+    }
+  }
+
   // Ground truth beats every log heuristic: a device that answers an RPC right
   // now is connected, even if its session predates the log window (32-day
   // sessions have no connect line left in any rotated file). A dev server
   // skips mqtt probes — the fleet dials the production broker, not ours.
   let answersNow = false;
-  const canProbe = device.transport === 'lan'
-    || env.nodeEnv === 'production' || process.env.HEALTH_ACTIVE === '1';
+  const canProbe = device.transport === 'lan' || prodHere;
   if (canProbe) {
     const { shellyCall } = await import('./shelly.js');
     answersNow = await shellyCall(device, 'Sys.GetStatus').then(() => true).catch(() => false);
@@ -175,7 +188,12 @@ export async function diagnoseDevice(deviceId) {
   } else {
     // Connected at some point in the window but stopped since.
     const ago = lastConnectS ? heDuration(nowS - lastConnectS) : 'זמן לא ידוע';
-    if (houseUp === true) {
+    if (flappingLine) {
+      // Hundreds of short sessions and THEN silence isn't a customer outage —
+      // it's the filter's throttling worsening into a full block.
+      verdict = 'flapping_went_silent';
+      text = `הקו נפל והתחבר שוב ושוב (${connects24} התחברויות ביממה, חציון חיבור ${medianSession} שניות) ולפני ${ago} השתתק לגמרי — דפוס מובהק של חסימת סינון שהחמירה. נדרשת החרגה אצל ספק הסינון.`;
+    } else if (houseUp === true) {
       verdict = 'went_silent_house_up';
       text = `המכשיר התחבר לאחרונה לפני ${ago} ומאז שקט, אבל הבית עצמו מגיב — או שהמכשיר כבה, או שהסינון החמיר לחסימה מלאה. כדאי לבדוק מול הלקוח.`;
     } else {
@@ -184,5 +202,20 @@ export async function diagnoseDevice(deviceId) {
     }
   }
 
-  return { verdict, text, evidence };
+  // The admin's bottom-line question: whose problem is it? 'customer' = power/
+  // internet at the house, 'filter' = the filtered-ISP blocking us (fix =
+  // exclusion request), 'service' = our side, 'ok' = nothing wrong, 'unknown'.
+  const CATEGORY = {
+    connected_ok: 'ok',
+    connected_flapping: 'filter',
+    filter_flapping: 'filter',
+    flapping_went_silent: 'filter',
+    tls_blocked: 'filter',
+    silent_house_up: 'customer',
+    silent_house_down: 'customer',
+    went_silent_house_up: 'customer',
+    went_silent: 'customer',
+    no_data: 'unknown',
+  };
+  return { verdict, category: CATEGORY[verdict] || 'unknown', text, evidence };
 }

@@ -198,11 +198,19 @@ export default function Devices() {
                     <td className="p-3 text-xs">
                       {!d.device_uid ? <span className="text-muted">לא חובר מעולם</span>
                         : reasons[d.id]
-                          ? <button type="button" className="text-right underline decoration-dotted text-ink"
-                              title={reasons[d.id].text}
-                              onClick={() => setDiagnosis({ device: d, ...reasons[d.id] })}>
-                              {REASON_LABELS[reasons[d.id].verdict] || reasons[d.id].verdict}
-                            </button>
+                          ? (() => {
+                              const r = reasons[d.id];
+                              const cat = REASON_CATEGORIES[r.category] || REASON_CATEGORIES.unknown;
+                              return (
+                                <button type="button" className="text-right" title={r.text}
+                                  onClick={() => setDiagnosis({ device: d, ...r })}>
+                                  <span className={`inline-block px-2 py-0.5 rounded-full font-bold ${cat.cls}`}>{cat.label}</span>
+                                  <div className="text-muted mt-1 underline decoration-dotted">
+                                    {REASON_LABELS[r.verdict] || r.verdict}
+                                  </div>
+                                </button>
+                              );
+                            })()
                           : <span className="text-muted">בודק…</span>}
                     </td>
                   )}
@@ -464,6 +472,11 @@ export default function Devices() {
         {diagnosis?.error && <ErrorNote error={diagnosis.error} />}
         {diagnosis?.text && (
           <div className="space-y-3">
+            {diagnosis.category && (
+              <span className={`inline-block px-2.5 py-1 rounded-full text-sm font-bold ${(REASON_CATEGORIES[diagnosis.category] || REASON_CATEGORIES.unknown).cls}`}>
+                {(REASON_CATEGORIES[diagnosis.category] || REASON_CATEGORIES.unknown).label}
+              </span>
+            )}
             <p className="text-sm font-semibold">{diagnosis.text}</p>
             {diagnosis.evidence && (
               <div className="text-xs text-muted space-y-1 border-t border-line pt-3">
@@ -586,10 +599,22 @@ export default function Devices() {
   );
 }
 
+// The bottom-line badge: whose problem is it? Colors follow the money-colors
+// convention (green = good, red = bad) with amber for the filter middle-ground.
+const REASON_CATEGORIES = {
+  customer: { label: 'חשמל/אינטרנט אצל הלקוח', cls: 'bg-[#fde8ec] text-[#e11d48]' },
+  filter: { label: 'חסימת ספק סינון', cls: 'bg-[#fdf1de] text-[#b45309]' },
+  service: { label: 'תקלה בשירות שלנו', cls: 'bg-[#fde8ec] text-[#e11d48] font-extrabold' },
+  ok: { label: 'תקין', cls: 'bg-[#e3f4e3] text-[#006e00]' },
+  unknown: { label: 'לא ידוע', cls: 'bg-surface2 text-muted' },
+};
+
 const REASON_LABELS = {
+  service_down: 'השרת מנותק מהברוקר',
   connected_ok: 'מגיב עכשיו — יתעדכן מיד',
   connected_flapping: 'מגיב, אך הסינון מנתק שוב ושוב',
   filter_flapping: 'הסינון מנתק שוב ושוב — נדרשת החרגה',
+  flapping_went_silent: 'הסינון ניתק שוב ושוב ואז חסם לגמרי',
   tls_blocked: 'חסימת סינון (זיוף תעודה) — נדרשת החרגה',
   silent_house_up: 'הבית מגיב — המכשיר כבוי או חסום לגמרי',
   silent_house_down: 'כנראה אין חשמל/אינטרנט בבית הלקוח',
