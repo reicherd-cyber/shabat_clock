@@ -20,8 +20,9 @@ export async function shellySet(ip, relayNo, on) {
 }
 
 // Any RPC over whichever transport the device uses — 'mqtt': through the broker
-// (device connects out to us, works from anywhere); 'lan': direct HTTP (same
-// network only; nested params ride the query string as JSON). Throws on failure.
+// (device connects out to us, works from anywhere); 'lan': POST /rpc with a
+// JSON-RPC body (the GET query string mangles values with spaces — a cron
+// timespec's "0 30 18 * * *" arrived '+'-encoded and the device 500'd).
 export async function shellyCall({ device_uid, transport, ip_address }, method, params = undefined) {
   if (transport === 'mqtt') {
     const { shellyMqttRpc } = await import('../mqtt/client.js');
@@ -30,10 +31,16 @@ export async function shellyCall({ device_uid, transport, ip_address }, method, 
     if (reply.error) throw new Error(reply.error.message || 'shelly rpc error');
     return reply.result;
   }
-  const qs = params && Object.fromEntries(Object.entries(params).map(
-    ([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : v],
-  ));
-  return rpc(ip_address, method, qs);
+  const res = await fetch(`http://${ip_address}/rpc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 1, src: 'shabat-server', method, ...(params ? { params } : {}) }),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`Shelly ${method} HTTP ${res.status}`);
+  const d = await res.json(); // POST /rpc returns the JSON-RPC envelope
+  if (d.error) throw new Error(d.error.message || 'shelly rpc error');
+  return d.result;
 }
 
 // Absolute on/off — single source for both immediate commands and the scheduler.
