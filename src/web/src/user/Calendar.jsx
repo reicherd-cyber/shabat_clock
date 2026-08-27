@@ -597,7 +597,9 @@ export default function Calendar() {
   // ── week matrix: channels are COLUMNS (like the day view), days are ROWS —
   // inside each cell a horizontal 0→24h state ribbon (time runs LTR). ──
   const WeekGrid = () => {
-    const ROW_H = 68;
+    // Tall rows: up to 4 on/off windows per day each get their own sub-lane, so
+    // every ribbon keeps a readable label even when the window is minutes wide.
+    const ROW_H = 112;
     const shownRelays = relays.filter((r) => !hiddenRelays.has(r.id));
     const segLabel = (s) => (s.from && s.to ? `${s.from}–${s.to}` : s.to ? `כיבוי ${s.to}` : s.from ? `הדלקה ${s.from}` : 'דולק');
     return (
@@ -668,25 +670,37 @@ export default function Calendar() {
                           <div key={m} className="absolute inset-y-0 border-l border-line/70 pointer-events-none" style={{ left: `${(m / 1440) * 100}%` }} />
                         ))}
                         <div className="absolute inset-y-0 border-l border-dashed pointer-events-none" style={{ left: `${(sun.sunset / 1440) * 100}%`, borderColor: 'rgba(237,161,0,0.65)' }} />
-                        {/* green state ribbons — the ON edge is the solid border */}
-                        {segs.map((s, j) => {
-                          const left = (s.startMin / 1440) * 100;
-                          const w = Math.max(((s.endMin - s.startMin) / 1440) * 100, 1.2);
-                          return (
-                            <div key={j} dir="rtl" className="absolute inset-y-1 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50"
-                              onClick={(e) => { e.stopPropagation(); openEdit(s.sid); }}
-                              title={`${segLabel(s)} · ${r.name} — לחיצה לעריכה`}
-                              style={{
-                                left: `${left}%`, width: `${w}%`,
-                                backgroundColor: 'rgba(0,131,0,0.15)',
-                                borderLeft: s.cont === 'up' || s.cont === 'both' ? 'none' : '3px solid #008300',
-                              }}>
-                              {w >= 13 && (
-                                <div className="text-[10.5px] font-bold px-1 pt-0.5 truncate leading-tight">{segLabel(s)}</div>
-                              )}
-                            </div>
-                          );
-                        })}
+                        {/* green state ribbons — the ON edge is the solid border. Each
+                            window gets its own sub-lane (up to 4), and a window too
+                            narrow for its label lets the text spill onto the red
+                            background beside it instead of truncating. */}
+                        {(() => {
+                          const lanes = Math.min(4, Math.max(1, segs.length));
+                          return segs.map((s, j) => {
+                            const left = (s.startMin / 1440) * 100;
+                            const w = Math.max(((s.endMin - s.startMin) / 1440) * 100, 1.2);
+                            const lane = Math.min(j, lanes - 1);
+                            const wide = w >= 14;
+                            return (
+                              <div key={j} dir="rtl" className="absolute text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50"
+                                onClick={(e) => { e.stopPropagation(); openEdit(s.sid); }}
+                                title={`${segLabel(s)} · ${r.name} — לחיצה לעריכה`}
+                                style={{
+                                  left: `${left}%`, width: `${w}%`,
+                                  top: `calc(${(lane / lanes) * 100}% + 3px)`,
+                                  height: `calc(${100 / lanes}% - 6px)`,
+                                  backgroundColor: 'rgba(0,131,0,0.15)',
+                                  borderLeft: s.cont === 'up' || s.cont === 'both' ? 'none' : '3px solid #008300',
+                                }}>
+                                <div dir="ltr"
+                                  className={`absolute top-1/2 -translate-y-1/2 text-[11px] font-bold leading-tight whitespace-nowrap ${wide ? 'right-1' : 'left-full ps-1'}`}
+                                  style={wide ? {} : { color: '#1a5c1a' }}>
+                                  <span dir="rtl">{segLabel(s)}</span>
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()}
                         {/* now line — vertical, inside today's row */}
                         {c.date === todayStr && (
                           <div className="absolute inset-y-0 z-10 pointer-events-none border-l-2 border-[#e34948]"
