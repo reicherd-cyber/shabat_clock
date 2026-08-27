@@ -25,6 +25,7 @@ const CHECK_INTERVAL_MS = 60_000;
 const RAM_CRITICAL_BYTES = 30_000;      // healthy Pro 2 idles ~120k free; panics start near zero
 const TEMP_CRITICAL_C = 80;             // Shelly hardware self-protects ~95° — warn well before
 const UNREACHABLE_AFTER = 3;            // consecutive probe failures before it's an incident
+const EMAIL_AFTER = 15;                 // minutes a problem must persist before any email leaves
 const HEAP_WARN_BYTES = 512 * 1024 * 1024;
 const ALERT_COOLDOWN_MS = 6 * 3600_000; // one email per incident kind per subject per 6h
 const REBOOT_COOLDOWN_MS = 6 * 3600_000;
@@ -88,8 +89,17 @@ async function checkShelly(device) {
     if (st.failures === UNREACHABLE_AFTER) {
       recordIncident('unreachable', device.name, `no RPC answer x${st.failures}`);
       await deviceEvent(device.id, 'error', { kind: 'health_unreachable', failures: st.failures });
-      await alert(`unreachable:${device.id}`, `המכשיר "${device.name}" לא מגיב`,
-        `בדיקת הבריאות לא מצליחה להגיע למכשיר "${device.name}" (${device.device_uid}) כבר ${st.failures} דקות.`);
+    }
+    // Email only when the outage has lasted EMAIL_AFTER minutes AND the
+    // diagnosis pins it on OUR side — filter blocks and customer power/internet
+    // outages live in the panel's disconnected table, not in the inbox.
+    if (st.failures === EMAIL_AFTER) {
+      const { diagnoseDevice } = await import('../services/device-diagnosis.js');
+      const diag = await diagnoseDevice(device.id).catch(() => null);
+      if (diag?.category === 'service') {
+        await alert(`unreachable:${device.id}`, `המכשיר "${device.name}" לא מגיב — תקלה בשירות`,
+          `בדיקת הבריאות לא מצליחה להגיע למכשיר "${device.name}" (${device.device_uid}) כבר ${st.failures} דקות, והאבחון מצביע על תקלה בצד שלנו: ${diag.text}`);
+      }
     }
     // The mirrored local Schedule jobs carry the schedule through an outage —
     // blind-firing into it only piles up failed commands. Flag it offline so
@@ -184,7 +194,7 @@ export async function healthTick() {
     dbFailures += 1;
     db = { ok: false, latency_ms: null };
     recordIncident('db_down', 'database', `${e.message} (x${dbFailures})`);
-    if (dbFailures === UNREACHABLE_AFTER) {
+    if (dbFailures === EMAIL_AFTER) {
       // Resend rides HTTPS, so this can leave the building even with the DB down.
       await alertAdmins('db_down', 'מסד הנתונים לא מגיב',
         `שאילתת בדיקה נכשלת כבר ${dbFailures} דקות: ${e.message}`);
@@ -197,6 +207,8 @@ export async function healthTick() {
   brokerFailures = brokerOk ? 0 : brokerFailures + 1;
   if (brokerFailures === UNREACHABLE_AFTER) {
     recordIncident('broker_down', 'mqtt broker', `disconnected x${brokerFailures}`);
+  }
+  if (brokerFailures === EMAIL_AFTER) {
     await alertAdmins('broker_down', 'ברוקר ה-MQTT מנותק',
       `השרת מנותק מהברוקר כבר ${brokerFailures} דקות — פקודות ותזמונים למכשירים לא יעבדו.`);
   }
