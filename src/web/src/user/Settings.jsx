@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, timeFormat } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, timeFormat, channelColorOf, ChannelDot } from '../ui.jsx';
 import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2 } from 'lucide-react';
 
 // Phones (caller-ID) + PIN + relay management — relay names/codes drive the IVR
@@ -21,6 +21,10 @@ export default function Settings() {
   const [showRemoved, setShowRemoved] = useState(false);
   const [clockFmt, setClockFmt] = useState(timeFormat.get()); // 12/24h time-entry preference (per device)
   const { busy, error, run, setError } = useAsync();
+  // Channel identity color (shared app-wide assignment — same as the calendar);
+  // disabled/removed channels fall back to grey.
+  const colorOf = useMemo(() => channelColorOf(devices.filter((d) => d.is_enabled)
+    .flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => r.id))), [devices]);
 
   const refresh = async () => {
     const [meRes, devRes] = await Promise.all([api.get('/me'), api.get('/devices')]);
@@ -266,7 +270,10 @@ export default function Settings() {
           <div className="space-y-2">
             {d.relays.map((r) => (
               <div key={r.id} className="grid grid-cols-2 sm:grid-cols-6 gap-2 items-center border border-line rounded-xl px-3 py-2">
-                <Input defaultValue={r.name} onBlur={(e) => e.target.value !== r.name && patchRelay(r, { name: e.target.value })} />
+                <span className="flex items-center gap-2 min-w-0">
+                  <ChannelDot color={colorOf(r.id)} />
+                  <Input defaultValue={r.name} onBlur={(e) => e.target.value !== r.name && patchRelay(r, { name: e.target.value })} />
+                </span>
                 <label className="text-sm flex items-center gap-1">
                   קוד:
                   <Input className="w-16" inputMode="numeric" defaultValue={r.ivr_digit}

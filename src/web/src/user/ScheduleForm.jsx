@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { Button, Input, TimeInput, Select, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
+import { Button, Input, TimeInput, Select, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf, ChannelDot } from '../ui.jsx';
 import { Check, ChevronDown, House, Trash2 } from 'lucide-react';
 
 // The schedule create/edit form, extracted so it can open as a modal on BOTH
@@ -204,6 +204,7 @@ function RelayMultiSelect({ relays, selected, onChange }) {
     return () => document.removeEventListener('mousedown', close);
   }, []);
   const toggle = (id) => onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  const colorOf = channelColorOf(relays.map((r) => r.id));
   const one = relays.find((r) => selected.length === 1 && r.id === selected[0]);
   const summary = selected.length === 0 ? 'בחרו ערוצים'
     : selected.length === relays.length ? `כל הערוצים (${relays.length})`
@@ -212,6 +213,7 @@ function RelayMultiSelect({ relays, selected, onChange }) {
     <div ref={ref} className="relative">
       <button type="button" onClick={() => setOpen(!open)}
         className="w-full flex items-center gap-2 bg-surface border border-line rounded-xl px-3 py-2 text-sm cursor-pointer hover:border-accent/50">
+        {one && <ChannelDot color={colorOf(one.id)} />}
         <span className={`flex-1 text-start ${selected.length ? '' : 'text-muted'}`}>{summary}</span>
         <ChevronDown size={15} className="text-muted shrink-0" />
       </button>
@@ -229,6 +231,7 @@ function RelayMultiSelect({ relays, selected, onChange }) {
               className="w-full flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-surface2 text-start"
               onClick={() => toggle(r.id)}>
               <span className="w-4 h-4 grid place-items-center">{selected.includes(r.id) && <Check size={14} className="text-accent-dk" />}</span>
+              <ChannelDot color={colorOf(r.id)} />
               <span className="flex-1 truncate">{r.name}</span>
               <span className="text-muted text-xs">{r.device}</span>
             </button>
@@ -442,12 +445,15 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
       {form && (
         <div className="space-y-3">
           {(form.id && !form.plan_id) || form.lock_relay ? (() => {
-            // The channel is fixed here — a plain headline, nothing to change.
+            // The channel is fixed here — a plain headline in the channel's
+            // app-wide identity color, nothing to change.
             const rid = Number(form.id && !form.plan_id ? form.relay_id : form.relay_ids[0]);
             const r = relays.find((x) => Number(x.id) === rid);
+            const color = r ? channelColorOf(relays.map((x) => x.id))(r.id) : '#6b7280';
             return (
               <div className="flex items-center gap-2 font-bold text-[17px]">
-                <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><House size={16} /></span>
+                <span className="w-8 h-8 rounded-[10px] text-white grid place-items-center shrink-0"
+                  style={{ backgroundColor: color }}><House size={16} /></span>
                 {r ? `${r.name} — ${r.device}` : (form.relay_name || 'ערוץ')}
               </div>
             );

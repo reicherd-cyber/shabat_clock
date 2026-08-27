@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot } from '../ui.jsx';
 import { UserRound, House } from 'lucide-react';
 
 // `to` makes the tile a clickable drill-down into the underlying data.
@@ -405,6 +405,16 @@ export function AdminSchedules() {
       {shown.length === 0 && schedules && <Card className="text-muted">לא נמצאו תזמונים</Card>}
       {/* Hierarchy: user → device → the device's schedules. */}
       {(() => {
+        // Channel identity dot, mapped per user over the relays present in their
+        // schedules (the admin list has no full relay roster; within this page
+        // the assignment is stable — built from the UNfiltered list).
+        const userColorOf = new Map();
+        for (const s of all) {
+          const uKey = s.user_id ?? 'none';
+          if (!userColorOf.has(uKey)) userColorOf.set(uKey, []);
+          userColorOf.get(uKey).push(s.relay_id);
+        }
+        for (const [k, ids] of userColorOf) userColorOf.set(k, channelColorOf(ids));
         const byUser = new Map();
         for (const s of shown) {
           const uKey = s.user_id ?? 'none';
@@ -441,6 +451,7 @@ export function AdminSchedules() {
                 {d.items.map((s, i) => (
                   <div key={s.id} className={`flex items-center justify-between flex-wrap gap-2 px-4 py-2.5 ${i > 0 ? 'border-t border-line' : ''} ${s.is_enabled ? '' : 'opacity-60'}`}>
                     <div className="text-sm">
+                      <ChannelDot color={userColorOf.get(s.user_id ?? 'none')(s.relay_id)} size={9} className="me-1.5 -mb-px" />
                       <b>{s.relay_name}</b>
                       {' — '}
                       {/* One-sided schedules render only their present side. */}

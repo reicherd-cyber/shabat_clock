@@ -140,7 +140,7 @@ export async function getHistory({ userId, limit = 50, cursor = null }) {
   }
 
   const cmds = await query(
-    `SELECT c.id, c.action, c.source, c.status, c.fail_reason, c.requested_at, r.name AS relay_name
+    `SELECT c.id, c.action, c.source, c.status, c.fail_reason, c.requested_at, c.relay_id, r.name AS relay_name
      FROM commands c JOIN relays r ON r.id = c.relay_id
      WHERE r.user_id = ? ${cmdWhere}
      ORDER BY c.requested_at DESC, c.id DESC LIMIT ?`,

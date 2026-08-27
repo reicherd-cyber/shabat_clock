@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, SectionHead, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot } from '../ui.jsx';
 import { Lightbulb, X, PhoneCall } from 'lucide-react';
 
 // Mockup .hist rows: icon square · sentence · time at the far edge.
@@ -19,7 +19,7 @@ function fmtTime(ts) {
   return `${d.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: '2-digit' })} ${time}`;
 }
 
-function Row({ item, first }) {
+function Row({ item, first, colorOf }) {
   const d = item.data;
   const isCmd = item.type === 'cmd';
   const ok = isCmd ? d.status === 'acked' : !['auth_fail', 'abandoned'].includes(d.outcome);
@@ -33,6 +33,7 @@ function Row({ item, first }) {
       <span className="min-w-0">
         {isCmd ? (
           <>
+            {d.relay_id != null && <ChannelDot color={colorOf(d.relay_id)} size={9} className="me-1.5 -mb-px" />}
             <b>{d.relay_name}</b> {d.action === 'on' ? 'הודלק' : 'כובה'} {SOURCE_HE[d.source] || ''}
             {d.status === 'failed' && <span className="text-off"> — נכשל{d.fail_reason === 'offline' ? ' (המכשיר לא היה מחובר)' : ''}</span>}
           </>
@@ -52,7 +53,11 @@ export default function History() {
   const [items, setItems] = useState([]);
   const [cursor, setCursor] = useState(null);
   const [done, setDone] = useState(false);
+  const [devices, setDevices] = useState([]);
   const { busy, error, run } = useAsync();
+  // Channel identity color (shared app-wide assignment — same as the calendar).
+  const colorOf = useMemo(() => channelColorOf(devices.filter((d) => d.is_enabled)
+    .flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => r.id))), [devices]);
 
   const load = (reset = false) => run(async () => {
     const q = !reset && cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
@@ -61,7 +66,10 @@ export default function History() {
     setCursor(res.next_cursor);
     setDone(!res.next_cursor);
   });
-  useEffect(() => { load(true); }, []);
+  useEffect(() => {
+    load(true);
+    api.get('/devices').then(setDevices).catch(() => {});
+  }, []);
 
   return (
     <>
@@ -70,7 +78,7 @@ export default function History() {
       {items.length === 0 && !busy && <Card>אין פעילות עדיין.</Card>}
       {items.length > 0 && (
         <Card flush>
-          {items.map((it, i) => <Row key={`${it.type}:${it.id}`} item={it} first={i === 0} />)}
+          {items.map((it, i) => <Row key={`${it.type}:${it.id}`} item={it} first={i === 0} colorOf={colorOf} />)}
         </Card>
       )}
       {!done && items.length > 0 && (

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, SectionHead, Modal, ErrorNote, useAsync, DAY_NAMES, Toggle, SyncNote } from '../ui.jsx';
+import { Card, Button, SectionHead, Modal, ErrorNote, useAsync, DAY_NAMES, Toggle, SyncNote, channelColorOf } from '../ui.jsx';
 import { House, Layers, Trash2, Plus, Check, RefreshCw, Sparkles, Pencil } from 'lucide-react';
 import {
   ScheduleFormModal, emptyForm, rowToForm, anchorText, holidaySummary, fmtDate,
@@ -16,6 +16,8 @@ export default function Schedules() {
   const [formInit, setFormInit] = useState(null);
   const [tab, setTab] = useState('channels'); // 'channels' | 'plans'
   const { busy, error, run, setError } = useAsync();
+  // Channel identity color (shared app-wide assignment — same as the calendar).
+  const colorOf = useMemo(() => channelColorOf(relays.map((r) => r.id)), [relays]);
 
   const refresh = async () => {
     const [s, devices] = await Promise.all([api.get('/schedules'), api.get('/devices')]);
@@ -201,7 +203,7 @@ export default function Schedules() {
         ? [...new Set(members.map((m) => m[`${side}_day_of_week`]).filter((v) => v != null).map(Number))].sort((a, b) => a - b)
         : [];
       const chanMap = new Map();
-      for (const m of members) if (!chanMap.has(m.relay_id)) chanMap.set(m.relay_id, { name: m.relay_name, device: m.device_name });
+      for (const m of members) if (!chanMap.has(m.relay_id)) chanMap.set(m.relay_id, { id: m.relay_id, name: m.relay_name, device: m.device_name });
       return {
         pid, members, repr, daysSet,
         relayIds: [...chanMap.keys()],
@@ -324,9 +326,10 @@ export default function Schedules() {
                 {/* channel chips — a full-width line of their own, wraps cleanly at 20 channels */}
                 <div className="w-full flex flex-wrap gap-1.5">
                   {p.channelList.map((c) => (
-                    <span key={`${c.device}·${c.name}`} title={c.device}
-                      className="inline-flex items-center gap-1 rounded-lg bg-[#E4EFFE] text-accent-dk font-bold text-[13px] px-2.5 py-1">
-                      <House size={12} />{c.name}
+                    <span key={c.id} title={c.device}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#E4EFFE] text-accent-dk font-bold text-[13px] px-2.5 py-1">
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colorOf(c.id) }} />
+                      {c.name}
                     </span>
                   ))}
                 </div>
@@ -341,9 +344,11 @@ export default function Schedules() {
       {tab === 'channels' && groups.map((g) => (
         <div key={`${g.device}·${g.relay}`} className="mb-7">
           <Card flush className="overflow-hidden border-accent/30">
-            {/* relay band — every relay (מטבח, סלון…) is its own clearly-bounded table */}
+            {/* relay band — every relay (מטבח, סלון…) is its own clearly-bounded table;
+                the icon square carries the channel's app-wide identity color */}
             <div className="flex items-center gap-2.5 px-5 py-3 bg-[#E4EFFE]/70 border-b-2 border-accent/40">
-              <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><House size={16} /></span>
+              <span className="w-8 h-8 rounded-[10px] text-white grid place-items-center shrink-0"
+                style={{ backgroundColor: colorOf(g.relayId) }}><House size={16} /></span>
               <h3 className="font-bold text-[17px]">{g.relay}</h3>
               <span className="text-muted text-sm ms-auto">{g.items.length === 0 ? '' : g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`}</span>
               <Button className="!py-1 !px-3 text-sm" disabled={busy}

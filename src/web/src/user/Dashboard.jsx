@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, Input, TimeInput, useInterval } from '../ui.jsx';
+import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, Input, TimeInput, useInterval, channelColorOf, ChannelDot } from '../ui.jsx';
 import { House, Timer, TriangleAlert } from 'lucide-react';
 
 const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
@@ -80,6 +80,10 @@ export default function Dashboard() {
     }
   };
 
+  // Channel identity color (shared app-wide assignment — same as the calendar).
+  const colorOf = useMemo(() => channelColorOf((devices || []).filter((d) => d.is_enabled)
+    .flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => r.id))), [devices]);
+
   if (!devices) return <p className="text-muted">טוען…</p>;
   // Removed devices (is_enabled=false) never appear on the dashboard — Settings is
   // where they're restored.
@@ -115,7 +119,9 @@ export default function Dashboard() {
               <div key={r.id} className={i > 0 ? 'border-t border-dashed border-line' : ''}>
                 <div className={`flex items-center gap-3.5 px-5 py-3.5 ${d.is_online ? '' : 'opacity-55'}`}>
                   <CodeChip>{r.ivr_digit}</CodeChip>
-                  <span className="flex-1 font-medium">{r.name}</span>
+                  <span className="flex-1 font-medium inline-flex items-center gap-2">
+                    <ChannelDot color={colorOf(r.id)} />{r.name}
+                  </span>
                   {r.current_state === 'on' && (
                     <button
                       title="כיבוי בשעה…"

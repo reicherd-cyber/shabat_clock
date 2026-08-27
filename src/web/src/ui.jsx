@@ -2,6 +2,25 @@ import { useEffect, useRef, useState } from 'react';
 
 export const DAY_NAMES = { 1: 'ראשון', 2: 'שני', 3: 'שלישי', 4: 'רביעי', 5: 'חמישי', 6: 'שישי', 7: 'שבת' };
 
+// ── channel colors ──
+// Validated categorical palette (dataviz skill, fixed order). Every channel
+// (relay) keeps ONE color across the whole app — assigned by ascending relay id
+// over the account's enabled channels, never re-dealt when filters change. The
+// calendar established the convention; every page showing a channel follows it.
+export const CHANNEL_PALETTE = ['#2a78d6', '#008300', '#e87ba4', '#eda100', '#1baf7a', '#eb6834', '#4a3aa7', '#e34948'];
+export function channelColorOf(relayIds) {
+  const ids = [...new Set(relayIds)].sort((a, b) => a - b);
+  const map = new Map(ids.map((id, i) => [id, CHANNEL_PALETTE[i % CHANNEL_PALETTE.length]]));
+  // Unknown id (a removed channel's leftover rows) → neutral grey, never a
+  // palette color that would collide with a live channel.
+  return (id) => map.get(id) || '#6b7280';
+}
+// The colored identity dot rendered next to a channel name.
+export const ChannelDot = ({ color, size = 10, className = '' }) => (
+  <span className={`inline-block rounded-full shrink-0 ${className}`}
+    style={{ width: size, height: size, backgroundColor: color }} />
+);
+
 export function useInterval(fn, ms) {
   const ref = useRef(fn);
   ref.current = fn;

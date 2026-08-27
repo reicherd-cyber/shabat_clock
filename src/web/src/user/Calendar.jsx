@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { getTimes } from 'suncalc';
 import { HDate, HebrewCalendar, flags, gematriya } from '@hebcal/core';
 import { api } from '../api.js';
-import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
+import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf } from '../ui.jsx';
 import { ChevronRight, ChevronLeft, ChevronDown, House, Check, Plus } from 'lucide-react';
 import { ScheduleFormModal, emptyForm, plusMinutes, rowToForm } from './ScheduleForm.jsx';
 
@@ -11,10 +11,6 @@ import { ScheduleFormModal, emptyForm, plusMinutes, rowToForm } from './Schedule
 // day fits on screen; ON→OFF pairs render as colored blocks at their real times,
 // split at midnight when a שבת/חג block spans days. Day columns are shaded by
 // real day/night (visual suncalc, Jerusalem) with an amber שקיעה line.
-
-// Validated categorical palette (dataviz skill, fixed order — color follows the
-// relay, assigned by ascending relay id, never re-dealt when filters change).
-const PALETTE = ['#2a78d6', '#008300', '#e87ba4', '#eda100', '#1baf7a', '#eb6834', '#4a3aa7', '#e34948'];
 
 const MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
 const VIEWS = [{ v: 'month', label: 'חודש' }, { v: 'week', label: 'שבוע' }, { v: 'day', label: 'יום' }];
@@ -375,12 +371,9 @@ export default function Calendar() {
     return () => clearInterval(t);
   }, []);
 
-  // Fixed color per relay id — stable regardless of filtering.
-  const colorOf = useMemo(() => {
-    const ids = [...new Set([...relays.map((r) => r.id), ...(events || []).map((e) => e.relay_id)])].sort((a, b) => a - b);
-    const map = new Map(ids.map((id, i) => [id, PALETTE[i % PALETTE.length]]));
-    return (id) => map.get(id) || PALETTE[0];
-  }, [relays, events]);
+  // Fixed color per relay id — the shared app-wide assignment (ui.jsx), so the
+  // calendar agrees with the dashboard/schedules pages; stable under filtering.
+  const colorOf = useMemo(() => channelColorOf(relays.map((r) => r.id)), [relays]);
 
 
   const todayStr = ymd(new Date());
@@ -423,13 +416,14 @@ export default function Calendar() {
 
   // gap (כבוי window of a כיבוי-והדלקה schedule): grey fill, dashed relay-color
   // edge — the relay keeps its identity but the block clearly reads "resting".
-  // stateColors (day matrix): the column already names the channel, so color
-  // carries STATE instead — green = דולק, soft red dashed = כבוי window.
+  // stateColors (day/week/month matrix): active time is painted in the CHANNEL's
+  // color — the same color the channel carries everywhere in the app — over the
+  // soft-red "off" column background; a כבוי window keeps the red dashed edge.
   const blockStyle = (relayId, seg = {}, stateColors = false) => ({
     ...(stateColors
       ? (seg.gap
         ? { backgroundColor: 'rgba(227,73,72,0.13)', borderInlineStart: '3px dashed #e34948' }
-        : { backgroundColor: 'rgba(0,131,0,0.15)', borderInlineStart: '3px solid #008300' })
+        : { backgroundColor: `${colorOf(relayId)}2e`, borderInlineStart: `3px solid ${colorOf(relayId)}` })
       : {
         backgroundColor: seg.gap ? 'rgba(107,114,128,0.14)' : `${colorOf(relayId)}24`,
         borderInlineStart: `3px ${seg.gap ? 'dashed' : 'solid'} ${colorOf(relayId)}`,
@@ -579,20 +573,29 @@ export default function Calendar() {
     </div>
   );
 
-  const StateLegend = ({ showOff = true }) => (
-    <div className="flex items-center gap-4 px-4 py-1.5 border-b border-line text-xs text-muted">
-      <span className="inline-flex items-center gap-1.5">
-        <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(0,131,0,0.35)', borderInlineStart: '3px solid #008300' }} />
-        דולק
-      </span>
-      {showOff && (
+  const StateLegend = ({ showOff = true }) => {
+    // ON is painted in each channel's own color — the legend shows the actual
+    // shown-channel colors (up to three) instead of a single generic green.
+    const shownColors = relays.filter((r) => !hiddenRelays.has(r.id)).slice(0, 3).map((r) => colorOf(r.id));
+    return (
+      <div className="flex items-center gap-4 px-4 py-1.5 border-b border-line text-xs text-muted">
         <span className="inline-flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(227,73,72,0.18)' }} />
-          כבוי
+          <span className="flex">
+            {(shownColors.length ? shownColors : ['#008300']).map((c, i) => (
+              <span key={i} className="w-3 h-3 rounded-sm" style={{ backgroundColor: `${c}59`, borderInlineStart: `3px solid ${c}`, ...(i > 0 ? { marginInlineStart: 2 } : {}) }} />
+            ))}
+          </span>
+          דולק — בצבע הערוץ
         </span>
-      )}
-    </div>
-  );
+        {showOff && (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(227,73,72,0.18)' }} />
+            כבוי
+          </span>
+        )}
+      </div>
+    );
+  };
 
   // ── day-band matrix (week AND month): the day view's layout — channels are
   // columns — with the vertical axis being DAYS: each day is one equal band
@@ -665,7 +668,7 @@ export default function Calendar() {
                         {i > 0 && <div className="absolute inset-x-0 top-0" style={{ borderTop: '3px solid rgba(43,58,103,0.45)' }} />}
                       </div>
                     ))}
-                    {/* green state blocks — time scales inside the day band */}
+                    {/* active-state blocks in the channel's own color — time scales inside the day band */}
                     {days.flatMap((c, i) => stateSegsFor(r, c.date).map((s, j) => {
                       const top = i * BAND_H + (s.startMin / 1440) * BAND_H;
                       const h = Math.max(7, ((s.endMin - s.startMin) / 1440) * BAND_H - 1);
@@ -675,8 +678,8 @@ export default function Calendar() {
                           title={`${segLabel(s)} · ${r.name} — לחיצה לעריכה`}
                           style={{
                             top, height: h, insetInlineStart: 2, insetInlineEnd: 2,
-                            backgroundColor: 'rgba(0,131,0,0.2)',
-                            borderInlineStart: '3px solid #008300',
+                            backgroundColor: `${colorOf(r.id)}38`,
+                            borderInlineStart: `3px solid ${colorOf(r.id)}`,
                           }}>
                           {h >= 15 && <div className="text-[10.5px] font-bold truncate leading-tight">{segLabel(s)}</div>}
                         </div>
