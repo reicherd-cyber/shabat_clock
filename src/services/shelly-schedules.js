@@ -204,11 +204,30 @@ export async function syncShellyLocalSchedules(device) {
   }
   const listed = await shellyCall(device, 'Schedule.List');
   const existing = Array.isArray(listed?.jobs) ? listed.jobs : [];
-  const same = existing.length === desired.length
-    && existing.map(canonical).sort().join('\n') === desired.map(canonical).sort().join('\n');
-  if (same) return { changed: false, jobs: desired.length };
-  await shellyCall(device, 'Schedule.DeleteAll');
-  for (const j of desired) await shellyCall(device, 'Schedule.Create', j);
+  // Per-job reconcile — NEVER DeleteAll+recreate. On a filtered line the
+  // connection window can close mid-sequence; the old wipe-then-rewrite left a
+  // real device with an EMPTY schedule table when the window died between the
+  // DeleteAll and the Creates (2026-08-27, device 3 — rev climbed 113 in 3.5h
+  // of restart-from-scratch cycles that never once completed). Now matching
+  // jobs are never touched and each attempt only writes the delta, so
+  // interrupted syncs converge instead of starting over.
+  const wantCounts = new Map();
+  for (const j of desired) { const k = canonical(j); wantCounts.set(k, (wantCounts.get(k) || 0) + 1); }
+  const extras = [];
+  for (const j of existing) {
+    const k = canonical(j);
+    const n = wantCounts.get(k) || 0;
+    if (n > 0) wantCounts.set(k, n - 1); else extras.push(j.id);
+  }
+  const missing = [];
+  for (const j of desired) {
+    const k = canonical(j);
+    const n = wantCounts.get(k) || 0;
+    if (n > 0) { missing.push(j); wantCounts.set(k, n - 1); }
+  }
+  if (!extras.length && !missing.length) return { changed: false, jobs: desired.length };
+  for (const id of extras) await shellyCall(device, 'Schedule.Delete', { id });
+  for (const j of missing) await shellyCall(device, 'Schedule.Create', j);
   if (fit.dropped) {
     // Visible trace that the horizon is truncated — only on an actual rewrite,
     // so a stably over-full device doesn't spam an event every daily sync.
