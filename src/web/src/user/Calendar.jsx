@@ -357,10 +357,10 @@ export default function Calendar() {
   }, []);
 
   // ±3-day padding keeps cross-boundary intervals pairable; display slices by
-  // cells. The day matrix replays STATE, so it looks back 35 days — enough for
-  // month-long yearly ranges whose ON fired weeks before the shown day.
-  const fetchFrom = shiftYmd(cells[0].date, view === 'day' ? -35 : -3);
-  const fetchDays = cells.length + (view === 'day' ? 37 : 6);
+  // cells. The day and week views replay STATE, so they look back 35 days —
+  // enough for month-long yearly ranges whose ON fired weeks before the window.
+  const fetchFrom = shiftYmd(cells[0].date, view === 'month' ? -3 : -35);
+  const fetchDays = cells.length + (view === 'month' ? 6 : 37);
   useEffect(() => {
     setEvents(null);
     api.get(`/schedules/calendar?from=${fetchFrom}&days=${fetchDays}`)
@@ -383,7 +383,6 @@ export default function Calendar() {
   const intervals = useMemo(() => toIntervals((events || []).filter((ev) => !hiddenRelays.has(ev.relay_id))),
     [events, hiddenRelays]);
   const monthChips = useMemo(() => chipsByDay(intervals), [intervals]);
-  const gridSegs = useMemo(() => segmentsByDay(intervals), [intervals]);
 
   const todayStr = ymd(new Date());
   const nowMin = (() => { const d = new Date(nowTick); return d.getHours() * 60 + d.getMinutes(); })();
@@ -484,16 +483,21 @@ export default function Calendar() {
 
   // One time-axis column: night shading, gridlines, blocks, now-line. Shared by
   // the week view (column = a date) and the day view (column = a channel).
-  const TimeColumn = ({ date, segs, minW, onEmptyClick, blockSub, stateColors, offTint }) => {
+  const TimeColumn = ({ date, segs, minW, onEmptyClick, blockSub, stateColors, offTint, laneCount = 1 }) => {
     const sun = sunFor(date);
     return (
       <div className={`flex-1 relative border-line border-s ${minW || 'min-w-0'} cursor-pointer`}
         title="לחיצה: תזמון חדש בשעה זו"
         onClick={(e) => {
-          // Clicked hour (rounded to the half hour) prefills the new schedule.
+          // Clicked hour (rounded to the half hour) prefills the new schedule;
+          // with channel lanes, the clicked LANE picks the channel (RTL: lane 0
+          // sits at the inline start = the right edge).
           const rect = e.currentTarget.getBoundingClientRect();
           const min = Math.min(1410, Math.max(0, Math.round(((e.clientY - rect.top) / HOUR_PX) * 60 / 30) * 30));
-          onEmptyClick(`${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`);
+          const idx = laneCount > 1
+            ? Math.max(0, Math.min(laneCount - 1, Math.floor(((rect.right - e.clientX) / rect.width) * laneCount)))
+            : 0;
+          onEmptyClick(`${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`, idx);
         }}>
         {/* state view: the whole column is "off" (soft red) unless a green block covers it */}
         {offTint && <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />}
@@ -526,10 +530,15 @@ export default function Calendar() {
               }}>
               {stateColors ? (
                 // State block: the ON moment at the top edge, the OFF moment
-                // pinned to the bottom edge — each at its real position.
-                h >= 42 && s.to ? (
+                // pinned to the bottom edge — each at its real position. In
+                // narrow lanes (many channels per column) the tooltip carries
+                // the text instead.
+                s.lanes > 3 ? null : h >= 42 && s.to ? (
                   <>
                     <div className="text-[12.5px] font-bold leading-snug truncate">{s.from ? `הדלקה ${s.from}` : 'דולק'}</div>
+                    {s.lanes > 1 && h >= 64 && (
+                      <div className="text-[11px] text-muted leading-snug truncate">{s.relay_name}</div>
+                    )}
                     <div className="absolute bottom-0.5 start-2 end-2 text-[12.5px] font-bold leading-snug truncate">כיבוי {s.to}</div>
                   </>
                 ) : (
@@ -572,9 +581,23 @@ export default function Calendar() {
     </div>
   );
 
+  const StateLegend = () => (
+    <div className="flex items-center gap-4 px-4 py-1.5 border-b border-line text-xs text-muted">
+      <span className="inline-flex items-center gap-1.5">
+        <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(0,131,0,0.35)', borderInlineStart: '3px solid #008300' }} />
+        דולק
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(227,73,72,0.18)' }} />
+        כבוי
+      </span>
+    </div>
+  );
+
   // ── time grid (week): whole day visible, four 6-hour sections ──
   const TimeGrid = () => (
     <Card flush className="overflow-hidden">
+      <StateLegend />
       <div className="flex border-b border-line bg-surface2/60">
         <div className="w-14 shrink-0" />
         {cells.map((c) => {
@@ -600,11 +623,18 @@ export default function Calendar() {
       ) : (
         <div className="flex" style={{ height: 24 * HOUR_PX }}>
           <HourGutter />
-          {cells.map((c) => (
-            <TimeColumn key={c.date} date={c.date} segs={gridSegs.get(c.date) || []}
-              onEmptyClick={(t) => openSched(c.date, t)}
-              blockSub={(s) => s.relay_name} />
-          ))}
+          {cells.map((c) => {
+            // Same state treatment as the day matrix: each visible channel gets
+            // a fixed lane in the day's column — green where on, red where off.
+            const laneRelays = relays.filter((r) => !hiddenRelays.has(r.id));
+            return (
+              <TimeColumn key={c.date} date={c.date} stateColors offTint
+                laneCount={laneRelays.length || 1}
+                segs={laneRelays.flatMap((r, i) => stateSegsFor(r, c.date)
+                  .map((s) => ({ ...s, lane: i, lanes: laneRelays.length })))}
+                onEmptyClick={(t, idx) => openSched(c.date, t, laneRelays[idx]?.id)} />
+            );
+          })}
         </div>
       )}
     </Card>
@@ -617,17 +647,7 @@ export default function Calendar() {
     const shownRelays = relays.filter((r) => !hiddenRelays.has(r.id));
     return (
       <Card flush className="overflow-hidden">
-        {/* state legend — in the day matrix color means STATE, not channel */}
-        <div className="flex items-center gap-4 px-4 py-1.5 border-b border-line text-xs text-muted">
-          <span className="inline-flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(0,131,0,0.35)', borderInlineStart: '3px solid #008300' }} />
-            דולק
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(227,73,72,0.18)' }} />
-            כבוי
-          </span>
-        </div>
+        <StateLegend />
         <div className="overflow-x-auto">
           <div style={{ minWidth: Math.max(0, shownRelays.length * 104 + 56) }}>
             <div className="flex border-b border-line bg-surface2/60">
@@ -701,10 +721,10 @@ export default function Calendar() {
                 )}
                 <div className="space-y-[3px]">
                   {shown.map((chip, j) => (
-                    <div key={j} style={blockStyle(chip.relay_id, chip)} title={`${chip.relay_name} · ${chip.device_name} — לחיצה לעריכה`}
+                    <div key={j} style={blockStyle(chip.relay_id, chip, true)} title={`${chip.relay_name} · ${chip.device_name} — לחיצה לעריכה`}
                       onClick={(e) => { e.stopPropagation(); openEdit(chip.sid); }}
-                      className={`text-[12.5px] font-medium leading-tight rounded px-1.5 py-[3px] truncate ${chip.gap ? 'text-muted' : 'text-ink'} hover:ring-1 hover:ring-accent/50`}>
-                      {chip.text}
+                      className="text-[12.5px] font-medium leading-tight px-1.5 py-[3px] truncate text-ink hover:ring-1 hover:ring-accent/50">
+                      {chip.relay_name} · {chip.text}
                     </div>
                   ))}
                   {chips.length > 3 && (
@@ -763,9 +783,9 @@ export default function Calendar() {
         {dayModal && (
           <div className="space-y-2">
             {(monthChips.get(dayModal) || []).map((chip, i) => (
-              <div key={i} style={blockStyle(chip.relay_id, chip)}
+              <div key={i} style={blockStyle(chip.relay_id, chip, true)}
                 onClick={() => openEdit(chip.sid)} title="לחיצה לעריכה"
-                className={`rounded-md px-3 py-2 text-sm cursor-pointer ${chip.gap ? 'text-muted' : 'text-ink'} hover:ring-1 hover:ring-accent/50`}>
+                className="px-3 py-2 text-sm cursor-pointer text-ink hover:ring-1 hover:ring-accent/50">
                 <b>{chip.text}</b>
                 <span className="text-muted"> — {chip.relay_name} · <House size={11} className="inline" /> {chip.device_name}</span>
               </div>
