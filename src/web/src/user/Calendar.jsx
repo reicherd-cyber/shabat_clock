@@ -472,7 +472,7 @@ export default function Calendar() {
       if (ev.action === 'on' && !cur) {
         cur = { startMin: m, sid: ev.schedule_id, from: ev.time };
       } else if (ev.action === 'off' && cur) {
-        segs.push({ ...cur, endMin: Math.max(m, cur.startMin + 1), label: cur.from ? `${cur.from}–${ev.time}` : `עד ${ev.time}` });
+        segs.push({ ...cur, endMin: Math.max(m, cur.startMin + 1), to: ev.time, label: cur.from ? `${cur.from}–${ev.time}` : `עד ${ev.time}` });
         cur = null;
       }
     }
@@ -514,7 +514,7 @@ export default function Calendar() {
           const h = Math.max(24, ((s.endMin - s.startMin) / 60) * HOUR_PX - 2);
           return (
             <div key={j}
-              className="absolute rounded-md px-2 py-0.5 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50"
+              className={`absolute px-2 py-0.5 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50 ${stateColors ? '' : 'rounded-md'}`}
               onClick={(e) => { e.stopPropagation(); openEdit(s.sid); }}
               title={`${s.label} · ${s.relay_name} · ${s.device_name} — לחיצה לעריכה`}
               style={{
@@ -524,9 +524,26 @@ export default function Calendar() {
                 width: `calc(${laneW}% - 5px)`,
                 ...blockStyle(s.relay_id, s, stateColors),
               }}>
-              <div className="text-[13px] font-bold leading-snug truncate">{s.label}</div>
-              {h >= 44 && blockSub && (
-                <div className="text-xs text-muted leading-snug truncate">{blockSub(s)}</div>
+              {stateColors ? (
+                // State block: the ON moment at the top edge, the OFF moment
+                // pinned to the bottom edge — each at its real position.
+                h >= 42 && s.to ? (
+                  <>
+                    <div className="text-[12.5px] font-bold leading-snug truncate">{s.from ? `הדלקה ${s.from}` : 'דולק'}</div>
+                    <div className="absolute bottom-0.5 start-2 end-2 text-[12.5px] font-bold leading-snug truncate">כיבוי {s.to}</div>
+                  </>
+                ) : (
+                  <div className="text-[12.5px] font-bold leading-snug truncate">
+                    {s.from && s.to ? `${s.from}–${s.to}` : s.to ? `כיבוי ${s.to}` : s.from ? `הדלקה ${s.from}` : 'דולק'}
+                  </div>
+                )
+              ) : (
+                <>
+                  <div className="text-[13px] font-bold leading-snug truncate">{s.label}</div>
+                  {h >= 44 && blockSub && (
+                    <div className="text-xs text-muted leading-snug truncate">{blockSub(s)}</div>
+                  )}
+                </>
               )}
             </div>
           );
