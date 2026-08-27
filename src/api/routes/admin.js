@@ -90,7 +90,7 @@ adminRouter.get('/users/:id', async (req, res, next) => {
   try {
     const user = await getUser(req.params.id);
     if (!user) throw errors.notFound();
-    user.phones = await query('SELECT id, phone, label, is_primary, verified_at FROM user_phones WHERE user_id = ?', [user.id]);
+    user.phones = await query('SELECT id, phone, label, is_primary, verified_at FROM user_phones WHERE user_id = ? AND deleted_at IS NULL', [user.id]);
     res.json(user);
   } catch (e) { next(e); }
 });
@@ -140,20 +140,73 @@ adminRouter.patch('/users/:id', requireWrite, async (req, res, next) => {
       await setUserEmailAdmin({ userId: Number(req.params.id), email: req.body.email, actor: adminActor(req) });
       fields.email = req.body.email; // audit-diff visibility only
     }
-    // Add a verified phone directly (admin path).
+    // Add a verified phone directly (admin path). The phone column is globally
+    // UNIQUE even across soft-deleted rows, so re-adding this user's own removed
+    // number revives that row instead of failing on the dup.
     if (req.body?.add_phone) {
       const phone = normalizePhone(req.body.add_phone);
       if (!isValidIsraeliPhone(phone)) throw errors.validation('Invalid phone', { phone });
-      await query(
-        'INSERT INTO user_phones (user_id, phone, verified_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),?)',
-        [req.params.id, phone, adminActor(req)],
-      ).catch((e) => {
-        if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', `המספר ${phone} כבר משויך לחשבון אחר — מספר טלפון יכול להשתייך לחשבון אחד בלבד`);
-        throw e;
-      });
+      const [existing] = await query('SELECT id, user_id, deleted_at FROM user_phones WHERE phone = ?', [phone]);
+      if (existing && Number(existing.user_id) !== Number(req.params.id)) {
+        throw errors.conflict('CONFLICT', `המספר ${phone} כבר משויך לחשבון אחר — מספר טלפון יכול להשתייך לחשבון אחד בלבד`);
+      }
+      if (existing && existing.deleted_at == null) {
+        throw errors.conflict('CONFLICT', `המספר ${phone} כבר קיים בחשבון הזה`);
+      }
+      if (existing) {
+        await query('UPDATE user_phones SET deleted_at = NULL, verified_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?',
+          [adminActor(req), existing.id]);
+      } else {
+        await query(
+          'INSERT INTO user_phones (user_id, phone, verified_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),?)',
+          [req.params.id, phone, adminActor(req)],
+        );
+      }
     }
     await audit(req, 'update', 'user', Number(req.params.id), { before, after: fields });
     res.json(await getUser(req.params.id));
+  } catch (e) { next(e); }
+});
+
+// ── user phones (admin path): edit/remove without any OTP — the admin entry is
+// the verification, matching add_phone; every change audit-logged. Same rules as
+// the user flow otherwise: one account per number, remove = soft deleted_at flip
+// (re-adding the number revives the row). No last-phone guard here — an admin
+// may deliberately strip a number, and the flip is reversible.
+adminRouter.patch('/users/:id/phones/:phoneId', requireWrite, async (req, res, next) => {
+  try {
+    const [row] = await query('SELECT * FROM user_phones WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
+      [req.params.phoneId, req.params.id]);
+    if (!row) throw errors.notFound();
+    const sets = {};
+    if (req.body?.phone !== undefined) {
+      const phone = normalizePhone(req.body.phone);
+      if (!isValidIsraeliPhone(phone)) throw errors.validation('Invalid phone', { phone });
+      sets.phone = phone;
+    }
+    if (req.body?.label !== undefined) sets.label = String(req.body.label).trim() || null;
+    if (!Object.keys(sets).length) return res.json({ ok: true });
+    sets.updated_by = adminActor(req);
+    const clauses = Object.keys(sets).map((k) => `${k} = ?`);
+    if (sets.phone) clauses.push('verified_at = UTC_TIMESTAMP()');
+    await query(`UPDATE user_phones SET ${clauses.join(', ')} WHERE id = ?`, [...Object.values(sets), row.id])
+      .catch((e) => {
+        if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', `המספר ${sets.phone} כבר קיים במערכת — מספר טלפון יכול להשתייך לחשבון אחד בלבד`);
+        throw e;
+      });
+    await audit(req, 'update', 'user_phone', row.id, { before: { phone: row.phone, label: row.label }, after: sets });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+adminRouter.delete('/users/:id/phones/:phoneId', requireWrite, async (req, res, next) => {
+  try {
+    const [row] = await query('SELECT * FROM user_phones WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
+      [req.params.phoneId, req.params.id]);
+    if (!row) throw errors.notFound();
+    await query('UPDATE user_phones SET deleted_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?', [adminActor(req), row.id]);
+    await audit(req, 'delete', 'user_phone', row.id, { before: { phone: row.phone } });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
+import { Pencil, Trash2 } from 'lucide-react';
 
 export default function Users() {
   const [users, setUsers] = useState(null);
@@ -36,17 +37,36 @@ export default function Users() {
     setPinReset(null);
   });
 
-  // Phone manager: list a user's numbers + add one directly — admin-added
-  // numbers are verified immediately (no OTP), server-side add_phone path.
+  // Phone manager: list a user's numbers + add/edit/remove directly — the admin
+  // path needs no OTP (admin entry = verification, server-side); remove is a
+  // soft flip, re-adding the number revives it.
   const [phoneMgr, setPhoneMgr] = useState(null); // {id, name, phones, new_phone}
+  const [phoneEdit, setPhoneEdit] = useState(null); // {id, phone, label} being edited inline
+  const [phoneDel, setPhoneDel] = useState(null); // phone row awaiting remove confirmation
   const openPhones = (u) => run(async () => {
     const full = await adminApi.get(`/users/${u.id}`);
+    setPhoneEdit(null);
     setPhoneMgr({ id: u.id, name: u.full_name, phones: full.phones || [], new_phone: '' });
   });
+  const reloadPhones = async () => {
+    const full = await adminApi.get(`/users/${phoneMgr.id}`);
+    setPhoneMgr((m) => ({ ...m, phones: full.phones || [], new_phone: '' }));
+  };
   const addPhone = () => run(async () => {
     await adminApi.patch(`/users/${phoneMgr.id}`, { add_phone: phoneMgr.new_phone.trim() });
-    const full = await adminApi.get(`/users/${phoneMgr.id}`);
-    setPhoneMgr({ ...phoneMgr, phones: full.phones || [], new_phone: '' });
+    await reloadPhones();
+  });
+  const savePhoneEdit = () => run(async () => {
+    await adminApi.patch(`/users/${phoneMgr.id}/phones/${phoneEdit.id}`, {
+      phone: phoneEdit.phone.trim(), label: phoneEdit.label,
+    });
+    setPhoneEdit(null);
+    await reloadPhones();
+  });
+  const removePhone = () => run(async () => {
+    await adminApi.del(`/users/${phoneMgr.id}/phones/${phoneDel.id}`);
+    setPhoneDel(null);
+    await reloadPhones();
   });
 
   // Impersonate: open the user panel as them [D14] — token stored in the user slot.
@@ -135,18 +155,31 @@ export default function Users() {
         )}
       </Modal>
 
-      <Modal open={!!phoneMgr} onClose={() => setPhoneMgr(null)} title={`טלפונים — ${phoneMgr?.name || ''}`}>
+      <Modal open={!!phoneMgr} onClose={() => { setPhoneMgr(null); setPhoneEdit(null); }} title={`טלפונים — ${phoneMgr?.name || ''}`}>
         {phoneMgr && (
           <div className="space-y-3">
             {phoneMgr.phones.length === 0 && <p className="text-muted text-sm">אין מספרים משויכים למשתמש זה.</p>}
-            {phoneMgr.phones.map((p) => (
+            {phoneMgr.phones.map((p) => (phoneEdit?.id === p.id ? (
+              <div key={p.id} className="flex items-center gap-2 text-sm border border-accent rounded-xl px-3 py-2">
+                <Input dir="ltr" type="tel" className="!py-1.5 flex-1" value={phoneEdit.phone}
+                  onChange={(e) => setPhoneEdit({ ...phoneEdit, phone: e.target.value })} />
+                <Input className="!py-1.5 w-24" placeholder="תווית" value={phoneEdit.label}
+                  onChange={(e) => setPhoneEdit({ ...phoneEdit, label: e.target.value })} />
+                <Button className="!px-2.5 !py-1 text-xs" disabled={busy || !phoneEdit.phone.trim()} onClick={savePhoneEdit}>שמור</Button>
+                <Button variant="ghost" className="!px-2.5 !py-1 text-xs" onClick={() => setPhoneEdit(null)}>ביטול</Button>
+              </div>
+            ) : (
               <div key={p.id} className="flex items-center gap-2 text-sm border border-line rounded-xl px-3 py-2">
                 <span dir="ltr" className="font-medium">{p.phone}</span>
                 {p.label && <span className="text-muted text-xs">{p.label}</span>}
                 {!!p.is_primary && <Badge ok>ראשי</Badge>}
                 <span className="ms-auto text-xs text-muted">{p.verified_at ? 'מאומת' : 'לא מאומת'}</span>
+                <button className="text-muted hover:text-accent-dk cursor-pointer" title="עריכת המספר"
+                  onClick={() => setPhoneEdit({ id: p.id, phone: p.phone, label: p.label || '' })}><Pencil size={15} /></button>
+                <button className="text-muted hover:text-off cursor-pointer" title="הסרת המספר"
+                  onClick={() => setPhoneDel(p)}><Trash2 size={15} /></button>
               </div>
-            ))}
+            )))}
             <div className="border-t border-line pt-3 space-y-2">
               <Input dir="ltr" type="tel" placeholder="מספר חדש — יאומת מיידית, בלי קוד"
                 value={phoneMgr.new_phone} onChange={(e) => setPhoneMgr({ ...phoneMgr, new_phone: e.target.value })} />
@@ -155,6 +188,25 @@ export default function Users() {
               </p>
               <ErrorNote error={error} />
               <Button className="w-full" disabled={busy || !phoneMgr.new_phone.trim()} onClick={addPhone}>הוסף מספר</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!phoneDel} onClose={() => setPhoneDel(null)} title="הסרת מספר טלפון">
+        {phoneDel && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              להסיר את <b dir="ltr">{phoneDel.phone}</b> מהחשבון של <b>{phoneMgr?.name}</b>?
+              המשתמש לא יוכל יותר להתחבר או להזדהות בקו מהמספר הזה.
+              {phoneMgr?.phones.filter((x) => x.verified_at && x.id !== phoneDel.id).length === 0
+                && ' שימו לב: זהו המספר המאומת האחרון בחשבון.'}
+              {' '}ניתן להחזיר את המספר על ידי הוספתו מחדש.
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" disabled={busy} onClick={() => setPhoneDel(null)}>ביטול</Button>
+              <Button variant="danger" disabled={busy} onClick={removePhone}>הסר</Button>
             </div>
           </div>
         )}
