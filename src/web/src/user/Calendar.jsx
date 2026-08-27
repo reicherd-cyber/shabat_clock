@@ -594,24 +594,22 @@ export default function Calendar() {
     </div>
   );
 
-  // ── week matrix: channels are COLUMNS (like the day view), days are ROWS —
-  // inside each cell a horizontal 0→24h state ribbon (time runs LTR). ──
+  // ── week matrix: EXACTLY the day view's layout — channels are columns — but
+  // the vertical axis is the seven DAYS: each day is one 1/7-height band and
+  // its 24 hours compress inside the band. ──
   const WeekGrid = () => {
-    // Tall rows: up to 4 on/off windows per day each get their own sub-lane, so
-    // every ribbon keeps a readable label even when the window is minutes wide.
-    const ROW_H = 112;
+    const BAND_H = 96; // one day band; ×7 ≈ the day view's total height
     const shownRelays = relays.filter((r) => !hiddenRelays.has(r.id));
     const segLabel = (s) => (s.from && s.to ? `${s.from}–${s.to}` : s.to ? `כיבוי ${s.to}` : s.from ? `הדלקה ${s.from}` : 'דולק');
     return (
       <Card flush className="overflow-hidden">
         <StateLegend />
         <div className="overflow-x-auto">
-          <div style={{ minWidth: Math.max(0, shownRelays.length * 148 + 64) }}>
-            {/* header: day gutter + channel names */}
+          <div style={{ minWidth: Math.max(0, shownRelays.length * 104 + 56) }}>
             <div className="flex border-b border-line bg-surface2/60">
-              <div className="w-16 shrink-0 sticky start-0 bg-surface2 z-20" />
+              <div className="w-14 shrink-0 sticky start-0 bg-surface2 z-20" />
               {shownRelays.map((r) => (
-                <div key={r.id} className="flex-1 min-w-[140px] text-center py-2 px-1 border-line border-s">
+                <div key={r.id} className="flex-1 min-w-[96px] text-center py-2 px-1 border-line border-s">
                   <span className="inline-flex items-center gap-1.5 max-w-full">
                     <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colorOf(r.id) }} />
                     <span className="font-bold text-[13.5px] truncate">{r.name}</span>
@@ -620,100 +618,90 @@ export default function Calendar() {
                 </div>
               ))}
             </div>
-            {/* hour scale — every channel column shares the same 0→24 axis */}
-            <div className="flex border-b border-line text-[9.5px] text-muted select-none">
-              <div className="w-16 shrink-0 sticky start-0 bg-surface z-20" />
-              {shownRelays.map((r) => (
-                <div key={r.id} dir="ltr" className="flex-1 min-w-[140px] relative h-4 border-line border-s">
-                  {[0, 6, 12, 18].map((h) => (
-                    <span key={h} className="absolute top-0" style={{ left: `calc(${(h / 24) * 100}% + 2px)` }}>{pad2(h)}</span>
-                  ))}
-                </div>
-              ))}
-            </div>
             {events == null ? (
               <p className="text-muted p-8 text-center">טוען…</p>
             ) : shownRelays.length === 0 ? (
               <p className="text-muted p-8 text-center">אין ערוצים להצגה — בחרו ערוצים בסינון למעלה.</p>
-            ) : cells.map((c) => {
-              const hi = hebInfo(c.date);
-              const sun = sunFor(c.date);
-              return (
-                <div key={c.date} className="flex border-b border-line" style={{ height: ROW_H }}>
-                  {/* day gutter */}
-                  <div className={`w-16 shrink-0 sticky start-0 z-20 text-center py-1.5 border-line
-                    ${c.date === todayStr ? 'bg-[#E4EFFE]' : hi.chag ? 'bg-[#FBF3DC]' : 'bg-surface'}`}>
-                    <div className="text-[11.5px] text-muted leading-tight">{DAY_NAMES[c.dow]}</div>
-                    <div className={`mx-auto mt-0.5 min-w-6 h-6 px-1 grid place-items-center rounded-full text-[13px] font-bold
-                      ${c.date === todayStr ? 'bg-accent text-white' : ''}`}>
-                      {calMode === 'heb' ? hi.day : c.day}
-                    </div>
-                    {hi.holiday && (
-                      <div className="text-[9px] leading-tight truncate px-0.5" style={{ color: '#B45309' }} title={hi.holiday}>{hi.holiday}</div>
-                    )}
-                  </div>
-                  {shownRelays.map((r) => {
-                    const segs = stateSegsFor(r, c.date);
+            ) : (
+              <div className="flex" style={{ height: 7 * BAND_H }}>
+                {/* day gutter — one label per band, like the hour gutter of the day view */}
+                <div className="w-14 shrink-0 relative sticky start-0 bg-surface z-20">
+                  {cells.map((c, i) => {
+                    const hi = hebInfo(c.date);
                     return (
-                      <div key={r.id} dir="ltr" className="flex-1 min-w-[140px] relative border-line border-s cursor-pointer"
-                        title="לחיצה: תזמון חדש בשעה זו"
-                        onClick={(e) => {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const min = Math.min(1410, Math.max(0, Math.round(((e.clientX - rect.left) / rect.width) * 1440 / 30) * 30));
-                          openSched(c.date, `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`, r.id);
-                        }}>
-                        {/* off background + night shading + hour ticks + שקיעה */}
-                        <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />
-                        <div className="absolute inset-y-0 left-0 pointer-events-none" style={{ width: `${(sun.sunrise / 1440) * 100}%`, background: NIGHT }} />
-                        <div className="absolute inset-y-0 right-0 pointer-events-none" style={{ width: `${((1440 - sun.sunset) / 1440) * 100}%`, background: NIGHT }} />
-                        {[360, 720, 1080].map((m) => (
-                          <div key={m} className="absolute inset-y-0 border-l border-line/70 pointer-events-none" style={{ left: `${(m / 1440) * 100}%` }} />
-                        ))}
-                        <div className="absolute inset-y-0 border-l border-dashed pointer-events-none" style={{ left: `${(sun.sunset / 1440) * 100}%`, borderColor: 'rgba(237,161,0,0.65)' }} />
-                        {/* green state ribbons — the ON edge is the solid border. Each
-                            window gets its own sub-lane (up to 4), and a window too
-                            narrow for its label lets the text spill onto the red
-                            background beside it instead of truncating. */}
-                        {(() => {
-                          const lanes = Math.min(4, Math.max(1, segs.length));
-                          return segs.map((s, j) => {
-                            const left = (s.startMin / 1440) * 100;
-                            const w = Math.max(((s.endMin - s.startMin) / 1440) * 100, 1.2);
-                            const lane = Math.min(j, lanes - 1);
-                            const wide = w >= 14;
-                            return (
-                              <div key={j} dir="rtl" className="absolute text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50"
-                                onClick={(e) => { e.stopPropagation(); openEdit(s.sid); }}
-                                title={`${segLabel(s)} · ${r.name} — לחיצה לעריכה`}
-                                style={{
-                                  left: `${left}%`, width: `${w}%`,
-                                  top: `calc(${(lane / lanes) * 100}% + 3px)`,
-                                  height: `calc(${100 / lanes}% - 6px)`,
-                                  backgroundColor: 'rgba(0,131,0,0.15)',
-                                  borderLeft: s.cont === 'up' || s.cont === 'both' ? 'none' : '3px solid #008300',
-                                }}>
-                                <div dir="ltr"
-                                  className={`absolute top-1/2 -translate-y-1/2 text-[11px] font-bold leading-tight whitespace-nowrap ${wide ? 'right-1' : 'left-full ps-1'}`}
-                                  style={wide ? {} : { color: '#1a5c1a' }}>
-                                  <span dir="rtl">{segLabel(s)}</span>
-                                </div>
-                              </div>
-                            );
-                          });
-                        })()}
-                        {/* now line — vertical, inside today's row */}
-                        {c.date === todayStr && (
-                          <div className="absolute inset-y-0 z-10 pointer-events-none border-l-2 border-[#e34948]"
-                            style={{ left: `${(nowMin / 1440) * 100}%` }}>
-                            <div className="w-2.5 h-2.5 rounded-full bg-[#e34948] -ml-[7px]" />
-                          </div>
+                      <div key={c.date} className={`absolute inset-x-0 text-center border-line ${i > 0 ? 'border-t-2' : ''}
+                        ${c.date === todayStr ? 'bg-[#E4EFFE]' : hi.chag ? 'bg-[#FBF3DC]' : ''}`}
+                        style={{ top: i * BAND_H, height: BAND_H }}>
+                        <div className="pt-2.5 text-[11.5px] text-muted leading-tight">{DAY_NAMES[c.dow]}</div>
+                        <div className={`mx-auto mt-0.5 min-w-6 h-6 px-1 grid place-items-center rounded-full text-[13px] font-bold
+                          ${c.date === todayStr ? 'bg-accent text-white' : ''}`}>
+                          {calMode === 'heb' ? hi.day : c.day}
+                        </div>
+                        {hi.holiday && (
+                          <div className="text-[9px] leading-tight truncate px-0.5" style={{ color: '#B45309' }} title={hi.holiday}>{hi.holiday}</div>
                         )}
                       </div>
                     );
                   })}
                 </div>
-              );
-            })}
+                {shownRelays.map((r) => (
+                  <div key={r.id} className="flex-1 min-w-[96px] relative border-line border-s cursor-pointer"
+                    title="לחיצה: תזמון חדש בשעה זו"
+                    onClick={(e) => {
+                      // Clicked band = the day; the position inside it = the hour.
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const y = e.clientY - rect.top;
+                      const idx = Math.min(6, Math.max(0, Math.floor(y / BAND_H)));
+                      const min = Math.min(1410, Math.max(0, Math.round((((y - idx * BAND_H) / BAND_H) * 1440) / 30) * 30));
+                      openSched(cells[idx].date, `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`, r.id);
+                    }}>
+                    {/* off background across the whole week */}
+                    <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />
+                    {/* per-band decorations: night shading, day separators, שקיעה line */}
+                    {cells.map((c, i) => {
+                      const sun = sunFor(c.date);
+                      const top = i * BAND_H;
+                      return (
+                        <div key={c.date} className="absolute inset-x-0 pointer-events-none" style={{ top, height: BAND_H }}>
+                          {i > 0 && <div className="absolute inset-x-0 top-0 border-t-2 border-line" />}
+                          <div className="absolute inset-x-0 top-0" style={{ height: (sun.sunrise / 1440) * BAND_H, background: NIGHT }} />
+                          <div className="absolute inset-x-0 bottom-0" style={{ height: ((1440 - sun.sunset) / 1440) * BAND_H, background: NIGHT }} />
+                          <div className="absolute inset-x-0 border-t border-dashed" style={{ top: (sun.sunset / 1440) * BAND_H, borderColor: 'rgba(237,161,0,0.65)' }} />
+                        </div>
+                      );
+                    })}
+                    {/* green state blocks — time scales inside the day band */}
+                    {cells.flatMap((c, i) => stateSegsFor(r, c.date).map((s, j) => {
+                      const top = i * BAND_H + (s.startMin / 1440) * BAND_H;
+                      const h = Math.max(7, ((s.endMin - s.startMin) / 1440) * BAND_H - 1);
+                      return (
+                        <div key={`${c.date}-${j}`} className="absolute px-1.5 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50"
+                          onClick={(e) => { e.stopPropagation(); openEdit(s.sid); }}
+                          title={`${segLabel(s)} · ${r.name} — לחיצה לעריכה`}
+                          style={{
+                            top, height: h, insetInlineStart: 2, insetInlineEnd: 2,
+                            backgroundColor: 'rgba(0,131,0,0.2)',
+                            borderInlineStart: '3px solid #008300',
+                          }}>
+                          {h >= 15 && <div className="text-[10.5px] font-bold truncate leading-tight">{segLabel(s)}</div>}
+                        </div>
+                      );
+                    }))}
+                    {/* now line inside today's band */}
+                    {(() => {
+                      const i = cells.findIndex((c) => c.date === todayStr);
+                      if (i === -1) return null;
+                      return (
+                        <div className="absolute inset-x-0 pointer-events-none z-10" style={{ top: i * BAND_H + (nowMin / 1440) * BAND_H }}>
+                          <div className="border-t-2 border-[#e34948]" />
+                          <div className="w-2.5 h-2.5 rounded-full bg-[#e34948] -mt-[7px] me-[-5px] ms-auto" />
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </Card>
