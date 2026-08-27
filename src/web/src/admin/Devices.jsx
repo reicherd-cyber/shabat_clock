@@ -18,6 +18,7 @@ export default function Devices() {
   const [expanded, setExpanded] = useState(null); // device id with its details row open
   const [transferForm, setTransferForm] = useState(null); // {device, user_id}
   const [diagnosis, setDiagnosis] = useState(null);       // {device, loading} → {device, verdict, text, evidence} | {device, error}
+  const [reasons, setReasons] = useState({});             // device id → diagnosis result (offline table's סיבה column)
   const [inventory, setInventory] = useState([]);         // prepared_devices rows
   const [showActivated, setShowActivated] = useState(false);
   const { busy, error, run, setError } = useAsync();
@@ -31,6 +32,17 @@ export default function Devices() {
     setInventory(inv);
   };
   useEffect(() => { refresh().catch(setError); }, []);
+
+  // Every offline device auto-diagnoses for the מנותקים table's סיבה column;
+  // results are cached per device id (the אבחון button reuses them too).
+  useEffect(() => {
+    if (!devices) return;
+    devices.filter((d) => !d.is_online && d.device_uid && !reasons[d.id]).forEach((d) => {
+      adminApi.get(`/devices/${d.id}/diagnosis`)
+        .then((r) => setReasons((m) => ({ ...m, [d.id]: r })))
+        .catch(() => setReasons((m) => ({ ...m, [d.id]: { verdict: 'error', text: 'האבחון נכשל' } })));
+    });
+  }, [devices]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Suspension is a total-recovery soft flip: everything is kept, but the UID and the
   // relays' IVR digits move to a stash so the hardware/digits are free for reuse.
@@ -154,24 +166,46 @@ export default function Devices() {
           <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: users[0]?.id || '', name: '' })}>2. שיוך Shelly ללקוח</Button>
         </div>
       </div>
-      <Card flush className="overflow-x-auto">
+      {[
+        { title: 'מחוברים', list: visibleDevices.filter((d) => d.is_online), withReason: false, dot: true },
+        { title: 'מנותקים', list: visibleDevices.filter((d) => !d.is_online), withReason: true, dot: false },
+      ].map(({ title, list, withReason, dot }) => (
+        <div key={title} className="space-y-2">
+          <h3 className="font-bold">
+            <span className="inline-flex items-center gap-2"><OnlineDot online={dot} />{title}
+              <span className="text-muted text-sm font-normal">({list.length})</span></span>
+          </h3>
+          <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-3">מצב</th><th className="p-3">שם</th><th className="p-3">לקוח</th><th className="p-3"></th>
+              <th className="p-3">שם</th><th className="p-3">לקוח</th>
+              {withReason && <th className="p-3">סיבת הניתוק</th>}
+              <th className="p-3"></th>
             </tr>
           </thead>
           <tbody>
-            {visibleDevices.map((d) => (
+            {list.map((d) => (
               <Fragment key={d.id}>
                 <tr className={`border-b border-line last:border-0 ${d.is_enabled ? '' : 'opacity-60'}`}>
-                  <td className="p-3 whitespace-nowrap"><span className="inline-flex items-center gap-1.5"><OnlineDot online={d.is_online} />{d.is_online ? 'מחובר' : 'מנותק'}</span></td>
                   <td className="p-3 font-semibold">
                     {d.name}
                     {!!d.mute_alerts && <span className="ms-1" title="התראות מייל מושתקות למכשיר זה">🔕</span>}
                     {!d.is_enabled && <span className="ms-1"><Badge ok={false}>מושהה</Badge></span>}
                   </td>
                   <td className="p-3">{d.owner_name}</td>
+                  {withReason && (
+                    <td className="p-3 text-xs">
+                      {!d.device_uid ? <span className="text-muted">לא חובר מעולם</span>
+                        : reasons[d.id]
+                          ? <button type="button" className="text-right underline decoration-dotted text-ink"
+                              title={reasons[d.id].text}
+                              onClick={() => setDiagnosis({ device: d, ...reasons[d.id] })}>
+                              {REASON_LABELS[reasons[d.id].verdict] || reasons[d.id].verdict}
+                            </button>
+                          : <span className="text-muted">בודק…</span>}
+                    </td>
+                  )}
                   <td className="p-3 text-left">
                     <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setExpanded(expanded === d.id ? null : d.id)}>
                       {expanded === d.id ? 'סגור' : 'פרטים ›'}
@@ -180,7 +214,7 @@ export default function Devices() {
                 </tr>
                 {expanded === d.id && (
                   <tr className="border-b border-line last:border-0 bg-surface2/50">
-                    <td colSpan={4} className="p-3">
+                    <td colSpan={withReason ? 4 : 3} className="p-3">
                       <div className="flex items-center gap-x-5 gap-y-2 flex-wrap text-xs text-muted">
                         <span dir="ltr">
                           UID: {d.device_uid
@@ -223,12 +257,14 @@ export default function Devices() {
                 )}
               </Fragment>
             ))}
-            {visibleDevices.length === 0 && (
-              <tr><td colSpan={4} className="p-6 text-center text-muted">לא נמצאו מכשירים</td></tr>
+            {list.length === 0 && (
+              <tr><td colSpan={withReason ? 4 : 3} className="p-6 text-center text-muted">אין מכשירים {title}</td></tr>
             )}
           </tbody>
         </table>
-      </Card>
+          </Card>
+        </div>
+      ))}
 
       {/* Prepared-devices inventory: every unit that completed the prep process. */}
       <div className="flex items-center justify-between flex-wrap gap-2 mt-6">
@@ -549,6 +585,20 @@ export default function Devices() {
     </div>
   );
 }
+
+const REASON_LABELS = {
+  connected_ok: 'מגיב עכשיו — יתעדכן מיד',
+  connected_flapping: 'מגיב, אך הסינון מנתק שוב ושוב',
+  filter_flapping: 'הסינון מנתק שוב ושוב — נדרשת החרגה',
+  tls_blocked: 'חסימת סינון (זיוף תעודה) — נדרשת החרגה',
+  silent_house_up: 'הבית מגיב — המכשיר כבוי או חסום לגמרי',
+  silent_house_down: 'כנראה אין חשמל/אינטרנט בבית הלקוח',
+  went_silent_house_up: 'השתתק — הבית מגיב, לבדוק מול הלקוח',
+  went_silent: 'השתתק — הבית לא מגיב',
+  no_uid: 'לא חובר מעולם',
+  no_data: 'אין נתונים (שרת פיתוח)',
+  error: 'האבחון נכשל',
+};
 
 function DiagRow({ label, value }) {
   return <div className="flex justify-between gap-3"><span>{label}</span><span className="font-semibold text-ink">{value}</span></div>;
