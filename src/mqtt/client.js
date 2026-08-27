@@ -114,9 +114,16 @@ async function handleShellyMessage(topic, buf) {
     }
     // Back from an outage: pull the true channel states and settle the
     // occurrences the mirrored local jobs handled while we couldn't see them.
+    // A device that's behind on schedules also gets its push right now — on a
+    // flapping (filtered) line the connection may only live ~2 minutes, and the
+    // per-minute tick retry can land entirely outside that window; the seconds
+    // right after hello are the most reliable ones the device has.
     if (isOnline && !device.is_online) {
       const { reconcileShellyDevice } = await import('../services/shelly-schedules.js');
       reconcileShellyDevice(device).catch((e) => console.error('shelly reconcile:', e.message));
+      if (device.sync_status !== 'synced') {
+        pushScheduleToDevice(device.id).catch((e) => console.error('shelly hello sync:', e.message));
+      }
     }
     return;
   }
