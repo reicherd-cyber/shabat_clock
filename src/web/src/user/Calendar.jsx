@@ -315,7 +315,6 @@ export default function Calendar() {
   const [events, setEvents] = useState(null);
   const [relays, setRelays] = useState([]);
   const [hiddenRelays, setHiddenRelays] = useState(new Set());
-  const [dayModal, setDayModal] = useState(null);
   const [nowTick, setNowTick] = useState(Date.now());
   const [schedForm, setSchedForm] = useState(null); // new-schedule modal, opened IN the calendar
   const [reload, setReload] = useState(0);
@@ -336,7 +335,6 @@ export default function Calendar() {
       heb_day: hd.getDate(),
       heb_month: hd.getMonth(),
     });
-    setDayModal(null);
   };
 
   // Click on an existing block/chip → open THAT schedule for editing (the full
@@ -346,7 +344,6 @@ export default function Calendar() {
       const rows = await api.get('/schedules');
       const row = rows.find((r) => Number(r.id) === Number(sid));
       if (!row) throw new Error('התזמון לא נמצא');
-      setDayModal(null);
       setSchedForm(rowToForm(row));
     } catch (e) { setError(e); }
   };
@@ -364,8 +361,8 @@ export default function Calendar() {
   // ±3-day padding keeps cross-boundary intervals pairable; display slices by
   // cells. The day and week views replay STATE, so they look back 35 days —
   // enough for month-long yearly ranges whose ON fired weeks before the window.
-  const fetchFrom = shiftYmd(cells[0].date, view === 'month' ? -3 : -35);
-  const fetchDays = cells.length + (view === 'month' ? 6 : 37);
+  const fetchFrom = shiftYmd(cells[0].date, -35);
+  const fetchDays = cells.length + 37;
   useEffect(() => {
     setEvents(null);
     api.get(`/schedules/calendar?from=${fetchFrom}&days=${fetchDays}`)
@@ -385,9 +382,6 @@ export default function Calendar() {
     return (id) => map.get(id) || PALETTE[0];
   }, [relays, events]);
 
-  const intervals = useMemo(() => toIntervals((events || []).filter((ev) => !hiddenRelays.has(ev.relay_id))),
-    [events, hiddenRelays]);
-  const monthChips = useMemo(() => chipsByDay(intervals), [intervals]);
 
   const todayStr = ymd(new Date());
   const nowMin = (() => { const d = new Date(nowTick); return d.getHours() * 60 + d.getMinutes(); })();
@@ -600,11 +594,12 @@ export default function Calendar() {
     </div>
   );
 
-  // ── week matrix: EXACTLY the day view's layout — channels are columns — but
-  // the vertical axis is the seven DAYS: each day is one 1/7-height band and
-  // its 24 hours compress inside the band. ──
-  const WeekGrid = () => {
-    const BAND_H = 96; // one day band; ×7 ≈ the day view's total height
+  // ── day-band matrix (week AND month): the day view's layout — channels are
+  // columns — with the vertical axis being DAYS: each day is one equal band
+  // and its 24 hours compress inside it. Week: 7 bands × 96px; month: every
+  // day of the month × 48px (half the weekly band). ──
+  const MatrixGrid = ({ days, bandH }) => {
+    const BAND_H = bandH;
     const shownRelays = relays.filter((r) => !hiddenRelays.has(r.id));
     const segLabel = (s) => (s.from && s.to ? `${s.from}–${s.to}` : s.to ? `כיבוי ${s.to}` : s.from ? `הדלקה ${s.from}` : 'דולק');
     return (
@@ -629,22 +624,23 @@ export default function Calendar() {
             ) : shownRelays.length === 0 ? (
               <p className="text-muted p-8 text-center">אין ערוצים להצגה — בחרו ערוצים בסינון למעלה.</p>
             ) : (
-              <div className="flex" style={{ height: 7 * BAND_H }}>
+              <div className="flex" style={{ height: days.length * BAND_H }}>
                 {/* day gutter — one label per band, like the hour gutter of the day view */}
                 <div className="w-14 shrink-0 relative sticky start-0 bg-surface z-20">
-                  {cells.map((c, i) => {
+                  {days.map((c, i) => {
                     const hi = hebInfo(c.date);
                     return (
                       <div key={c.date} className={`absolute inset-x-0 text-center
                         ${c.date === todayStr ? 'bg-[#E4EFFE]' : hi.chag ? 'bg-[#FBF3DC]' : ''}`}
-                        style={{ top: i * BAND_H, height: BAND_H, ...(i > 0 ? { borderTop: '3px solid rgba(43,58,103,0.45)' } : {}) }}>
-                        <div className="pt-2.5 text-[11.5px] text-muted leading-tight">{DAY_NAMES[c.dow]}</div>
+                        style={{ top: i * BAND_H, height: BAND_H, ...(i > 0 ? { borderTop: '3px solid rgba(43,58,103,0.45)' } : {}) }}
+                        title={hi.holiday || undefined}>
+                        <div className={`${BAND_H >= 70 ? 'pt-2.5 text-[11.5px]' : 'pt-0.5 text-[10px]'} text-muted leading-tight`}>{DAY_NAMES[c.dow]}</div>
                         <div className={`mx-auto mt-0.5 min-w-6 h-6 px-1 grid place-items-center rounded-full text-[13px] font-bold
                           ${c.date === todayStr ? 'bg-accent text-white' : ''}`}>
                           {calMode === 'heb' ? hi.day : c.day}
                         </div>
-                        {hi.holiday && (
-                          <div className="text-[9px] leading-tight truncate px-0.5" style={{ color: '#B45309' }} title={hi.holiday}>{hi.holiday}</div>
+                        {hi.holiday && BAND_H >= 70 && (
+                          <div className="text-[9px] leading-tight truncate px-0.5" style={{ color: '#B45309' }}>{hi.holiday}</div>
                         )}
                       </div>
                     );
@@ -657,20 +653,20 @@ export default function Calendar() {
                       // Clicked band = the day; the position inside it = the hour.
                       const rect = e.currentTarget.getBoundingClientRect();
                       const y = e.clientY - rect.top;
-                      const idx = Math.min(6, Math.max(0, Math.floor(y / BAND_H)));
+                      const idx = Math.min(days.length - 1, Math.max(0, Math.floor(y / BAND_H)));
                       const min = Math.min(1410, Math.max(0, Math.round((((y - idx * BAND_H) / BAND_H) * 1440) / 30) * 30));
-                      openSched(cells[idx].date, `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`, r.id);
+                      openSched(days[idx].date, `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`, r.id);
                     }}>
                     {/* off background — the single state color behind the green blocks */}
                     <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />
                     {/* per-band decorations: day separators only */}
-                    {cells.map((c, i) => (
+                    {days.map((c, i) => (
                       <div key={c.date} className="absolute inset-x-0 pointer-events-none" style={{ top: i * BAND_H, height: BAND_H }}>
                         {i > 0 && <div className="absolute inset-x-0 top-0" style={{ borderTop: '3px solid rgba(43,58,103,0.45)' }} />}
                       </div>
                     ))}
                     {/* green state blocks — time scales inside the day band */}
-                    {cells.flatMap((c, i) => stateSegsFor(r, c.date).map((s, j) => {
+                    {days.flatMap((c, i) => stateSegsFor(r, c.date).map((s, j) => {
                       const top = i * BAND_H + (s.startMin / 1440) * BAND_H;
                       const h = Math.max(7, ((s.endMin - s.startMin) / 1440) * BAND_H - 1);
                       return (
@@ -688,7 +684,7 @@ export default function Calendar() {
                     }))}
                     {/* now line inside today's band */}
                     {(() => {
-                      const i = cells.findIndex((c) => c.date === todayStr);
+                      const i = days.findIndex((c) => c.date === todayStr);
                       if (i === -1) return null;
                       return (
                         <div className="absolute inset-x-0 pointer-events-none z-10" style={{ top: i * BAND_H + (nowMin / 1440) * BAND_H }}>
@@ -749,62 +745,9 @@ export default function Calendar() {
     );
   };
 
-  // ── month grid ──
-  const MonthGrid = () => (
-    <Card flush className="overflow-hidden">
-      <div className="grid grid-cols-7 border-b border-line bg-surface2/60">
-        {Object.values(DAY_NAMES).map((n) => (
-          <div key={n} className="text-center text-[13px] font-medium text-muted py-1.5">{n}</div>
-        ))}
-      </div>
-      {events == null ? (
-        <p className="text-muted p-8 text-center">טוען…</p>
-      ) : (
-        <div className="grid grid-cols-7">
-          {cells.map((c, i) => {
-            const chips = monthChips.get(c.date) || [];
-            const shown = chips.slice(0, 3);
-            const hi = hebInfo(c.date);
-            return (
-              <div key={c.date}
-                onClick={() => setDayModal(c.date)}
-                className={`min-h-[108px] p-1 border-line ${i % 7 !== 6 ? 'border-e' : ''} ${i >= 7 ? 'border-t' : ''}
-                  ${c.inMonth ? '' : 'bg-surface2/60 opacity-40 grayscale'}
-                  ${hi.chag && c.inMonth ? 'bg-[#FBF3DC]/70' : c.dow === 7 && c.inMonth ? 'bg-surface2/60' : ''}
-                  cursor-pointer hover:bg-[#E4EFFE]/40`}>
-                <div className="flex items-start justify-between gap-1">
-                  <div className={`text-[13px] mb-0.5 min-w-7 h-7 px-1 grid place-items-center rounded-full
-                    ${c.date === todayStr ? 'bg-accent text-white font-bold' : c.inMonth ? '' : 'text-muted'}`}>
-                    {calMode === 'heb' ? hi.day : c.day}
-                  </div>
-                  <span className="hidden sm:inline text-[10.5px] text-muted mt-1.5">
-                    {calMode === 'heb' ? `${c.day}.${Number(c.date.slice(5, 7))}` : hi.day}
-                  </span>
-                </div>
-                {hi.holiday && (
-                  <div className="text-[10.5px] font-medium leading-tight truncate mb-0.5" style={{ color: '#B45309' }} title={hi.holiday}>
-                    {hi.holiday}
-                  </div>
-                )}
-                <div className="space-y-[3px]">
-                  {shown.map((chip, j) => (
-                    <div key={j} style={blockStyle(chip.relay_id, chip, true)} title={`${chip.relay_name} · ${chip.device_name} — לחיצה לעריכה`}
-                      onClick={(e) => { e.stopPropagation(); openEdit(chip.sid); }}
-                      className="text-[12.5px] font-medium leading-tight px-1.5 py-[3px] truncate text-ink hover:ring-1 hover:ring-accent/50">
-                      {chip.relay_name} · {chip.text}
-                    </div>
-                  ))}
-                  {chips.length > 3 && (
-                    <div className="text-xs text-muted px-1">+{chips.length - 3} עוד</div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </Card>
-  );
+  // Week = 7 bands; month = every day of the shown month at half the band height.
+  const WeekGrid = () => <MatrixGrid days={cells} bandH={96} />;
+  const MonthGrid = () => <MatrixGrid days={cells.filter((c) => c.inMonth)} bandH={48} />;
 
   return (
     <>
@@ -844,26 +787,6 @@ export default function Calendar() {
       <ErrorNote error={error} />
 
       {view === 'month' ? <MonthGrid /> : view === 'day' ? <DayGrid /> : <WeekGrid />}
-
-      <Modal open={!!dayModal} onClose={() => setDayModal(null)}
-        title={dayModal ? `${DAY_NAMES[new Date(`${dayModal}T12:00:00`).getDay() + 1]}, ${Number(dayModal.slice(8, 10))} ב${MONTHS[Number(dayModal.slice(5, 7)) - 1]} · ${hebFullDate(hebInfo(dayModal).hd)}${hebInfo(dayModal).holiday ? ` · ${hebInfo(dayModal).holiday}` : ''}` : ''}>
-        {dayModal && (
-          <div className="space-y-2">
-            {(monthChips.get(dayModal) || []).map((chip, i) => (
-              <div key={i} style={blockStyle(chip.relay_id, chip, true)}
-                onClick={() => openEdit(chip.sid)} title="לחיצה לעריכה"
-                className="px-3 py-2 text-sm cursor-pointer text-ink hover:ring-1 hover:ring-accent/50">
-                <b>{chip.text}</b>
-                <span className="text-muted"> — {chip.relay_name} · <House size={11} className="inline" /> {chip.device_name}</span>
-              </div>
-            ))}
-            {!(monthChips.get(dayModal) || []).length && <p className="text-muted">אין תזמונים ביום זה.</p>}
-            <Button variant="ghost" className="w-full" onClick={() => openSched(dayModal, null)}>
-              <span className="inline-flex items-center gap-1.5"><Plus size={15} />תזמון חדש בתאריך זה</span>
-            </Button>
-          </div>
-        )}
-      </Modal>
 
       {/* creating from the calendar stays in the calendar */}
       <ScheduleFormModal initial={schedForm} relays={relays}
