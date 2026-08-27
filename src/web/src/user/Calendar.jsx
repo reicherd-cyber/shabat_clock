@@ -510,9 +510,7 @@ export default function Calendar() {
         }}>
         {/* state view: the whole column is "off" (soft red) unless a green block covers it */}
         {offTint && <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />}
-        {/* night shading + שקיעה line — the day literally darkens where lights matter */}
-        <div className="absolute inset-x-0 top-0 pointer-events-none" style={{ height: (sun.sunrise / 60) * HOUR_PX, background: NIGHT }} />
-        <div className="absolute inset-x-0 bottom-0 pointer-events-none" style={{ height: ((1440 - sun.sunset) / 60) * HOUR_PX, background: NIGHT }} />
+        {/* שקיעה line (the off tint is the ONLY background color — no night shading) */}
         <div className="absolute inset-x-0 pointer-events-none border-t border-dashed" style={{ top: (sun.sunset / 60) * HOUR_PX, borderColor: 'rgba(237,161,0,0.65)' }} title="שקיעה" />
         {/* section lines (bold) + 3h lines (faint) */}
         {SECTIONS.map((h) => (
@@ -614,7 +612,7 @@ export default function Calendar() {
     const segLabel = (s) => (s.from && s.to ? `${s.from}–${s.to}` : s.to ? `כיבוי ${s.to}` : s.from ? `הדלקה ${s.from}` : 'דולק');
     return (
       <Card flush className="overflow-hidden">
-        <StateLegend showOff={false} />
+        <StateLegend />
         <div className="overflow-x-auto">
           <div style={{ minWidth: Math.max(0, shownRelays.length * 104 + 56) }}>
             <div className="flex border-b border-line bg-surface2/60">
@@ -666,15 +664,15 @@ export default function Calendar() {
                       const min = Math.min(1410, Math.max(0, Math.round((((y - idx * BAND_H) / BAND_H) * 1440) / 30) * 30));
                       openSched(cells[idx].date, `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`, r.id);
                     }}>
-                    {/* per-band decorations: night shading, day separators, שקיעה line */}
+                    {/* off background — the single state color behind the green blocks */}
+                    <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.13)' }} />
+                    {/* per-band decorations: day separators + שקיעה line (no night shading) */}
                     {cells.map((c, i) => {
                       const sun = sunFor(c.date);
                       const top = i * BAND_H;
                       return (
                         <div key={c.date} className="absolute inset-x-0 pointer-events-none" style={{ top, height: BAND_H }}>
                           {i > 0 && <div className="absolute inset-x-0 top-0" style={{ borderTop: '3px solid rgba(43,58,103,0.45)' }} />}
-                          <div className="absolute inset-x-0 top-0" style={{ height: (sun.sunrise / 1440) * BAND_H, background: NIGHT }} />
-                          <div className="absolute inset-x-0 bottom-0" style={{ height: ((1440 - sun.sunset) / 1440) * BAND_H, background: NIGHT }} />
                           <div className="absolute inset-x-0 border-t border-dashed" style={{ top: (sun.sunset / 1440) * BAND_H, borderColor: 'rgba(237,161,0,0.65)' }} />
                         </div>
                       );
