@@ -356,9 +356,11 @@ export default function Calendar() {
     }).catch(setError);
   }, []);
 
-  // ±3-day padding keeps cross-boundary intervals pairable; display slices by cells.
-  const fetchFrom = shiftYmd(cells[0].date, -3);
-  const fetchDays = cells.length + 6;
+  // ±3-day padding keeps cross-boundary intervals pairable; display slices by
+  // cells. The day matrix replays STATE, so it looks back 35 days — enough for
+  // month-long yearly ranges whose ON fired weeks before the shown day.
+  const fetchFrom = shiftYmd(cells[0].date, view === 'day' ? -35 : -3);
+  const fetchDays = cells.length + (view === 'day' ? 37 : 6);
   useEffect(() => {
     setEvents(null);
     api.get(`/schedules/calendar?from=${fetchFrom}&days=${fetchDays}`)
@@ -438,24 +440,51 @@ export default function Calendar() {
     ...(seg.cont === 'up' || seg.cont === 'both' ? { borderTopLeftRadius: 0, borderTopRightRadius: 0 } : {}),
   });
 
-  // Per-column lane assignment — the day view recomputes lanes WITHIN each
-  // channel's own column (the global assignment mixes channels together).
-  const assignLanes = (list) => {
-    const segs = [...list].sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin).map((s) => ({ ...s }));
-    const laneEnds = [];
-    for (const s of segs) {
-      let lane = laneEnds.findIndex((end) => end <= s.startMin);
-      if (lane === -1) { lane = laneEnds.length; laneEnds.push(0); }
-      laneEnds[lane] = s.endMin;
-      s.lane = lane;
+  // All events per relay, chronological (the server sorts) — the day matrix
+  // replays them like the device would (ON/OFF are absolute) to know the
+  // channel's true state at every minute of the shown day.
+  const eventsByRelay = useMemo(() => {
+    const m = new Map();
+    for (const ev of (events || [])) {
+      if (!m.has(ev.relay_id)) m.set(ev.relay_id, []);
+      m.get(ev.relay_id).push(ev);
     }
-    for (const s of segs) s.lanes = laneEnds.length || 1;
-    return segs;
+    return m;
+  }, [events]);
+
+  // Flat state ribbon for one relay on one day: green segments wherever the
+  // channel is scheduled ON — including a block carried in from yesterday's
+  // הדלקה — everything else is off (the column's red background).
+  const stateSegsFor = (relay, dayStr) => {
+    const list = eventsByRelay.get(relay.id) || [];
+    let on = false;
+    let sid = null;
+    for (const ev of list) {
+      if (ev.date >= dayStr) break;
+      on = ev.action === 'on';
+      sid = ev.schedule_id;
+    }
+    const segs = [];
+    let cur = on ? { startMin: 0, sid, cont: 'up', from: null } : null;
+    for (const ev of list) {
+      if (ev.date !== dayStr) continue;
+      const m = toMin(ev.time);
+      if (ev.action === 'on' && !cur) {
+        cur = { startMin: m, sid: ev.schedule_id, from: ev.time };
+      } else if (ev.action === 'off' && cur) {
+        segs.push({ ...cur, endMin: Math.max(m, cur.startMin + 1), label: cur.from ? `${cur.from}–${ev.time}` : `עד ${ev.time}` });
+        cur = null;
+      }
+    }
+    if (cur) {
+      segs.push({ ...cur, endMin: 1440, cont: cur.cont === 'up' ? 'both' : 'down', label: cur.from ? `הדלקה ${cur.from}` : 'דולק כל היום' });
+    }
+    return segs.map((s) => ({ ...s, lane: 0, lanes: 1, relay_name: relay.name, device_name: relay.device }));
   };
 
   // One time-axis column: night shading, gridlines, blocks, now-line. Shared by
   // the week view (column = a date) and the day view (column = a channel).
-  const TimeColumn = ({ date, segs, minW, onEmptyClick, blockSub, stateColors }) => {
+  const TimeColumn = ({ date, segs, minW, onEmptyClick, blockSub, stateColors, offTint }) => {
     const sun = sunFor(date);
     return (
       <div className={`flex-1 relative border-line border-s ${minW || 'min-w-0'} cursor-pointer`}
@@ -466,6 +495,8 @@ export default function Calendar() {
           const min = Math.min(1410, Math.max(0, Math.round(((e.clientY - rect.top) / HOUR_PX) * 60 / 30) * 30));
           onEmptyClick(`${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`);
         }}>
+        {/* state view: the whole column is "off" (soft red) unless a green block covers it */}
+        {offTint && <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(227,73,72,0.06)' }} />}
         {/* night shading + שקיעה line — the day literally darkens where lights matter */}
         <div className="absolute inset-x-0 top-0 pointer-events-none" style={{ height: (sun.sunrise / 60) * HOUR_PX, background: NIGHT }} />
         <div className="absolute inset-x-0 bottom-0 pointer-events-none" style={{ height: ((1440 - sun.sunset) / 60) * HOUR_PX, background: NIGHT }} />
@@ -567,7 +598,6 @@ export default function Calendar() {
   const DayGrid = () => {
     const dayDate = cells[0].date;
     const shownRelays = relays.filter((r) => !hiddenRelays.has(r.id));
-    const daySegs = gridSegs.get(dayDate) || [];
     return (
       <Card flush className="overflow-hidden">
         {/* state legend — in the day matrix color means STATE, not channel */}
@@ -577,8 +607,8 @@ export default function Calendar() {
             דולק
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(227,73,72,0.3)', borderInlineStart: '3px dashed #e34948' }} />
-            כבוי (חלון כיבוי מתוזמן)
+            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(227,73,72,0.18)' }} />
+            כבוי
           </span>
         </div>
         <div className="overflow-x-auto">
@@ -603,8 +633,8 @@ export default function Calendar() {
               <div className="flex" style={{ height: 24 * HOUR_PX }}>
                 <HourGutter />
                 {shownRelays.map((r) => (
-                  <TimeColumn key={r.id} date={dayDate} minW="min-w-[96px]" stateColors
-                    segs={assignLanes(daySegs.filter((s) => s.relay_id === r.id))}
+                  <TimeColumn key={r.id} date={dayDate} minW="min-w-[96px]" stateColors offTint
+                    segs={stateSegsFor(r, dayDate)}
                     onEmptyClick={(t) => openSched(dayDate, t, r.id)} />
                 ))}
               </div>
