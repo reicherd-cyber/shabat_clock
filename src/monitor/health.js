@@ -24,7 +24,7 @@ import { sendEmail } from '../services/email.js';
 const CHECK_INTERVAL_MS = 60_000;
 const RAM_CRITICAL_BYTES = 30_000;      // healthy Pro 2 idles ~120k free; panics start near zero
 const TEMP_CRITICAL_C = 80;             // Shelly hardware self-protects ~95° — warn well before
-const UNREACHABLE_AFTER = 3;            // consecutive probe failures before it's an incident
+const UNREACHABLE_AFTER = 15;           // consecutive probe failures before it's an incident + offline flip
 const EMAIL_AFTER = 15;                 // minutes a problem must persist before any email leaves
 const HEAP_WARN_BYTES = 512 * 1024 * 1024;
 const ALERT_COOLDOWN_MS = 6 * 3600_000; // one email per incident kind per subject per 6h
