@@ -5,6 +5,7 @@ import { Plus, CalendarOff, Pencil, Trash2, ArrowRight, Save } from 'lucide-reac
 import {
   ANCHOR_NAMES, anchorText, HEB_DAYS, HEB_MONTHS, hebMonthLabel, hebOf, todayYmd, fmtDate,
   RelayMultiSelect, REGION_NAMES, HolidayDaysGrid, holidaySummary, DAY_HOLIDAY_KEYS, HOLIDAY_NAMES,
+  anchorAllowed, anchorLabel,
 } from './ScheduleForm.jsx';
 
 // תוכנית editor (redesign 2026-08-30): a plan is a LIST of single-action
@@ -323,7 +324,9 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
         <span className={`text-sm font-medium ${s.action === 'on' ? 'text-on' : 'text-off'}`}>{s.action === 'on' ? 'הדלקה' : 'כיבוי'} — באיזו שעה?</span>
         <Select className="w-full" value={s.kind} onChange={(e) => set({ kind: e.target.value })}>
           <option value="clock">שעה קבועה</option>
-          {Object.entries(ANCHOR_NAMES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
+          {Object.keys(ANCHOR_NAMES)
+            .filter((v) => anchorAllowed(v, { repeat_type: s.repeat_type, daily: s.daily, days: s.days, holidays: s.holidays, current: s.kind }))
+            .map((v) => <option key={v} value={v}>{anchorLabel(v, s.repeat_type)}</option>)}
         </Select>
         {anchored ? (
           <div className="flex gap-1.5 items-center">

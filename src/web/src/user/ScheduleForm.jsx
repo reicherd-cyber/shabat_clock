@@ -58,9 +58,33 @@ export const ANCHOR_NAMES = {
   shabbat_end_rt: 'צאת שבת (ר״ת)',
   chatzot_layla: 'חצות הלילה',
 };
-// כניסת שבת is meaningful on a Friday side, צאת שבת on a שבת side — weekly
-// schedules filter them by the chosen day(s); other types show everything.
-const dayOnlyAnchors = { candles: 6, shabbat_end: 7, shabbat_end_rt: 7 };
+// Shabbat-specific anchors appear only where they can apply: כניסת שבת on a
+// Friday (weekly) or on a שבת/חג DAY (its entry evening); צאת שבת on a Saturday
+// (weekly) or on any שבת/חג day or מוצאי; never for חד-פעמי / לפי תאריך. The
+// anchor currently chosen always stays listed so an edit never hides its value.
+const SHABBAT_IN = new Set(['candles']);
+const SHABBAT_OUT = new Set(['shabbat_end', 'shabbat_end_rt']);
+export function anchorAllowed(anchor, { repeat_type, daily, days = [], holidays = [], current } = {}) {
+  if (anchor === current) return true;
+  const isIn = SHABBAT_IN.has(anchor);
+  const isOut = SHABBAT_OUT.has(anchor);
+  if (!isIn && !isOut) return true;
+  if (repeat_type === 'weekly') {
+    if (daily) return true;
+    const d = days.map(Number);
+    return isIn ? d.includes(6) : d.includes(7);
+  }
+  if (repeat_type === 'holiday') {
+    const hasDay = holidays.some((k) => !k.startsWith('motzaei_'));
+    return isIn ? hasDay : holidays.length > 0;
+  }
+  return false; // once / yearly — a plain date has no שבת entry/exit
+}
+// In the שבת וחגים form the same anchors read as שבת/חג.
+export const anchorLabel = (anchor, repeat_type) => {
+  const n = ANCHOR_NAMES[anchor] || anchor;
+  return repeat_type === 'holiday' ? n.replace('כניסת שבת', 'כניסת שבת/חג').replace('צאת שבת', 'צאת שבת/חג') : n;
+};
 
 // שבת/חג schedule: every selected day fires on its own (mechanical Shabbat-clock
 // model, see services/holidays.js). Each row of the picker is a day plus its
@@ -700,13 +724,10 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
               )}
               <Select className="w-full" value={form[`${p}_kind`]} onChange={(e) => setForm({ ...form, [`${p}_kind`]: e.target.value })}>
                 <option value="clock">שעה קבועה</option>
-                {Object.entries(ANCHOR_NAMES).filter(([v]) => {
-                  const need = dayOnlyAnchors[v];
-                  if (!need || form.repeat_type !== 'weekly' || form.daily) return true;
-                  const days = (form.mode === 'on' || form.mode === 'off')
-                    ? form.days.map(Number) : [Number(form[`${p}_day_of_week`])];
-                  return days.includes(need) || form[`${p}_kind`] === v;
-                }).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
+                {Object.keys(ANCHOR_NAMES).filter((v) => anchorAllowed(v, {
+                  repeat_type: form.repeat_type, daily: form.daily, holidays: form.holidays, current: form[`${p}_kind`],
+                  days: (form.mode === 'on' || form.mode === 'off') ? form.days : [Number(form[`${p}_day_of_week`])],
+                })).map((v) => <option key={v} value={v}>{anchorLabel(v, form.repeat_type)}</option>)}
               </Select>
               {form[`${p}_kind`] === 'clock'
                 ? <TimeInput value={form[`${p}_time`]} onChange={(e) => setForm({ ...form, [`${p}_time`]: e.target.value })} />
