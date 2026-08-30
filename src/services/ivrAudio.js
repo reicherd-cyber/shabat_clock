@@ -18,6 +18,13 @@ const MANIFEST = fileURLToPath(new URL('../../deploy/ivr-audio.json', import.met
 export const VOICES = ['he-IL-AvriNeural', 'he-IL-HilaNeural'];
 
 const manifest = () => JSON.parse(readFileSync(MANIFEST, 'utf8'));
+// Every recording key becomes a file name: only manifest keys (own properties —
+// not 'constructor'/'__proto__') of a plain shape may reach the filesystem.
+const KEY_RE = /^[A-Za-z0-9_.-]+$/;
+function assertKey(key, files = manifest().files) {
+  if (!KEY_RE.test(String(key)) || !Object.hasOwn(files, key)) throw errors.validation('הקלטה לא מוכרת');
+  return files[key];
+}
 
 const yemotToken = () => {
   const token = env.otpYemot.token;
@@ -104,7 +111,7 @@ async function uploadWavToYemot(file, wavBuf) {
 // snapshotted in its place, so undo-of-undo toggles between the two.
 export async function undoLastUpload(key) {
   const { files } = manifest();
-  const file = files[key];
+  const file = assertKey(key, files);
   if (!file) throw errors.validation('הקלטה לא מוכרת');
   let meta;
   let wavBuf;
@@ -180,6 +187,7 @@ export function discardAllPending() {
 }
 
 export function discardPending(key) {
+  assertKey(key);
   if (!existsSync(pendingWav(key))) throw errors.validation('אין טיוטה ממתינה');
   rmSync(pendingWav(key), { force: true });
   rmSync(pendingMeta(key), { force: true });
@@ -188,7 +196,7 @@ export function discardPending(key) {
 
 export async function generateRecording(key, { text, voice } = {}) {
   const { files, voice: defVoice } = manifest();
-  if (!files[key]) throw errors.validation('הקלטה לא מוכרת');
+  assertKey(key, files);
   const spoken = String(text || '').trim();
   if (!spoken || spoken.length > 500) throw errors.validation('נדרש טקסט (עד 500 תווים)');
   const v = VOICES.includes(voice) ? voice : defVoice;
@@ -226,7 +234,7 @@ export async function generateRecording(key, { text, voice } = {}) {
 // listen/approve/upload work identically. voice is marked 'self'.
 export function savePendingFromUpload(key, buf, { text } = {}) {
   const { files } = manifest();
-  if (!files[key]) throw errors.validation('הקלטה לא מוכרת');
+  assertKey(key, files);
   if (!buf || buf.length < 2000) throw errors.validation('ההקלטה ריקה או קצרה מדי — נסו שוב');
   if (buf.length > 20 * 1024 * 1024) throw errors.validation('ההקלטה ארוכה מדי');
 
@@ -247,6 +255,7 @@ export function savePendingFromUpload(key, buf, { text } = {}) {
 
 // The pending (not yet uploaded) WAV, for in-modal listening.
 export function fetchPendingAudio(key) {
+  assertKey(key);
   try {
     return readFileSync(pendingWav(key));
   } catch {
@@ -256,7 +265,7 @@ export function fetchPendingAudio(key) {
 
 export async function uploadPendingRecording(key, { text } = {}) {
   const { files } = manifest();
-  const file = files[key];
+  const file = assertKey(key, files);
   if (!file) throw errors.validation('הקלטה לא מוכרת');
   let meta;
   let wavBuf;
@@ -288,7 +297,7 @@ export async function uploadPendingRecording(key, { text } = {}) {
 // Yemot URL embeds the API token).
 export async function fetchRecordingAudio(key) {
   const { files } = manifest();
-  const file = files[key];
+  const file = assertKey(key, files);
   if (!file) throw errors.validation('הקלטה לא מוכרת');
   const url = 'https://www.call2all.co.il/ym/api/DownloadFile'
     + `?token=${encodeURIComponent(yemotToken())}&path=${encodeURIComponent(`ivr2:/${file}.wav`)}`;

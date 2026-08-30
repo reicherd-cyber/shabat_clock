@@ -25,6 +25,14 @@ export function errorHandler(err, req, res, _next) {
     if (err.fields) body.error.fields = err.fields;
     return res.status(err.status).json(body);
   }
+  // body-parser failures are the client's fault, not a server error: malformed
+  // JSON → 400, oversized body → 413 — and neither is worth a stack in the log.
+  if (err?.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: { code: 'VALIDATION', message: 'Malformed JSON body' } });
+  }
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ error: { code: 'PAYLOAD_TOO_LARGE', message: 'Request body too large' } });
+  }
   console.error('Unhandled error:', err);
   return res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
 }

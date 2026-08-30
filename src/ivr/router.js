@@ -1,6 +1,7 @@
 // §4 IVR webhook — single GET /ivr endpoint; the state machine per §4.1.
 // Yemot is just the voice front-end; this IS the IVR logic.
 import { Router } from 'express';
+import { timingSafeEqual } from 'node:crypto';
 import { env } from '../config/env.js';
 import { normalizePhone } from '../services/phone.js';
 import { findUserByPhone, verifyPin } from '../services/users.js';
@@ -384,9 +385,16 @@ async function authFailed(session, phone) {
 // Token in the path (/ivr/<token>) — Yemot's api_link appends its params with '?'
 // even when the URL already has a query string, which would mangle a ?token= query.
 // The bare /ivr?token= form still works for manual testing.
+// Constant-time token check — a plain !== leaks the match length through timing.
+const tokenValid = (given) => {
+  const a = Buffer.from(String(given || ''));
+  const b = Buffer.from(String(env.ivrToken || ''));
+  return b.length > 0 && a.length === b.length && timingSafeEqual(a, b);
+};
+
 ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
   try {
-    if ((req.params.token || req.query.token) !== env.ivrToken) {
+    if (!tokenValid(req.params.token || req.query.token)) {
       console.warn(`IVR: bad token from ${req.ip}`);
       return res.status(403).send('forbidden');
     }

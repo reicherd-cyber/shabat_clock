@@ -53,7 +53,21 @@ async function buildQr({ device_uid, secret, relay_count }) {
   return dataUrl.split(',')[1]; // base64 png
 }
 
+// An unknown IANA zone makes Intl.DateTimeFormat throw — inside the scheduler
+// tick that would stall EVERY user's backup firing. Reject it at the door.
+export function assertTimezone(tz) {
+  const v = String(tz || '').trim();
+  try {
+    if (!v) throw new Error('empty');
+    new Intl.DateTimeFormat('en-US', { timeZone: v });
+  } catch {
+    throw errors.validation('אזור זמן לא תקין', { timezone: 'IANA zone, e.g. Asia/Jerusalem' });
+  }
+  return v;
+}
+
 export async function provisionDevice({ user_id, name, relay_count, device_uid = null, timezone = 'Asia/Jerusalem', actor = null }) {
+  timezone = assertTimezone(timezone);
   const rc = Number(relay_count);
   if (!Number.isInteger(rc) || rc < 1 || rc > 20) throw errors.validation('relay_count must be 1–20', { relay_count: '1-20' });
   const uid = device_uid ? normalizeUid(device_uid) : null;
@@ -194,7 +208,10 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
     if (!device) throw errors.notFound('NOT_FOUND', 'Device not found');
     const fields = {};
 
-    if (patch.name !== undefined) fields.name = patch.name;
+    if (patch.name !== undefined) {
+      fields.name = String(patch.name).trim().slice(0, 100);
+      if (!fields.name) throw errors.validation('נדרש שם', { name: 'required' });
+    }
     if (patch.mute_alerts !== undefined) fields.mute_alerts = Boolean(patch.mute_alerts);
     if (patch.is_enabled !== undefined) fields.is_enabled = Boolean(patch.is_enabled);
     const removing = fields.is_enabled === false && device.is_enabled;
@@ -227,7 +244,7 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
       await applyEnabledTransition();
       return;
     }
-    if (patch.timezone !== undefined) fields.timezone = patch.timezone;
+    if (patch.timezone !== undefined) fields.timezone = assertTimezone(patch.timezone);
 
     if (patch.relay_count !== undefined) {
       if (device.device_uid) throw errors.conflict('DEVICE_FLASHED', 'relay_count is pinned once flashed; use rotate-secret');

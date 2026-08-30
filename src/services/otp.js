@@ -9,8 +9,10 @@ import { recordFailure, isLockedOut } from './authFailures.js';
 import { OTP_TTL_MIN, OTP_PHONE_ADD_TTL_MIN, OTP_MAX_ATTEMPTS } from '../config/constants.js';
 
 async function deliverOtp(phone, code) {
-  // In dev always log the code, so local testing works even when the call fails.
-  if (env.nodeEnv !== 'production') console.log(`[dev] OTP for ${phone}: ${code}`);
+  // On a DEVELOPMENT machine log the code so local testing works even when the
+  // call fails. Strictly 'development' — staging shares the production DB, so
+  // its log must never carry real users' codes.
+  if (env.nodeEnv === 'development') console.log(`[dev] OTP for ${phone}: ${code}`);
 
   // Prefer an API-key token; fall back to legacy user:pass. No creds → dev-log only.
   const token = env.otpYemot.token || (env.otpYemot.user ? `${env.otpYemot.user}:${env.otpYemot.pass}` : '');
@@ -43,8 +45,8 @@ async function deliverOtp(phone, code) {
     console.log(`[yemot] OTP call to ${phone} threw: ${detail}`);
   }
 
-  // In production a failed call must surface; in dev the code was already logged, so keep going.
-  if (!ok && env.nodeEnv === 'production') throw new Error(`Yemot OTP call failed: ${detail}`);
+  // Outside a dev machine a failed call must surface; in dev the code was already logged, so keep going.
+  if (!ok && env.nodeEnv !== 'development') throw new Error(`Yemot OTP call failed: ${detail}`);
 }
 
 async function deliverOtpEmail(email, code) {
@@ -102,10 +104,16 @@ export async function requestOtp({ phone, purpose, userPhoneId = null, channel =
     // NO outbound call (saves Yemot units, and campaign calls were getting
     // filtered anyway): the user dials the line from the new number and the IVR
     // reads the code back (router.js phone_add_code branch).
-    if (env.nodeEnv !== 'production') console.log(`[dev] phone-add code for ${phone}: ${code}`);
+    if (env.nodeEnv === 'development') console.log(`[dev] phone-add code for ${phone}: ${code}`);
     return;
   } else {
     code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    // Exactly ONE live code per phone+purpose: a fresh request retires the
+    // earlier ones, so re-requesting never multiplies the guess surface.
+    await query(
+      'UPDATE otp_codes SET used_at = UTC_TIMESTAMP() WHERE phone = ? AND purpose = ? AND used_at IS NULL',
+      [phone, purpose],
+    );
     await query(
       `INSERT INTO otp_codes (phone, purpose, user_phone_id, code_hash, expires_at)
        VALUES (?,?,?,?, UTC_TIMESTAMP() + INTERVAL ? MINUTE)`,
@@ -120,12 +128,16 @@ export async function requestOtp({ phone, purpose, userPhoneId = null, channel =
 // pooled auth_failures row in one transaction (§3.1). Purposes never cross.
 // Returns the winning otp_codes row (with user_phone_id for phone_add).
 export async function verifyOtp({ phone, code, purpose, userPhoneId = null }) {
-  // Google Play review account: the fixed code always works (login only, no lockout
-  // interplay — the row-shaped return is unused on the login path).
-  if (env.review.phone && env.review.otp && phone === env.review.phone
-      && purpose === 'login' && code === env.review.otp) return {};
-
   if (await isLockedOut(phone, 'web_otp')) throw errors.rateLimited();
+
+  // Google Play review account: the fixed code works (login only) — but only
+  // AFTER the lockout gate, and a wrong guess counts like any other failure, so
+  // the review number is no better a brute-force target than a real one.
+  if (env.review.phone && env.review.otp && phone === env.review.phone && purpose === 'login') {
+    if (code === env.review.otp) return {};
+    await recordFailure(phone, 'web_otp');
+    throw errors.badCode();
+  }
 
   const rows = await query(
     `SELECT * FROM otp_codes

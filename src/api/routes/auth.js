@@ -8,7 +8,7 @@ import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { bcryptCompare, bcryptHash } from '../../services/users.js';
 import { verifyTotp } from '../../services/totp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
-import { signUserToken, signAdminToken, otpRequestLimiter, otpRequestIpLimiter, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter } from '../middleware.js';
+import { signUserToken, signAdminToken, otpRequestLimiter, otpRequestIpLimiter, otpVerifyIpLimiter, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter } from '../middleware.js';
 import { env } from '../../config/env.js';
 
 export const authRouter = Router();
@@ -147,7 +147,11 @@ function maskEmail(email) {
 // Single-use emailed second-factor code: valid, unexpired, matches → clear it, true.
 async function verifyAdminEmailCode(admin, code) {
   if (!admin.email_code_hash || !admin.email_code_expires) return false;
-  if (new Date(admin.email_code_expires + 'Z') <= new Date()) return false;
+  // Expiry judged by the database clock (the column is a UTC DATETIME the driver
+  // hands back as a Date parsed in the host zone — comparing it in JS is off by
+  // the host's UTC offset on any non-UTC box).
+  const [live] = await query('SELECT 1 AS ok FROM admins WHERE id = ? AND email_code_expires > UTC_TIMESTAMP()', [admin.id]);
+  if (!live) return false;
   if (!bcryptCompare(code, admin.email_code_hash)) return false;
   await query('UPDATE admins SET email_code_hash = NULL, email_code_expires = NULL WHERE id = ?', [admin.id]);
   return true;
@@ -172,7 +176,7 @@ authRouter.post('/auth/otp/request', otpRequestIpLimiter, otpRequestLimiter, asy
   } catch (e) { next(e); }
 });
 
-authRouter.post('/auth/otp/verify', async (req, res, next) => {
+authRouter.post('/auth/otp/verify', otpVerifyIpLimiter, async (req, res, next) => {
   try {
     const phone = normalizePhone(req.body?.phone);
     const code = String(req.body?.code || '');

@@ -41,6 +41,17 @@ export async function patchRelay({ userId, relayId, patch, force = false, actor 
     for (const k of ['name', 'ivr_digit', 'is_enabled', 'sort_order', 'boot_behavior']) {
       if (patch[k] !== undefined) fields[k] = patch[k];
     }
+    // Whitelisted KEYS still need typed VALUES — a nested object or array here
+    // reaches the driver as a bizarre (if harmless) SET clause.
+    if (fields.name !== undefined) {
+      fields.name = String(fields.name).trim().slice(0, 100);
+      if (!fields.name) throw errors.validation('נדרש שם', { name: 'required' });
+    }
+    if (fields.is_enabled !== undefined) fields.is_enabled = Boolean(fields.is_enabled);
+    if (fields.sort_order !== undefined) {
+      fields.sort_order = Number(fields.sort_order);
+      if (!Number.isInteger(fields.sort_order)) throw errors.validation('sort_order must be an integer', { sort_order: 'int' });
+    }
     // Digit invariant: PATCH may never set ivr_digit NULL on a live row [D38].
     if ('ivr_digit' in fields) {
       const digit = Number(fields.ivr_digit);

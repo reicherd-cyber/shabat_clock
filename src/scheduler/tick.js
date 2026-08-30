@@ -196,8 +196,14 @@ export async function tick(now = new Date()) {
   const winEnd = new Date(nowM.getTime() - BACKUP_GRACE_MIN * 60000);
 
   const schedules = await loadActiveSchedules();
-  const due = sortDue(schedules.flatMap((s) => occurrencesInWindow(s, winStart, winEnd))
-    .filter((occ) => !inExclusionRange(occ.schedule, occ.localKey.slice(0, 10))));
+  // One bad row (e.g. an unparseable timezone) must never take the whole tick
+  // down — skip it, log it, keep firing everyone else.
+  const due = sortDue(schedules.flatMap((s) => {
+    try { return occurrencesInWindow(s, winStart, winEnd); } catch (e) {
+      console.error(`tick: schedule ${s.id} skipped:`, e.message);
+      return [];
+    }
+  }).filter((occ) => !inExclusionRange(occ.schedule, occ.localKey.slice(0, 10))));
 
   for (const occ of due) {
     const s = occ.schedule;

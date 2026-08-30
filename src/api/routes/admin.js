@@ -2,7 +2,18 @@
 import { Router, raw } from 'express';
 import { query } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
-import { requireAdmin, requireWrite, requireSuperadmin, signUserToken } from '../middleware.js';
+import { requireAdmin, requireWrite, requireSuperadmin, signUserToken, invalidateSession } from '../middleware.js';
+import { isIP } from 'node:net';
+
+// The Shelly LAN wizard fetches http://<ip>/rpc — only a literal IP address may
+// get there (never a hostname/path the server would then request on the
+// caller's behalf). MQTT-transport devices carry no ip at all.
+const cleanLanIp = (transport, ip) => {
+  const v = String(ip || '').trim();
+  if (transport !== 'lan') return '';
+  if (!isIP(v)) throw errors.validation('כתובת IP לא תקינה', { ip: 'IPv4/IPv6 literal' });
+  return v;
+};
 import { createUser, getUser, setPin, bcryptHash, setUserEmailAdmin } from '../../services/users.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview } from '../../services/devices.js';
@@ -40,12 +51,18 @@ adminRouter.get('/2fa/status', async (req, res, next) => {
 });
 
 // Generate a fresh secret (stored but NOT yet enforced) + a scannable QR. Re-running
-// before enable() overwrites the pending secret; harmless.
+// before enable() overwrites the pending secret; harmless. When 2FA is ALREADY on,
+// a valid current code is required first — otherwise a hijacked session could
+// use "setup" to switch enforcement off and plant its own secret.
 adminRouter.post('/2fa/setup', async (req, res, next) => {
   try {
-    const [a] = await query('SELECT email FROM admins WHERE id = ?', [req.auth.adminId]);
+    const [a] = await query('SELECT email, totp_secret, totp_enabled FROM admins WHERE id = ?', [req.auth.adminId]);
+    if (a?.totp_enabled && !verifyTotp(a.totp_secret, req.body?.code)) {
+      throw errors.validation('נדרש קוד אימות נוכחי כדי להגדיר מחדש', { code: 'current TOTP required' });
+    }
     const secret = generateSecret();
     await query('UPDATE admins SET totp_secret = ?, totp_enabled = FALSE WHERE id = ?', [secret, req.auth.adminId]);
+    if (a?.totp_enabled) audit(req, 'reset_2fa', 'admin', req.auth.adminId);
     const uri = otpauthUri(secret, a.email);
     const qr = await QRCode.toDataURL(uri);
     res.json({ secret, uri, qr });
@@ -319,9 +336,9 @@ adminRouter.post('/shelly/prep-status', requireSuperadmin, async (req, res, next
 adminRouter.post('/shelly/probe', requireWrite, async (req, res, next) => {
   try {
     const b = req.body || {};
+    const transport = b.transport === 'mqtt' ? 'mqtt' : 'lan';
     res.json(await probeShelly({
-      transport: b.transport === 'mqtt' ? 'mqtt' : 'lan',
-      ip: String(b.ip || '').trim(), mac: String(b.mac || '').trim(),
+      transport, ip: cleanLanIp(transport, b.ip), mac: String(b.mac || '').trim(),
     }));
   } catch (e) { next(e); }
 });
@@ -329,10 +346,11 @@ adminRouter.post('/shelly/probe', requireWrite, async (req, res, next) => {
 adminRouter.post('/shelly/register', requireWrite, async (req, res, next) => {
   try {
     const b = req.body || {};
+    const transport = b.transport === 'mqtt' ? 'mqtt' : 'lan';
     const result = await registerShellyDevice({
       userId: Number(b.user_id),
-      transport: b.transport === 'mqtt' ? 'mqtt' : 'lan',
-      ip: String(b.ip || '').trim(), mac: String(b.mac || '').trim(),
+      transport,
+      ip: cleanLanIp(transport, b.ip), mac: String(b.mac || '').trim(),
       name: b.name, relays: b.relays, actor: adminActor(req),
     });
     await audit(req, 'register_shelly', 'device', result.id, { after: { ip: b.ip, mac: b.mac, transport: b.transport, user_id: b.user_id } });
@@ -777,12 +795,16 @@ adminRouter.post('/admins', requireSuperadmin, async (req, res, next) => {
 
 adminRouter.patch('/admins/:id', requireSuperadmin, async (req, res, next) => {
   try {
+    // Same whitelist as the create route — never forward a raw role string.
     const fields = {};
-    for (const k of ['name', 'role', 'is_active']) if (req.body?.[k] !== undefined) fields[k] = req.body[k];
+    if (req.body?.name !== undefined) fields.name = String(req.body.name).trim().slice(0, 100);
+    if (req.body?.role !== undefined) fields.role = req.body.role === 'superadmin' ? 'superadmin' : 'support';
+    if (req.body?.is_active !== undefined) fields.is_active = Boolean(req.body.is_active);
     if (req.body?.password) fields.password_hash = bcryptHash(req.body.password);
     if (Object.keys(fields).length) {
       const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
       await query(`UPDATE admins SET ${sets} WHERE id = ?`, [...Object.values(fields), req.params.id]);
+      invalidateSession('admin', Number(req.params.id)); // deactivation / re-role bites now, not in 60s
     }
     await audit(req, 'update', 'admin', Number(req.params.id), { after: { ...fields, password_hash: undefined } });
     res.json({ ok: true });

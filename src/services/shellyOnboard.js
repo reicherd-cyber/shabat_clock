@@ -288,14 +288,17 @@ exit 1
 function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
   // Injected as JS string literals — the RPC bodies are JSON (no backticks/quotes issues
   // beyond '); JSON.stringify once more makes them safe literals.
+  // JSON.stringify does NOT escape '<', so a value containing "</script>" would
+  // break out of the inline script — escape it into a < literal.
+  const js = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
   const inject = {
-    uid: JSON.stringify(uid || ''),
-    statusUrl: JSON.stringify(statusUrl || ''),
-    prepareUrl: JSON.stringify(prepareUrl),
-    broker: JSON.stringify(broker),
-    wifiSsid: JSON.stringify(wifi.ssid || ''),
-    wifiPass: JSON.stringify(wifi.pass || ''),
-    bodies: b ? JSON.stringify({ putCa: b.putCa, mqtt: b.mqtt, noVerify: b.mqttNoVerify, reboot: b.reboot, sntp: b.sntp }) : 'null',
+    uid: js(uid || ''),
+    statusUrl: js(statusUrl || ''),
+    prepareUrl: js(prepareUrl),
+    broker: js(broker),
+    wifiSsid: js(wifi.ssid || ''),
+    wifiPass: js(wifi.pass || ''),
+    bodies: b ? js({ putCa: b.putCa, mqtt: b.mqtt, noVerify: b.mqttNoVerify, reboot: b.reboot, sntp: b.sntp }) : 'null',
   };
   return `<!doctype html>
 <html dir="rtl" lang="he"><head><meta charset="utf-8">
@@ -389,6 +392,7 @@ let STAGE=PREPARE_URL?'detect':'install';
 function parseMac(v){const s=v.trim().toLowerCase();const tail=s.includes('-')?s.slice(s.lastIndexOf('-')+1):s;const hex=tail.replace(/[^0-9a-f]/g,'');return hex.length===12?hex:s.replace(/[^0-9a-f]/g,'')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
 const log=(t,cls)=>{const d=document.createElement('div');d.textContent=t;if(cls)d.className=cls;$('log').appendChild(d);d.scrollIntoView()};
+const esc=(v)=>String(v).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const verdict=(t,cls)=>{$('verdict').innerHTML='<div class="verdict '+cls+'">'+t+'</div>'};
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 // no-cors: an opaque response still resolves = the device answered; reject = unreachable.
@@ -556,14 +560,14 @@ async function stageWifi(){
   if(eth&&eth.ip){STA_IP=eth.ip;log('המכשיר מחובר בכבל רשת ✓ (כתובת '+eth.ip+')','ok');afterWifi('');return}
   verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה — או חברו למכשיר כבל רשת מהנתב, המתינו רגע ולחצו שוב בלי למלא כלום.','warn');return}
  IP=DEVIP;
- log('שולח את פרטי הרשת "'+ssid+'" למכשיר...');
+ log('שולח את פרטי הרשת "'+esc(ssid)+'" למכשיר...');
  try{await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}))}
  catch(e){verdict('שגיאה בשליחה — ודאו שהטלפון עדיין על רשת המכשיר (Shelly...) ונסו שוב.','bad');return}
  log('ממתין שהמכשיר יתחבר לרשת...');
  let st=null;
  for(let i=0;i<15;i++){await sleep(2000);st=await wsRpc(DEVIP,'Wifi.GetStatus');if(st&&st.status==='got ip'&&st.sta_ip)break}
  if(!(st&&st.status==='got ip'&&st.sta_ip)){
-  verdict('המכשיר לא הצליח להתחבר לרשת "'+ssid+'" — כנראה שם רשת או סיסמה שגויים. תקנו את הפרטים ולחצו שוב (אתם עדיין על רשת המכשיר — אפשר לתקן מיד).','warn');
+  verdict('המכשיר לא הצליח להתחבר לרשת "'+esc(ssid)+'" — כנראה שם רשת או סיסמה שגויים. תקנו את הפרטים ולחצו שוב (אתם עדיין על רשת המכשיר — אפשר לתקן מיד).','warn');
   return}
  STA_IP=st.sta_ip;
  afterWifi(ssid);
@@ -634,7 +638,7 @@ async function stageInstall(){
    log('מאתחל את המכשיר...');
    await rpc(JSON.stringify({id:8002,method:'Shelly.Reboot'})).catch(()=>{});
   }catch(e){verdict('שגיאה בשליחה: '+e.message+' — ודאו שנשארתם על רשת המכשיר ונסו שוב.','bad');return}
-  verdict('נשלח ✓. המכשיר יתחבר לרשת '+ssid+' ולשרת בתוך כדקה — אין צורך בשום דבר נוסף כאן. אפשר לוודא במסך הניהול ("בדוק חיבור").','ok');
+  verdict('נשלח ✓. המכשיר יתחבר לרשת '+esc(ssid)+' ולשרת בתוך כדקה — אין צורך בשום דבר נוסף כאן. אפשר לוודא במסך הניהול ("בדוק חיבור").','ok');
   return}
  // Credentials are minted before this stage; if they're somehow missing
  // (stale state), fall back to the mint step instead of failing mid-send.
@@ -662,13 +666,13 @@ async function stageInstall(){
   log('מגדיר שרת זמן...');await rpc(B.sntp[0]);
   // Wi-Fi last, so the server config already sits on the device even if the
   // network switch cuts this session short.
-  if(ssid){log('מגדיר חיבור לרשת '+ssid+'...');await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}))}
+  if(ssid){log('מגדיר חיבור לרשת '+esc(ssid)+'...');await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}))}
   log('מאתחל את המכשיר...');await rpc(B.reboot).catch(()=>{});
  }catch(e){verdict('שגיאה בשליחת ההגדרות: '+e.message+' — ודאו שנשארתם על אותו Wi-Fi ונסו שוב.','bad');$('go').disabled=false;return}
  if(!(await waitBack())){
   // With a Wi-Fi change this is expected: the device moved to the home network
   // and the phone may still sit on the (now stale) hotspot connection.
-  if(ssid){verdict('המכשיר עבר כנראה לרשת '+ssid+'. חברו את הטלפון ל-Wi-Fi הביתי ולחצו "בדוק מול השרת".','warn');actionBtn('בדוק מול השרת',async()=>{await finish()});$('go').disabled=false;return}
+  if(ssid){verdict('המכשיר עבר כנראה לרשת '+esc(ssid)+'. חברו את הטלפון ל-Wi-Fi הביתי ולחצו "בדוק מול השרת".','warn');actionBtn('בדוק מול השרת',async()=>{await finish()});$('go').disabled=false;return}
   verdict('המכשיר לא חזר אחרי האתחול — בדקו חשמל וכתובת, ונסו שוב.','bad');$('go').disabled=false;return}
  log('המכשיר חזר לרשת.','ok');
  await finish();

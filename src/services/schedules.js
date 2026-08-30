@@ -337,6 +337,7 @@ export async function createSchedule({ userId, relayId, createdVia, actingUserId
   delete fields.plan_id;
   const result = await withTransaction(async (conn) => {
     const relay = await requireRelay(conn, relayId, actingUserId);
+    await assertPlanIdFree(conn, planId, relay.user_id);
     // No name given → numbered default: plans count the user's OTHER plans
     // (stable across the member-row loop), plain rows count per relay.
     if (!name && planId) {
@@ -421,24 +422,7 @@ function schedulerRows(sch, exclusions) {
 // included). Pure — nothing is written; validation errors (e.g. a past one-time
 // date) surface as-is. Returns [{key?, day?, date, time, action}] in firing order.
 export async function previewScheduler({ userId, scheduler, exclusions, region, relayId }) {
-  const groups = scheduler?.repeat_type === 'holiday'
-    ? parseHolidayKeys(scheduler.holidays).map((key) => ({ key, override: { holidays: [key] } }))
-    : scheduler?.repeat_type === 'weekly' && !scheduler.daily && Array.isArray(scheduler.days) && scheduler.days.length
-      ? [...new Set(scheduler.days.map(Number))].sort((a, b) => a - b).map((day) => ({ day, override: { days: [day] } }))
-      : [{ override: {} }];
-  const out = [];
-  for (const g of groups) {
-    const [next] = await previewOne({ userId, scheduler: { ...scheduler, ...g.override }, exclusions, region, relayId, count: 1 });
-    out.push({ ...(g.key ? { key: g.key } : {}), ...(g.day ? { day: g.day } : {}), ...(next || { date: null, time: null, action: scheduler?.action === 'off' ? 'off' : 'on' }) });
-  }
-  return out.sort((a, b) => {
-    if (!a.date) return 1;
-    if (!b.date) return -1;
-    return `${a.date}T${a.time}` < `${b.date}T${b.time}` ? -1 : 1;
-  });
-}
-
-async function previewOne({ userId, scheduler, exclusions, region, relayId, count = 3 }) {
+  // Timezone + region resolve once for all groups (they were two queries per group).
   let tz = 'Asia/Jerusalem';
   if (relayId) {
     const [r] = await query(
@@ -448,6 +432,24 @@ async function previewOne({ userId, scheduler, exclusions, region, relayId, coun
     if (r?.timezone) tz = r.timezone;
   }
   const zr = region || (await query('SELECT zmanim_region FROM users WHERE id = ?', [userId]))[0]?.zmanim_region || DEFAULT_REGION;
+  const groups = scheduler?.repeat_type === 'holiday'
+    ? parseHolidayKeys(scheduler.holidays).map((key) => ({ key, override: { holidays: [key] } }))
+    : scheduler?.repeat_type === 'weekly' && !scheduler.daily && Array.isArray(scheduler.days) && scheduler.days.length
+      ? [...new Set(scheduler.days.map(Number))].sort((a, b) => a - b).map((day) => ({ day, override: { days: [day] } }))
+      : [{ override: {} }];
+  const out = [];
+  for (const g of groups) {
+    const [next] = await previewOne({ scheduler: { ...scheduler, ...g.override }, exclusions, tz, zr, count: 1 });
+    out.push({ ...(g.key ? { key: g.key } : {}), ...(g.day ? { day: g.day } : {}), ...(next || { date: null, time: null, action: scheduler?.action === 'off' ? 'off' : 'on' }) });
+  }
+  return out.sort((a, b) => {
+    if (!a.date) return 1;
+    if (!b.date) return -1;
+    return `${a.date}T${a.time}` < `${b.date}T${b.time}` ? -1 : 1;
+  });
+}
+
+async function previewOne({ scheduler, exclusions, tz, zr, count = 3 }) {
   const { expandSchedules } = await import('./calendar.js');
   const p = localParts(new Date(), tz);
   const from = { y: p.y, mo: p.mo, d: p.d };
@@ -466,6 +468,18 @@ async function previewOne({ userId, scheduler, exclusions, region, relayId, coun
     .map((e) => ({ date: e.date, time: e.time, action: e.action }));
 }
 
+// A plan_id is client-minted, so it must never be shared across accounts: rows
+// carrying another user's token would show up under their plan in admin views.
+// Same 404 as any foreign object — no hint that the token exists.
+async function assertPlanIdFree(conn, planId, userId) {
+  if (!planId) return;
+  const [rows] = await conn.query(
+    'SELECT 1 FROM schedules WHERE plan_id = ? AND user_id <> ? LIMIT 1',
+    [planId, userId],
+  );
+  if (rows.length) throw errors.notFound();
+}
+
 // תוכנית save — ONE transaction: the plan's existing member rows are soft-deleted
 // [D37] and every (channel × scheduler × weekly day) combination is inserted
 // fresh, all sharing plan_id, the plan name and its exclusion list. The devices
@@ -479,6 +493,7 @@ export async function savePlan({ userId, planId, name, relayIds, schedulers, exc
   const deviceIds = new Set();
   const ids = [];
   await withTransaction(async (conn) => {
+    await assertPlanIdFree(conn, planId, userId);
     const [existing] = await conn.query(
       `SELECT s.id, s.name, r.device_id FROM schedules s JOIN relays r ON r.id = s.relay_id
        WHERE s.plan_id = ? AND s.user_id = ? AND s.deleted_at IS NULL FOR UPDATE`,

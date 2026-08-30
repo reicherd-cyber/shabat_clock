@@ -22,10 +22,11 @@ export function createApp() {
   }));
   app.use(express.json({ limit: '100kb' }));
 
-  // Request log — never the query string on /ivr (token) and never bodies at all;
-  // provisioning/rotate responses are thereby excluded from logging (§8.4 [D29]).
+  // Request log — never the query string, never bodies, and the /ivr PATH is
+  // redacted: the Yemot webhook token rides in the path (/ivr/<token>), and a
+  // secret must not end up in pm2/nginx logs and their backups (§8.4 [D29]).
   app.use((req, res, next) => {
-    console.log(`${req.method} ${req.path}`);
+    console.log(`${req.method} ${req.path.startsWith('/ivr') ? '/ivr/[redacted]' : req.path}`);
     next();
   });
 

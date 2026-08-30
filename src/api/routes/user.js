@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
-import { requireUser } from '../middleware.js';
+import { requireUser, supportAskLimiter, supportMessageLimiter, phoneAddLimiter, previewLimiter } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, setPrimaryUserEmail } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
@@ -305,7 +305,7 @@ userRouter.get('/schedules/calendar', async (req, res, next) => {
 // Editor hint: the next events a scheduler WOULD fire (nothing saved). GET with
 // the scheduler as a JSON query param — read-only, so the impersonation guard
 // (which wraps every POST/PATCH) doesn't prompt on every keystroke.
-userRouter.get('/schedules/preview', async (req, res, next) => {
+userRouter.get('/schedules/preview', previewLimiter, async (req, res, next) => {
   try {
     let q;
     try { q = JSON.parse(String(req.query.q || '{}')); } catch { throw errors.validation('bad preview query', { q: 'JSON' }); }
@@ -396,7 +396,7 @@ userRouter.get('/history', async (req, res, next) => {
 // ── תמיכה: self-help bot + escalation to a human ──
 
 // Free-text question → bot guide. Stateless: the client counts its own tries.
-userRouter.post('/support/ask', async (req, res, next) => {
+userRouter.post('/support/ask', supportAskLimiter, async (req, res, next) => {
   try {
     const text = String(req.body?.text || '').trim();
     if (text.length < 4) throw errors.validation('כתבו שאלה של לפחות 4 תווים');
@@ -405,7 +405,7 @@ userRouter.post('/support/ask', async (req, res, next) => {
 });
 
 // Escalation: store the message (+ the failed self-help transcript) for admins.
-userRouter.post('/support/messages', async (req, res, next) => {
+userRouter.post('/support/messages', supportMessageLimiter, async (req, res, next) => {
   try {
     const body = String(req.body?.body || '').trim();
     if (body.length < 4 || body.length > 2000) throw errors.validation('הודעה באורך 4–2000 תווים', { body: '4-2000' });
