@@ -415,11 +415,30 @@ function schedulerRows(sch, exclusions) {
   return days.map((d) => ({ ...base, [`${side}_day_of_week`]: d }));
 }
 
-// Preview for the editor's "יפעל בפעם הבאה" hint: the next few concrete events
-// one single-action scheduler would fire, run through the SAME resolvers and
-// calendar expansion as a real save (exclusions included). Pure — nothing is
-// written; validation errors (e.g. a past one-time date) surface as-is.
-export async function previewScheduler({ userId, scheduler, exclusions, region, relayId, count = 3 }) {
+// Preview for the editor's "הדלקה הבאה …" hint: ONE line per selected day —
+// each שבת/חג key (or each weekday) reports its own next concrete event, run
+// through the SAME resolvers and calendar expansion as a real save (exclusions
+// included). Pure — nothing is written; validation errors (e.g. a past one-time
+// date) surface as-is. Returns [{key?, day?, date, time, action}] in firing order.
+export async function previewScheduler({ userId, scheduler, exclusions, region, relayId }) {
+  const groups = scheduler?.repeat_type === 'holiday'
+    ? parseHolidayKeys(scheduler.holidays).map((key) => ({ key, override: { holidays: [key] } }))
+    : scheduler?.repeat_type === 'weekly' && !scheduler.daily && Array.isArray(scheduler.days) && scheduler.days.length
+      ? [...new Set(scheduler.days.map(Number))].sort((a, b) => a - b).map((day) => ({ day, override: { days: [day] } }))
+      : [{ override: {} }];
+  const out = [];
+  for (const g of groups) {
+    const [next] = await previewOne({ userId, scheduler: { ...scheduler, ...g.override }, exclusions, region, relayId, count: 1 });
+    out.push({ ...(g.key ? { key: g.key } : {}), ...(g.day ? { day: g.day } : {}), ...(next || { date: null, time: null, action: scheduler?.action === 'off' ? 'off' : 'on' }) });
+  }
+  return out.sort((a, b) => {
+    if (!a.date) return 1;
+    if (!b.date) return -1;
+    return `${a.date}T${a.time}` < `${b.date}T${b.time}` ? -1 : 1;
+  });
+}
+
+async function previewOne({ userId, scheduler, exclusions, region, relayId, count = 3 }) {
   let tz = 'Asia/Jerusalem';
   if (relayId) {
     const [r] = await query(

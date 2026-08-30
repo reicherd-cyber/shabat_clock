@@ -4,7 +4,7 @@ import { Button, Input, TimeInput, Select, Modal, ErrorNote, useAsync, DAY_NAMES
 import { Plus, CalendarOff, Pencil, Trash2, ArrowRight, Save } from 'lucide-react';
 import {
   ANCHOR_NAMES, anchorText, HEB_DAYS, HEB_MONTHS, hebMonthLabel, hebOf, todayYmd, fmtDate,
-  RelayMultiSelect, REGION_NAMES, HolidayDaysGrid, holidaySummary, DAY_HOLIDAY_KEYS,
+  RelayMultiSelect, REGION_NAMES, HolidayDaysGrid, holidaySummary, DAY_HOLIDAY_KEYS, HOLIDAY_NAMES,
 } from './ScheduleForm.jsx';
 
 // תוכנית editor (redesign 2026-08-30): a plan is a LIST of single-action
@@ -173,6 +173,8 @@ function NextPreview({ draft, exclusions, region, relayId, invalid }) {
   }, [JSON.stringify(draft), JSON.stringify(exclusions), region, relayId, invalid]); // eslint-disable-line react-hooks/exhaustive-deps
   if (invalid) return null;
   const act = draft.action === 'on' ? 'הדלקה' : 'כיבוי';
+  // one line per selected day: "הדלקה הבאה ראש השנה א׳: יום שישי, 11.9.2026 23:00"
+  const labelOf = (e) => (e.key ? HOLIDAY_NAMES[e.key] || e.key : e.day ? DAY_NAMES[e.day] : (draft.daily ? 'כל יום' : ''));
   return (
     <div className={`rounded-xl px-3 py-2 text-sm border ${state.error ? 'border-[#e11d48]/40 bg-[#FDE8E8]' : 'border-line bg-surface2/60'}`}>
       {state.error ? (
@@ -182,16 +184,17 @@ function NextPreview({ draft, exclusions, region, relayId, invalid }) {
       ) : state.events.length === 0 ? (
         <span className="text-muted">אין מועד קרוב שבו התזמון יפעל (בדקו את הימים וההחרגות).</span>
       ) : (
-        <>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-muted">{act} בפעם הבאה:</span>
-            <b className={draft.action === 'on' ? 'text-on' : 'text-off'}>{fmtWhen(state.events[0])}</b>
-            {state.loading && <span className="text-muted text-xs">מעדכן…</span>}
-          </div>
-          {state.events.length > 1 && (
-            <div className="text-xs text-muted mt-0.5">אחר כך: {state.events.slice(1).map(fmtWhen).join(' · ')}</div>
-          )}
-        </>
+        <div className="space-y-0.5">
+          {state.events.map((e, i) => (
+            <div key={i} className="flex items-baseline gap-2 flex-wrap">
+              <span className="text-muted">{act} הבאה {labelOf(e)}:</span>
+              {e.date
+                ? <b className={draft.action === 'on' ? 'text-on' : 'text-off'}>{fmtWhen(e)}</b>
+                : <span className="text-muted">אין מועד קרוב</span>}
+            </div>
+          ))}
+          {state.loading && <span className="text-muted text-xs">מעדכן…</span>}
+        </div>
       )}
     </div>
   );
