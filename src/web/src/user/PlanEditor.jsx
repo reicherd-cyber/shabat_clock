@@ -17,7 +17,9 @@ import {
 
 const uid = () => `u${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
 
-export const emptyPlan = { plan_id: null, name: '', relay_ids: [], schedulers: [], exclusions: [], member_ids: [] };
+// legacy_ids: standalone schedule rows (no plan_id) this editor took over —
+// saving mints a real plan and retires them.
+export const emptyPlan = { plan_id: null, name: '', relay_ids: [], schedulers: [], exclusions: [], member_ids: [], legacy_ids: [] };
 
 // A new scheduler starts BLANK (user decision): no type, no action, no days,
 // no time — every choice is the user's; the form validates before adding.
@@ -106,7 +108,7 @@ export function planFromMembers(members) {
     plan_id: repr.plan_id, name: repr.name || '',
     relay_ids: [...new Set(members.map((m) => m.relay_id))],
     schedulers: [...map.values()], exclusions,
-    member_ids: members.map((m) => m.id),
+    member_ids: members.map((m) => m.id), legacy_ids: [],
   };
 }
 
@@ -466,13 +468,18 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
       exclusions: plan.exclusions.map(exclusionToApi),
     };
     if (plan.plan_id) await api.put(`/plans/${plan.plan_id}`, body);
-    else await api.post('/plans', body);
+    else {
+      await api.post('/plans', body);
+      // a standalone schedule taken over by the editor: the old rows retire
+      for (const id of (plan.legacy_ids || [])) await api.del(`/schedules/${id}`);
+    }
     await onSaved();
   });
 
+  const editing = Boolean(plan.plan_id || plan.member_ids?.length);
   const title = view === 'scheduler' ? (draftIsNew ? 'תזמון חדש לתוכנית' : 'עריכת תזמון')
     : view === 'exclusion' ? (draftIsNew ? 'החרגה חדשה' : 'עריכת החרגה')
-      : (plan.plan_id ? 'עריכת תוכנית' : 'תוכנית חדשה');
+      : (editing ? 'עריכת תוכנית' : 'תוכנית חדשה');
 
   return (
     <Modal open={!!plan} onClose={onClose} title={title}>
@@ -544,10 +551,10 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
           </div>
           <Button className="w-full" disabled={busy || !plan.relay_ids.length || !plan.schedulers.length} onClick={save}>
             <span className="inline-flex items-center gap-1.5"><Save size={15} />
-              {busy ? 'שומר…' : plan.plan_id ? 'שמור תוכנית' : `שמור תוכנית${plan.relay_ids.length > 1 ? ` ל־${plan.relay_ids.length} ערוצים` : ''}`}
+              {busy ? 'שומר…' : editing ? 'שמור תוכנית' : `שמור תוכנית${plan.relay_ids.length > 1 ? ` ל־${plan.relay_ids.length} ערוצים` : ''}`}
             </span>
           </Button>
-          {plan.plan_id && (
+          {editing && (
             <button disabled={busy}
               className={`w-full flex items-center justify-center gap-1.5 text-sm py-1 cursor-pointer ${armDelete ? 'text-off font-bold' : 'text-muted hover:text-off'}`}
               onClick={armDelete

@@ -1,22 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, SectionHead, Modal, ErrorNote, useAsync, DAY_NAMES, Toggle, SyncNote, channelColorOf } from '../ui.jsx';
-import { House, Layers, Trash2, Plus, Check, RefreshCw, Sparkles, Pencil } from 'lucide-react';
-import {
-  ScheduleFormModal, emptyForm, rowToForm, anchorText, holidaySummary, fmtDate,
-  HEB_DAYS, hebMonthLabel, DAY_HOLIDAY_KEYS, MOTZAEI_KEYS,
-} from './ScheduleForm.jsx';
+import { Card, Button, SectionHead, ErrorNote, useAsync, DAY_NAMES, Toggle, SyncNote, channelColorOf } from '../ui.jsx';
+import { Layers, Trash2, Plus, Check, RefreshCw, Pencil } from 'lucide-react';
 import { PlanEditorModal, planFromMembers, schedulerSummary, exclusionSummary, emptyPlan } from './PlanEditor.jsx';
 
-// Mockup .sched: one bordered list; each row = relay (+device·code small) →
-// green ON pill ← red OFF pill → sync note → enable toggle. The create/edit
-// form lives in ScheduleForm.jsx (shared with the לוח).
+// תוכניות (redesign 2026-08-30): the page is ONE list of plans. A plan = channels
+// × single-action schedulers (+ exclusions) sharing a plan_id; standalone rows
+// (per-channel schedules from before, or "כבה בעוד…" from the dashboard / the
+// לוח) appear in the same list as single-channel plans and open in the same
+// editor — saving one converts it into a real plan. No per-channel view.
 export default function Schedules() {
   const [schedules, setSchedules] = useState(null);
   const [relays, setRelays] = useState([]);
-  const [formInit, setFormInit] = useState(null);
   const [planInit, setPlanInit] = useState(null); // the תוכנית editor (PlanEditor.jsx)
-  const [tab, setTab] = useState('channels'); // 'channels' | 'plans'
   const { busy, error, run, setError } = useAsync();
   // Channel identity color (shared app-wide assignment — same as the calendar).
   const colorOf = useMemo(() => channelColorOf(relays.map((r) => r.id)), [relays]);
@@ -30,76 +26,19 @@ export default function Schedules() {
   };
   useEffect(() => { refresh().catch(setError); }, []);
 
-  // A merged row acts on every schedule behind it (see mergeWeekly).
-  const toggleEnabled = (s) => run(async () => {
-    for (const m of (s._group || [s])) await api.patch(`/schedules/${m.id}`, { is_enabled: !s.is_enabled });
+  // Every action runs on ALL of a plan's member rows.
+  const toggleEnabled = (members, on) => run(async () => {
+    for (const m of members) await api.patch(`/schedules/${m.id}`, { is_enabled: on });
+    await refresh();
+  });
+  const remove = (members) => run(async () => {
+    for (const m of members) await api.del(`/schedules/${m.id}`);
     await refresh();
   });
 
-  const remove = (s) => run(async () => {
-    for (const m of (s._group || [s])) await api.del(`/schedules/${m.id}`);
-    await refresh();
-  });
-
-  // A weekly שישי→שבת pair can be upgraded to שבת וחגים: the ON keeps its time
-  // on every שבת/חג DAY (= its entry evening), the OFF becomes its own row on
-  // every מוצאי — each day fires on its own (see services/holidays.js).
-  const isShabbatPair = (s) => s.repeat_type === 'weekly'
-    && Number(s.on_day_of_week) === 6 && Number(s.off_day_of_week) === 7
-    && s.on_time && s.off_time;
-  const [convert, setConvert] = useState(null); // schedule awaiting convert confirmation
-  const applyToHolidays = () => run(async () => {
-    const s = convert;
-    const offAnchored = s.off_anchor && s.off_anchor !== 'clock';
-    await api.patch(`/schedules/${s.id}`, {
-      repeat_type: 'holiday', holidays: [...DAY_HOLIDAY_KEYS],
-      off_time: null, off_day_of_week: null, off_anchor: 'clock', off_offset_min: 0,
-    });
-    await api.post('/schedules', {
-      relay_id: s.relay_id, name: s.name || null, repeat_type: 'holiday', holidays: [...MOTZAEI_KEYS],
-      ...(offAnchored ? { off_anchor: s.off_anchor, off_offset_min: s.off_offset_min } : { off_time: s.off_time }),
-    });
-    setConvert(null);
-    await refresh();
-  });
-
-  // A 'once' schedule may be one-sided (e.g. the dashboard's quick "turn off at…") —
-  // a missing side yields null and renders no pill. Anchored sides show the zman
-  // rule with the currently-resolved time (≈ — it shifts a little every day).
-  const sideTime = (s, p) => (s[`${p}_anchor`] && s[`${p}_anchor`] !== 'clock'
-    ? `${anchorText(s[`${p}_anchor`], s[`${p}_offset_min`])} (≈${s[`${p}_time`]})`
-    : s[`${p}_time`]);
-  // Per-schedule החרגה summary, per its type ("א׳ אב עד א׳ אלול", "בימי שלישי",
-  // "שבתות + כל החגים", "9.7–18.7").
-  const exclRange = (s) => {
-    if (s.excl_type === 'weekly') {
-      return `בימי ${String(s.excl_days || '').split(',').filter(Boolean).map((d) => DAY_NAMES[d]).join(', ')}`;
-    }
-    if (s.excl_type === 'holiday') return holidaySummary(s.excl_holidays);
-    const heb = s.excl_calendar === 'heb';
-    const from = heb
-      ? `${HEB_DAYS[(s.excl_heb_day || 1) - 1]} ${hebMonthLabel(s.excl_heb_month)}`
-      : fmtDate(s.excl_date);
-    const to = heb
-      ? `${HEB_DAYS[(s.excl_end_heb_day || s.excl_heb_day || 1) - 1]} ${hebMonthLabel(s.excl_end_heb_month || s.excl_heb_month)}`
-      : fmtDate(s.excl_end_date || s.excl_date);
-    const range = to !== from ? `${from} עד ${to}` : from;
-    return s.excl_type === 'yearly' ? `כל שנה ${range}` : range;
-  };
-  // Yearly range "ח׳ אב עד י׳ אב" (collapses to a single date when from = to).
-  const yearlyRange = (s) => {
-    const from = s.annual_calendar === 'heb'
-      ? `${HEB_DAYS[(s.annual_heb_day || 1) - 1]} ${hebMonthLabel(s.annual_heb_month)}`
-      : fmtDate(s.annual_date);
-    const to = s.annual_calendar === 'heb'
-      ? `${HEB_DAYS[(s.annual_end_heb_day || s.annual_heb_day || 1) - 1]} ${hebMonthLabel(s.annual_end_heb_month || s.annual_heb_month)}`
-      : fmtDate(s.annual_end_date || s.annual_date);
-    return to !== from ? `${from} עד ${to}` : from;
-  };
-  // ── timeline ordering: when does this schedule act next? ──
-  // Resolves each side to a concrete Date: dated sides (once/holiday/yearly) use
-  // their stored next-occurrence date; weekly sides roll to the coming day-of-week
-  // (null day = daily). Anchored sides already carry the resolved wall time.
+  // ── timeline ordering: when does this row act next? ──
+  // Dated sides (once/holiday/yearly) use their stored next-occurrence date;
+  // weekly sides roll to the coming day-of-week (null day = daily).
   const sideDate = (s, p) => {
     if (s[`${p}_time`] == null) return null;
     const hm = String(s[`${p}_time`]).slice(0, 5);
@@ -112,8 +51,6 @@ export default function Schedules() {
     if (d <= now) d.setDate(d.getDate() + (dow == null ? 1 : 7));
     return d;
   };
-  // Next event = the earliest FUTURE side; a past ON with a future OFF means the
-  // schedule is running right now (mid-block שבת included).
   const nextEvent = (s) => {
     const now = new Date();
     const on = sideDate(s, 'on');
@@ -122,9 +59,8 @@ export default function Schedules() {
     const future = [on, off].filter((d) => d && d > now).sort((a, b) => a - b);
     if (running) return { d: off, act: 'כיבוי', running: true };
     if (future.length) return { d: future[0], act: future[0] === on ? 'הדלקה' : 'כיבוי' };
-    return { d: null }; // both sides in the past (a spent one-time)
+    return { d: null };
   };
-  // Sort key: running first, then by next action time; spent → after those; disabled → last.
   const sortKey = (s) => {
     if (!s.is_enabled) return Infinity;
     const ev = nextEvent(s);
@@ -140,304 +76,130 @@ export default function Schedules() {
     if (days < 7) return `${DAY_NAMES[d.getDay() + 1]} ${fmtHM(d)}`;
     return `${d.getDate()}.${d.getMonth() + 1} ${fmtHM(d)}`;
   };
-  // The compact "next action" chip that gives every row its place on the timeline.
-  const nextChip = (s) => {
-    if (!s.is_enabled) return { text: 'מושבת', cls: 'bg-surface2 text-muted' };
-    const ev = nextEvent(s);
+  // The compact "next action" chip — the plan's soonest member decides.
+  const nextChip = (members) => {
+    const repr = [...members].sort((a, b) => sortKey(a) - sortKey(b))[0];
+    if (!repr.is_enabled) return { text: 'מושבת', cls: 'bg-surface2 text-muted' };
+    const ev = nextEvent(repr);
     if (!ev.d) return { text: 'הסתיים', cls: 'bg-surface2 text-muted' };
     if (ev.running) return { text: `פועל · כיבוי ${whenText(ev.d)}`, cls: 'bg-[#E7F6EC] text-[#006e00]' };
     return { text: `${ev.act} ${whenText(ev.d)}`, cls: 'bg-[#E4EFFE] text-accent-dk' };
   };
-  // Groups: one card per RELAY (מטבח, סלון…), rows in firing order; relays ordered
-  // by their soonest upcoming action so "what happens next" is always at the top.
-  // Seeded from the RELAY list (not just schedules) so a relay with no schedules
-  // still gets a table with its own add button; schedules of removed relays keep
-  // their table too.
-  // Sibling single-action weekly rows (created by the form's day multi-select —
-  // same channel/side/time/anchor/exclusions/state, different day) merge into
-  // ONE display row carrying all their days. _group keeps the real rows so
-  // toggle/delete/edit act on all of them.
-  const mergeWeekly = (items) => {
+
+  // Standalone weekly rows that differ only by day (the old multi-day form made
+  // one row per day) belong together as one entry.
+  const groupStandalone = (items) => {
     const seen = new Map();
     const out = [];
     for (const s of items) {
       const side = s.on_time && !s.off_time ? 'on' : (!s.on_time && s.off_time ? 'off' : null);
-      if (s.repeat_type !== 'weekly' || !side || s[`${side}_day_of_week`] == null) { out.push(s); continue; }
+      if (s.repeat_type !== 'weekly' || !side || s[`${side}_day_of_week`] == null) { out.push([s]); continue; }
       const anchored = s[`${side}_anchor`] && s[`${side}_anchor`] !== 'clock';
-      const key = JSON.stringify([s.plan_id, s.relay_id, side, anchored ? null : s[`${side}_time`],
-        s[`${side}_anchor`], s[`${side}_offset_min`], s.is_enabled, s.sync_status,
-        s.excl_type, s.excl_days, s.excl_holidays, s.excl_calendar, s.excl_date, s.excl_end_date,
-        s.excl_heb_day, s.excl_heb_month, s.excl_end_heb_day, s.excl_end_heb_month]);
-      if (seen.has(key)) seen.get(key)._group.push(s);
-      else { const m = { ...s, _group: [s], _side: side }; seen.set(key, m); out.push(m); }
-    }
-    for (const m of out) {
-      if (!m._group || m._group.length < 2) continue;
-      m._daysText = m._group.map((x) => Number(x[`${m._side}_day_of_week`]))
-        .sort((a, b) => a - b).map((d) => DAY_NAMES[d]).join(', ');
+      const key = JSON.stringify([s.relay_id, s.name, side, anchored ? null : s[`${side}_time`],
+        s[`${side}_anchor`], s[`${side}_offset_min`], s.is_enabled, s.excl_type, s.excl_date, s.excl_end_date, s.excl_days]);
+      if (seen.has(key)) seen.get(key).push(s);
+      else { const g = [s]; seen.set(key, g); out.push(g); }
     }
     return out;
   };
-  const mergedKey = (s) => (s._group ? Math.min(...s._group.map(sortKey)) : sortKey(s));
-  const groups = useMemo(() => {
-    if (!schedules) return [];
-    const byRelay = new Map();
-    for (const r of relays) byRelay.set(r.id, { relayId: r.id, relay: r.name, device: r.device, items: [] });
-    for (const s of schedules) {
-      // תוכנית member rows appear in their channel's card too, marked as such;
-      // actions on them run through the whole plan (see the row render).
-      if (!byRelay.has(s.relay_id)) byRelay.set(s.relay_id, { relayId: s.relay_id, relay: s.relay_name, device: s.device_name, items: [] });
-      byRelay.get(s.relay_id).items.push(s);
-    }
-    return [...byRelay.values()]
-      .map((g) => ({ ...g, items: mergeWeekly(g.items).sort((a, b) => mergedKey(a) - mergedKey(b)) }))
-      .sort((a, b) => (g => g.items.length ? mergedKey(g.items[0]) : Infinity)(a) - (g => g.items.length ? mergedKey(g.items[0]) : Infinity)(b));
-  }, [schedules, relays]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // תוכניות — one logical schedule across several channels: member rows share a
-  // plan_id; the displayed row represents all of them and every action (edit /
-  // toggle / delete) applies to the whole group.
+  // The list: real plans (shared plan_id) + every standalone row as a
+  // single-channel "plan" the editor can take over.
   const plans = useMemo(() => {
     if (!schedules) return [];
     const byPlan = new Map();
+    const loose = [];
     for (const s of schedules) {
-      if (!s.plan_id) continue;
+      if (!s.plan_id) { loose.push(s); continue; }
       if (!byPlan.has(s.plan_id)) byPlan.set(s.plan_id, []);
       byPlan.get(s.plan_id).push(s);
     }
-    return [...byPlan.entries()].map(([pid, members]) => {
-      const repr = [...members].sort((a, b) => sortKey(a) - sortKey(b))[0];
-      const side = repr.on_time && !repr.off_time ? 'on' : (!repr.on_time && repr.off_time ? 'off' : null);
-      const daysSet = side
-        ? [...new Set(members.map((m) => m[`${side}_day_of_week`]).filter((v) => v != null).map(Number))].sort((a, b) => a - b)
-        : [];
+    const entry = (pid, members, legacy) => {
       const chanMap = new Map();
       for (const m of members) if (!chanMap.has(m.relay_id)) chanMap.set(m.relay_id, { id: m.relay_id, name: m.relay_name, device: m.device_name });
+      const view = planFromMembers(members);
       return {
-        pid, members, repr, daysSet,
-        relayIds: [...chanMap.keys()],
+        pid, members, name: members[0].name,
         channelList: [...chanMap.values()],
-        // the editor's view of the plan: its schedulers + exclusions, rebuilt from the rows
-        view: planFromMembers(members),
-        pseudo: { ...repr, _daysText: daysSet.length > 1 ? daysSet.map((d) => DAY_NAMES[d]).join(', ') : undefined },
+        // a standalone entry has no plan_id yet: saving it mints one and retires the old rows
+        view: legacy ? { ...view, plan_id: null, legacy_ids: members.map((m) => m.id) } : view,
+        enabled: members.some((m) => m.is_enabled),
+        key: Math.min(...members.map(sortKey)),
       };
-    }).sort((a, b) => Math.min(...a.members.map(sortKey)) - Math.min(...b.members.map(sortKey)));
+    };
+    return [
+      ...[...byPlan.entries()].map(([pid, members]) => entry(pid, members, false)),
+      ...groupStandalone(loose).map((members) => entry(`s${members[0].id}`, members, true)),
+    ].sort((a, b) => a.key - b.key);
   }, [schedules]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Reversed pair (כיבוי והדלקה): the OFF fires before the ON — pills must render
-  // in the true order. Daily pairs are cyclic, so they stay ON→OFF.
-  const isReversed = (s) => {
-    if (!s.on_time || !s.off_time) return false;
-    if (s.repeat_type === 'once') {
-      return `${String(s.off_date).slice(0, 10)}T${s.off_time}` < `${String(s.on_date).slice(0, 10)}T${s.on_time}`;
-    }
-    if (s.repeat_type === 'weekly' && s.on_day_of_week != null && s.off_day_of_week != null) {
-      return `${s.off_day_of_week}${s.off_time}` < `${s.on_day_of_week}${s.on_time}`;
-    }
-    return false;
-  };
-
-  const onLabel = (s) => (s.on_time == null ? null
-    : s.repeat_type === 'holiday' ? `הקרוב ${fmtDate(s.on_date)} · ${sideTime(s, 'on')} · הדלקה`
-      : s.repeat_type === 'yearly' ? `כל שנה — ${yearlyRange(s)} · הקרוב ${fmtDate(s.on_date)} · ${sideTime(s, 'on')} · הדלקה`
-        : s.repeat_type === 'once' ? `${String(s.on_date).slice(0, 10)} ${sideTime(s, 'on')} · הדלקה`
-          : `${s.on_day_of_week == null ? 'כל יום' : (s._daysText || DAY_NAMES[s.on_day_of_week])} ${sideTime(s, 'on')} · הדלקה`);
-  const offLabel = (s) => (s.off_time == null ? null
-    : s.repeat_type === 'holiday' ? `הקרוב ${fmtDate(s.off_date)} · ${sideTime(s, 'off')} · כיבוי`
-      : s.repeat_type === 'yearly' ? `${s.on_time == null ? `כל שנה — ${yearlyRange(s)} · ` : ''}${fmtDate(s.off_date)} · ${sideTime(s, 'off')} · כיבוי`
-        : s.repeat_type === 'once' ? `${String(s.off_date).slice(0, 10)} ${sideTime(s, 'off')} · כיבוי`
-          : `${s.off_day_of_week == null ? 'כל יום' : (s._daysText || DAY_NAMES[s.off_day_of_week])} ${sideTime(s, 'off')} · כיבוי`);
 
   if (!schedules) return <p className="text-muted">טוען…</p>;
   return (
     <>
-      <SectionHead title="תזמונים" />
+      <SectionHead title="תוכניות">
+        <Button disabled={busy} onClick={() => setPlanInit({ ...emptyPlan })}>
+          <span className="inline-flex items-center gap-1"><Plus size={15} />הוסף תוכנית</span>
+        </Button>
+      </SectionHead>
       <ErrorNote error={error} />
 
-      <div className="flex gap-2 mb-4">
-        <Button variant={tab === 'channels' ? 'primary' : 'ghost'} onClick={() => setTab('channels')}>לפי ערוץ</Button>
-        <Button variant={tab === 'plans' ? 'primary' : 'ghost'} onClick={() => setTab('plans')}>
-          תוכניות{plans.length ? ` (${plans.length})` : ''}
-        </Button>
-      </div>
-
-      {/* תוכניות — cross-channel schedules; the member rows also show inside
-          their channel cards, where every action still runs on the whole plan */}
-      {tab === 'plans' && (
-      <div className="mb-7">
-        <Card flush className="overflow-hidden border-accent/30">
-          <div className="flex items-center gap-2.5 px-5 py-3 bg-[#E4EFFE]/70 border-b-2 border-accent/40">
-            <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><Layers size={16} /></span>
-            <h3 className="font-bold text-[17px]">תוכניות — כמה ערוצים יחד</h3>
-            <span className="text-muted text-sm ms-auto">{plans.length === 0 ? '' : plans.length === 1 ? 'תוכנית אחת' : `${plans.length} תוכניות`}</span>
-            <Button className="!py-1 !px-3 text-sm" disabled={busy}
-              onClick={() => setPlanInit({ ...emptyPlan })}>
-              <span className="inline-flex items-center gap-1"><Plus size={14} />תוכנית חדשה</span>
-            </Button>
-          </div>
-          {plans.length === 0 && (
-            <p className="text-muted text-sm px-5 py-4">
-              תוכנית = כמה ערוצים יחד עם רשימת תזמונים (כל תזמון הוא הדלקה או כיבוי) והחרגות — עריכה אחת משנה את כולם.
-            </p>
-          )}
-          {plans.map((p, i) => {
-            const chip = nextChip(p.repr);
-            const synced = p.members.every((m) => m.sync_status === 'synced');
-            return (
-              <div key={p.pid} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''} ${p.repr.is_enabled ? '' : 'opacity-60'}`}>
-                <div className="min-w-[130px]">
-                  {p.repr.name && <div className="font-bold text-[15px] mb-0.5">{p.repr.name}</div>}
-                  <small className={`flex w-fit items-center font-medium text-[11.5px] rounded-full px-2 py-px whitespace-nowrap ${chip.cls}`}>{chip.text}</small>
-                  {p.view.exclusions.map((x) => (
-                    <small key={x.uid} className="block font-normal text-[12.5px] mt-0.5" style={{ color: '#B45309' }}
-                      title="בתאריכי ההחרגה התוכנית לא תפעל">
-                      החרגה: {exclusionSummary(x)}
-                    </small>
-                  ))}
-                </div>
-                {/* one pill per scheduler — the plan's whole program at a glance */}
-                <div className="flex-1 flex items-center gap-1.5 flex-wrap">
-                  {p.view.schedulers.map((sch) => (
-                    <span key={sch.uid} className={`pill ${sch.action === 'on' ? 'on-p' : 'off-p'}`}>{schedulerSummary(sch)}</span>
-                  ))}
-                </div>
-                <SyncNote ok={synced}>
-                  {synced
-                    ? <span className="inline-flex items-center gap-1"><Check size={13} />מסונכרן</span>
-                    : <span className="inline-flex items-center gap-1"><RefreshCw size={13} />ממתין לסנכרון</span>}
-                </SyncNote>
-                <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-ink cursor-pointer'}`}
-                  title="עריכת התוכנית (חלה על כל הערוצים)" onClick={() => setPlanInit(p.view)}><Pencil size={16} /></button>
-                <Toggle checked={!!p.repr.is_enabled} busy={busy} onChange={() => toggleEnabled({ ...p.repr, _group: p.members })} />
-                <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
-                  title="מחק את התוכנית מכל הערוצים" onClick={() => remove({ ...p.repr, _group: p.members })}><Trash2 size={17} /></button>
-                {/* channel chips — a full-width line of their own, wraps cleanly at 20 channels */}
-                <div className="w-full flex flex-wrap gap-1.5">
-                  {p.channelList.map((c) => (
-                    <span key={c.id} title={c.device}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#E4EFFE] text-accent-dk font-bold text-[13px] px-2.5 py-1">
-                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colorOf(c.id) }} />
-                      {c.name}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </Card>
-      </div>
-      )}
-
-      {tab === 'channels' && groups.length === 0 && <Card>אין ערוצים פעילים בחשבון.</Card>}
-      {tab === 'channels' && groups.map((g) => (
-        <div key={`${g.device}·${g.relay}`} className="mb-7">
-          <Card flush className="overflow-hidden border-accent/30">
-            {/* relay band — every relay (מטבח, סלון…) is its own clearly-bounded table;
-                the icon square carries the channel's app-wide identity color */}
-            <div className="flex items-center gap-2.5 px-5 py-3 bg-[#E4EFFE]/70 border-b-2 border-accent/40">
-              <span className="w-8 h-8 rounded-[10px] text-white grid place-items-center shrink-0"
-                style={{ backgroundColor: colorOf(g.relayId) }}><House size={16} /></span>
-              <h3 className="font-bold text-[17px]">{g.relay}</h3>
-              <span className="text-muted text-sm ms-auto">{g.items.length === 0 ? '' : g.items.length === 1 ? 'תזמון אחד' : `${g.items.length} תזמונים`}</span>
-              <Button className="!py-1 !px-3 text-sm" disabled={busy}
-                onClick={() => setFormInit({ ...emptyForm, relay_ids: [g.relayId], lock_relay: true })}>
-                <span className="inline-flex items-center gap-1"><Plus size={14} />תזמון חדש</span>
-              </Button>
-            </div>
-            {g.items.length === 0 && (
-              <p className="text-muted text-sm px-5 py-4">אין תזמונים לערוץ זה עדיין — הוסיפו עם הכפתור למעלה.</p>
-            )}
-            {g.items.map((s, i) => {
-              // Merged row: the chip reflects whichever member acts soonest.
-              const repr = s._group ? [...s._group].sort((a, b) => sortKey(a) - sortKey(b))[0] : s;
-              const chip = nextChip(repr);
-              // A תוכנית member: every action here runs on the WHOLE plan.
-              const plan = s.plan_id ? plans.find((x) => x.pid === s.plan_id) : null;
-              return (
-                <div key={s.id} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''} ${s.is_enabled ? '' : 'opacity-60'}`}>
-                  <div className="min-w-[130px]">
-                    {s.name && (
-                      <div className="font-semibold text-[13.5px] mb-0.5">
-                        {s.name}
-                        {plan && <span className="text-accent font-normal text-[11.5px]"> · <Layers size={11} className="inline -mt-0.5" /> תוכנית</span>}
-                      </div>
-                    )}
-                    <small className={`flex w-fit items-center font-medium text-[11.5px] rounded-full px-2 py-px whitespace-nowrap ${chip.cls}`}>{chip.text}</small>
-                    {s.repeat_type === 'holiday' && (
-                      <small className="block font-normal text-muted text-[12.5px] mt-0.5">{holidaySummary(s.holidays)}</small>
-                    )}
-                    {s.excl_type && (
-                      <small className="block font-normal text-[12.5px] mt-0.5" style={{ color: '#B45309' }}
-                        title="בזמני ההחרגה התזמון לא יפעל">
-                        החרגה: {exclRange(s)}
-                      </small>
-                    )}
-                  </div>
-                  <div className="flex-1 flex items-center gap-2.5 flex-wrap">
-                    {(isReversed(s)
-                      ? [offLabel(s) && <span key="off" className="pill off-p">{offLabel(s)}</span>,
-                        onLabel(s) && offLabel(s) && <span key="arr" className="text-muted">←</span>,
-                        onLabel(s) && <span key="on" className="pill on-p">{onLabel(s)}</span>]
-                      : [onLabel(s) && <span key="on" className="pill on-p">{onLabel(s)}</span>,
-                        onLabel(s) && offLabel(s) && <span key="arr" className="text-muted">←</span>,
-                        offLabel(s) && <span key="off" className="pill off-p">{offLabel(s)}</span>])}
-                  </div>
-                  <SyncNote ok={s.sync_status === 'synced'}>
-                    {s.sync_status === 'synced'
-                      ? <span className="inline-flex items-center gap-1"><Check size={13} />מסונכרן</span>
-                      : <span className="inline-flex items-center gap-1"><RefreshCw size={13} />ממתין לסנכרון</span>}
-                  </SyncNote>
-                  {!plan && isShabbatPair(s) && (
-                    <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-accent cursor-pointer'}`}
-                      title="החל את זמני השבת גם בחגים" onClick={() => setConvert(s)}><Sparkles size={17} /></button>
-                  )}
-                  <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-ink cursor-pointer'}`}
-                    title={plan ? 'עריכת התוכנית (חלה על כל הערוצים)' : 'עריכת התזמון'}
-                    onClick={() => (plan ? setPlanInit(plan.view) : setFormInit({
-                      ...rowToForm(s),
-                      ...(s._group && s._group.length > 1 ? {
-                        days: s._group.map((x) => Number(x[`${s._side}_day_of_week`])).sort((a, b) => a - b),
-                        group_ids: s._group.map((x) => x.id),
-                      } : {}),
-                    }))}><Pencil size={16} /></button>
-                  <Toggle checked={!!s.is_enabled} busy={busy}
-                    onChange={() => toggleEnabled(plan ? { ...s, _group: plan.members } : s)} />
-                  <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
-                    title={plan ? 'מחק את התוכנית מכל הערוצים' : 'מחק'}
-                    onClick={() => remove(plan ? { ...s, _group: plan.members } : s)}><Trash2 size={17} /></button>
-                </div>
-              );
-            })}
-          </Card>
+      <Card flush className="overflow-hidden border-accent/30">
+        <div className="flex items-center gap-2.5 px-5 py-3 bg-[#E4EFFE]/70 border-b-2 border-accent/40">
+          <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><Layers size={16} /></span>
+          <h3 className="font-bold text-[17px]">התוכניות שלי</h3>
+          <span className="text-muted text-sm ms-auto">{plans.length === 0 ? '' : plans.length === 1 ? 'תוכנית אחת' : `${plans.length} תוכניות`}</span>
         </div>
-      ))}
-
-      {/* convert a weekly Shabbat pair into a שבת וחגים schedule */}
-      <Modal open={!!convert} onClose={() => setConvert(null)} title="להחיל את זמני השבת גם בחגים?">
-        {convert && (
-          <div className="space-y-3">
-            <p>
-              התזמון של <b>{convert.relay_name}</b> יהפוך לשני תזמוני <b>שבת וחגים</b>: ההדלקה בכניסת כל
-              שבת וחג (ראש השנה, יום כיפור, חג ראשון של סוכות, שמיני עצרת, פסח, שביעי של פסח
-              ושבועות), והכיבוי בכל מוצאי שבת וחג.
-            </p>
-            <p className="text-muted text-sm">
-              מוצאי שנכנס ישר לשבת או חג נוסף לא מכבה — האור נשאר דולק עד היציאה הסופית.
-            </p>
-            <ErrorNote error={error} />
-            <div className="grid grid-cols-2 gap-2">
-              <Button disabled={busy} onClick={applyToHolidays}>
-                <span className="inline-flex items-center gap-1.5"><Sparkles size={15} />החל גם בחגים</span>
-              </Button>
-              <Button variant="ghost" disabled={busy} onClick={() => setConvert(null)}>ביטול</Button>
-            </div>
-          </div>
+        {plans.length === 0 && (
+          <p className="text-muted text-sm px-5 py-6 text-center">
+            עדיין אין תוכניות. תוכנית = ערוץ אחד או כמה, עם רשימת תזמונים (כל תזמון הוא הדלקה או כיבוי) והחרגות.
+          </p>
         )}
-      </Modal>
+        {plans.map((p, i) => {
+          const chip = nextChip(p.members);
+          const synced = p.members.every((m) => m.sync_status === 'synced');
+          return (
+            <div key={p.pid} className={`flex items-center gap-4 px-5 py-[15px] flex-wrap ${i > 0 ? 'border-t border-line' : ''} ${p.enabled ? '' : 'opacity-60'}`}>
+              <div className="min-w-[130px]">
+                {p.name && <div className="font-bold text-[15px] mb-0.5">{p.name}</div>}
+                <small className={`flex w-fit items-center font-medium text-[11.5px] rounded-full px-2 py-px whitespace-nowrap ${chip.cls}`}>{chip.text}</small>
+                {p.view.exclusions.map((x) => (
+                  <small key={x.uid} className="block font-normal text-[12.5px] mt-0.5" style={{ color: '#B45309' }}
+                    title="בתאריכי ההחרגה התוכנית לא תפעל">
+                    החרגה: {exclusionSummary(x)}
+                  </small>
+                ))}
+              </div>
+              {/* one pill per scheduler — the plan's whole program at a glance */}
+              <div className="flex-1 flex items-center gap-1.5 flex-wrap">
+                {p.view.schedulers.map((sch) => (
+                  <span key={sch.uid} className={`pill ${sch.action === 'on' ? 'on-p' : 'off-p'}`}>{schedulerSummary(sch)}</span>
+                ))}
+              </div>
+              <SyncNote ok={synced}>
+                {synced
+                  ? <span className="inline-flex items-center gap-1"><Check size={13} />מסונכרן</span>
+                  : <span className="inline-flex items-center gap-1"><RefreshCw size={13} />ממתין לסנכרון</span>}
+              </SyncNote>
+              <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-ink cursor-pointer'}`}
+                title="עריכת התוכנית" onClick={() => setPlanInit(p.view)}><Pencil size={16} /></button>
+              <Toggle checked={p.enabled} busy={busy} onChange={() => toggleEnabled(p.members, !p.enabled)} />
+              <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
+                title="מחק את התוכנית" onClick={() => remove(p.members)}><Trash2 size={17} /></button>
+              {/* channel chips — a full-width line of their own */}
+              <div className="w-full flex flex-wrap gap-1.5">
+                {p.channelList.map((c) => (
+                  <span key={c.id} title={c.device}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#E4EFFE] text-accent-dk font-bold text-[13px] px-2.5 py-1">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colorOf(c.id) }} />
+                    {c.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </Card>
 
-      <ScheduleFormModal initial={formInit} relays={relays}
-        onClose={() => setFormInit(null)}
-        onSaved={async () => { setFormInit(null); await refresh(); }} />
       <PlanEditorModal initial={planInit} relays={relays}
         onClose={() => setPlanInit(null)}
         onSaved={async () => { setPlanInit(null); await refresh(); }} />

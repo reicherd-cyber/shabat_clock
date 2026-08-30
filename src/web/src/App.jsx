@@ -58,7 +58,7 @@ function ImpersonationGuard() {
 //    desktop inline nav, mobile bottom tab bar ──
 const TABS = [
   { to: '/', label: 'דשבורד', Icon: LayoutGrid, end: true },
-  { to: '/schedules', label: 'תזמונים', Icon: CalendarClock },
+  { to: '/schedules', label: 'תוכניות', Icon: CalendarClock },
   { to: '/calendar', label: 'לוח', Icon: CalendarDays },
   { to: '/history', label: 'היסטוריה', Icon: HistoryIcon },
   { to: '/settings', label: 'הגדרות', Icon: SettingsIcon },
