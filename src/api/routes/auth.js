@@ -5,7 +5,8 @@ import { query } from '../../db/pool.js';
 import { errors, ApiError } from '../../config/errors.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
-import { bcryptCompare, bcryptHash } from '../../services/users.js';
+import { bcryptCompare, bcryptHash, createUser } from '../../services/users.js';
+import { logAction } from '../../services/audit.js';
 import { verifyTotp } from '../../services/totp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
 import { signUserToken, signAdminToken, otpRequestLimiter, otpRequestIpLimiter, otpVerifyIpLimiter, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter } from '../middleware.js';
@@ -49,19 +50,47 @@ authRouter.post('/admin/auth/google', adminLoginLimiter, async (req, res, next) 
 
 // "Sign in with Google" for users — an alternative to phone-OTP. ANY of the
 // account's addresses (user_emails) signs in; the global one-address-one-account
-// rule guarantees a single match. No self-signup: unknown email = 401.
+// rule guarantees a single match.
+//
+// Self-signup (2026-08-30): an unknown (verified) Google address may open an
+// account — but only after the person accepts the terms. First call answers
+// {needs_terms:true}; the client shows the consent step and calls again with
+// accept_terms:true, which creates the user (consent stamped, audit-logged) and
+// signs them in. A suspended account is still refused.
 authRouter.post('/auth/google', adminLoginLimiter, async (req, res, next) => {
   try {
     const claims = await verifyGoogleCredential(String(req.body?.credential || ''));
+    const email = String(claims.email || '').toLowerCase();
     const rows = await query(
-      `SELECT u.id, u.full_name FROM user_emails e
+      `SELECT u.id, u.full_name, u.status FROM user_emails e
        JOIN users u ON u.id = e.user_id
-       WHERE e.email = ? AND e.deleted_at IS NULL AND u.status = 'active'`,
-      [String(claims.email || '').toLowerCase()],
+       WHERE e.email = ? AND e.deleted_at IS NULL`,
+      [email],
     );
-    if (rows.length === 0) throw errors.unauthenticated('אימייל זה אינו רשום במערכת');
-    const u = rows[0];
-    res.json({ token: signUserToken(u.id), user: { id: Number(u.id), full_name: u.full_name } });
+    if (rows.length) {
+      const u = rows[0];
+      if (u.status !== 'active') throw errors.unauthenticated('החשבון מושעה — פנו לתמיכה');
+      return res.json({ token: signUserToken(u.id), user: { id: Number(u.id), full_name: u.full_name } });
+    }
+    // New person. Google gives us a verified address and a display name.
+    const fullName = String(claims.name || email.split('@')[0]).trim().slice(0, 100) || 'משתמש חדש';
+    if (req.body?.accept_terms !== true) {
+      return res.json({ needs_terms: true, name: fullName, email });
+    }
+    // A random PIN so the account is complete (it gates the IVR only when
+    // require_pin is on); shown once in the welcome step, changeable in settings.
+    const pin = String(crypto.randomInt(0, 10000)).padStart(4, '0');
+    const user = await createUser({ full_name: fullName, pin, email, actor: 'self:google' });
+    await query(
+      "UPDATE users SET terms_accepted_at = UTC_TIMESTAMP(), signup_via = 'google' WHERE id = ?",
+      [user.id],
+    );
+    await logAction({ type: 'user', id: user.id }, 'signup', 'user', user.id, { via: 'google', email, terms: true });
+    res.status(201).json({
+      token: signUserToken(user.id),
+      user: { id: Number(user.id), full_name: user.full_name },
+      created: true, pin,
+    });
   } catch (e) { next(e); }
 });
 
