@@ -84,6 +84,7 @@ async function guardedCall(method, path, body) {
 export const api = {
   get: (p) => call('GET', p, undefined, tokens.user, 'user'),
   post: (p, b) => guardedCall('POST', p, b),
+  put: (p, b) => guardedCall('PUT', p, b),
   patch: (p, b) => guardedCall('PATCH', p, b),
   del: (p) => guardedCall('DELETE', p),
 };
