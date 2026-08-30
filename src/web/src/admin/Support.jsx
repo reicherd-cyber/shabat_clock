@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
+import { MessageSquare, Send } from 'lucide-react';
 
 // פניות תמיכה: תיבת ההודעות שמשתמשים שולחים ממרכז העזרה. סטטוסים רכים והפיכים
 // (חדשה ↔ נקראה ↔ טופלה) — לעולם לא מחיקה. פתיחת פנייה חדשה מסמנת אותה כנקראה
 // אוטומטית (וזה מה שמוריד אותה ממונה ה"כדור" בתפריט).
+// כל פנייה היא שיחה: המנהל עונה מתוך המודל (צ'אט), המשתמש רואה ועונה ב-/help;
+// תשובת משתמש מחזירה את הפנייה ל"חדשה" — כך היא חוזרת לתור ולמונה.
 
 const STATUS = {
   new: { label: 'חדשה', cls: 'bg-[#FDE8E8] text-[#B42318]' },
@@ -20,13 +23,33 @@ const PERIODS = [
 ];
 const fmtTs = (ts) => new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
 
+// בועת צ'אט: המשתמש בצד ההתחלה (ימין ב-RTL), הצוות בצד הסוף ובכחול.
+function ChatBubble({ who, name, ts, seen, children }) {
+  const admin = who === 'admin';
+  return (
+    <div className={`max-w-[85%] ${admin ? 'self-end' : 'self-start'}`}>
+      <div className={`rounded-[12px] px-3 py-2 whitespace-pre-wrap leading-relaxed text-sm ${admin ? 'bg-[#E4EFFE] text-ink' : 'bg-surface2 border border-line'}`}>
+        {children}
+      </div>
+      <div className={`text-[11px] text-muted mt-0.5 px-1 flex gap-2 ${admin ? 'justify-end' : ''}`}>
+        <span>{name}</span>
+        <span dir="ltr">{fmtTs(ts)}</span>
+        {admin && <span title={seen ? `נקרא ${fmtTs(seen)}` : 'טרם נקרא'}>{seen ? '✓✓' : '✓'}</span>}
+      </div>
+    </div>
+  );
+}
+
 export function SupportInbox() {
   const [data, setData] = useState(null); // { rows, counts }
   const [fStatus, setFStatus] = useState('');
   const [period, setPeriod] = useState('all');
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(null); // the row shown in the modal
+  const [thread, setThread] = useState(null); // replies of the open row (null = loading)
+  const [reply, setReply] = useState('');
   const [confirmClose, setConfirmClose] = useState(null); // row pending "טופלה" confirm
+  const threadEnd = useRef(null);
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -51,11 +74,38 @@ export function SupportInbox() {
     setOpen((o) => (o && o.id === row.id ? { ...o, status } : o));
   }).catch(() => {});
 
+  const loadThread = async (id) => {
+    const r = await adminApi.get(`/support/${id}/replies`);
+    setThread(r.rows);
+  };
+
   // פתיחת פנייה חדשה = נקראה, בלי לשאול — זו בדיוק משמעות הפתיחה.
   const openRow = (row) => {
     setOpen(row);
+    setThread(null);
+    setReply('');
+    loadThread(row.id).catch(setError);
     if (row.status === 'new') setStatus(row, 'read');
   };
+
+  // שליחת תשובה: מצטרפת לשיחה, המשתמש מקבל מייל; פנייה חדשה הופכת לנקראה.
+  const sendReply = () => {
+    const body = reply.trim();
+    if (!body || !open) return;
+    run(async () => {
+      const r = await adminApi.post(`/support/${open.id}/replies`, { body });
+      setReply('');
+      await loadThread(open.id);
+      if (r.status !== open.status) {
+        setOpen((o) => (o ? { ...o, status: r.status } : o));
+        window.dispatchEvent(new Event('support-count-changed'));
+      }
+      await refresh();
+    }).catch(() => {});
+  };
+
+  // גלילה לסוף השיחה כשנטענת / כשנוספת תשובה.
+  useEffect(() => { threadEnd.current?.scrollIntoView({ block: 'nearest' }); }, [thread]);
 
   const counts = data?.counts || {};
   const filtering = fStatus || search || period !== 'all';
@@ -111,7 +161,13 @@ export function SupportInbox() {
                 </div>
                 <div className="text-sm text-muted truncate">{m.body}</div>
               </div>
-              <span className="text-xs text-muted shrink-0" dir="ltr">{fmtTs(m.created_at)}</span>
+              {m.reply_count > 0 && (
+                <span className={`flex items-center gap-1 text-xs shrink-0 ${m.last_sender === 'user' ? 'text-[#B42318] font-medium' : 'text-muted'}`}
+                  title={m.last_sender === 'user' ? 'המשתמש ענה — ממתין לתשובה' : 'נענתה'}>
+                  <MessageSquare size={13} />{m.reply_count}
+                </span>
+              )}
+              <span className="text-xs text-muted shrink-0" dir="ltr">{fmtTs(m.last_reply_at || m.created_at)}</span>
             </div>
           ))
         )}
@@ -124,10 +180,39 @@ export function SupportInbox() {
             <div className="text-sm text-muted flex flex-wrap gap-x-4 gap-y-1">
               <span dir="ltr">{open.user_phone || '—'}</span>
               <span dir="ltr">{open.user_email || '—'}</span>
-              <span dir="ltr">{fmtTs(open.created_at)}</span>
               {open.topic && <span>נושא: {TOPIC_LABELS[open.topic] || open.topic}</span>}
             </div>
-            <div className="border border-line rounded-[10px] px-3 py-2.5 whitespace-pre-wrap leading-relaxed">{open.body}</div>
+
+            {/* השיחה: ההודעה המקורית + כל התשובות, כבועות צ'אט */}
+            <div className="flex flex-col gap-2 max-h-[40vh] overflow-y-auto pe-1">
+              <ChatBubble who="user" name={open.user_name} ts={open.created_at}>{open.body}</ChatBubble>
+              {thread == null && <p className="text-xs text-muted text-center">טוען שיחה…</p>}
+              {thread?.map((r) => (
+                <ChatBubble key={r.id} who={r.sender} ts={r.created_at}
+                  name={r.sender === 'admin' ? (r.admin_name || 'צוות') : open.user_name}
+                  seen={r.sender === 'admin' ? r.seen_at : null}>
+                  {r.body}
+                </ChatBubble>
+              ))}
+              <div ref={threadEnd} />
+            </div>
+
+            {/* תיבת תשובה — Ctrl+Enter שולח */}
+            <div className="border border-line rounded-[10px] bg-surface focus-within:border-accent">
+              <textarea
+                className="w-full bg-transparent px-3 py-2 min-h-[64px] resize-y focus:outline-none"
+                placeholder={`תשובה ל${open.user_name}…`} value={reply} maxLength={4000}
+                onChange={(e) => setReply(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendReply(); } }}
+              />
+              <div className="flex items-center justify-between gap-2 px-2 pb-2">
+                <span className="text-xs text-muted">המשתמש יראה את התשובה במרכז העזרה ויקבל מייל</span>
+                <Button className="text-sm py-1.5" onClick={sendReply} disabled={busy || !reply.trim()}>
+                  <span className="flex items-center gap-1.5"><Send size={14} />{busy ? 'שולח…' : 'שלח תשובה'}</span>
+                </Button>
+              </div>
+            </div>
+
             {transcript.length > 0 && (
               <details className="text-sm">
                 <summary className="cursor-pointer text-muted font-medium">מה המשתמש כבר ניסה ({transcript.length} שאלות לבוט)</summary>

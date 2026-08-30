@@ -65,6 +65,17 @@ function UserLayout() {
   useEffect(() => {
     if (tokens.user) api.get('/me').then((r) => setName(r.user.full_name)).catch(() => {});
   }, []);
+  // תשובות צוות שטרם נקראו — מונה על כפתור ה-?; נדגם כל דקה + מתעדכן מיד
+  // כשפותחים שיחה ב-/help (אירוע support-unread-changed).
+  const [supportUnread, setSupportUnread] = useState(0);
+  useEffect(() => {
+    if (!tokens.user) return undefined;
+    const fetchUnread = () => api.get('/support/unread').then((r) => setSupportUnread(r.unread)).catch(() => {});
+    fetchUnread();
+    const t = setInterval(fetchUnread, 60_000);
+    window.addEventListener('support-unread-changed', fetchUnread);
+    return () => { clearInterval(t); window.removeEventListener('support-unread-changed', fetchUnread); };
+  }, []);
   if (!tokens.user) return <Navigate to="/login" replace />;
 
   // When an admin is impersonating, the user token carries `imp` (the admin's id).
@@ -100,9 +111,14 @@ function UserLayout() {
         </nav>
         <div className="flex items-center gap-2.5 font-medium text-muted">
           {/* עזרה חיה בפינה, לא בניווט — כפתור ? קבוע בכל מסך */}
-          <NavLink to="/help" title="עזרה ותמיכה" className={({ isActive }) =>
-            `w-8 h-8 rounded-full border grid place-items-center transition-colors ${isActive ? 'bg-accent text-white border-accent' : 'border-line text-muted hover:text-accent-dk hover:border-accent'}`}>
+          <NavLink to="/help" title={supportUnread ? `עזרה ותמיכה — ${supportUnread} תשובות חדשות` : 'עזרה ותמיכה'} className={({ isActive }) =>
+            `relative w-8 h-8 rounded-full border grid place-items-center transition-colors ${isActive ? 'bg-accent text-white border-accent' : 'border-line text-muted hover:text-accent-dk hover:border-accent'}`}>
             <LifeBuoy size={17} strokeWidth={2} />
+            {supportUnread > 0 && (
+              <span className="absolute -top-1.5 -start-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#e11d48] text-white text-[11px] font-bold grid place-items-center leading-none">
+                {supportUnread}
+              </span>
+            )}
           </NavLink>
           <span className="hidden sm:inline">{name}</span>
           <span className="w-8 h-8 rounded-full bg-surface2 border border-line grid place-items-center font-bold text-accent-dk">

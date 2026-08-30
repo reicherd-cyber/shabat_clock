@@ -1,14 +1,125 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
 import {
   WifiOff, CalendarX, KeyRound, PhoneCall, MonitorSmartphone, MessageCircleQuestion,
-  ChevronRight, Check, Send, Sparkles,
+  ChevronRight, ChevronDown, Check, Send, Sparkles, MessagesSquare,
 } from 'lucide-react';
 
 // מרכז עזרה: (1) אשף מודרך — נושא → צעדי פתרון עצמי; (2) שאלה חופשית שנענית
 // על-ידי בוט (שרת, Claude); (3) אחרי 3 ניסיונות שלא עזרו (או כשהבוט מוותר) —
 // שליחת הודעה לצוות, כולל תמליל הניסיונות כדי שלא נציע שוב את אותו הדבר.
+// (4) "הפניות שלי" — כל פנייה היא שיחה: תשובות הצוות מופיעות כאן (ובמייל),
+// והמשתמש עונה בחזרה מתוך השיחה.
+
+const TICKET_STATUS = {
+  new: { label: 'ממתינה לצוות', cls: 'bg-[#FEF4D6] text-[#B45309]' },
+  read: { label: 'בטיפול', cls: 'bg-[#E4EFFE] text-accent-dk' },
+  closed: { label: 'טופלה', cls: 'bg-[#E7F6EC] text-[#006e00]' },
+};
+const fmtTs = (ts) => new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
+const unseenOf = (t) => t.replies.filter((r) => r.sender === 'admin' && !r.seen_at).length;
+
+function Bubble({ who, name, ts, children }) {
+  const me = who === 'user';
+  return (
+    <div className={`max-w-[88%] ${me ? 'self-start' : 'self-end'}`}>
+      <div className={`rounded-[12px] px-3 py-2 whitespace-pre-wrap leading-relaxed text-sm ${me ? 'bg-surface2 border border-line' : 'bg-[#E4EFFE] text-ink'}`}>
+        {children}
+      </div>
+      <div className={`text-[11px] text-muted mt-0.5 px-1 flex gap-2 ${me ? '' : 'justify-end'}`}>
+        <span>{name}</span><span dir="ltr">{fmtTs(ts)}</span>
+      </div>
+    </div>
+  );
+}
+
+// שיחה אחת: ההודעה המקורית + תשובות, ותיבת מענה. פתיחה מסמנת את תשובות הצוות
+// כנקראו (וזה מה שמוריד את המונה מכפתור ה-?).
+function Ticket({ t, open, onToggle, onChanged }) {
+  const [text, setText] = useState('');
+  const { busy, error, run } = useAsync();
+  const unseen = unseenOf(t);
+  const st = TICKET_STATUS[t.status] || TICKET_STATUS.new;
+
+  useEffect(() => {
+    if (!open || !unseen) return;
+    api.post(`/support/messages/${t.id}/seen`).then(() => {
+      window.dispatchEvent(new Event('support-unread-changed'));
+      onChanged();
+    }).catch(() => {});
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const send = () => {
+    const body = text.trim();
+    if (!body) return;
+    run(async () => {
+      await api.post(`/support/messages/${t.id}/replies`, { body });
+      setText('');
+      await onChanged();
+    }).catch(() => {});
+  };
+
+  return (
+    <div className="border border-line rounded-[12px] overflow-hidden">
+      <button type="button" onClick={onToggle}
+        className="w-full flex items-center gap-3 px-3 py-2.5 text-start cursor-pointer hover:bg-surface2/50">
+        <span className={`text-xs font-medium rounded-full px-2 py-0.5 shrink-0 ${st.cls}`}>{st.label}</span>
+        <span className={`flex-1 min-w-0 truncate text-sm ${unseen ? 'font-bold' : ''}`}>{t.body}</span>
+        {unseen > 0 && <span className="text-xs bg-[#e11d48] text-white rounded-full px-1.5 min-w-[18px] text-center shrink-0">{unseen}</span>}
+        <span className="text-xs text-muted shrink-0" dir="ltr">{fmtTs(t.replies.length ? t.replies[t.replies.length - 1].created_at : t.created_at)}</span>
+        <ChevronDown size={15} className={`text-muted shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="border-t border-line p-3 space-y-3">
+          <div className="flex flex-col gap-2">
+            <Bubble who="user" name="אני" ts={t.created_at}>{t.body}</Bubble>
+            {t.replies.map((r) => (
+              <Bubble key={r.id} who={r.sender} ts={r.created_at}
+                name={r.sender === 'admin' ? `צוות התמיכה${r.admin_name ? ` · ${r.admin_name}` : ''}` : 'אני'}>
+                {r.body}
+              </Bubble>
+            ))}
+            {t.replies.length === 0 && <p className="text-xs text-muted text-center">הפנייה התקבלה — נענה בהקדם.</p>}
+          </div>
+          <div className="border border-line rounded-[10px] bg-surface focus-within:border-accent">
+            <textarea
+              className="w-full bg-transparent px-3 py-2 min-h-[56px] resize-y focus:outline-none text-sm"
+              placeholder={t.status === 'closed' ? 'הפנייה טופלה — אפשר להמשיך לכתוב וזה יפתח אותה מחדש' : 'כתבו תשובה…'}
+              value={text} maxLength={4000} onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } }}
+            />
+            <div className="flex items-center justify-end px-2 pb-2">
+              <Button className="text-sm py-1.5" onClick={send} disabled={busy || !text.trim()}>
+                <span className="flex items-center gap-1.5"><Send size={14} />{busy ? 'שולח…' : 'שליחה'}</span>
+              </Button>
+            </div>
+          </div>
+          <ErrorNote error={error} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MyTickets({ rows, reload }) {
+  // פנייה עם תשובה שטרם נקראה נפתחת אוטומטית — זו הסיבה שהמשתמש הגיע לכאן.
+  const [openId, setOpenId] = useState(() => rows.find((t) => unseenOf(t) > 0)?.id ?? null);
+  const totalUnseen = rows.reduce((n, t) => n + unseenOf(t), 0);
+  return (
+    <Card>
+      <h3 className="font-bold mb-3 flex items-center gap-2">
+        <MessagesSquare size={18} className="text-accent-dk" />הפניות שלי
+        {totalUnseen > 0 && <span className="text-xs bg-[#e11d48] text-white rounded-full px-2 py-0.5 font-medium">{totalUnseen} תשובות חדשות</span>}
+      </h3>
+      <div className="space-y-2">
+        {rows.map((t) => (
+          <Ticket key={t.id} t={t} open={openId === t.id} onToggle={() => setOpenId(openId === t.id ? null : t.id)} onChanged={reload} />
+        ))}
+      </div>
+    </Card>
+  );
+}
 
 const TOPICS = [
   {
@@ -71,7 +182,11 @@ export default function Help() {
   const [contactOpen, setContactOpen] = useState(false);
   const [contactBody, setContactBody] = useState('');
   const [sent, setSent] = useState(false);
+  const [mine, setMine] = useState(null); // my tickets with threads (null = not loaded yet)
   const { busy, error, run, setError } = useAsync();
+
+  const loadMine = () => api.get('/support/messages').then((r) => setMine(r.rows)).catch(() => setMine([]));
+  useEffect(() => { loadMine(); }, []);
 
   // הצוות מוצע אחרי 3 ניסיונות אמיתיים, או ברגע שהבוט אומר שאין לו תשובה.
   const canContact = tries.length >= MAX_TRIES || (lastAnswer && !lastAnswer.can_answer);
@@ -102,6 +217,7 @@ export default function Help() {
     run(async () => {
       await api.post('/support/messages', { topic: topic?.key || null, body, transcript: tries });
       setSent(true);
+      loadMine();
     }).catch(() => {});
   };
 
@@ -110,7 +226,7 @@ export default function Help() {
       <Card className="max-w-xl mx-auto text-center py-10">
         <div className="w-12 h-12 rounded-full bg-[#E7F6EC] text-[#006e00] grid place-items-center mx-auto mb-3"><Check size={26} /></div>
         <h2 className="text-lg font-bold mb-1">ההודעה נשלחה לצוות</h2>
-        <p className="text-muted mb-5">נחזור אליכם בהקדם. אפשר להמשיך להשתמש במערכת כרגיל.</p>
+        <p className="text-muted mb-5">נחזור אליכם בהקדם — התשובה תופיע כאן תחת "הפניות שלי" וגם במייל. אפשר להמשיך להשתמש במערכת כרגיל.</p>
         <Button variant="ghost" onClick={() => { setSent(false); setTopic(null); setTries([]); setLastAnswer(null); setContactOpen(false); setContactBody(''); }}>
           חזרה למרכז העזרה
         </Button>
@@ -123,6 +239,9 @@ export default function Help() {
       <SectionHead title="במה נוכל לעזור?">
         {topic && <Button variant="ghost" onClick={() => pickTopic(null)}>← כל הנושאים</Button>}
       </SectionHead>
+
+      {/* הפניות שלי — רק אם יש כאלה, מעל הנושאים */}
+      {!topic && mine?.length > 0 && <MyTickets rows={mine} reload={loadMine} />}
 
       {/* בחירת נושא */}
       {!topic && (

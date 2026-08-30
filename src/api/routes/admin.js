@@ -18,6 +18,7 @@ import { getVoiceCosts, addRate, RATE_KINDS } from '../../services/voiceCosts.js
 import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEntry, restoreFinanceEntry } from '../../services/finance.js';
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
+import { listReplies, markRepliesSeen, insertReply, cleanReplyBody, notifyUserOfReply } from '../../services/supportThread.js';
 import { brokerConnected } from '../../mqtt/client.js';
 import { healthSnapshot } from '../../monitor/health.js';
 import { generateSecret, otpauthUri, verifyTotp } from '../../services/totp.js';
@@ -837,6 +838,9 @@ adminRouter.get('/support', async (req, res, next) => {
     const rows = await query(
       `SELECT m.id, m.user_id, m.topic, m.body, m.transcript, m.status, m.created_at, m.updated_at, m.updated_by,
               u.full_name AS user_name, u.email AS user_email,
+              (SELECT COUNT(*) FROM support_replies r WHERE r.message_id = m.id AND r.deleted_at IS NULL) AS reply_count,
+              (SELECT r.sender FROM support_replies r WHERE r.message_id = m.id AND r.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1) AS last_sender,
+              (SELECT r.created_at FROM support_replies r WHERE r.message_id = m.id AND r.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1) AS last_reply_at,
               (SELECT p.phone FROM user_phones p WHERE p.user_id = u.id AND p.deleted_at IS NULL ORDER BY p.is_primary DESC, p.id LIMIT 1) AS user_phone
          FROM support_messages m JOIN users u ON u.id = m.user_id
         WHERE ${cond.join(' AND ')} ORDER BY m.id DESC LIMIT 500`,
@@ -861,6 +865,40 @@ adminRouter.patch('/support/:id', requireWrite, async (req, res, next) => {
     if (!r.affectedRows) throw errors.notFound();
     audit(req, `support_${status}`, 'support_message', Number(req.params.id));
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ── תגובות — chat thread on a ticket ──
+
+// Opening the thread stamps the user's replies as seen (writers only — support
+// role is read-only [D15] and must not leave a trace).
+adminRouter.get('/support/:id/replies', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const [m] = await query('SELECT id FROM support_messages WHERE id = ? AND deleted_at IS NULL', [id]);
+    if (!m) throw errors.notFound();
+    if (req.auth.role === 'superadmin') await markRepliesSeen(id, 'user');
+    res.json({ rows: await listReplies(id) });
+  } catch (e) { next(e); }
+});
+
+// Answering = engaging: a 'new' ticket becomes 'read'. Closed tickets stay
+// closed (a follow-up answer doesn't reopen the queue). The user gets an email.
+adminRouter.post('/support/:id/replies', requireWrite, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const body = cleanReplyBody(req.body?.body);
+    if (!body) throw errors.validation('תגובה באורך 1–4000 תווים', { body: '1-4000' });
+    const [m] = await query('SELECT id, user_id, status FROM support_messages WHERE id = ? AND deleted_at IS NULL', [id]);
+    if (!m) throw errors.notFound();
+    const replyId = await insertReply({ messageId: id, sender: 'admin', authorId: req.auth.adminId, body, createdBy: adminActor(req) });
+    const status = m.status === 'new' ? 'read' : m.status;
+    if (status !== m.status) {
+      await query('UPDATE support_messages SET status = ?, updated_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?', [status, adminActor(req), id]);
+    }
+    audit(req, 'support_reply', 'support_message', id, { reply_id: replyId });
+    notifyUserOfReply({ userId: m.user_id, messageId: id, body });
+    res.status(201).json({ id: replyId, status });
   } catch (e) { next(e); }
 });
 

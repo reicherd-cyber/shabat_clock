@@ -16,6 +16,7 @@ import { REGIONS } from '../../services/zmanim.js';
 import { calendarEvents } from '../../services/calendar.js';
 import { localParts } from '../../services/time.js';
 import { answerSupportQuestion } from '../../services/support.js';
+import { listReplies, markRepliesSeen, insertReply, cleanReplyBody } from '../../services/supportThread.js';
 
 export const userRouter = Router();
 userRouter.use(requireUser);
@@ -379,5 +380,70 @@ userRouter.post('/support/messages', async (req, res, next) => {
     );
     await act(req, 'create', 'support_message', r.insertId, { topic });
     res.status(201).json({ id: r.insertId });
+  } catch (e) { next(e); }
+});
+
+// My tickets with their chat threads, newest first. Read-only: seeing the list
+// doesn't mark anything — opening a thread does (POST …/seen).
+userRouter.get('/support/messages', async (req, res, next) => {
+  try {
+    const rows = await query(
+      'SELECT id, topic, body, status, created_at FROM support_messages WHERE user_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 50',
+      [req.auth.userId],
+    );
+    const replies = await listReplies(rows.map((m) => m.id));
+    const byMsg = {};
+    for (const r of replies) {
+      (byMsg[r.message_id] ||= []).push({
+        id: r.id, sender: r.sender, body: r.body, created_at: r.created_at, seen_at: r.seen_at,
+        admin_name: r.sender === 'admin' ? r.admin_name : null,
+      });
+    }
+    res.json({ rows: rows.map((m) => ({ ...m, replies: byMsg[m.id] || [] })) });
+  } catch (e) { next(e); }
+});
+
+// Unseen admin answers — the badge on the header "?" button. Polled; keep light.
+userRouter.get('/support/unread', async (req, res, next) => {
+  try {
+    const [row] = await query(
+      `SELECT COUNT(*) AS n FROM support_replies r JOIN support_messages m ON m.id = r.message_id
+        WHERE m.user_id = ? AND m.deleted_at IS NULL AND r.sender = 'admin' AND r.seen_at IS NULL AND r.deleted_at IS NULL`,
+      [req.auth.userId],
+    );
+    res.json({ unread: row.n });
+  } catch (e) { next(e); }
+});
+
+const ownTicket = async (req) => {
+  const [m] = await query(
+    'SELECT id, status FROM support_messages WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
+    [Number(req.params.id), req.auth.userId],
+  );
+  if (!m) throw errors.notFound();
+  return m;
+};
+
+userRouter.post('/support/messages/:id/seen', async (req, res, next) => {
+  try {
+    const m = await ownTicket(req);
+    await markRepliesSeen(m.id, 'admin');
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// User replies in the thread → the ticket goes back to 'new' (re-enters the
+// admin queue, lights the badge) — even if it was already closed.
+userRouter.post('/support/messages/:id/replies', async (req, res, next) => {
+  try {
+    const m = await ownTicket(req);
+    const body = cleanReplyBody(req.body?.body);
+    if (!body) throw errors.validation('תגובה באורך 1–4000 תווים', { body: '1-4000' });
+    const replyId = await insertReply({ messageId: m.id, sender: 'user', authorId: req.auth.userId, body, createdBy: actorStr(actorOf(req)) });
+    if (m.status !== 'new') {
+      await query("UPDATE support_messages SET status = 'new', updated_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?", [actorStr(actorOf(req)), m.id]);
+    }
+    await act(req, 'reply', 'support_message', m.id, { reply_id: replyId });
+    res.status(201).json({ id: replyId });
   } catch (e) { next(e); }
 });
