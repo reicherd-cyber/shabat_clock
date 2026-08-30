@@ -1,36 +1,61 @@
-// שבת/חג schedules: recur on the chosen Jewish holidays (Israeli יום טוב days,
-// where a Shabbat clock behaves like on Shabbat) and optionally every Shabbat.
-// Consecutive protected days merge into one block — a chag entering on מוצאי
-// שבת or ending into ליל שבת produces a single ON at the block's entry (erev)
-// and a single OFF at its exit — so lights never go dark mid-block. Saturdays
-// ALWAYS extend a chag block even when 'shabbat' itself isn't selected (the
-// standalone weekly Shabbat schedule covers plain Shabbatot in that case).
+// שבת/חג schedules — the mechanical Shabbat-clock model (user decision
+// 2026-08-30): every selected day fires INDEPENDENTLY, one action per row (a
+// תוכנית is many single-action rows sharing a plan_id).
 //
-// Like the zmanim anchors, resolution writes the NEXT block's concrete dates
-// and wall times into on_date/off_date + on_time/off_time, so payload, hash,
-// tick and firmware treat the schedule as an ordinary dated pair; the daily
-// scheduler refresh rolls it to the following block after it passes.
+// A selected day X (שבת, ראש השנה א׳, …) is its night + its day — from the
+// sunset that starts it to the sunset that ends it. So for X on civil date D:
+//   - sunset-relative anchors (לפני/אחרי שקיעה, צאת הכוכבים, חצות הלילה, כניסת
+//     שבת) resolve on the EVENING that starts X, i.e. civil date D−1;
+//   - daytime anchors (הנץ … פלג המנחה) resolve on D;
+//   - a clock time at/after that sunset means the night that starts X (D−1),
+//     an earlier clock time means the daytime of X (D): "07:00 on שבת" is
+//     Saturday morning, "23:00 on שבת" is Friday night;
+//   - צאת שבת anchors always resolve on D (they ARE the exit).
+// מוצאי X is the evening after X: every anchor resolves on D itself and a clock
+// time before noon rolls to the next morning. A מוצאי event is skipped when the
+// following day is itself שבת/חג (no "exit" mid-block — a Shabbat light stays
+// lit through a ראש השנה that starts on Saturday).
+//
+// Resolution writes the NEXT occurrence of each side into on_date/on_time and
+// off_date/off_time INDEPENDENTLY (a legacy two-sided row keeps working), so
+// payload, hash, tick and firmware treat the row as ordinary dated events; the
+// daily scheduler refresh rolls each side forward once it passes.
 import { HDate, months } from '@hebcal/core';
 import { errors } from '../config/errors.js';
 import { localParts, shiftDate, dowOfDate, timeToMinutes, minutesToHHMM } from './time.js';
 import { anchorMinutes, resolveForDate, validateSide, DEFAULT_REGION } from './zmanim.js';
 
-// Hebrew dates (Israel) per key. rosh_hashana is the only two-day entry.
+// Hebrew dates (Israel) per יום טוב key — one civil day each.
 const YOM_TOV = {
-  rosh_hashana: [{ d: 1, m: months.TISHREI }, { d: 2, m: months.TISHREI }],
-  yom_kippur: [{ d: 10, m: months.TISHREI }],
-  sukkot: [{ d: 15, m: months.TISHREI }],
-  shemini_atzeret: [{ d: 22, m: months.TISHREI }],
-  pesach_1: [{ d: 15, m: months.NISAN }],
-  pesach_7: [{ d: 21, m: months.NISAN }],
-  shavuot: [{ d: 6, m: months.SIVAN }],
+  rosh_hashana_1: { d: 1, m: months.TISHREI },
+  rosh_hashana_2: { d: 2, m: months.TISHREI },
+  yom_kippur: { d: 10, m: months.TISHREI },
+  sukkot: { d: 15, m: months.TISHREI },
+  shemini_atzeret: { d: 22, m: months.TISHREI },
+  pesach_1: { d: 15, m: months.NISAN },
+  pesach_7: { d: 21, m: months.NISAN },
+  shavuot: { d: 6, m: months.SIVAN },
 };
-
-export const HOLIDAY_KEYS = ['shabbat', ...Object.keys(YOM_TOV)];
+// מוצאי keys → the day whose exit evening they mean.
+export const MOTZAEI = {
+  motzaei_shabbat: 'shabbat',
+  motzaei_rosh_hashana: 'rosh_hashana_2',
+  motzaei_yom_kippur: 'yom_kippur',
+  motzaei_sukkot: 'sukkot',
+  motzaei_shemini_atzeret: 'shemini_atzeret',
+  motzaei_pesach_1: 'pesach_1',
+  motzaei_pesach_7: 'pesach_7',
+  motzaei_shavuot: 'shavuot',
+};
+export const DAY_KEYS = ['shabbat', ...Object.keys(YOM_TOV)];
+export const HOLIDAY_KEYS = [...DAY_KEYS, ...Object.keys(MOTZAEI)];
+// Pre-2026-08-30 rows stored the two-day 'rosh_hashana' as one key.
+const LEGACY_KEYS = { rosh_hashana: ['rosh_hashana_1', 'rosh_hashana_2'] };
 
 export function parseHolidayKeys(v) {
-  const raw = Array.isArray(v) ? v : String(v || '').split(',');
-  const keys = HOLIDAY_KEYS.filter((k) => raw.map((s) => String(s).trim()).includes(k));
+  const raw = (Array.isArray(v) ? v : String(v || '').split(',')).map((s) => String(s).trim());
+  const expanded = raw.flatMap((k) => LEGACY_KEYS[k] || [k]);
+  const keys = HOLIDAY_KEYS.filter((k) => expanded.includes(k));
   if (!keys.length) {
     throw errors.validation('holiday schedule needs at least one holiday', { holidays: HOLIDAY_KEYS.join('|') });
   }
@@ -39,48 +64,32 @@ export function parseHolidayKeys(v) {
 
 const dateKey = (dt) => `${dt.y}-${dt.mo}-${dt.d}`;
 
-function chagDates(keys, hyears) {
-  const set = new Set();
-  for (const hy of hyears) {
-    for (const k of keys) {
-      for (const { d, m } of YOM_TOV[k] || []) {
-        const g = new HDate(d, m, hy).greg();
-        set.add(dateKey({ y: g.getFullYear(), mo: g.getMonth() + 1, d: g.getDate() }));
-      }
+// Civil date → יום טוב keys, memoized per Hebrew year (every civil date belongs
+// to exactly one Hebrew year, whose chagim are all in that year's map).
+const chagMemo = new Map();
+function chagMapFor(hy) {
+  let m = chagMemo.get(hy);
+  if (!m) {
+    m = new Map();
+    for (const [k, { d, m: mo }] of Object.entries(YOM_TOV)) {
+      const g = new HDate(d, mo, hy).greg();
+      const dk = dateKey({ y: g.getFullYear(), mo: g.getMonth() + 1, d: g.getDate() });
+      if (!m.has(dk)) m.set(dk, []);
+      m.get(dk).push(k);
     }
+    chagMemo.set(hy, m);
   }
-  return set;
+  return m;
 }
 
-// Merged blocks (chronological): {entry, exit} local dates, where entry = the
-// erev (day before the first protected day) and exit = the last protected day.
-// Scans ~14 months, starting a few days BACK to catch a block we're currently
-// inside — so the list may open with a just-passed block; callers filter by
-// their own event times (see resolveHolidaySchedule).
-export function upcomingBlocks(keys, { tz, now = new Date() } = {}) {
-  const includeShabbat = keys.includes('shabbat');
-  const today = localParts(now, tz);
-  const hyNow = new HDate(new Date(Date.UTC(today.y, today.mo - 1, today.d, 12))).getFullYear();
-  const chag = chagDates(keys, [hyNow, hyNow + 1, hyNow + 2]);
-  const isChag = (dt) => chag.has(dateKey(dt));
-  const isProtected = (dt) => isChag(dt) || dowOfDate(dt) === 7;
-
-  const blocks = [];
-  let run = null;
-  let d = shiftDate({ y: today.y, mo: today.mo, d: today.d }, -5);
-  for (let i = 0; i < 430; i++) {
-    if (isProtected(d)) {
-      if (!run) run = { first: d, hasChag: false };
-      run.last = d;
-      run.hasChag = run.hasChag || isChag(d);
-    } else if (run) {
-      if (run.hasChag || includeShabbat) blocks.push({ entry: shiftDate(run.first, -1), exit: run.last });
-      run = null;
-    }
-    d = shiftDate(d, 1);
-  }
-  return blocks;
+// The day keys (שבת + יום טוב) that fall on a civil date — [] on a weekday.
+export function dayKeysOn(dt) {
+  const hy = new HDate(new Date(Date.UTC(dt.y, dt.mo - 1, dt.d, 12))).getFullYear();
+  const keys = [...(chagMapFor(hy).get(dateKey(dt)) || [])];
+  if (dowOfDate(dt) === 7) keys.push('shabbat');
+  return keys;
 }
+const isProtected = (dt) => dayKeysOn(dt).length > 0;
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymdStr = (dt) => `${dt.y}-${pad2(dt.mo)}-${pad2(dt.d)}`;
@@ -97,9 +106,60 @@ function sideMinutes(s, side, date, region, tz) {
   return timeToMinutes(resolveForDate(anchor, Number(s[`${side}_offset_min`] || 0), date, region, tz));
 }
 
+// Anchors that belong to the NIGHT of a day (resolve on the evening that starts
+// it) vs. the exit anchors that are מוצאי by definition (see the header).
+const NIGHT_ANCHORS = new Set(['sunset', 'tzeit', 'tzeit_rt', 'chatzot_layla', 'candles']);
+const EXIT_ANCHORS = new Set(['shabbat_end', 'shabbat_end_rt']);
+
+// The concrete {date, min} one side fires at for a selected key whose day falls
+// on civil date D — null when nothing fires (מוצאי into another שבת/חג, or an
+// anchored time that leaves the civil day on this date).
+function sideEventOn(s, side, key, D, region, tz) {
+  const anchor = s[`${side}_anchor`] || 'clock';
+  const offset = Number(s[`${side}_offset_min`] || 0);
+  const motzaei = Boolean(MOTZAEI[key]);
+  if (motzaei && isProtected(shiftDate(D, 1))) return null;
+  if (anchor === 'clock') {
+    const min = timeToMinutes(s[`${side}_time`]);
+    if (min == null) return null;
+    if (motzaei) return { date: min < 720 ? shiftDate(D, 1) : D, min };
+    const eve = shiftDate(D, -1);
+    return { date: min >= anchorMinutes('sunset', eve, region, tz) ? eve : D, min };
+  }
+  const date = (motzaei || EXIT_ANCHORS.has(anchor) || !NIGHT_ANCHORS.has(anchor)) ? D : shiftDate(D, -1);
+  try {
+    return { date, min: timeToMinutes(resolveForDate(anchor, offset, date, region, tz)) };
+  } catch {
+    return null;
+  }
+}
+
+// Every event of one side over the civil range [from, to] (inclusive) for the
+// selected keys — chronological, de-duplicated (שבת and a chag on the same
+// Saturday fire once). Pure; the calendar and the resolver both use it.
+export function holidaySideEvents(s, side, keys, { from, to, region = DEFAULT_REGION, tz = 'Asia/Jerusalem' }) {
+  const fromStr = ymdStr(from);
+  const toStr = ymdStr(to);
+  const scanEnd = ymdStr(shiftDate(to, 1)); // an event may land a day either side of its day
+  const out = new Map();
+  for (let d = shiftDate(from, -1), i = 0; ymdStr(d) <= scanEnd && i < 800; d = shiftDate(d, 1), i++) {
+    const dayKeys = dayKeysOn(d);
+    if (!dayKeys.length) continue;
+    for (const key of keys) {
+      if (!dayKeys.includes(MOTZAEI[key] || key)) continue;
+      const ev = sideEventOn(s, side, key, d, region, tz);
+      if (!ev) continue;
+      const ds = ymdStr(ev.date);
+      if (ds < fromStr || ds > toStr) continue;
+      out.set(`${ds}T${minutesToHHMM(ev.min)}`, ev);
+    }
+  }
+  return [...out.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, v]) => v);
+}
+
 // Normalize + resolve a holiday schedule in place: validates the holiday list
-// and anchors, picks the first block whose LAST event is still ahead, and
-// writes concrete on_date/on_time + off_date/off_time (one-sided allowed).
+// and anchors, then writes each side's NEXT occurrence (independently) into
+// on_date/on_time and off_date/off_time. One-sided rows are the norm.
 export function resolveHolidaySchedule(s, { region = DEFAULT_REGION, tz = 'Asia/Jerusalem', now = new Date() } = {}) {
   const keys = parseHolidayKeys(s.holidays);
   s.holidays = keys.join(',');
@@ -117,23 +177,26 @@ export function resolveHolidaySchedule(s, { region = DEFAULT_REGION, tz = 'Asia/
   }
 
   const p = localParts(now, tz);
-  const nowKey = localKey({ y: p.y, mo: p.mo, d: p.d }, p.hh * 60 + p.mm);
-  for (const block of upcomingBlocks(keys, { tz, now })) {
-    const onMin = hasOn ? sideMinutes(s, 'on', block.entry, region, tz) : null;
-    const offMin = hasOff ? sideMinutes(s, 'off', block.exit, region, tz) : null;
-    if (hasOn && onMin == null) throw errors.validation('ON side needs on_time HH:MM', { on_time: 'HH:MM' });
-    if (hasOff && offMin == null) throw errors.validation('OFF side needs off_time HH:MM', { off_time: 'HH:MM' });
-    const lastKey = hasOff ? localKey(block.exit, offMin) : localKey(block.entry, onMin);
-    if (lastKey <= nowKey) continue; // block already behind us — roll forward
-    s.on_date = hasOn ? ymdStr(block.entry) : null;
-    s.on_time = hasOn ? minutesToHHMM(onMin) : null;
-    s.off_date = hasOff ? ymdStr(block.exit) : null;
-    s.off_time = hasOff ? minutesToHHMM(offMin) : null;
-    s.on_day_of_week = null;
-    s.off_day_of_week = null;
-    return s;
+  const today = { y: p.y, mo: p.mo, d: p.d };
+  const nowKey = localKey(today, p.hh * 60 + p.mm);
+  for (const side of ['on', 'off']) {
+    if (!(side === 'on' ? hasOn : hasOff)) {
+      s[`${side}_date`] = null;
+      s[`${side}_time`] = null;
+      continue;
+    }
+    if (s[`${side}_anchor`] === 'clock' && timeToMinutes(s[`${side}_time`]) == null) {
+      throw errors.validation(`${side.toUpperCase()} side needs ${side}_time HH:MM`, { [`${side}_time`]: 'HH:MM' });
+    }
+    const events = holidaySideEvents(s, side, keys, { from: shiftDate(today, -2), to: shiftDate(today, 400), region, tz });
+    const next = events.find((e) => localKey(e.date, e.min) > nowKey);
+    if (!next) throw errors.validation('no upcoming occurrence for the chosen holidays', { holidays: 'none upcoming' });
+    s[`${side}_date`] = ymdStr(next.date);
+    s[`${side}_time`] = minutesToHHMM(next.min);
   }
-  throw errors.validation('no upcoming occurrence for the chosen holidays', { holidays: 'none upcoming' });
+  s.on_day_of_week = null;
+  s.off_day_of_week = null;
+  return s;
 }
 
 // ── yearly (anniversary) schedules — e.g. נר זיכרון on a Hebrew date ──
@@ -211,74 +274,65 @@ export function hebOnceDate(day, month, { tz = 'Asia/Jerusalem', now = new Date(
   throw errors.validation('לא נמצא מופע קרוב לתאריך', { once_heb_day: 'none' });
 }
 
-// ── per-schedule החרגה — same type choices as the schedule itself ──
+// ── per-schedule החרגה ──
+// Two storages: the legacy single exclusion (excl_type + fields — the per-channel
+// form still writes it) and excl_list — a JSON array of date ranges written by
+// the תוכנית editor: [{type:'yearly'|'once', calendar:'heb'|'greg', date, end_date}].
+// A date is excluded when EITHER says so.
 
-// Chag-date memo per (keys, hebrew year) — the block test below is called per
-// occurrence/event and must stay cheap.
-const chagMemo = new Map();
-function chagSetFor(keys, hy) {
-  const k = `${keys.join(',')}|${hy}`;
-  let v = chagMemo.get(k);
-  if (!v) {
-    v = chagDates(keys, [hy]);
-    chagMemo.set(k, v);
-  }
-  return v;
-}
-
-// Is the date inside a שבת/חג block for the given keys — SAME days the include
-// type acts on: the merged protected run PLUS its erev (entry day). Erev is
-// deliberately included: evening events on erev land inside שבת/חג itself, and
-// for a Shabbat clock skipping them is the safe reading of "לא בשבת".
+// Is the date a selected שבת/חג day or its erev — the legacy 'holiday' exclusion.
+// Erev is included on purpose: evening events on erev land inside שבת/חג itself,
+// and for a Shabbat clock skipping them is the safe reading of "לא בשבת".
 function inHolidayBlock(keysCsv, dateStr) {
   let keys;
   try { keys = parseHolidayKeys(keysCsv); } catch { return false; }
-  const includeShabbat = keys.includes('shabbat');
-  const isChag = (dt) => {
-    const hy = new HDate(new Date(Date.UTC(dt.y, dt.mo - 1, dt.d, 12))).getFullYear();
-    return chagSetFor(keys, hy).has(dateKey(dt));
-  };
-  const isProtected = (dt) => isChag(dt) || dowOfDate(dt) === 7;
-  // The run containing d (or starting at d+1 when d is the erev). Runs are a
-  // few days at most — walking ±8 days is far more than enough.
-  const runSelected = (start) => {
-    let first = start;
-    while (isProtected(shiftDate(first, -1))) first = shiftDate(first, -1);
-    let hasChag = false;
-    let d = first;
-    for (let i = 0; i < 8 && isProtected(d); i++, d = shiftDate(d, 1)) hasChag = hasChag || isChag(d);
-    return hasChag || includeShabbat;
-  };
+  const bases = new Set(keys.map((k) => MOTZAEI[k] || k));
+  const hit = (dt) => dayKeysOn(dt).some((k) => bases.has(k));
   const p = ymdParts(dateStr);
-  if (isProtected(p)) return runSelected(p);
-  const next = shiftDate(p, 1);
-  if (isProtected(next)) return runSelected(next); // d is the erev
-  return false;
+  return hit(p) || hit(shiftDate(p, 1));
 }
 
-// Does a LOCAL date fall inside the schedule's own החרגה? Pure — projected from
-// the stored fields per excl_type:
-//   'yearly'  recurring date range (Hebrew or civil), representative dates —
-//             occurrences projected around the tested date, so wrap-the-year
-//             ranges (אלול→תשרי) work;
-//   'once'    concrete date range, no recurrence;
-//   'holiday' שבת/חג blocks (erev through exit) of the chosen excl_holidays keys;
-//   'weekly'  chosen days of week (CSV of 1–7).
-export function inExclusionRange(row, dateStr) {
-  if (!row || !row.excl_type) return false;
-  if (row.excl_type === 'weekly') {
-    return String(row.excl_days || '').split(',').includes(String(dowOfDate(ymdParts(dateStr))));
+// Stored JSON (or an already-parsed array) → array of range items; never throws.
+export function parseExclList(v) {
+  if (!v) return [];
+  if (Array.isArray(v)) return v;
+  try {
+    const a = JSON.parse(String(v));
+    return Array.isArray(a) ? a : [];
+  } catch {
+    return [];
   }
-  if (row.excl_type === 'holiday') return inHolidayBlock(row.excl_holidays, dateStr);
-  if (!row.excl_date) return false;
-  if (row.excl_type === 'once') {
-    const from = ymdStr(ymdParts(row.excl_date));
-    const to = ymdStr(ymdParts(row.excl_end_date || row.excl_date));
+}
+
+// One date range: 'once' = the concrete dates; anything else recurs yearly on
+// its calendar (representative dates projected around the tested date, so a
+// wrap-the-year range like אלול→תשרי works).
+function inDateRange(x, dateStr) {
+  if (!x || !x.date) return false;
+  if (x.type === 'once') {
+    const from = ymdStr(ymdParts(x.date));
+    const to = ymdStr(ymdParts(x.end_date || x.date));
     return dateStr >= from && dateStr <= to;
   }
   const p = ymdParts(dateStr);
-  return yearlyRangesAround(row.excl_date, row.excl_end_date, row.excl_calendar, p, 2)
+  return yearlyRangesAround(x.date, x.end_date, x.calendar, p, 2)
     .some((r) => dateStr >= ymdStr(r.on) && dateStr <= ymdStr(r.off));
+}
+
+// Does a LOCAL date fall inside the schedule's own החרגה? Pure — projected from
+// the stored fields. Legacy excl_type: 'yearly'/'once' date range, 'holiday'
+// (selected שבת/חג days + erev), 'weekly' (CSV of days 1–7); plus every range
+// in excl_list.
+export function inExclusionRange(row, dateStr) {
+  if (!row) return false;
+  if (row.excl_type === 'weekly') {
+    if (String(row.excl_days || '').split(',').includes(String(dowOfDate(ymdParts(dateStr))))) return true;
+  } else if (row.excl_type === 'holiday') {
+    if (inHolidayBlock(row.excl_holidays, dateStr)) return true;
+  } else if (row.excl_type && row.excl_date) {
+    if (inDateRange({ type: row.excl_type, calendar: row.excl_calendar, date: row.excl_date, end_date: row.excl_end_date }, dateStr)) return true;
+  }
+  return parseExclList(row.excl_list).some((x) => inDateRange(x, dateStr));
 }
 
 // Hebrew pick (day 1–30 + hebcal month, Nisan=1 … Tishrei=7 … Adar=12/Adar II=13)

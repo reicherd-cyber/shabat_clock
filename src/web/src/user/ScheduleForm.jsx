@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Button, Input, TimeInput, Select, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf, ChannelDot } from '../ui.jsx';
 import { Check, ChevronDown, House, Trash2 } from 'lucide-react';
@@ -22,8 +22,8 @@ export const emptyForm = {
   // Halachic anchors: 'clock' = fixed time; otherwise offset דק׳ לפני/אחרי the zman.
   on_kind: 'clock', on_offset: 20, on_dir: 'before',
   off_kind: 'clock', off_offset: 20, off_dir: 'after',
-  // holiday mode: which days (default — everything; keep in sync with HOLIDAY_NAMES)
-  holidays: ['shabbat', 'rosh_hashana', 'yom_kippur', 'sukkot', 'shemini_atzeret', 'pesach_1', 'pesach_7', 'shavuot'],
+  // holiday mode: which days (default — every שבת/חג DAY, no מוצאי; keep in sync with HOLIDAY_ROWS)
+  holidays: ['shabbat', 'rosh_hashana_1', 'rosh_hashana_2', 'yom_kippur', 'sukkot', 'shemini_atzeret', 'pesach_1', 'pesach_7', 'shavuot'],
   // לפי תאריך (yearly, from→to range) + one-time date entry: Hebrew or civil calendar
   annual_calendar: 'heb', once_calendar: 'greg', heb_day: 1, heb_month: 7,
   heb_day_to: 1, heb_month_to: 7, end_date: '',
@@ -33,7 +33,7 @@ export const emptyForm = {
   excl_on: false, excl_type: 'yearly', excl_calendar: 'heb',
   excl_heb_day: 1, excl_heb_month: 5, excl_heb_day_to: 1, excl_heb_month_to: 6,
   excl_date: '', excl_end_date: '',
-  excl_holidays: ['shabbat', 'rosh_hashana', 'yom_kippur', 'sukkot', 'shemini_atzeret', 'pesach_1', 'pesach_7', 'shavuot'],
+  excl_holidays: ['shabbat', 'rosh_hashana_1', 'rosh_hashana_2', 'yom_kippur', 'sukkot', 'shemini_atzeret', 'pesach_1', 'pesach_7', 'shavuot'],
   excl_days: [],
 };
 
@@ -62,24 +62,83 @@ export const ANCHOR_NAMES = {
 // schedules filter them by the chosen day(s); other types show everything.
 const dayOnlyAnchors = { candles: 6, shabbat_end: 7, shabbat_end_rt: 7 };
 
-// שבת/חג schedule: the selectable days (Israeli יום טוב), merged with adjacent
-// Shabbatot server-side so a חג touching שבת becomes one ON→OFF block.
-export const HOLIDAY_NAMES = {
-  shabbat: 'כל שבת', rosh_hashana: 'ראש השנה', yom_kippur: 'יום כיפור',
-  sukkot: 'סוכות (חג ראשון)', shemini_atzeret: 'שמיני עצרת',
-  pesach_1: 'פסח (יו״ט ראשון)', pesach_7: 'שביעי של פסח', shavuot: 'שבועות',
-};
-export const ALL_HOLIDAYS = Object.keys(HOLIDAY_NAMES);
+// שבת/חג schedule: every selected day fires on its own (mechanical Shabbat-clock
+// model, see services/holidays.js). Each row of the picker is a day plus its
+// מוצאי (the evening after it); ראש השנה is two days, only ב׳ has a מוצאי.
+export const HOLIDAY_ROWS = [
+  { day: 'shabbat', motzaei: 'motzaei_shabbat', label: 'כל שבת' },
+  { day: 'rosh_hashana_1', label: 'ראש השנה א׳' },
+  { day: 'rosh_hashana_2', motzaei: 'motzaei_rosh_hashana', label: 'ראש השנה ב׳' },
+  { day: 'yom_kippur', motzaei: 'motzaei_yom_kippur', label: 'יום כיפור' },
+  { day: 'sukkot', motzaei: 'motzaei_sukkot', label: 'סוכות (חג ראשון)' },
+  { day: 'shemini_atzeret', motzaei: 'motzaei_shemini_atzeret', label: 'שמיני עצרת' },
+  { day: 'pesach_1', motzaei: 'motzaei_pesach_1', label: 'פסח (יו״ט ראשון)' },
+  { day: 'pesach_7', motzaei: 'motzaei_pesach_7', label: 'שביעי של פסח' },
+  { day: 'shavuot', motzaei: 'motzaei_shavuot', label: 'שבועות' },
+];
+export const HOLIDAY_NAMES = Object.fromEntries(HOLIDAY_ROWS.flatMap((r) => [
+  [r.day, r.label],
+  ...(r.motzaei ? [[r.motzaei, r.day === 'shabbat' ? 'מוצאי שבת' : `מוצאי ${r.label.replace(/ \(.*\)$/, '').replace(/ ב׳$/, '')}`]] : []),
+]));
+export const DAY_HOLIDAY_KEYS = HOLIDAY_ROWS.map((r) => r.day);
+export const MOTZAEI_KEYS = HOLIDAY_ROWS.map((r) => r.motzaei).filter(Boolean);
+export const ALL_HOLIDAYS = DAY_HOLIDAY_KEYS;
 
 export const holidaySummary = (csv) => {
-  const keys = String(csv || '').split(',').filter(Boolean);
-  const chagim = keys.filter((k) => k !== 'shabbat');
+  const keys = String(csv || '').split(',').filter(Boolean)
+    .flatMap((k) => (k === 'rosh_hashana' ? ['rosh_hashana_1', 'rosh_hashana_2'] : [k]));
+  const days = keys.filter((k) => DAY_HOLIDAY_KEYS.includes(k));
+  const motz = keys.filter((k) => MOTZAEI_KEYS.includes(k));
   const parts = [];
-  if (keys.includes('shabbat')) parts.push('שבתות');
-  if (chagim.length === ALL_HOLIDAYS.length - 1) parts.push('כל החגים');
-  else if (chagim.length) parts.push(chagim.map((k) => HOLIDAY_NAMES[k] || k).join(', '));
+  if (days.length === DAY_HOLIDAY_KEYS.length) parts.push('כל השבתות והחגים');
+  else if (days.length) parts.push(days.map((k) => HOLIDAY_NAMES[k] || k).join(', '));
+  if (motz.length === MOTZAEI_KEYS.length) parts.push('כל המוצאי');
+  else if (motz.length) parts.push(motz.map((k) => HOLIDAY_NAMES[k] || k).join(', '));
   return parts.join(' + ');
 };
+
+// The יום / מוצאי picker — one row per שבת/חג, two checkbox columns.
+export function HolidayDaysGrid({ value, onChange, hint = true }) {
+  const has = (k) => value.includes(k);
+  const toggle = (k) => onChange(has(k) ? value.filter((x) => x !== k) : [...value, k]);
+  const allDays = DAY_HOLIDAY_KEYS.every(has);
+  const allMotz = MOTZAEI_KEYS.every(has);
+  const setAll = (keys, on) => onChange(on ? [...new Set([...value, ...keys])] : value.filter((k) => !keys.includes(k)));
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className="text-sm text-muted">באילו ימים</span>
+        <div className="flex gap-1">
+          <Button variant="ghost" className="!px-2 !py-0.5 text-xs" onClick={() => setAll(DAY_HOLIDAY_KEYS, !allDays)}>
+            {allDays ? 'נקה ימים' : 'כל הימים'}
+          </Button>
+          <Button variant="ghost" className="!px-2 !py-0.5 text-xs" onClick={() => setAll(MOTZAEI_KEYS, !allMotz)}>
+            {allMotz ? 'נקה מוצאי' : 'כל המוצאי'}
+          </Button>
+        </div>
+      </div>
+      <div className="grid grid-cols-[1fr_3rem_3rem] gap-y-1 text-sm items-center">
+        <span />
+        <span className="text-xs text-muted text-center">יום</span>
+        <span className="text-xs text-muted text-center">מוצאי</span>
+        {HOLIDAY_ROWS.map((r) => (
+          <Fragment key={r.day}>
+            <label className="cursor-pointer" onClick={() => toggle(r.day)}>{r.label}</label>
+            <input type="checkbox" className="justify-self-center" checked={has(r.day)} onChange={() => toggle(r.day)} title={r.label} />
+            {r.motzaei
+              ? <input type="checkbox" className="justify-self-center" checked={has(r.motzaei)} onChange={() => toggle(r.motzaei)} title={HOLIDAY_NAMES[r.motzaei]} />
+              : <span className="text-muted text-center">—</span>}
+          </Fragment>
+        ))}
+      </div>
+      {hint && (
+        <p className="text-xs text-muted">
+          יום = מהכניסה (הערב שלפניו) ועד השקיעה; מוצאי = הערב שאחרי היציאה. מוצאי שנכנס ישר לשבת/חג נוסף לא מופעל.
+        </p>
+      )}
+    </div>
+  );
+}
 export const fmtDate = (d) => (d ? `${Number(String(d).slice(8, 10))}.${Number(String(d).slice(5, 7))}` : '');
 
 // Hebrew date picker parts (hebcal month numbering: Nisan=1 … Tishrei=7 … Adar=12).
@@ -105,7 +164,7 @@ export const plusMinutes = (t, mins) => {
   const total = (Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)) + mins) % 1440;
   return `${pad2(Math.floor(total / 60))}:${pad2(total % 60)}`;
 };
-const REGION_NAMES = { jerusalem: 'ירושלים', tel_aviv: 'תל אביב', haifa: 'חיפה', beer_sheva: 'באר שבע' };
+export const REGION_NAMES = { jerusalem: 'ירושלים', tel_aviv: 'תל אביב', haifa: 'חיפה', beer_sheva: 'באר שבע' };
 
 // "20 דק׳ לפני שקיעה" (offset 0 → just the zman name)
 export const anchorText = (anchor, offsetMin) => {
@@ -195,7 +254,7 @@ export const rowToForm = (s) => ({
 
 // Multi-select dropdown for the target channels of a new schedule — checkbox
 // semantics with a summary face, same pattern as the calendar's channel filter.
-function RelayMultiSelect({ relays, selected, onChange }) {
+export function RelayMultiSelect({ relays, selected, onChange }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -501,29 +560,14 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
             )}
           </div>
           {form.repeat_type === 'holiday' && (
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted">באילו ימים</span>
-                <Button variant="ghost" className="!px-2 !py-0.5 text-xs"
-                  onClick={() => setForm({ ...form, holidays: form.holidays.length === ALL_HOLIDAYS.length ? [] : [...ALL_HOLIDAYS] })}>
-                  {form.holidays.length === ALL_HOLIDAYS.length ? 'נקה הכל' : 'בחר הכל'}
-                </Button>
-              </div>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                {Object.entries(HOLIDAY_NAMES).map(([k, n]) => (
-                  <label key={k} className="flex items-center gap-1.5 text-sm">
-                    <input type="checkbox" checked={form.holidays.includes(k)}
-                      onChange={() => setForm({
-                        ...form,
-                        holidays: form.holidays.includes(k) ? form.holidays.filter((x) => x !== k) : [...form.holidays, k],
-                      })} /> {n}
-                  </label>
-                ))}
-              </div>
-            </div>
+            <HolidayDaysGrid value={form.holidays} onChange={(holidays) => setForm({ ...form, holidays })} />
           )}
           <div className="flex gap-1.5 flex-wrap">
-            {MODES.filter((m) => m.v !== 'offon' || form.repeat_type === 'weekly' || form.repeat_type === 'once').map((m) => (
+            {/* שבת וחגים rows are single-action (each selected day fires on its own);
+                a legacy two-sided row keeps showing its pair until re-saved */}
+            {MODES.filter((m) => (m.v === 'on' || m.v === 'off')
+              || (form.repeat_type === 'holiday' ? form.mode === m.v
+                : (m.v !== 'offon' || form.repeat_type === 'weekly' || form.repeat_type === 'once'))).map((m) => (
               <Button key={m.v} variant={form.mode === m.v ? 'primary' : 'ghost'} className="!px-2.5 !py-1 text-xs"
                 onClick={() => {
                   let next = {
@@ -730,29 +774,8 @@ export function ScheduleFormModal({ initial, relays, onClose, onSaved }) {
                   )}
                   {form.excl_type === 'holiday' && (
                     <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-muted">כולל ערב החג — מהכניסה ועד היציאה</span>
-                        <Button variant="ghost" className="!px-2 !py-0.5 text-xs"
-                          onClick={() => setForm({
-                            ...form,
-                            excl_holidays: form.excl_holidays.length === ALL_HOLIDAYS.length ? [] : [...ALL_HOLIDAYS],
-                          })}>
-                          {form.excl_holidays.length === ALL_HOLIDAYS.length ? 'נקה הכל' : 'בחר הכל'}
-                        </Button>
-                      </div>
-                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                        {Object.entries(HOLIDAY_NAMES).map(([k, n]) => (
-                          <label key={k} className="flex items-center gap-1.5 text-sm">
-                            <input type="checkbox" checked={form.excl_holidays.includes(k)}
-                              onChange={() => setForm({
-                                ...form,
-                                excl_holidays: form.excl_holidays.includes(k)
-                                  ? form.excl_holidays.filter((x) => x !== k)
-                                  : [...form.excl_holidays, k],
-                              })} /> {n}
-                          </label>
-                        ))}
-                      </div>
+                      <span className="text-xs text-muted">כולל ערב החג — מהכניסה ועד היציאה</span>
+                      <HolidayDaysGrid hint={false} value={form.excl_holidays} onChange={(excl_holidays) => setForm({ ...form, excl_holidays })} />
                     </div>
                   )}
                   {form.excl_type === 'yearly' && (

@@ -58,7 +58,7 @@ export function buildShellyJobs(rows, today) {
         if (s.excl_type === 'weekly') {
           const excl = String(s.excl_days || '').split(',').map(Number);
           days = days.filter((d) => !excl.includes(d));
-        } else if (s.excl_type && inExclusionRange(s, today)) {
+        } else if ((s.excl_type || s.excl_list) && inExclusionRange(s, today)) {
           continue; // omitted while today is inside the range; restored on the flip day
         }
         if (!days.length) continue;
@@ -69,7 +69,7 @@ export function buildShellyJobs(rows, today) {
         // date (refreshed daily), so a concrete day-of-month/month cron fits.
         const date = s[`${side}_date`];
         if (!date) continue;
-        if (s.excl_type && inExclusionRange(s, date)) continue;
+        if ((s.excl_type || s.excl_list) && inExclusionRange(s, date)) continue;
         const [, mo, d] = date.split('-').map(Number);
         jobs.push({ enable: true, timespec: `0 ${mm} ${hh} ${d} ${mo} *`, calls: [call] });
       }
@@ -137,7 +137,7 @@ async function desiredJobs(device) {
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, DATE_FORMAT(s.on_date,'%Y-%m-%d') AS on_date,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, DATE_FORMAT(s.off_date,'%Y-%m-%d') AS off_date,
             s.excl_type, DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date,
-            s.excl_calendar, s.excl_holidays, s.excl_days,
+            s.excl_calendar, s.excl_holidays, s.excl_days, s.excl_list,
             r.relay_no
      FROM schedules s JOIN relays r ON r.id = s.relay_id
      WHERE r.device_id = ? AND s.is_enabled = TRUE AND s.deleted_at IS NULL

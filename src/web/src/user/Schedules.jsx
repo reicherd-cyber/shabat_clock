@@ -4,8 +4,9 @@ import { Card, Button, SectionHead, Modal, ErrorNote, useAsync, DAY_NAMES, Toggl
 import { House, Layers, Trash2, Plus, Check, RefreshCw, Sparkles, Pencil } from 'lucide-react';
 import {
   ScheduleFormModal, emptyForm, rowToForm, anchorText, holidaySummary, fmtDate,
-  HEB_DAYS, hebMonthLabel, ALL_HOLIDAYS,
+  HEB_DAYS, hebMonthLabel, DAY_HOLIDAY_KEYS, MOTZAEI_KEYS,
 } from './ScheduleForm.jsx';
+import { PlanEditorModal, planFromMembers, schedulerSummary, exclusionSummary, emptyPlan } from './PlanEditor.jsx';
 
 // Mockup .sched: one bordered list; each row = relay (+device·code small) →
 // green ON pill ← red OFF pill → sync note → enable toggle. The create/edit
@@ -14,6 +15,7 @@ export default function Schedules() {
   const [schedules, setSchedules] = useState(null);
   const [relays, setRelays] = useState([]);
   const [formInit, setFormInit] = useState(null);
+  const [planInit, setPlanInit] = useState(null); // the תוכנית editor (PlanEditor.jsx)
   const [tab, setTab] = useState('channels'); // 'channels' | 'plans'
   const { busy, error, run, setError } = useAsync();
   // Channel identity color (shared app-wide assignment — same as the calendar).
@@ -39,16 +41,23 @@ export default function Schedules() {
     await refresh();
   });
 
-  // A weekly שישי→שבת pair can be upgraded to a שבת וחגים schedule — the same
-  // times/anchors apply on every חג too, with adjacent שבת+חג merged into one block.
+  // A weekly שישי→שבת pair can be upgraded to שבת וחגים: the ON keeps its time
+  // on every שבת/חג DAY (= its entry evening), the OFF becomes its own row on
+  // every מוצאי — each day fires on its own (see services/holidays.js).
   const isShabbatPair = (s) => s.repeat_type === 'weekly'
     && Number(s.on_day_of_week) === 6 && Number(s.off_day_of_week) === 7
     && s.on_time && s.off_time;
   const [convert, setConvert] = useState(null); // schedule awaiting convert confirmation
   const applyToHolidays = () => run(async () => {
-    await api.patch(`/schedules/${convert.id}`, {
-      repeat_type: 'holiday',
-      holidays: [...ALL_HOLIDAYS],
+    const s = convert;
+    const offAnchored = s.off_anchor && s.off_anchor !== 'clock';
+    await api.patch(`/schedules/${s.id}`, {
+      repeat_type: 'holiday', holidays: [...DAY_HOLIDAY_KEYS],
+      off_time: null, off_day_of_week: null, off_anchor: 'clock', off_offset_min: 0,
+    });
+    await api.post('/schedules', {
+      relay_id: s.relay_id, name: s.name || null, repeat_type: 'holiday', holidays: [...MOTZAEI_KEYS],
+      ...(offAnchored ? { off_anchor: s.off_anchor, off_offset_min: s.off_offset_min } : { off_time: s.off_time }),
     });
     setConvert(null);
     await refresh();
@@ -208,20 +217,12 @@ export default function Schedules() {
         pid, members, repr, daysSet,
         relayIds: [...chanMap.keys()],
         channelList: [...chanMap.values()],
+        // the editor's view of the plan: its schedulers + exclusions, rebuilt from the rows
+        view: planFromMembers(members),
         pseudo: { ...repr, _daysText: daysSet.length > 1 ? daysSet.map((d) => DAY_NAMES[d]).join(', ') : undefined },
       };
     }).sort((a, b) => Math.min(...a.members.map(sortKey)) - Math.min(...b.members.map(sortKey)));
   }, [schedules]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Open the plan editor — the same init whether entered from the plans tab or
-  // from a member row inside a channel card.
-  const planEditInit = (p) => ({
-    ...rowToForm(p.repr),
-    relay_ids: p.relayIds,
-    plan_id: p.pid,
-    plan_member_ids: p.members.map((m) => m.id),
-    ...(p.daysSet.length > 1 ? { days: p.daysSet } : {}),
-  });
 
   // Reversed pair (כיבוי והדלקה): the OFF fires before the ON — pills must render
   // in the true order. Daily pairs are cyclic, so they stay ON→OFF.
@@ -237,12 +238,12 @@ export default function Schedules() {
   };
 
   const onLabel = (s) => (s.on_time == null ? null
-    : s.repeat_type === 'holiday' ? `בכניסה (${fmtDate(s.on_date)}) · ${sideTime(s, 'on')} · הדלקה`
+    : s.repeat_type === 'holiday' ? `הקרוב ${fmtDate(s.on_date)} · ${sideTime(s, 'on')} · הדלקה`
       : s.repeat_type === 'yearly' ? `כל שנה — ${yearlyRange(s)} · הקרוב ${fmtDate(s.on_date)} · ${sideTime(s, 'on')} · הדלקה`
         : s.repeat_type === 'once' ? `${String(s.on_date).slice(0, 10)} ${sideTime(s, 'on')} · הדלקה`
           : `${s.on_day_of_week == null ? 'כל יום' : (s._daysText || DAY_NAMES[s.on_day_of_week])} ${sideTime(s, 'on')} · הדלקה`);
   const offLabel = (s) => (s.off_time == null ? null
-    : s.repeat_type === 'holiday' ? `ביציאה (${fmtDate(s.off_date)}) · ${sideTime(s, 'off')} · כיבוי`
+    : s.repeat_type === 'holiday' ? `הקרוב ${fmtDate(s.off_date)} · ${sideTime(s, 'off')} · כיבוי`
       : s.repeat_type === 'yearly' ? `${s.on_time == null ? `כל שנה — ${yearlyRange(s)} · ` : ''}${fmtDate(s.off_date)} · ${sideTime(s, 'off')} · כיבוי`
         : s.repeat_type === 'once' ? `${String(s.off_date).slice(0, 10)} ${sideTime(s, 'off')} · כיבוי`
           : `${s.off_day_of_week == null ? 'כל יום' : (s._daysText || DAY_NAMES[s.off_day_of_week])} ${sideTime(s, 'off')} · כיבוי`);
@@ -270,17 +271,16 @@ export default function Schedules() {
             <h3 className="font-bold text-[17px]">תוכניות — כמה ערוצים יחד</h3>
             <span className="text-muted text-sm ms-auto">{plans.length === 0 ? '' : plans.length === 1 ? 'תוכנית אחת' : `${plans.length} תוכניות`}</span>
             <Button className="!py-1 !px-3 text-sm" disabled={busy}
-              onClick={() => setFormInit({ ...emptyForm, plan: true, relay_ids: [] })}>
+              onClick={() => setPlanInit({ ...emptyPlan })}>
               <span className="inline-flex items-center gap-1"><Plus size={14} />תוכנית חדשה</span>
             </Button>
           </div>
           {plans.length === 0 && (
             <p className="text-muted text-sm px-5 py-4">
-              תוכנית מפעילה כמה ערוצים יחד באותם זמנים — עריכה אחת משנה את כולם.
+              תוכנית = כמה ערוצים יחד עם רשימת תזמונים (כל תזמון הוא הדלקה או כיבוי) והחרגות — עריכה אחת משנה את כולם.
             </p>
           )}
           {plans.map((p, i) => {
-            const s = { ...p.pseudo, _group: p.members };
             const chip = nextChip(p.repr);
             const synced = p.members.every((m) => m.sync_status === 'synced');
             return (
@@ -288,24 +288,18 @@ export default function Schedules() {
                 <div className="min-w-[130px]">
                   {p.repr.name && <div className="font-bold text-[15px] mb-0.5">{p.repr.name}</div>}
                   <small className={`flex w-fit items-center font-medium text-[11.5px] rounded-full px-2 py-px whitespace-nowrap ${chip.cls}`}>{chip.text}</small>
-                  {p.repr.repeat_type === 'holiday' && (
-                    <small className="block font-normal text-muted text-[12.5px] mt-0.5">{holidaySummary(p.repr.holidays)}</small>
-                  )}
-                  {p.repr.excl_type && (
-                    <small className="block font-normal text-[12.5px] mt-0.5" style={{ color: '#B45309' }}
-                      title="בזמני ההחרגה התוכנית לא תפעל">
-                      החרגה: {exclRange(p.repr)}
+                  {p.view.exclusions.map((x) => (
+                    <small key={x.uid} className="block font-normal text-[12.5px] mt-0.5" style={{ color: '#B45309' }}
+                      title="בתאריכי ההחרגה התוכנית לא תפעל">
+                      החרגה: {exclusionSummary(x)}
                     </small>
-                  )}
+                  ))}
                 </div>
-                <div className="flex-1 flex items-center gap-2.5 flex-wrap">
-                  {(isReversed(s)
-                    ? [offLabel(s) && <span key="off" className="pill off-p">{offLabel(s)}</span>,
-                      onLabel(s) && offLabel(s) && <span key="arr" className="text-muted">←</span>,
-                      onLabel(s) && <span key="on" className="pill on-p">{onLabel(s)}</span>]
-                    : [onLabel(s) && <span key="on" className="pill on-p">{onLabel(s)}</span>,
-                      onLabel(s) && offLabel(s) && <span key="arr" className="text-muted">←</span>,
-                      offLabel(s) && <span key="off" className="pill off-p">{offLabel(s)}</span>])}
+                {/* one pill per scheduler — the plan's whole program at a glance */}
+                <div className="flex-1 flex items-center gap-1.5 flex-wrap">
+                  {p.view.schedulers.map((sch) => (
+                    <span key={sch.uid} className={`pill ${sch.action === 'on' ? 'on-p' : 'off-p'}`}>{schedulerSummary(sch)}</span>
+                  ))}
                 </div>
                 <SyncNote ok={synced}>
                   {synced
@@ -313,13 +307,7 @@ export default function Schedules() {
                     : <span className="inline-flex items-center gap-1"><RefreshCw size={13} />ממתין לסנכרון</span>}
                 </SyncNote>
                 <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-ink cursor-pointer'}`}
-                  title="עריכת התוכנית (חלה על כל הערוצים)" onClick={() => setFormInit({
-                    ...rowToForm(p.repr),
-                    relay_ids: p.relayIds,
-                    plan_id: p.pid,
-                    plan_member_ids: p.members.map((m) => m.id),
-                    ...(p.daysSet.length > 1 ? { days: p.daysSet } : {}),
-                  })}><Pencil size={16} /></button>
+                  title="עריכת התוכנית (חלה על כל הערוצים)" onClick={() => setPlanInit(p.view)}><Pencil size={16} /></button>
                 <Toggle checked={!!p.repr.is_enabled} busy={busy} onChange={() => toggleEnabled({ ...p.repr, _group: p.members })} />
                 <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
                   title="מחק את התוכנית מכל הערוצים" onClick={() => remove({ ...p.repr, _group: p.members })}><Trash2 size={17} /></button>
@@ -405,13 +393,13 @@ export default function Schedules() {
                   )}
                   <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-ink cursor-pointer'}`}
                     title={plan ? 'עריכת התוכנית (חלה על כל הערוצים)' : 'עריכת התזמון'}
-                    onClick={() => setFormInit(plan ? planEditInit(plan) : {
+                    onClick={() => (plan ? setPlanInit(plan.view) : setFormInit({
                       ...rowToForm(s),
                       ...(s._group && s._group.length > 1 ? {
                         days: s._group.map((x) => Number(x[`${s._side}_day_of_week`])).sort((a, b) => a - b),
                         group_ids: s._group.map((x) => x.id),
                       } : {}),
-                    })}><Pencil size={16} /></button>
+                    }))}><Pencil size={16} /></button>
                   <Toggle checked={!!s.is_enabled} busy={busy}
                     onChange={() => toggleEnabled(plan ? { ...s, _group: plan.members } : s)} />
                   <button disabled={busy} className={`text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
@@ -429,12 +417,12 @@ export default function Schedules() {
         {convert && (
           <div className="space-y-3">
             <p>
-              התזמון של <b>{convert.relay_name}</b> יהפוך לתזמון <b>שבת וחגים</b>: אותם זמני
-              הדלקה וכיבוי יחולו גם בערבי חג ובמוצאי חג (ראש השנה, יום כיפור, חג ראשון של
-              סוכות, שמיני עצרת, פסח, שביעי של פסח ושבועות).
+              התזמון של <b>{convert.relay_name}</b> יהפוך לשני תזמוני <b>שבת וחגים</b>: ההדלקה בכניסת כל
+              שבת וחג (ראש השנה, יום כיפור, חג ראשון של סוכות, שמיני עצרת, פסח, שביעי של פסח
+              ושבועות), והכיבוי בכל מוצאי שבת וחג.
             </p>
             <p className="text-muted text-sm">
-              חג שצמוד לשבת ממוזג לרצף אחד — הדלקה בכניסה וכיבוי רק ביציאה הסופית, בלי כיבוי באמצע.
+              מוצאי שנכנס ישר לשבת או חג נוסף לא מכבה — האור נשאר דולק עד היציאה הסופית.
             </p>
             <ErrorNote error={error} />
             <div className="grid grid-cols-2 gap-2">
@@ -450,6 +438,9 @@ export default function Schedules() {
       <ScheduleFormModal initial={formInit} relays={relays}
         onClose={() => setFormInit(null)}
         onSaved={async () => { setFormInit(null); await refresh(); }} />
+      <PlanEditorModal initial={planInit} relays={relays}
+        onClose={() => setPlanInit(null)}
+        onSaved={async () => { setPlanInit(null); await refresh(); }} />
     </>
   );
 }

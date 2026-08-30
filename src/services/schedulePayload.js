@@ -36,7 +36,7 @@ export async function buildDevicePayload(deviceId) {
     `SELECT s.id, s.on_day_of_week, s.on_time, s.off_day_of_week, s.off_time,
             s.repeat_type, s.on_date, s.off_date, r.relay_no,
             s.excl_type, DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date,
-            s.excl_calendar, s.excl_holidays, s.excl_days
+            s.excl_calendar, s.excl_holidays, s.excl_days, s.excl_list
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
      WHERE r.device_id = ? AND s.is_enabled = TRUE AND s.deleted_at IS NULL

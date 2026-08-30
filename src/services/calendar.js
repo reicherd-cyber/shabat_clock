@@ -4,9 +4,9 @@
 // holiday schedules expand every שבת/חג block in range — so the calendar shows
 // the real future times, not just the upcoming one.
 import { query } from '../db/pool.js';
-import { shiftDate, dowOfDate, timeToMinutes } from './time.js';
+import { shiftDate, dowOfDate, timeToMinutes, minutesToHHMM } from './time.js';
 import { resolveForDate, DEFAULT_REGION } from './zmanim.js';
-import { upcomingBlocks, parseHolidayKeys, yearlyRangesAround, inExclusionRange } from './holidays.js';
+import { holidaySideEvents, parseHolidayKeys, yearlyRangesAround, inExclusionRange } from './holidays.js';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymdStr = (dt) => `${dt.y}-${pad2(dt.mo)}-${pad2(dt.d)}`;
@@ -87,15 +87,15 @@ export function expandSchedules(rows, { from, days }) {
         }
       }
     } else if (s.repeat_type === 'holiday') {
+      // Every selected day fires on its own (see holidays.js): each side's
+      // events over the window, computed per date with the day/night rules.
       let keys;
       try { keys = parseHolidayKeys(s.holidays); } catch { continue; }
-      const anchorDate = new Date(Date.UTC(from.y, from.mo - 1, from.d, 12));
-      for (const b of upcomingBlocks(keys, { tz, now: anchorDate })) {
-        if (ymdStr(b.entry) > endStr) break; // blocks are chronological
-        for (const side of ['on', 'off']) {
-          if (!s[`${side}_time`]) continue;
-          const d = side === 'on' ? b.entry : b.exit;
-          if (inRange(ymdStr(d))) push(d, sideTimeFor(side, d), side);
+      const to = shiftDate(from, days - 1);
+      for (const side of ['on', 'off']) {
+        if (!s[`${side}_time`]) continue; // side absent (anchored sides always store a time)
+        for (const ev of holidaySideEvents(s, side, keys, { from, to, region, tz })) {
+          push(ev.date, minutesToHHMM(ev.min), side);
         }
       }
     }
@@ -116,7 +116,7 @@ export async function calendarEvents({ userId, from, days }) {
   const rows = await query(
     `SELECT s.id, s.repeat_type, s.holidays,
             s.excl_type, DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date,
-            s.excl_calendar, s.excl_holidays, s.excl_days,
+            s.excl_calendar, s.excl_holidays, s.excl_days, s.excl_list,
             DATE_FORMAT(s.annual_date,'%Y-%m-%d') AS annual_date, DATE_FORMAT(s.annual_end_date,'%Y-%m-%d') AS annual_end_date, s.annual_calendar,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             DATE_FORMAT(s.on_date,'%Y-%m-%d') AS on_date,

@@ -58,12 +58,11 @@ test('once outside the range contributes nothing', () => {
   assert.equal(events.length, 0);
 });
 
-test('holiday (shabbat) expands every weekend block in range with per-date zmanim', () => {
-  const events = expandSchedules([{
-    ...base, repeat_type: 'holiday', holidays: 'shabbat',
-    on_anchor: 'sunset', on_offset_min: -20, on_time: '19:10',
-    off_anchor: 'tzeit', off_offset_min: 0, off_time: '20:10',
-  }], RANGE);
+test('holiday: שבת ON before sunset lands on every Friday, מוצאי שבת OFF at tzeit on every Saturday', () => {
+  const events = expandSchedules([
+    { ...base, id: 1, repeat_type: 'holiday', holidays: 'shabbat', on_anchor: 'sunset', on_offset_min: -20, on_time: '19:10' },
+    { ...base, id: 2, repeat_type: 'holiday', holidays: 'motzaei_shabbat', off_anchor: 'tzeit', off_offset_min: 0, off_time: '20:10' },
+  ], RANGE);
   const ons = events.filter((e) => e.action === 'on');
   const offs = events.filter((e) => e.action === 'off');
   assert.deepEqual(ons.map((e) => e.date), ['2026-07-03', '2026-07-10', '2026-07-17', '2026-07-24', '2026-07-31']);
@@ -71,15 +70,23 @@ test('holiday (shabbat) expands every weekend block in range with per-date zmani
   const fri = { y: 2026, mo: 7, d: 24 };
   assert.equal(ons.find((e) => e.date === '2026-07-24').time,
     minutesToHHMM(anchorMinutes('sunset', fri, 'jerusalem', TZ) - 20));
+  assert.equal(offs.find((e) => e.date === '2026-07-25').time,
+    minutesToHHMM(anchorMinutes('tzeit', { y: 2026, mo: 7, d: 25 }, 'jerusalem', TZ)));
 });
 
-test('holiday blocks in September include rosh hashana merged through Shabbat', () => {
+test('holiday: ראש השנה days fire independently — daytime clock on each day, evening clock on each night', () => {
+  // רה 5787: א׳ = Sat Sep 12, ב׳ = Sun Sep 13. The legacy 'rosh_hashana' key expands to both.
   const events = expandSchedules([{
     ...base, repeat_type: 'holiday', holidays: 'rosh_hashana',
-    on_time: '18:00', off_time: '20:30',
+    on_time: '07:00', off_time: '20:30',
   }], { from: { y: 2026, mo: 9, d: 1 }, days: 30 });
   assert.deepEqual(events.map((e) => [e.date, e.action]),
-    [['2026-09-11', 'on'], ['2026-09-13', 'off']]);
+    [['2026-09-11', 'off'], ['2026-09-12', 'on'], ['2026-09-12', 'off'], ['2026-09-13', 'on']]);
+  // מוצאי ר"ה = Sunday evening
+  const motz = expandSchedules([{
+    ...base, repeat_type: 'holiday', holidays: 'motzaei_rosh_hashana', off_time: '20:30',
+  }], { from: { y: 2026, mo: 9, d: 1 }, days: 30 });
+  assert.deepEqual(motz.map((e) => [e.date, e.action]), [['2026-09-13', 'off']]);
 });
 
 test('events are chronologically sorted across schedules', () => {

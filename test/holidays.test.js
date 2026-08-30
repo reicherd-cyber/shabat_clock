@@ -1,8 +1,11 @@
 import './helpers/env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { upcomingBlocks, resolveHolidaySchedule, freshHolidayFor, anchorMinutes, inExclusionRange, hebPickDate } from '../src/services/holidays.js';
-import { timeToMinutes } from '../src/services/time.js';
+import {
+  dayKeysOn, holidaySideEvents, resolveHolidaySchedule, freshHolidayFor, anchorMinutes, inExclusionRange, hebPickDate,
+  parseHolidayKeys, HOLIDAY_KEYS,
+} from '../src/services/holidays.js';
+import { timeToMinutes, minutesToHHMM } from '../src/services/time.js';
 
 const TZ = 'Asia/Jerusalem';
 
@@ -69,61 +72,101 @@ test('inExclusionRange: holiday covers the block erev→exit, same days as the i
   assert.ok(!inExclusionRange(rh, '2026-09-05'));
 });
 
-test('shabbat-only: blocks are Friday erev → Saturday exit (list may open with the just-passed one)', () => {
-  // Wed 2026-07-22 → previous Shabbat Jul 18 (kept for mid-block), then Jul 25
-  const blocks = upcomingBlocks(['shabbat'], { tz: TZ, now: new Date('2026-07-22T10:00:00Z') });
-  assert.deepEqual(blocks[0], { entry: { y: 2026, mo: 7, d: 17 }, exit: { y: 2026, mo: 7, d: 18 } });
-  assert.deepEqual(blocks[1], { entry: { y: 2026, mo: 7, d: 24 }, exit: { y: 2026, mo: 7, d: 25 } });
+// ── the day/night model (see holidays.js header) ──
+
+const J = 'jerusalem';
+const ev = (s, side, keys, from, to) => holidaySideEvents(s, side, keys, { from, to, region: J, tz: TZ })
+  .map((e) => `${e.date.y}-${String(e.date.mo).padStart(2, '0')}-${String(e.date.d).padStart(2, '0')} ${minutesToHHMM(e.min)}`);
+const JUL = [{ y: 2026, mo: 7, d: 20 }, { y: 2026, mo: 7, d: 27 }]; // Mon → Mon around Shabbat Jul 25
+const SEP = [{ y: 2026, mo: 9, d: 1 }, { y: 2026, mo: 9, d: 30 }]; // רה 5787 = Sat Sep 12 + Sun Sep 13
+
+test('keys: legacy rosh_hashana expands to א׳+ב׳; מוצאי keys exist; unknown dropped', () => {
+  assert.deepEqual(parseHolidayKeys('rosh_hashana,shabbat,bogus'), ['shabbat', 'rosh_hashana_1', 'rosh_hashana_2']);
+  assert.ok(HOLIDAY_KEYS.includes('motzaei_shabbat') && HOLIDAY_KEYS.includes('motzaei_rosh_hashana'));
+  assert.deepEqual(dayKeysOn({ y: 2026, mo: 9, d: 12 }), ['rosh_hashana_1', 'shabbat']);
+  assert.deepEqual(dayKeysOn({ y: 2026, mo: 9, d: 13 }), ['rosh_hashana_2']);
+  assert.deepEqual(dayKeysOn({ y: 2026, mo: 9, d: 11 }), []);
 });
 
-test('rosh hashana 5787 (Sat+Sun) merges into one Fri-erev → Sun-exit block, even without shabbat selected', () => {
-  const [b] = upcomingBlocks(['rosh_hashana'], { tz: TZ, now: new Date('2026-09-01T10:00:00Z') });
-  assert.deepEqual(b.entry, { y: 2026, mo: 9, d: 11 }); // erev = Friday
-  assert.deepEqual(b.exit, { y: 2026, mo: 9, d: 13 }); // motzaei = Sunday night
+test('שבת clock times: morning on Saturday, evening on Friday night', () => {
+  assert.deepEqual(ev({ on_time: '07:00' }, 'on', ['shabbat'], ...JUL), ['2026-07-25 07:00']);
+  assert.deepEqual(ev({ off_time: '23:00' }, 'off', ['shabbat'], ...JUL), ['2026-07-24 23:00']);
+  // 18:00 in July is before sunset (~19:40) → Saturday afternoon
+  assert.deepEqual(ev({ on_time: '18:00' }, 'on', ['shabbat'], ...JUL), ['2026-07-25 18:00']);
 });
 
-test('shavuot 5786 falls on Friday → block extends through Shabbat (exit Sat May 23)', () => {
-  const [b] = upcomingBlocks(['shavuot'], { tz: TZ, now: new Date('2026-05-01T10:00:00Z') });
-  assert.deepEqual(b.entry, { y: 2026, mo: 5, d: 21 }); // erev = Thursday
-  assert.deepEqual(b.exit, { y: 2026, mo: 5, d: 23 }); // motzaei Shabbat
+test('שבת anchors: before/after sunset and tzeit belong to the night that starts it; daytime anchors to Saturday; צאת שבת to Saturday', () => {
+  const fri = { y: 2026, mo: 7, d: 24 };
+  const sat = { y: 2026, mo: 7, d: 25 };
+  assert.deepEqual(ev({ on_anchor: 'sunset', on_offset_min: -20 }, 'on', ['shabbat'], ...JUL),
+    [`2026-07-24 ${minutesToHHMM(anchorMinutes('sunset', fri, J, TZ) - 20)}`]);
+  assert.deepEqual(ev({ off_anchor: 'tzeit', off_offset_min: 0 }, 'off', ['shabbat'], ...JUL),
+    [`2026-07-24 ${minutesToHHMM(anchorMinutes('tzeit', fri, J, TZ))}`]);
+  assert.deepEqual(ev({ on_anchor: 'sunrise', on_offset_min: 0 }, 'on', ['shabbat'], ...JUL),
+    [`2026-07-25 ${minutesToHHMM(anchorMinutes('sunrise', sat, J, TZ))}`]);
+  assert.deepEqual(ev({ off_anchor: 'shabbat_end', off_offset_min: 0 }, 'off', ['shabbat'], ...JUL),
+    [`2026-07-25 ${minutesToHHMM(anchorMinutes('shabbat_end', sat, J, TZ))}`]);
 });
 
-test('chagim-only selection skips plain Shabbatot (YK block, not Sep 19)', () => {
-  const [b] = upcomingBlocks(['yom_kippur'], { tz: TZ, now: new Date('2026-09-14T10:00:00Z') });
-  assert.deepEqual(b.entry, { y: 2026, mo: 9, d: 20 }); // erev YK (Sunday), not erev Shabbat Sep 18
-  assert.deepEqual(b.exit, { y: 2026, mo: 9, d: 21 });
+test('מוצאי שבת: anchors on Saturday evening, clock before noon rolls to Sunday morning', () => {
+  const sat = { y: 2026, mo: 7, d: 25 };
+  assert.deepEqual(ev({ off_anchor: 'tzeit', off_offset_min: 0 }, 'off', ['motzaei_shabbat'], ...JUL),
+    [`2026-07-25 ${minutesToHHMM(anchorMinutes('tzeit', sat, J, TZ))}`]);
+  assert.deepEqual(ev({ on_anchor: 'sunset', on_offset_min: -60 }, 'on', ['motzaei_shabbat'], ...JUL),
+    [`2026-07-25 ${minutesToHHMM(anchorMinutes('sunset', sat, J, TZ) - 60)}`]);
+  assert.deepEqual(ev({ off_time: '23:30' }, 'off', ['motzaei_shabbat'], ...JUL), ['2026-07-25 23:30']);
+  assert.deepEqual(ev({ off_time: '07:00' }, 'off', ['motzaei_shabbat'], ...JUL), ['2026-07-26 07:00']);
 });
 
-test('resolveHolidaySchedule: clock pair lands on the next block dates', () => {
-  const s = {
-    repeat_type: 'holiday', holidays: ['shabbat'],
-    on_time: '18:00', off_time: '23:00',
-  };
-  resolveHolidaySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-22T10:00:00Z') });
-  assert.equal(s.on_date, '2026-07-24');
-  assert.equal(s.on_time, '18:00');
-  assert.equal(s.off_date, '2026-07-25');
-  assert.equal(s.off_time, '23:00');
+test('ראש השנה: the three evening sessions and the two mornings of the user\'s plans', () => {
+  // ליל א׳ (Fri), ליל ב׳ (Sat), מוצאי ר"ה (Sun) — ON 60′ before sunset each evening
+  const on = { on_anchor: 'sunset', on_offset_min: -60 };
+  assert.deepEqual(ev(on, 'on', ['rosh_hashana_1', 'rosh_hashana_2', 'motzaei_rosh_hashana'], ...SEP).map((x) => x.slice(0, 10)),
+    ['2026-09-11', '2026-09-12', '2026-09-13']);
+  const off = { off_anchor: 'sunset', off_offset_min: 72 };
+  assert.deepEqual(ev(off, 'off', ['rosh_hashana_1', 'rosh_hashana_2', 'motzaei_rosh_hashana'], ...SEP).map((x) => x.slice(0, 10)),
+    ['2026-09-11', '2026-09-12', '2026-09-13']);
+  // "07:00 on ראש השנה" = the mornings of both days, not erev
+  assert.deepEqual(ev({ on_time: '07:00' }, 'on', ['rosh_hashana_1', 'rosh_hashana_2'], ...SEP), ['2026-09-12 07:00', '2026-09-13 07:00']);
+  assert.deepEqual(ev({ off_time: '14:30' }, 'off', ['rosh_hashana_1', 'rosh_hashana_2'], ...SEP), ['2026-09-12 14:30', '2026-09-13 14:30']);
+});
+
+test('מוצאי is skipped when the next day is itself שבת/חג (a Shabbat light survives ר"ה that starts on Saturday)', () => {
+  // Sep 12 2026 is Shabbat AND ר"ה א׳ → its "מוצאי" flows into ר"ה ב׳: no OFF; Sep 5 and Sep 19 are plain
+  assert.deepEqual(ev({ off_anchor: 'tzeit', off_offset_min: 0 }, 'off', ['motzaei_shabbat'], ...SEP).map((x) => x.slice(0, 10)),
+    ['2026-09-05', '2026-09-19', '2026-09-26']);
+  // רה 5785 = Thu Oct 3 + Fri Oct 4 2024 → ג׳ תשרי is Shabbat: no מוצאי ר"ה that year
+  assert.deepEqual(ev({ off_time: '20:00' }, 'off', ['motzaei_rosh_hashana'], { y: 2024, mo: 10, d: 1 }, { y: 2024, mo: 10, d: 10 }), []);
+  // שבת + ר"ה א׳ on the same Saturday fire once
+  assert.deepEqual(ev({ on_time: '07:00' }, 'on', ['shabbat', 'rosh_hashana_1'], { y: 2026, mo: 9, d: 10 }, { y: 2026, mo: 9, d: 14 }), ['2026-09-12 07:00']);
+});
+
+test('resolveHolidaySchedule: each side gets its own next occurrence', () => {
+  const s = { repeat_type: 'holiday', holidays: ['shabbat'], on_time: '07:00', off_time: '23:00' };
+  resolveHolidaySchedule(s, { region: J, tz: TZ, now: new Date('2026-07-22T10:00:00Z') }); // Wed
+  assert.equal(s.on_date, '2026-07-25'); // Saturday morning
+  assert.equal(s.off_date, '2026-07-24'); // Friday night
   assert.equal(s.holidays, 'shabbat');
+  assert.equal(s.on_day_of_week, null);
 });
 
-test('resolveHolidaySchedule: after the OFF passes, rolls to the next block', () => {
-  const s = { repeat_type: 'holiday', holidays: ['shabbat'], on_time: '18:00', off_time: '23:00' };
-  // Sat 2026-07-25 23:30 local (20:30Z IDT) — past this week's OFF
-  resolveHolidaySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-25T20:30:00Z') });
-  assert.equal(s.on_date, '2026-07-31');
-  assert.equal(s.off_date, '2026-08-01');
+test('resolveHolidaySchedule: a passed side rolls forward on its own', () => {
+  const s = { repeat_type: 'holiday', holidays: ['shabbat'], on_time: '07:00', off_time: '23:00' };
+  // Sat 2026-07-25 14:00 local (11:00Z) — ON fired this morning, OFF (Friday) already passed too
+  resolveHolidaySchedule(s, { region: J, tz: TZ, now: new Date('2026-07-25T11:00:00Z') });
+  assert.equal(s.on_date, '2026-08-01');
+  assert.equal(s.off_date, '2026-07-31');
 });
 
-test('resolveHolidaySchedule: anchored ON resolves sunset−20 for the erev date', () => {
-  const s = {
-    repeat_type: 'holiday', holidays: ['shabbat'],
-    on_anchor: 'sunset', on_offset_min: -20, off_time: '23:00',
-  };
-  resolveHolidaySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-22T10:00:00Z') });
-  const sunset = anchorMinutes('sunset', { y: 2026, mo: 7, d: 24 }, 'jerusalem', TZ);
-  assert.equal(timeToMinutes(s.on_time), sunset - 20);
-  assert.equal(s.on_date, '2026-07-24');
+test('resolveHolidaySchedule: legacy two-sided ר"ה row (sunset−60 / sunset+72) resolves both sides on the same evening', () => {
+  const s = { repeat_type: 'holiday', holidays: 'rosh_hashana', on_anchor: 'sunset', on_offset_min: -60, off_anchor: 'sunset', off_offset_min: 72 };
+  resolveHolidaySchedule(s, { region: J, tz: TZ, now: new Date('2026-09-01T10:00:00Z') });
+  assert.equal(s.holidays, 'rosh_hashana_1,rosh_hashana_2');
+  assert.equal(s.on_date, '2026-09-11');
+  assert.equal(s.off_date, '2026-09-11');
+  const sunset = anchorMinutes('sunset', { y: 2026, mo: 9, d: 11 }, J, TZ);
+  assert.equal(timeToMinutes(s.on_time), sunset - 60);
+  assert.equal(timeToMinutes(s.off_time), sunset + 72);
 });
 
 test('resolveHolidaySchedule: empty holiday list rejected', () => {
@@ -133,24 +176,37 @@ test('resolveHolidaySchedule: empty holiday list rejected', () => {
   );
 });
 
-test('resolveHolidaySchedule: one-sided ON-only rolls on the ON event', () => {
-  const s = { repeat_type: 'holiday', holidays: ['shabbat'], on_time: '18:00' };
-  // Fri 2026-07-24 19:00 local — ON already fired → next week
-  resolveHolidaySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-24T16:00:00Z') });
-  assert.equal(s.on_date, '2026-07-31');
+test('resolveHolidaySchedule: one-sided ON-only has no OFF side', () => {
+  const s = { repeat_type: 'holiday', holidays: ['motzaei_shabbat'], on_time: '21:00' };
+  resolveHolidaySchedule(s, { region: J, tz: TZ, now: new Date('2026-07-24T16:00:00Z') });
+  assert.equal(s.on_date, '2026-07-25');
   assert.equal(s.off_date, null);
+  assert.equal(s.off_time, null);
 });
 
-test('freshHolidayFor: mid-block keeps the current block (Shabbat afternoon)', () => {
+test('freshHolidayFor: a side still ahead today keeps its date', () => {
   const row = {
-    repeat_type: 'holiday', holidays: 'shabbat', timezone: TZ, zmanim_region: 'jerusalem',
-    on_anchor: 'clock', on_offset_min: 0, on_time: '18:00', on_date: '2026-07-24',
-    off_anchor: 'clock', off_offset_min: 0, off_time: '23:00', off_date: '2026-07-25',
+    repeat_type: 'holiday', holidays: 'shabbat', timezone: TZ, zmanim_region: J,
+    on_anchor: 'clock', on_offset_min: 0, on_time: '18:00', on_date: '2026-07-25',
+    off_anchor: 'clock', off_offset_min: 0, off_time: null, off_date: null,
   };
-  // Sat 14:00 local — OFF still ahead, block must not roll
+  // Sat 14:00 local — the 18:00 (Saturday afternoon) ON is still ahead
   const fresh = freshHolidayFor(row, new Date('2026-07-25T11:00:00Z'));
-  assert.equal(fresh.on_date, '2026-07-24');
-  assert.equal(fresh.off_date, '2026-07-25');
+  assert.equal(fresh.on_date, '2026-07-25');
+  assert.equal(fresh.off_date, null);
+});
+
+test('inExclusionRange: excl_list ranges (yearly + once) count alongside the legacy fields', () => {
+  const row = { excl_list: JSON.stringify([
+    { type: 'yearly', calendar: 'greg', date: '2026-07-09', end_date: '2026-07-18' },
+    { type: 'once', calendar: 'greg', date: '2026-12-01', end_date: '2026-12-03' },
+  ]) };
+  assert.ok(inExclusionRange(row, '2026-07-10'));
+  assert.ok(inExclusionRange(row, '2027-07-10')); // yearly recurs
+  assert.ok(inExclusionRange(row, '2026-12-02'));
+  assert.ok(!inExclusionRange(row, '2027-12-02')); // once does not
+  assert.ok(!inExclusionRange(row, '2026-08-01'));
+  assert.ok(!inExclusionRange({ excl_list: 'not json' }, '2026-07-10'));
 });
 
 // ── yearly (anniversary) schedules ──

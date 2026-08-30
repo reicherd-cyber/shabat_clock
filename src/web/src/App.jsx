@@ -38,14 +38,19 @@ function ImpersonationGuard() {
     return () => registerMutationConfirm(null);
   }, []);
   const answer = (ok) => { pending?.resolve(ok); setPending(null); };
+  // Wrapped in its own stacking context ABOVE every other modal (z-50): the
+  // guard fires from inside open dialogs (plan/schedule editors) and must never
+  // sit behind them — an invisible confirm would look like a hung save.
   return (
-    <Modal open={!!pending} onClose={() => answer(false)} title="אישור פעולה — מצב התחזות">
-      <p className="text-sm mb-4">אתה פועל בחשבון של משתמש אחר. השינוי יחול על החשבון שלו — להמשיך?</p>
-      <div className="flex gap-2 justify-end">
-        <Button variant="ghost" onClick={() => answer(false)}>ביטול</Button>
-        <Button onClick={() => answer(true)}>אישור</Button>
-      </div>
-    </Modal>
+    <div className="relative z-[60]">
+      <Modal open={!!pending} onClose={() => answer(false)} title="אישור פעולה — מצב התחזות">
+        <p className="text-sm mb-4">אתה פועל בחשבון של משתמש אחר. השינוי יחול על החשבון שלו — להמשיך?</p>
+        <div className="flex gap-2 justify-end">
+          <Button variant="ghost" onClick={() => answer(false)}>ביטול</Button>
+          <Button onClick={() => answer(true)}>אישור</Button>
+        </div>
+      </Modal>
+    </div>
   );
 }
 

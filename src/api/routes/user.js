@@ -9,7 +9,7 @@ import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { patchDevice } from '../../services/devices.js';
 import { sendImmediateCommand } from '../../services/commands.js';
-import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
+import { createSchedule, updateSchedule, deleteSchedule, listSchedules, savePlan } from '../../services/schedules.js';
 import { getHistory } from '../../services/history.js';
 import { logAction, actorStr } from '../../services/audit.js';
 import { REGIONS } from '../../services/zmanim.js';
@@ -327,6 +327,31 @@ userRouter.post('/schedules', async (req, res, next) => {
     });
     await act(req, 'create', 'schedule', result.id, { after: b });
     res.status(201).json(result);
+  } catch (e) { next(e); }
+});
+
+// ── תוכניות: several channels × several single-action schedulers, saved as one
+// unit (create mints the plan_id; PUT rebuilds every member row atomically) ──
+const planArgs = (req, planId) => {
+  const b = req.body || {};
+  return {
+    userId: req.auth.userId, planId, actor: actorStr(actorOf(req)),
+    name: b.name ?? null, relayIds: b.relay_ids, schedulers: b.schedulers, exclusions: b.exclusions ?? null,
+  };
+};
+userRouter.post('/plans', async (req, res, next) => {
+  try {
+    const planId = `p${Date.now().toString(36)}${Math.floor(Math.random() * 1e9).toString(36)}`;
+    const r = await savePlan(planArgs(req, planId));
+    await act(req, 'create', 'schedule', r.ids[0] ?? null, { plan_id: planId, after: req.body });
+    res.status(201).json(r);
+  } catch (e) { next(e); }
+});
+userRouter.put('/plans/:planId', async (req, res, next) => {
+  try {
+    const r = await savePlan(planArgs(req, String(req.params.planId)));
+    await act(req, 'update', 'schedule', r.ids[0] ?? null, { plan_id: r.plan_id, after: req.body });
+    res.json(r);
   } catch (e) { next(e); }
 });
 
