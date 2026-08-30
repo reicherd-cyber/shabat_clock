@@ -3,7 +3,7 @@ import { api } from '../api.js';
 import { Button, Input, TimeInput, Select, Modal, ErrorNote, useAsync, DAY_NAMES } from '../ui.jsx';
 import { Plus, CalendarOff, Pencil, Trash2, ArrowRight, Save } from 'lucide-react';
 import {
-  ANCHOR_NAMES, anchorText, HEB_DAYS, HEB_MONTHS, hebMonthLabel, hebOf, todayYmd, nowHm, fmtDate,
+  ANCHOR_NAMES, anchorText, HEB_DAYS, HEB_MONTHS, hebMonthLabel, hebOf, todayYmd, fmtDate,
   RelayMultiSelect, REGION_NAMES, HolidayDaysGrid, holidaySummary, DAY_HOLIDAY_KEYS,
 } from './ScheduleForm.jsx';
 
@@ -18,12 +18,14 @@ const uid = () => `u${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).
 
 export const emptyPlan = { plan_id: null, name: '', relay_ids: [], schedulers: [], exclusions: [], member_ids: [] };
 
+// A new scheduler starts BLANK (user decision): no type, no action, no days,
+// no time — every choice is the user's; the form validates before adding.
 const newScheduler = () => ({
-  uid: uid(), action: 'on', repeat_type: 'weekly',
-  days: [6], daily: false,
-  holidays: [...DAY_HOLIDAY_KEYS],
-  kind: 'clock', time: '18:00', offset: 20, dir: 'before',
-  calendar: 'greg', date: todayYmd(), heb_day: 1, heb_month: 7,
+  uid: uid(), action: null, repeat_type: null,
+  days: [], daily: false,
+  holidays: [],
+  kind: 'clock', time: '', offset: '', dir: 'before',
+  calendar: 'greg', date: '', heb_day: 1, heb_month: 7,
 });
 const newExclusion = () => ({
   uid: uid(), yearly: true, calendar: 'heb',
@@ -202,32 +204,36 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
   const anchored = s.kind !== 'clock';
   const setType = (v) => {
     const patch = { repeat_type: v };
-    if (v === 'holiday' && s.kind === 'clock') Object.assign(patch, { kind: 'sunset', dir: 'before', offset: 20 });
-    if (v === 'once') Object.assign(patch, { date: s.date || todayYmd(), time: s.time || nowHm() });
-    if (v === 'yearly' && s.calendar === 'heb') {
-      hebOf(s.date || todayYmd()).then((h) => setDraft((d) => (d ? { ...d, ...h } : d))).catch(() => {});
+    // switching to a Hebrew date keeps the civil date the user already typed, converted
+    if (v === 'yearly' && s.calendar === 'heb' && s.date) {
+      hebOf(s.date).then((h) => setDraft((d) => (d ? { ...d, ...h } : d))).catch(() => {});
     }
     set(patch);
   };
   const setCalendar = (v) => {
-    set({ calendar: v, date: s.date || todayYmd() });
-    if (v === 'heb') hebOf(s.date || todayYmd()).then((h) => setDraft((d) => (d ? { ...d, ...h } : d))).catch(() => {});
+    set({ calendar: v });
+    if (v === 'heb' && s.date) hebOf(s.date).then((h) => setDraft((d) => (d ? { ...d, ...h } : d))).catch(() => {});
   };
-  const invalid = (s.repeat_type === 'weekly' && !s.daily && !s.days.length)
+  const invalid = !s.repeat_type || !s.action
+    || (s.repeat_type === 'weekly' && !s.daily && !s.days.length)
     || (s.repeat_type === 'holiday' && !s.holidays.length)
     || ((s.repeat_type === 'once' || s.repeat_type === 'yearly') && s.calendar === 'greg' && !s.date)
-    || (!anchored && !s.time);
+    || (!anchored && !s.time)
+    || (anchored && (s.offset === '' || Number.isNaN(Number(s.offset))));
   return (
     <div className="space-y-3">
-      <div className="flex gap-2 items-center flex-wrap">
-        {TYPES.map((t) => (
-          <Button key={t.v} variant={s.repeat_type === t.v ? 'primary' : 'ghost'} onClick={() => setType(t.v)}>{t.label}</Button>
-        ))}
-        {s.repeat_type === 'weekly' && (
-          <label className="flex items-center gap-1 text-sm mr-2">
-            <input type="checkbox" checked={s.daily} onChange={(e) => set({ daily: e.target.checked })} /> כל יום
-          </label>
-        )}
+      <div className="space-y-1">
+        {!s.repeat_type && <span className="text-sm text-muted">מתי? בחרו סוג תזמון</span>}
+        <div className="flex gap-2 items-center flex-wrap">
+          {TYPES.map((t) => (
+            <Button key={t.v} variant={s.repeat_type === t.v ? 'primary' : 'ghost'} onClick={() => setType(t.v)}>{t.label}</Button>
+          ))}
+          {s.repeat_type === 'weekly' && (
+            <label className="flex items-center gap-1 text-sm mr-2">
+              <input type="checkbox" checked={s.daily} onChange={(e) => set({ daily: e.target.checked })} /> כל יום
+            </label>
+          )}
+        </div>
       </div>
 
       {/* days */}
@@ -270,20 +276,25 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
         </div>
       )}
 
-      {/* the single action */}
-      <div className="flex gap-1.5">
-        <Button variant={s.action === 'on' ? 'primary' : 'ghost'} className="!px-3 !py-1 text-sm" onClick={() => set({ action: 'on' })}>הדלקה</Button>
-        <Button variant={s.action === 'off' ? 'primary' : 'ghost'} className="!px-3 !py-1 text-sm" onClick={() => set({ action: 'off' })}>כיבוי</Button>
-      </div>
-      <div className="space-y-2">
-        <span className={`text-sm font-medium ${s.action === 'on' ? 'text-on' : 'text-off'}`}>{s.action === 'on' ? 'הדלקה' : 'כיבוי'}</span>
+      {/* the single action — shown once a type is chosen */}
+      {s.repeat_type && (<>
+        <div className="space-y-1">
+          {!s.action && <span className="text-sm text-muted">מה לעשות?</span>}
+          <div className="flex gap-1.5">
+            <Button variant={s.action === 'on' ? 'primary' : 'ghost'} className="!px-3 !py-1 text-sm" onClick={() => set({ action: 'on' })}>הדלקה</Button>
+            <Button variant={s.action === 'off' ? 'primary' : 'ghost'} className="!px-3 !py-1 text-sm" onClick={() => set({ action: 'off' })}>כיבוי</Button>
+          </div>
+        </div>
+      </>)}
+      {s.repeat_type && s.action && (<div className="space-y-2">
+        <span className={`text-sm font-medium ${s.action === 'on' ? 'text-on' : 'text-off'}`}>{s.action === 'on' ? 'הדלקה' : 'כיבוי'} — באיזו שעה?</span>
         <Select className="w-full" value={s.kind} onChange={(e) => set({ kind: e.target.value })}>
           <option value="clock">שעה קבועה</option>
           {Object.entries(ANCHOR_NAMES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
         </Select>
         {anchored ? (
           <div className="flex gap-1.5 items-center">
-            <Input type="number" min="0" max="240" className="w-16 text-center" value={s.offset}
+            <Input type="number" min="0" max="240" className="w-16 text-center" placeholder="דק׳" value={s.offset}
               onChange={(e) => set({ offset: e.target.value })} />
             <Select className="flex-1" value={s.dir} onChange={(e) => set({ dir: e.target.value })}>
               <option value="before">דק׳ לפני</option>
@@ -300,8 +311,8 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
               : 'שעה קבועה על "יום": בוקר וצהריים = היום עצמו, שעת ערב = הלילה שבו הוא נכנס (23:00 בשבת = ליל שבת).'}
           </p>
         )}
-      </div>
-      {anchored && (
+      </div>)}
+      {s.action && anchored && (
         <label className="block">
           <span className="text-sm text-muted">אזור לחישוב הזמנים</span>
           <Select className="w-full" value={region} onChange={(e) => setRegion(e.target.value)}>
