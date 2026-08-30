@@ -148,10 +148,18 @@ function HebPick({ day, month, onChange }) {
 
 // "יפעל בפעם הבאה" — the server runs the real resolvers on the draft (debounced)
 // and answers with the next few concrete events, exclusions included.
+// "יום ראשון, ב׳ תשרי תשפ״ז (13.9.2026) 15:52" — Hebrew date first, civil in parentheses.
 const fmtWhen = (e) => {
   const d = new Date(`${e.date}T${e.time}:00`);
-  const day = d.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric', year: 'numeric' });
-  return `${day} ${e.time}`;
+  const weekday = d.toLocaleDateString('he-IL', { weekday: 'long' });
+  const civil = d.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: 'numeric' });
+  return `${weekday}, ${e.heb ? `${e.heb} (${civil})` : civil} ${e.time}`;
+};
+// Stamp each event with its Hebrew date (calendar engine lazy-loaded, shared with the לוח chunk).
+const withHebrew = async (events) => {
+  const { HDate } = await import('@hebcal/core');
+  const strip = (t) => t.replace(/[֑-ׇ]/g, ''); // no nikud in the month name
+  return events.map((e) => (e.date ? { ...e, heb: strip(new HDate(new Date(`${e.date}T12:00:00`)).renderGematriya()) } : e));
 };
 function NextPreview({ draft, exclusions, region, relayId, invalid }) {
   const [state, setState] = useState({ events: null, error: null, loading: false });
@@ -162,7 +170,8 @@ function NextPreview({ draft, exclusions, region, relayId, invalid }) {
     const t = setTimeout(() => {
       const q = { scheduler: schedulerToApi(draft), exclusions: exclusions.map(exclusionToApi), region, relay_id: relayId || null };
       api.get(`/schedules/preview?q=${encodeURIComponent(JSON.stringify(q))}`)
-        .then((r) => { if (live) setState({ events: r.events, error: null, loading: false }); })
+        .then((r) => withHebrew(r.events).catch(() => r.events))
+        .then((events) => { if (live) setState({ events, error: null, loading: false }); })
         .catch((e) => {
           if (!live) return;
           const msg = /in the past/i.test(e.message) ? 'התאריך והשעה כבר עברו' : e.message;
@@ -201,7 +210,9 @@ function NextPreview({ draft, exclusions, region, relayId, invalid }) {
 }
 
 // ── scheduler sub-form: one action, one time, its own type and days ──
-function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel, isNew, exclusions, relayId }) {
+// `others` = the schedulers already in the plan (summarised on top, each
+// editable from here); `onEditOther` swaps the form to one of them.
+function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel, isNew, exclusions, relayId, others = [], onEditOther }) {
   const s = draft;
   const set = (patch) => setDraft({ ...s, ...patch });
   const anchored = s.kind !== 'clock';
@@ -223,8 +234,27 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
     || ((s.repeat_type === 'once' || s.repeat_type === 'yearly') && s.calendar === 'greg' && !s.date)
     || (!anchored && !s.time)
     || (anchored && (s.offset === '' || Number.isNaN(Number(s.offset))));
+  const previous = others.filter((o) => o.uid !== s.uid);
   return (
     <div className="space-y-3">
+      {/* what the plan already holds — a glance back, with a way to fix any of them */}
+      {previous.length > 0 && (
+        <div className="space-y-1">
+          <span className="text-xs text-muted">כבר בתוכנית ({previous.length})</span>
+          <div className="space-y-1">
+            {previous.map((o, i) => (
+              <div key={o.uid} className="flex items-center gap-2 border border-line rounded-xl px-2.5 py-1.5">
+                <span className="text-xs text-muted w-4 shrink-0">{i + 1}</span>
+                <span className={`pill ${o.action === 'on' ? 'on-p' : 'off-p'} flex-1 min-w-0 truncate !text-[12.5px]`}>{schedulerSummary(o)}</span>
+                <button className="text-muted hover:text-ink cursor-pointer" title="עריכת תזמון זה" onClick={() => onEditOther(o, !invalid)}>
+                  <Pencil size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="border-t border-line pt-2 text-sm font-medium">{isNew ? 'תזמון נוסף' : 'עריכת תזמון'}</div>
+        </div>
+      )}
       <div className="space-y-1">
         {!s.repeat_type && <span className="text-sm text-muted">מתי? בחרו סוג תזמון</span>}
         <div className="flex gap-2 items-center flex-wrap">
@@ -404,12 +434,20 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
 
   const openScheduler = (s) => { setDraft(s ? { ...s } : newScheduler()); setDraftIsNew(!s); setView('scheduler'); };
   const openExclusion = (x) => { setDraft(x ? { ...x } : newExclusion()); setDraftIsNew(!x); setView('exclusion'); };
+  const upsert = (list, item) => (list.some((i) => i.uid === item.uid) ? list.map((i) => (i.uid === item.uid ? item : i)) : [...list, item]);
   const confirmDraft = (listKey) => {
-    const list = plan[listKey];
-    const next = list.some((i) => i.uid === draft.uid) ? list.map((i) => (i.uid === draft.uid ? draft : i)) : [...list, draft];
-    setPlan({ ...plan, [listKey]: next });
+    setPlan({ ...plan, [listKey]: upsert(plan[listKey], draft) });
     setDraft(null);
     setView('plan');
+  };
+  // Jump from the scheduler form to one of the plan's earlier schedulers: a
+  // complete draft is kept (added/updated first), an incomplete one is dropped.
+  const editOtherScheduler = (other, draftComplete) => {
+    const schedulers = draftComplete ? upsert(plan.schedulers, draft) : plan.schedulers;
+    setPlan({ ...plan, schedulers });
+    setDraft({ ...other });
+    setDraftIsNew(false);
+    setView('scheduler');
   };
   const removeItem = (listKey, id) => setPlan({ ...plan, [listKey]: plan[listKey].filter((i) => i.uid !== id) });
 
@@ -438,6 +476,7 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
       {view === 'scheduler' && draft && (
         <SchedulerForm draft={draft} setDraft={setDraft} region={region} setRegion={setRegion} isNew={draftIsNew}
           exclusions={plan.exclusions} relayId={plan.relay_ids[0] ? Number(plan.relay_ids[0]) : null}
+          others={plan.schedulers} onEditOther={editOtherScheduler}
           onConfirm={() => confirmDraft('schedulers')} onCancel={() => { setDraft(null); setView('plan'); }} />
       )}
       {view === 'exclusion' && draft && (
