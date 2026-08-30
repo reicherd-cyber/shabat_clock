@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot } from '../ui.jsx';
 import { UserRound, House } from 'lucide-react';
+import { ProviderBalances } from './ProviderBalances.jsx';
 
 // `to` makes the tile a clickable drill-down into the underlying data.
 const Stat = ({ label, value, ok, to }) => {
@@ -164,6 +165,8 @@ export function Monitoring() {
         <Stat label="כשלי זיהוי (24ש)" value={m.auth_failures_24h} ok={m.auth_failures_24h < 5} to="/admin/call-logs" />
         <Stat label="ברוקר MQTT" value={m.broker_ok ? 'תקין' : 'מנותק'} ok={m.broker_ok} />
       </div>
+      {/* provider balances (Yemot units, Anthropic credit) — moved here from עלויות קול */}
+      <ProviderBalances />
       <HealthSection h={m.health} />
       {m.sync_errors.length > 0 && (
         <Card>
