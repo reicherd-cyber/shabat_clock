@@ -478,10 +478,10 @@ export default function Calendar() {
     if (cur) {
       segs.push({ ...cur, endMin: 1440, cont: cur.cont === 'up' ? 'both' : 'down', label: cur.from ? `הדלקה ${cur.from}` : 'דולק כל היום' });
     }
-    // Carried-in blocks (no הדלקה on this day): keep the real continuations —
-    // שבת/חג daytime that runs on until its כיבוי in the evening — but drop the
-    // pre-dawn orphans (overnight tails ending before 06:00, like 00:00–00:59).
-    return segs.filter((s) => s.from || s.endMin > 360)
+    // Carried-in blocks (no הדלקה on this day) are shown in full, including an
+    // overnight tail like 00:00–01:00: the channel really is on then (user
+    // report 2026-08-30 — the old "pre-dawn orphan" filter hid exactly that).
+    return segs
       .map((s) => ({ ...s, lane: 0, lanes: 1, relay_id: relay.id, relay_name: relay.name, device_name: relay.device }));
   };
 
