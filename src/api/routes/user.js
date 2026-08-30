@@ -127,7 +127,7 @@ async function requirePin(userId, pin) {
 
 // Step 1 of adding a number: nothing is saved yet — we only place the OTP call.
 // The row is created in verify-new below, AFTER the code proves control.
-userRouter.post('/me/phones', async (req, res, next) => {
+userRouter.post('/me/phones', phoneAddLimiter, async (req, res, next) => {
   try {
     await requirePin(req.auth.userId, req.body?.pin);
     const phone = normalizePhone(req.body?.phone);
