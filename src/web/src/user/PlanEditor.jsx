@@ -144,8 +144,59 @@ function HebPick({ day, month, onChange }) {
   );
 }
 
+// "יפעל בפעם הבאה" — the server runs the real resolvers on the draft (debounced)
+// and answers with the next few concrete events, exclusions included.
+const fmtWhen = (e) => {
+  const d = new Date(`${e.date}T${e.time}:00`);
+  const day = d.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric', year: 'numeric' });
+  return `${day} ${e.time}`;
+};
+function NextPreview({ draft, exclusions, region, relayId, invalid }) {
+  const [state, setState] = useState({ events: null, error: null, loading: false });
+  useEffect(() => {
+    if (invalid) { setState({ events: null, error: null, loading: false }); return undefined; }
+    let live = true;
+    setState((st) => ({ ...st, loading: true }));
+    const t = setTimeout(() => {
+      const q = { scheduler: schedulerToApi(draft), exclusions: exclusions.map(exclusionToApi), region, relay_id: relayId || null };
+      api.get(`/schedules/preview?q=${encodeURIComponent(JSON.stringify(q))}`)
+        .then((r) => { if (live) setState({ events: r.events, error: null, loading: false }); })
+        .catch((e) => {
+          if (!live) return;
+          const msg = /in the past/i.test(e.message) ? 'התאריך והשעה כבר עברו' : e.message;
+          setState({ events: null, error: msg, loading: false });
+        });
+    }, 350);
+    return () => { live = false; clearTimeout(t); };
+  }, [JSON.stringify(draft), JSON.stringify(exclusions), region, relayId, invalid]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (invalid) return null;
+  const act = draft.action === 'on' ? 'הדלקה' : 'כיבוי';
+  return (
+    <div className={`rounded-xl px-3 py-2 text-sm border ${state.error ? 'border-[#e11d48]/40 bg-[#FDE8E8]' : 'border-line bg-surface2/60'}`}>
+      {state.error ? (
+        <span className="text-[#B42318]">לא יפעל: {state.error}</span>
+      ) : state.events == null ? (
+        <span className="text-muted">מחשב מתי יפעל…</span>
+      ) : state.events.length === 0 ? (
+        <span className="text-muted">אין מועד קרוב שבו התזמון יפעל (בדקו את הימים וההחרגות).</span>
+      ) : (
+        <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-muted">{act} בפעם הבאה:</span>
+            <b className={draft.action === 'on' ? 'text-on' : 'text-off'}>{fmtWhen(state.events[0])}</b>
+            {state.loading && <span className="text-muted text-xs">מעדכן…</span>}
+          </div>
+          {state.events.length > 1 && (
+            <div className="text-xs text-muted mt-0.5">אחר כך: {state.events.slice(1).map(fmtWhen).join(' · ')}</div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── scheduler sub-form: one action, one time, its own type and days ──
-function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel, isNew }) {
+function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel, isNew, exclusions, relayId }) {
   const s = draft;
   const set = (patch) => setDraft({ ...s, ...patch });
   const anchored = s.kind !== 'clock';
@@ -258,6 +309,7 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
           </Select>
         </label>
       )}
+      <NextPreview draft={s} exclusions={exclusions} region={region} relayId={relayId} invalid={invalid} />
       <div className="grid grid-cols-2 gap-2 pt-1">
         <Button disabled={invalid} onClick={onConfirm}>
           <span className="inline-flex items-center gap-1.5">{isNew ? <Plus size={15} /> : <Pencil size={14} />}{isNew ? 'הוסף לתוכנית' : 'עדכן תזמון'}</span>
@@ -371,6 +423,7 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
     <Modal open={!!plan} onClose={onClose} title={title}>
       {view === 'scheduler' && draft && (
         <SchedulerForm draft={draft} setDraft={setDraft} region={region} setRegion={setRegion} isNew={draftIsNew}
+          exclusions={plan.exclusions} relayId={plan.relay_ids[0] ? Number(plan.relay_ids[0]) : null}
           onConfirm={() => confirmDraft('schedulers')} onCancel={() => { setDraft(null); setView('plan'); }} />
       )}
       {view === 'exclusion' && draft && (

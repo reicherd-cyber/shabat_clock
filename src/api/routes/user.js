@@ -9,7 +9,7 @@ import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { patchDevice } from '../../services/devices.js';
 import { sendImmediateCommand } from '../../services/commands.js';
-import { createSchedule, updateSchedule, deleteSchedule, listSchedules, savePlan } from '../../services/schedules.js';
+import { createSchedule, updateSchedule, deleteSchedule, listSchedules, savePlan, previewScheduler } from '../../services/schedules.js';
 import { getHistory } from '../../services/history.js';
 import { logAction, actorStr } from '../../services/audit.js';
 import { REGIONS } from '../../services/zmanim.js';
@@ -299,6 +299,22 @@ userRouter.get('/schedules/calendar', async (req, res, next) => {
     const from = m ? { y: +m[1], mo: +m[2], d: +m[3] } : { y: p.y, mo: p.mo, d: p.d };
     const days = Math.min(Math.max(Number(req.query.days) || 42, 1), 92);
     res.json({ from, days, events: await calendarEvents({ userId: req.auth.userId, from, days }) });
+  } catch (e) { next(e); }
+});
+
+// Editor hint: the next events a scheduler WOULD fire (nothing saved). GET with
+// the scheduler as a JSON query param — read-only, so the impersonation guard
+// (which wraps every POST/PATCH) doesn't prompt on every keystroke.
+userRouter.get('/schedules/preview', async (req, res, next) => {
+  try {
+    let q;
+    try { q = JSON.parse(String(req.query.q || '{}')); } catch { throw errors.validation('bad preview query', { q: 'JSON' }); }
+    res.json({
+      events: await previewScheduler({
+        userId: req.auth.userId, scheduler: q.scheduler || {}, exclusions: q.exclusions ?? null,
+        region: q.region ? String(q.region) : null, relayId: q.relay_id ? Number(q.relay_id) : null,
+      }),
+    });
   } catch (e) { next(e); }
 });
 

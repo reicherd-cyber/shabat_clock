@@ -415,6 +415,38 @@ function schedulerRows(sch, exclusions) {
   return days.map((d) => ({ ...base, [`${side}_day_of_week`]: d }));
 }
 
+// Preview for the editor's "יפעל בפעם הבאה" hint: the next few concrete events
+// one single-action scheduler would fire, run through the SAME resolvers and
+// calendar expansion as a real save (exclusions included). Pure — nothing is
+// written; validation errors (e.g. a past one-time date) surface as-is.
+export async function previewScheduler({ userId, scheduler, exclusions, region, relayId, count = 3 }) {
+  let tz = 'Asia/Jerusalem';
+  if (relayId) {
+    const [r] = await query(
+      'SELECT d.timezone FROM relays r JOIN devices d ON d.id = r.device_id WHERE r.id = ? AND r.user_id = ?',
+      [Number(relayId), userId],
+    );
+    if (r?.timezone) tz = r.timezone;
+  }
+  const zr = region || (await query('SELECT zmanim_region FROM users WHERE id = ?', [userId]))[0]?.zmanim_region || DEFAULT_REGION;
+  const { expandSchedules } = await import('./calendar.js');
+  const p = localParts(new Date(), tz);
+  const from = { y: p.y, mo: p.mo, d: p.d };
+  const nowKey = `${from.y}-${String(from.mo).padStart(2, '0')}-${String(from.d).padStart(2, '0')}T${String(p.hh).padStart(2, '0')}:${String(p.mm).padStart(2, '0')}`;
+  const rows = [];
+  for (const fields of schedulerRows(scheduler, exclusions)) {
+    normalizeExclusionFields(fields, { tz });
+    normalizeExclusionList(fields, { tz });
+    resolveSchedule(fields, { region: zr, tz });
+    const s = validateScheduleRules(fields, { tz });
+    rows.push({ ...s, id: rows.length + 1, relay_id: 0, relay_name: '', device_id: 0, device_name: '', timezone: tz, zmanim_region: zr });
+  }
+  return expandSchedules(rows, { from, days: 400 })
+    .filter((e) => `${e.date}T${e.time}` > nowKey)
+    .slice(0, count)
+    .map((e) => ({ date: e.date, time: e.time, action: e.action }));
+}
+
 // תוכנית save — ONE transaction: the plan's existing member rows are soft-deleted
 // [D37] and every (channel × scheduler × weekly day) combination is inserted
 // fresh, all sharing plan_id, the plan name and its exclusion list. The devices
