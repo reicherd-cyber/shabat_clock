@@ -21,11 +21,12 @@ import VoiceCosts from './admin/VoiceCosts.jsx';
 import Finance from './admin/Finance.jsx';
 import { SupportInbox } from './admin/Support.jsx';
 import { Crm } from './admin/Crm.jsx';
+import { Tasks } from './admin/Tasks.jsx';
 import { Logo, Wordmark, useInterval, Modal, Button } from './ui.jsx';
 import {
   LayoutGrid, CalendarClock, CalendarDays, History as HistoryIcon, Settings as SettingsIcon,
   Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
-  ShieldCheck, ScrollText, ChevronDown, AudioLines, LifeBuoy, Inbox, Handshake,
+  ShieldCheck, ScrollText, ChevronDown, AudioLines, LifeBuoy, Inbox, Handshake, ListChecks,
 } from 'lucide-react';
 
 // While impersonating, api.js blocks every mutation until this modal approves it
@@ -160,6 +161,7 @@ const ADMIN_NAV = [
     title: 'ניהול',
     items: [
       { to: '/admin/crm', label: 'מכירות ולידים', Icon: Handshake },
+      { to: '/admin/tasks', label: 'משימות', Icon: ListChecks, badge: 'tasks' },
       { to: '/admin/users', label: 'משתמשים', Icon: UsersIcon },
       { to: '/admin/devices', label: 'מכשירים', Icon: Plug },
       { to: '/admin/schedules', label: 'תזמונים', Icon: CalendarClock },
@@ -261,13 +263,20 @@ function AdminLayout() {
   // מונה פניות חדשות ל"כדור" בתפריט: נטען מיד, מתרענן כל דקה, ומיידית כשעמוד
   // הפניות משנה סטטוס (אירוע support-count-changed).
   const [supportCount, setSupportCount] = useState(0);
+  const [taskCount, setTaskCount] = useState(0); // open tasks due today/overdue
   const fetchCount = () => {
-    if (tokens.admin) adminApi.get('/support/count').then((r) => setSupportCount(r.new)).catch(() => {});
+    if (!tokens.admin) return;
+    adminApi.get('/support/count').then((r) => setSupportCount(r.new)).catch(() => {});
+    adminApi.get('/tasks/count').then((r) => setTaskCount(r.due)).catch(() => {});
   };
   useEffect(() => {
     fetchCount();
     window.addEventListener('support-count-changed', fetchCount);
-    return () => window.removeEventListener('support-count-changed', fetchCount);
+    window.addEventListener('task-count-changed', fetchCount);
+    return () => {
+      window.removeEventListener('support-count-changed', fetchCount);
+      window.removeEventListener('task-count-changed', fetchCount);
+    };
   }, []);
   useInterval(fetchCount, 60000);
 
@@ -295,7 +304,7 @@ function AdminLayout() {
           title={collapsed ? 'הרחב תפריט' : 'צמצם תפריט'}
           onClick={toggleCollapsed}
         >{collapsed ? '«' : '»'}</button>
-        {!collapsed && <AdminNav badges={{ support: supportCount }} />}
+        {!collapsed && <AdminNav badges={{ support: supportCount, tasks: taskCount }} />}
         {!collapsed && (
           <div className="mt-auto space-y-2">
             <button className="block w-full text-right px-3 py-1.5 text-sm text-muted cursor-pointer hover:text-ink" onClick={logout}>יציאה</button>
@@ -317,7 +326,7 @@ function AdminLayout() {
           <div className="absolute top-0 bottom-0 right-0 w-64 bg-surface shadow-xl px-3 py-4 flex flex-col gap-5 overflow-y-auto"
             onClick={(e) => e.stopPropagation()}>
             {brand}
-            <AdminNav onNavigate={() => setMenuOpen(false)} badges={{ support: supportCount }} />
+            <AdminNav onNavigate={() => setMenuOpen(false)} badges={{ support: supportCount, tasks: taskCount }} />
             <button className="mt-auto block w-full text-right px-3 py-1.5 text-sm text-muted cursor-pointer" onClick={logout}>יציאה</button>
           </div>
         </div>
@@ -350,6 +359,7 @@ export default function App() {
           <Route index element={<Monitoring />} />
           <Route path="support" element={<SupportInbox />} />
           <Route path="crm" element={<Crm />} />
+          <Route path="tasks" element={<Tasks />} />
           <Route path="users" element={<Users />} />
           <Route path="devices" element={<Devices />} />
           <Route path="schedules" element={<AdminSchedules />} />

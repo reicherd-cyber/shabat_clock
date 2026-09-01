@@ -924,6 +924,108 @@ adminRouter.post('/support/:id/replies', requireWrite, async (req, res, next) =>
   } catch (e) { next(e); }
 });
 
+// ── משימות: admin to-do / follow-ups ──
+// A shared task board for the team. Reads open to any admin (incl. support);
+// writes are requireWrite. Soft-delete + stamped. The nav badge counts OPEN
+// tasks due today or overdue — what needs attention now.
+
+const TASK_STATUSES = ['open', 'in_progress', 'done'];
+const TASK_PRIORITIES = ['low', 'normal', 'high'];
+const TASK_FIELDS = ['title', 'notes', 'status', 'priority', 'due_date', 'assignee_id', 'user_id'];
+
+const taskBody = (b) => {
+  const out = {};
+  for (const f of TASK_FIELDS) {
+    if (b?.[f] === undefined) continue;
+    out[f] = b[f] === '' ? null : b[f];
+  }
+  if (out.status && !TASK_STATUSES.includes(out.status)) throw errors.validation('unknown status', { status: TASK_STATUSES.join('|') });
+  if (out.priority && !TASK_PRIORITIES.includes(out.priority)) throw errors.validation('unknown priority', { priority: TASK_PRIORITIES.join('|') });
+  if (out.assignee_id != null) out.assignee_id = Number(out.assignee_id) || null;
+  if (out.user_id != null) out.user_id = Number(out.user_id) || null;
+  return out;
+};
+
+// Light badge count — open (not done) tasks whose due date is today or past.
+adminRouter.get('/tasks/count', async (req, res, next) => {
+  try {
+    const [row] = await query(
+      "SELECT COUNT(*) AS n FROM admin_tasks WHERE deleted_at IS NULL AND status <> 'done' AND due_date IS NOT NULL AND due_date <= CURDATE()",
+    );
+    res.json({ due: row.n });
+  } catch (e) { next(e); }
+});
+
+adminRouter.get('/tasks', async (req, res, next) => {
+  try {
+    const cond = ['t.deleted_at IS NULL'];
+    const params = [];
+    if (req.query.archived === '1') cond[0] = 't.deleted_at IS NOT NULL';
+    if (req.query.status && TASK_STATUSES.includes(req.query.status)) { cond.push('t.status = ?'); params.push(req.query.status); }
+    if (req.query.priority && TASK_PRIORITIES.includes(req.query.priority)) { cond.push('t.priority = ?'); params.push(req.query.priority); }
+    if (req.query.assignee) {
+      if (req.query.assignee === 'none') cond.push('t.assignee_id IS NULL');
+      else { cond.push('t.assignee_id = ?'); params.push(Number(req.query.assignee)); }
+    }
+    if (req.query.due === 'overdue') cond.push("t.status <> 'done' AND t.due_date IS NOT NULL AND t.due_date <= CURDATE()");
+    if (req.query.q) {
+      cond.push('(t.title LIKE ? OR t.notes LIKE ?)');
+      const like = `%${String(req.query.q)}%`;
+      params.push(like, like);
+    }
+    // Open first, then by due date (nulls last), then newest.
+    const rows = await query(
+      `SELECT t.*, a.name AS assignee_name, u.full_name AS user_name
+         FROM admin_tasks t
+         LEFT JOIN admins a ON a.id = t.assignee_id
+         LEFT JOIN users u ON u.id = t.user_id
+        WHERE ${cond.join(' AND ')}
+        ORDER BY (t.status = 'done'), (t.due_date IS NULL), t.due_date, t.id DESC
+        LIMIT 500`,
+      params,
+    );
+    const counts = await query(
+      "SELECT status, COUNT(*) AS n FROM admin_tasks WHERE deleted_at IS NULL GROUP BY status",
+    );
+    const assignees = await query("SELECT id, name FROM admins WHERE is_active = TRUE ORDER BY name");
+    res.json({ rows, counts: Object.fromEntries(counts.map((c) => [c.status, c.n])), assignees });
+  } catch (e) { next(e); }
+});
+
+adminRouter.post('/tasks', requireWrite, async (req, res, next) => {
+  try {
+    const f = taskBody(req.body);
+    if (!f.title || String(f.title).trim().length < 2) throw errors.validation('title required', { title: '2+ chars' });
+    f.created_by = adminActor(req);
+    if (f.status === 'done') f.done_at = new Date();
+    const r = await query(
+      `INSERT INTO admin_tasks (${Object.keys(f).join(',')}) VALUES (${Object.keys(f).map(() => '?').join(',')})`,
+      Object.values(f),
+    );
+    audit(req, 'task_create', 'admin_task', r.insertId, { after: { title: f.title } });
+    res.status(201).json({ id: r.insertId });
+  } catch (e) { next(e); }
+});
+
+adminRouter.patch('/tasks/:id', requireWrite, async (req, res, next) => {
+  try {
+    const f = taskBody(req.body);
+    if (req.body?.deleted !== undefined) f.deleted_at = req.body.deleted ? new Date() : null; // soft archive / restore
+    // done_at follows the status transition so "how long open" stays truthful.
+    if (f.status !== undefined) f.done_at = f.status === 'done' ? new Date() : null;
+    if (!Object.keys(f).length) throw errors.validation('nothing to update');
+    f.updated_at = new Date();
+    f.updated_by = adminActor(req);
+    const r = await query(
+      `UPDATE admin_tasks SET ${Object.keys(f).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+      [...Object.values(f), Number(req.params.id)],
+    );
+    if (!r.affectedRows) throw errors.notFound();
+    audit(req, 'task_update', 'admin_task', Number(req.params.id), { after: req.body });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 // ── CRM: לידים, הזמנות ותשלומים (admin-only sales pipeline) ──
 
 const CRM_STATUSES = ['new', 'interested', 'not_interested', 'customer'];
