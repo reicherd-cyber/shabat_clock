@@ -44,7 +44,10 @@ export function ask(spec, { min = 1, max = 1, message = null } = {}) {
 // utterance (up to maxSeconds, ended by maxSilence of quiet — or instantly with the
 // standard Yemot #, which needs DTMF unblocked, hence the empty 5th position) and
 // transcribes that, so long/compound orders survive.
-export function askVoice(spec, { varName = 'nlu', lang = 'he-IL', message = null, maxSilence = 2, maxSeconds = 30 } = {}) {
+// maxSilence trimmed 2s → 1.5s (2026-09-02) to cut the dead air after the caller
+// stops talking — the biggest in-our-control delay in a voice order. Still
+// tolerant of a short breath mid-sentence; # ends the recording instantly.
+export function askVoice(spec, { varName = 'nlu', lang = 'he-IL', message = null, maxSilence = 1.5, maxSeconds = 30 } = {}) {
   const parts = [];
   if (message) parts.push(`id_list_message=${data(message)}`);
   parts.push(`read=${data(spec)}=${varName},,voice,${lang},,,record,${maxSilence},${maxSeconds}`);

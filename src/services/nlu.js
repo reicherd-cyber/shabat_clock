@@ -123,15 +123,19 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
   // few hundred chars, so the guard only needs to stop runaway garbage.
   if (clean.length > 1000) throw errors.validation('הטקסט ארוך מדי');
 
-  const relays = await query(
-    `SELECT r.id, r.name, r.current_state, d.name AS device_name, d.timezone
-       FROM relays r JOIN devices d ON d.id = r.device_id
-      WHERE r.user_id = ? AND r.is_enabled = TRUE AND r.deleted_at IS NULL AND d.is_enabled = TRUE
-      ORDER BY r.sort_order, r.id`,
-    [userId],
-  );
+  // Both lookups feed the prompt — run them together so the caller waits one
+  // DB round-trip, not two, before the model call.
+  const [relays, schedules] = await Promise.all([
+    query(
+      `SELECT r.id, r.name, r.current_state, d.name AS device_name, d.timezone
+         FROM relays r JOIN devices d ON d.id = r.device_id
+        WHERE r.user_id = ? AND r.is_enabled = TRUE AND r.deleted_at IS NULL AND d.is_enabled = TRUE
+        ORDER BY r.sort_order, r.id`,
+      [userId],
+    ),
+    listSchedules({ userId }),
+  ]);
   if (relays.length === 0) throw errors.validation('אין ממסרים פעילים לחשבון זה');
-  const schedules = await listSchedules({ userId });
 
   const tz = relays[0].timezone || 'Asia/Jerusalem';
   const nowParts = localParts(new Date(), tz);
