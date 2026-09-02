@@ -85,7 +85,9 @@ export function Tasks() {
   const [dragId, setDragId] = useState(null);
   const [sortBy, setSortBy] = useState('manual');
   const [sortDir, setSortDir] = useState('asc');
+  const [hideDone, setHideDone] = useState(() => localStorage.getItem('tasksHideDone') === '1');
   const { busy, error, run, setError } = useAsync();
+  const toggleHideDone = (v) => { setHideDone(v); localStorage.setItem('tasksHideDone', v ? '1' : '0'); };
 
   const refresh = async () => {
     const p = new URLSearchParams();
@@ -171,6 +173,14 @@ export function Tasks() {
     });
   }, [rows, sortBy, sortDir]);
 
+  // "הסתר שהושלמו" — client-side; ignored when the done tile is the active filter
+  // (there the user explicitly asked to see done tasks).
+  const visibleRows = useMemo(
+    () => (hideDone && fStatus !== 'done' ? sortedRows.filter((t) => t.status !== 'done') : sortedRows),
+    [sortedRows, hideDone, fStatus],
+  );
+  const hiddenDone = sortedRows.length - visibleRows.length;
+
   // Drag reorder (native HTML5 DnD). Dropping persists the new id order; drag is
   // available only in manual order and while unfiltered (a re-sorted or partial
   // reorder would be misleading).
@@ -225,6 +235,10 @@ export function Tasks() {
           <input type="checkbox" checked={overdueOnly} onChange={(e) => setOverdueOnly(e.target.checked)} />
           באיחור בלבד{overdueCount ? ` (${overdueCount})` : ''}
         </label>
+        <label className="flex items-center gap-1.5 text-sm">
+          <input type="checkbox" checked={hideDone} onChange={(e) => toggleHideDone(e.target.checked)} />
+          הסתר שהושלמו{hideDone && hiddenDone ? ` (${hiddenDone})` : ''}
+        </label>
         <Input className="w-52 py-2 text-sm" placeholder="חיפוש בכותרת ובהערות…" value={search} onChange={(e) => setSearch(e.target.value)} />
         {filtering && (
           <Button variant="ghost" className="text-sm" onClick={() => { setFStatus(''); setFAssignee(''); setFPriority(''); setOverdueOnly(false); setSearch(''); }}>נקה סינון</Button>
@@ -250,10 +264,14 @@ export function Tasks() {
       <Card flush>
         {data == null ? (
           <p className="text-muted p-8 text-center">טוען…</p>
-        ) : sortedRows.length === 0 ? (
-          <p className="text-muted p-8 text-center">אין משימות{filtering ? ' בסינון הנוכחי' : ''} 🎉</p>
+        ) : visibleRows.length === 0 ? (
+          <p className="text-muted p-8 text-center">
+            {hideDone && hiddenDone > 0 && !sortedRows.some((t) => t.status !== 'done')
+              ? 'כל המשימות הושלמו 🎉 (מוסתרות)'
+              : `אין משימות${filtering ? ' בסינון הנוכחי' : ''} 🎉`}
+          </p>
         ) : (
-          sortedRows.map((t, i) => {
+          visibleRows.map((t, i) => {
             const prog = clProgress(t.checklist);
             const isOpen = expanded[t.id];
             return (
