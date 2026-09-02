@@ -66,7 +66,9 @@ const PRICE_PER_MTOK = {
 };
 
 async function logUsage({ userId, phone, text, model, usage }) {
-  const [inP, outP] = PRICE_PER_MTOK[model] || [5, 25];
+  let [inP, outP] = PRICE_PER_MTOK[model] || [5, 25];
+  // Fast mode (research preview) bills at ~2× — stamp the real price it ran at.
+  if (usage.speed === 'fast') { inP *= 2; outP *= 2; }
   const cost = (usage.input_tokens * inP + usage.output_tokens * outP) / 1e6;
   await query(
     'INSERT INTO nlu_usage (user_id, phone, text, model, input_tokens, output_tokens, cost_usd) VALUES (?,?,?,?,?,?,?)',
@@ -141,7 +143,7 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
   const nowParts = localParts(new Date(), tz);
   const client = new Anthropic({ apiKey: env.anthropic.apiKey });
 
-  const response = await client.messages.create({
+  const params = {
     model: env.anthropic.model,
     // Compound orders return several actions — 1024 could truncate the JSON mid-array.
     max_tokens: 2048,
@@ -151,7 +153,28 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
     output_config: { format: { type: 'json_schema', schema: SCHEMA } },
     system: buildSystemPrompt(relays, schedules, tz, nowParts, prevText),
     messages: [{ role: 'user', content: clean }],
-  });
+  };
+
+  // Fast mode (research preview, Opus 4.8) runs the interpret ~2× faster at ~2×
+  // price. OPT-IN via NLU_FAST=1: as of 2026-09-02 the org's fast-mode input-token
+  // allowance is effectively 0 — a real (~1200-tok) request 429s and the failed
+  // attempt only ADDS latency, so it stays off until Anthropic grants real
+  // capacity. When on, a 429 still falls back to standard speed in the same call.
+  const wantFast = env.anthropic.model === 'claude-opus-4-8' && process.env.NLU_FAST === '1';
+  let response;
+  if (wantFast) {
+    try {
+      response = await client.beta.messages.create({
+        ...params, speed: 'fast', betas: ['fast-mode-2026-02-01'],
+      });
+    } catch (e) {
+      if (e?.status !== 429) throw e;
+      console.warn('NLU: fast mode rate-limited, falling back to standard speed');
+      response = await client.messages.create(params);
+    }
+  } else {
+    response = await client.messages.create(params);
+  }
 
   // Cost log for the admin voice-costs table; a logging hiccup must never fail the call.
   logUsage({ userId, phone, text: clean, model: env.anthropic.model, usage: response.usage })
