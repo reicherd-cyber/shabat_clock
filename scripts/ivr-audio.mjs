@@ -49,7 +49,7 @@ const PROMPTS = {
   // — voice-command (NLU) flow. Verb/day keys are fragments juxtaposed with TTS
   //   relay names and times in the confirmation readback. —
   main_menu_voice: 'לומר בקשה בְּקוֹל, הַקֵּשׁ 1, להדלקה מיידית הַקֵּשׁ 2, לכיבוי מיידי הַקֵּשׁ 3, לתזמון עתידי הַקֵּשׁ 4, למצב נוכחי הַקֵּשׁ 5',
-  nlu_listen: 'אמרו את הבקשה לאחר הצפצוף, למשל, כבה את הסלון בעוד חמש דקות',
+  nlu_listen: 'אמרו את הבקשה לאחר הצפצוף, למשל, כבה את הסלון בעוד חמש דקות, לְחַץ סולמית לסיום',
   nlu_confirm: 'הַקֵּשׁ 1 לאישור, 2 לביטול',
   nlu_on_now: 'הדלקה מיידית של',
   nlu_off_now: 'כיבוי מיידי של',
@@ -104,10 +104,17 @@ async function generate() {
   const workDir = path.join(process.env.TEMP || '/tmp', 'ivr-audio');
   mkdirSync(workDir, { recursive: true });
 
-  const manifest = {};
+  // Optional key filter: `generate nlu_listen [other_key…]` re-synths only those
+  // prompts (file numbers stay index-based, so they overwrite the right files)
+  // and MERGES the manifest — so a one-line text fix doesn't re-upload all 30+.
+  const only = process.argv.slice(3);
+  const manifest = only.length
+    ? (JSON.parse(readFileSync(MANIFEST, 'utf8')).files || {})
+    : {};
   const keys = Object.keys(PROMPTS);
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
+    if (only.length && !only.includes(key)) continue;
     const fileNum = String(100 + i);
     const mp3 = path.join(workDir, `${key}.mp3`);
     const wav = path.join(workDir, `${key}.wav`);

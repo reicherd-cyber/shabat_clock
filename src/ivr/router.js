@@ -143,6 +143,12 @@ export const ivrRouter = Router();
 // Prompt as response items: the neural-voice recording when ivr.audio.<key> is set
 // (see scripts/ivr-audio.mjs), else the editable TTS text. Delete the audio setting
 // row after editing a text to make the change audible again.
+// The voice-order prompt — one continuous message (instruction + "לחץ סולמית
+// לסיום"), played on first listen and replayed on no-speech. The # hint is part
+// of the recording, so the TTS fallback here carries it too.
+const nluListenSpec = () => speak('ivr.nlu_listen', {},
+  'אמרו את הבקשה לאחר הצפצוף, למשל: כבה את הסלון בעוד חמש דקות. לחץ סולמית לסיום');
+
 async function speak(key, vars = {}, fallback = null) {
   const audio = await getSetting(key.replace(/^ivr\./, 'ivr.audio.'));
   if (audio) return [{ f: audio }];
@@ -493,10 +499,11 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
             session.state = 'NLU_LISTEN';
             session.data.nluRetries = 0;
             session.data.nluPrev = null;
-            return res.send(askVoice([
-              ...await speak('ivr.nlu_listen', {}, 'אמרו את הבקשה לאחר הצפצוף, למשל: כבה את הסלון בעוד חמש דקות'),
-              { t: 'בסיום אפשר להקיש סולמית' },
-            ]));
+            // The "לחץ סולמית לסיום" hint is now baked into the nlu_listen
+            // recording (one continuous sentence, one voice) — no separate TTS
+            // item. maxSilence 2s: on no speech the record returns after ~2s and
+            // we replay the same message (see the empty-nlu branch below).
+            return res.send(askVoice(await nluListenSpec(), { maxSilence: 2 }));
           }
           if (input === '2' || input === '3') {
             await appendPath(session.callLogId, input === '2' ? 'immediate_on' : 'immediate_off');
@@ -529,12 +536,11 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         const rawNlu = req.query.nlu;
         const spoken = String(Array.isArray(rawNlu) ? rawNlu[rawNlu.length - 1] : (rawNlu ?? '')).trim();
         if (!spoken) {
-          // Yemot's STT returned nothing — guide and listen again (the generic
-          // invalidInput talks about digits, which only confuses here).
+          // No speech within the 2s window — replay the SAME full message (per
+          // the user's request), up to 2 times, then fall back to the main menu.
           session.data.nluRetries = (session.data.nluRetries || 0) + 1;
           if (session.data.nluRetries <= 2) {
-            return res.send(askVoice(await speak('ivr.nlu_not_heard', {},
-              'לא שמעתי, אפשר לומר את הבקשה שוב לאחר הצפצוף, לאט וברור')));
+            return res.send(askVoice(await nluListenSpec(), { maxSilence: 2 }));
           }
           return res.send(await mainMenu(session, await speak('ivr.nlu_giveup', {}, 'לא זוהה דיבור, חוזרים לתפריט הראשי')));
         }
