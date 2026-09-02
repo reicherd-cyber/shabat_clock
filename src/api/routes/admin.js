@@ -1,6 +1,6 @@
 // §3.3 admin panel. support = read-only [D15]; every write audit-logged.
 import { Router, raw } from 'express';
-import { query } from '../../db/pool.js';
+import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireAdmin, requireWrite, requireSuperadmin, signUserToken, invalidateSession } from '../middleware.js';
 import { isIP } from 'node:net';
@@ -933,12 +933,24 @@ const TASK_STATUSES = ['open', 'in_progress', 'done'];
 const TASK_PRIORITIES = ['low', 'normal', 'high'];
 const TASK_FIELDS = ['title', 'notes', 'status', 'priority', 'due_date', 'assignee_id', 'user_id'];
 
+// A subtask checklist → canonical JSON: at most 100 items, each {text (1–200), done}.
+const cleanChecklist = (v) => {
+  const arr = Array.isArray(v) ? v : [];
+  const items = arr.map((it) => ({
+    text: String(it?.text ?? '').trim().slice(0, 200),
+    done: Boolean(it?.done),
+  })).filter((it) => it.text).slice(0, 100);
+  return JSON.stringify(items);
+};
+const parseChecklist = (v) => { try { const a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch { return []; } };
+
 const taskBody = (b) => {
   const out = {};
   for (const f of TASK_FIELDS) {
     if (b?.[f] === undefined) continue;
     out[f] = b[f] === '' ? null : b[f];
   }
+  if (b?.checklist !== undefined) out.checklist = cleanChecklist(b.checklist);
   if (out.status && !TASK_STATUSES.includes(out.status)) throw errors.validation('unknown status', { status: TASK_STATUSES.join('|') });
   if (out.priority && !TASK_PRIORITIES.includes(out.priority)) throw errors.validation('unknown priority', { priority: TASK_PRIORITIES.join('|') });
   if (out.assignee_id != null) out.assignee_id = Number(out.assignee_id) || null;
@@ -973,17 +985,19 @@ adminRouter.get('/tasks', async (req, res, next) => {
       const like = `%${String(req.query.q)}%`;
       params.push(like, like);
     }
-    // Open first, then by due date (nulls last), then newest.
+    // Done tasks sink to the bottom; everything else follows the manual
+    // drag-order (sort_order), newest first within an equal order.
     const rows = await query(
       `SELECT t.*, a.name AS assignee_name, u.full_name AS user_name
          FROM admin_tasks t
          LEFT JOIN admins a ON a.id = t.assignee_id
          LEFT JOIN users u ON u.id = t.user_id
         WHERE ${cond.join(' AND ')}
-        ORDER BY (t.status = 'done'), (t.due_date IS NULL), t.due_date, t.id DESC
+        ORDER BY (t.status = 'done'), t.sort_order, t.id DESC
         LIMIT 500`,
       params,
     );
+    for (const r of rows) r.checklist = parseChecklist(r.checklist);
     const counts = await query(
       "SELECT status, COUNT(*) AS n FROM admin_tasks WHERE deleted_at IS NULL GROUP BY status",
     );
@@ -998,12 +1012,31 @@ adminRouter.post('/tasks', requireWrite, async (req, res, next) => {
     if (!f.title || String(f.title).trim().length < 2) throw errors.validation('title required', { title: '2+ chars' });
     f.created_by = adminActor(req);
     if (f.status === 'done') f.done_at = new Date();
+    // A new task floats to the top (smallest sort_order among live tasks).
+    const [mn] = await query('SELECT COALESCE(MIN(sort_order), 0) - 1 AS s FROM admin_tasks WHERE deleted_at IS NULL');
+    f.sort_order = mn.s;
     const r = await query(
       `INSERT INTO admin_tasks (${Object.keys(f).join(',')}) VALUES (${Object.keys(f).map(() => '?').join(',')})`,
       Object.values(f),
     );
     audit(req, 'task_create', 'admin_task', r.insertId, { after: { title: f.title } });
     res.status(201).json({ id: r.insertId });
+  } catch (e) { next(e); }
+});
+
+// Persist a manual drag-reorder: the ids in their new visual order get
+// sort_order = position. Only ids that belong to live tasks are touched.
+adminRouter.patch('/tasks/reorder', requireWrite, async (req, res, next) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isInteger) : [];
+    if (!ids.length) throw errors.validation('ids required', { ids: 'array' });
+    await withTransaction(async (conn) => {
+      for (let i = 0; i < ids.length; i++) {
+        await conn.query('UPDATE admin_tasks SET sort_order = ? WHERE id = ? AND deleted_at IS NULL', [i, ids[i]]);
+      }
+    });
+    audit(req, 'task_reorder', 'admin_task', null, { ids });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

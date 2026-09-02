@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
-import { Plus, Trash2, Pencil, Check, CalendarClock } from 'lucide-react';
+import { Plus, Trash2, Pencil, Check, CalendarClock, GripVertical, ChevronDown, ListChecks, X } from 'lucide-react';
 
 // משימות — לוח מטלות פנימי לצוות: "להתקשר ללקוח", "להתקין מכשיר ל…". כל משימה
 // אופציונלית: אחראי (מנהל), תאריך יעד, וקישור למשתמש במערכת. סטטוסים רכים,
@@ -22,7 +22,39 @@ const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('he-IL', { day: 'nume
 const todayYmd = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const isOverdue = (t) => t.status !== 'done' && t.due_date && String(t.due_date).slice(0, 10) <= todayYmd();
 
-const emptyForm = { title: '', notes: '', status: 'open', priority: 'normal', due_date: '', assignee_id: '', user_id: '' };
+const emptyForm = { title: '', notes: '', status: 'open', priority: 'normal', due_date: '', assignee_id: '', user_id: '', checklist: [] };
+const clProgress = (cl) => (cl && cl.length ? { done: cl.filter((i) => i.done).length, total: cl.length } : null);
+
+// Subtask checklist editor inside the task modal: add / toggle / remove items.
+function ChecklistEditor({ items, onChange }) {
+  const [text, setText] = useState('');
+  const add = () => {
+    const v = text.trim();
+    if (!v) return;
+    onChange([...items, { text: v.slice(0, 200), done: false }]);
+    setText('');
+  };
+  const toggle = (i) => onChange(items.map((it, idx) => (idx === i ? { ...it, done: !it.done } : it)));
+  const remove = (i) => onChange(items.filter((_, idx) => idx !== i));
+  return (
+    <div className="space-y-1">
+      <span className="text-sm text-muted flex items-center gap-1.5"><ListChecks size={14} />תת-משימות (צ׳ק-ליסט)</span>
+      {items.map((it, i) => (
+        <div key={i} className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={it.done} onChange={() => toggle(i)} />
+          <span className={`flex-1 ${it.done ? 'line-through text-muted' : ''}`}>{it.text}</span>
+          <button type="button" className="text-muted hover:text-off cursor-pointer" title="הסר" onClick={() => remove(i)}><X size={14} /></button>
+        </div>
+      ))}
+      <div className="flex gap-2">
+        <Input className="flex-1 py-1.5 text-sm" placeholder="הוסיפו פריט ולחצו Enter" maxLength={200}
+          value={text} onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} />
+        <Button variant="ghost" className="text-sm" onClick={add} disabled={!text.trim()}>הוסף</Button>
+      </div>
+    </div>
+  );
+}
 
 export function Tasks() {
   const [data, setData] = useState(null); // { rows, counts, assignees }
@@ -34,6 +66,8 @@ export function Tasks() {
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [form, setForm] = useState(null); // create/edit modal form (null = closed)
   const [confirmDel, setConfirmDel] = useState(null);
+  const [expanded, setExpanded] = useState({}); // task id → checklist shown
+  const [dragId, setDragId] = useState(null);
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -59,11 +93,19 @@ export function Tasks() {
       status: form.status, priority: form.priority,
       due_date: form.due_date || null,
       assignee_id: form.assignee_id || null, user_id: form.user_id || null,
+      checklist: (form.checklist || []).map((i) => ({ text: i.text, done: i.done })),
     };
     if (form.id) await adminApi.patch(`/tasks/${form.id}`, b);
     else await adminApi.post('/tasks', b);
     setForm(null);
     bumpBadge();
+    await refresh();
+  }).catch(() => {});
+
+  // Inline checklist toggle from an expanded row — send the whole (small) array.
+  const toggleItem = (t, idx) => run(async () => {
+    const checklist = t.checklist.map((it, i) => (i === idx ? { text: it.text, done: !it.done } : { text: it.text, done: it.done }));
+    await adminApi.patch(`/tasks/${t.id}`, { checklist });
     await refresh();
   }).catch(() => {});
 
@@ -89,7 +131,26 @@ export function Tasks() {
     id: t.id, title: t.title, notes: t.notes || '', status: t.status, priority: t.priority,
     due_date: t.due_date ? String(t.due_date).slice(0, 10) : '',
     assignee_id: t.assignee_id || '', user_id: t.user_id || '',
-  } : { ...emptyForm });
+    checklist: (t.checklist || []).map((i) => ({ text: i.text, done: i.done })),
+  } : { ...emptyForm, checklist: [] });
+
+  // Drag reorder (native HTML5 DnD). Dropping persists the new id order; drag is
+  // disabled while filtered, where a partial reorder would be misleading.
+  const canDrag = !filtering;
+  const onDrop = (targetId) => run(async () => {
+    if (dragId == null || dragId === targetId) return;
+    const ids = rows.map((r) => r.id);
+    const from = ids.indexOf(dragId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    // optimistic: reflect the new order immediately
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    setData({ ...data, rows: ids.map((id) => byId[id]) });
+    setDragId(null);
+    await adminApi.patch('/tasks/reorder', { ids });
+    await refresh();
+  }).catch(() => { setDragId(null); });
 
   const overdueCount = useMemo(() => rows.filter(isOverdue).length, [rows]);
 
@@ -139,44 +200,75 @@ export function Tasks() {
         ) : rows.length === 0 ? (
           <p className="text-muted p-8 text-center">אין משימות{filtering ? ' בסינון הנוכחי' : ''} 🎉</p>
         ) : (
-          rows.map((t, i) => (
-            <div key={t.id} className={`flex items-center gap-3 px-4 py-3 ${i > 0 ? 'border-t border-line' : ''} ${t.status === 'done' ? 'opacity-60' : ''}`}>
-              {/* quick toggle done */}
-              <button title={t.status === 'done' ? 'החזר לפתוחה' : 'סמן כהושלמה'} disabled={busy}
-                className={`w-6 h-6 rounded-full border grid place-items-center shrink-0 cursor-pointer ${t.status === 'done' ? 'bg-[#E7F6EC] border-[#006e00] text-[#006e00]' : 'border-line text-transparent hover:text-muted'}`}
-                onClick={() => setStatus(t, t.status === 'done' ? 'open' : 'done')}>
-                <Check size={14} />
-              </button>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2 flex-wrap">
-                  <span className={`font-medium ${t.status === 'done' ? 'line-through' : ''}`}>{t.title}</span>
-                  <span className={`text-xs font-medium rounded-full px-2 py-0.5 ${STATUS[t.status].cls}`}>{STATUS[t.status].label}</span>
-                  {t.priority !== 'normal' && <span className={`text-xs font-medium rounded-full px-2 py-0.5 ${PRIORITY[t.priority].cls}`}>{PRIORITY[t.priority].label}</span>}
-                  {t.due_date && (
-                    <span className={`text-xs inline-flex items-center gap-1 ${isOverdue(t) ? 'text-[#B42318] font-semibold' : 'text-muted'}`}>
-                      <CalendarClock size={12} />{fmtDate(t.due_date)}{isOverdue(t) ? ' · באיחור' : ''}
-                    </span>
+          rows.map((t, i) => {
+            const prog = clProgress(t.checklist);
+            const isOpen = expanded[t.id];
+            return (
+            <div key={t.id} className={`${i > 0 ? 'border-t border-line' : ''} ${dragId === t.id ? 'opacity-40' : ''}`}
+              draggable={canDrag && !busy}
+              onDragStart={() => canDrag && setDragId(t.id)}
+              onDragOver={(e) => { if (canDrag && dragId != null) e.preventDefault(); }}
+              onDrop={(e) => { if (canDrag) { e.preventDefault(); onDrop(t.id); } }}>
+              <div className={`flex items-center gap-3 px-4 py-3 ${t.status === 'done' ? 'opacity-60' : ''}`}>
+                {canDrag && (
+                  <span className="text-muted/60 cursor-grab active:cursor-grabbing shrink-0" title="גררו לסידור מחדש"><GripVertical size={16} /></span>
+                )}
+                {/* quick toggle done */}
+                <button title={t.status === 'done' ? 'החזר לפתוחה' : 'סמן כהושלמה'} disabled={busy}
+                  className={`w-6 h-6 rounded-full border grid place-items-center shrink-0 cursor-pointer ${t.status === 'done' ? 'bg-[#E7F6EC] border-[#006e00] text-[#006e00]' : 'border-line text-transparent hover:text-muted'}`}
+                  onClick={() => setStatus(t, t.status === 'done' ? 'open' : 'done')}>
+                  <Check size={14} />
+                </button>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <span className={`font-medium ${t.status === 'done' ? 'line-through' : ''}`}>{t.title}</span>
+                    <span className={`text-xs font-medium rounded-full px-2 py-0.5 ${STATUS[t.status].cls}`}>{STATUS[t.status].label}</span>
+                    {t.priority !== 'normal' && <span className={`text-xs font-medium rounded-full px-2 py-0.5 ${PRIORITY[t.priority].cls}`}>{PRIORITY[t.priority].label}</span>}
+                    {t.due_date && (
+                      <span className={`text-xs inline-flex items-center gap-1 ${isOverdue(t) ? 'text-[#B42318] font-semibold' : 'text-muted'}`}>
+                        <CalendarClock size={12} />{fmtDate(t.due_date)}{isOverdue(t) ? ' · באיחור' : ''}
+                      </span>
+                    )}
+                    {prog && (
+                      <button className={`text-xs inline-flex items-center gap-1 cursor-pointer hover:text-ink ${prog.done === prog.total ? 'text-[#006e00]' : 'text-muted'}`}
+                        onClick={() => setExpanded((e) => ({ ...e, [t.id]: !e[t.id] }))} title="רשימת תת-משימות">
+                        <ListChecks size={12} />{prog.done}/{prog.total}
+                        <ChevronDown size={11} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                      </button>
+                    )}
+                  </div>
+                  {(t.notes || t.assignee_name || t.user_name) && (
+                    <div className="text-sm text-muted truncate">
+                      {t.assignee_name && <>👤 {t.assignee_name}{(t.user_name || t.notes) ? ' · ' : ''}</>}
+                      {t.user_name && <>לקוח: {t.user_name}{t.notes ? ' · ' : ''}</>}
+                      {t.notes}
+                    </div>
                   )}
                 </div>
-                {(t.notes || t.assignee_name || t.user_name) && (
-                  <div className="text-sm text-muted truncate">
-                    {t.assignee_name && <>👤 {t.assignee_name}{(t.user_name || t.notes) ? ' · ' : ''}</>}
-                    {t.user_name && <>לקוח: {t.user_name}{t.notes ? ' · ' : ''}</>}
-                    {t.notes}
-                  </div>
+                {t.status !== 'done' && (
+                  <Select className="py-1 text-xs w-24 shrink-0" value={t.status} onChange={(e) => setStatus(t, e.target.value)} disabled={busy}>
+                    <option value="open">פתוחה</option>
+                    <option value="in_progress">בטיפול</option>
+                    <option value="done">הושלמה</option>
+                  </Select>
                 )}
+                <button className="text-muted hover:text-ink cursor-pointer shrink-0" title="עריכה" disabled={busy} onClick={() => openForm(t)}><Pencil size={16} /></button>
+                <button className="text-muted hover:text-off cursor-pointer shrink-0" title="ארכוב" disabled={busy} onClick={() => setConfirmDel(t)}><Trash2 size={17} /></button>
               </div>
-              {t.status !== 'done' && (
-                <Select className="py-1 text-xs w-24 shrink-0" value={t.status} onChange={(e) => setStatus(t, e.target.value)} disabled={busy}>
-                  <option value="open">פתוחה</option>
-                  <option value="in_progress">בטיפול</option>
-                  <option value="done">הושלמה</option>
-                </Select>
+              {/* expanded subtask checklist — inline toggles */}
+              {isOpen && prog && (
+                <div className="px-4 pb-3 -mt-1 ps-14 space-y-1">
+                  {t.checklist.map((it, idx) => (
+                    <label key={idx} className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={it.done} disabled={busy} onChange={() => toggleItem(t, idx)} />
+                      <span className={it.done ? 'line-through text-muted' : ''}>{it.text}</span>
+                    </label>
+                  ))}
+                </div>
               )}
-              <button className="text-muted hover:text-ink cursor-pointer shrink-0" title="עריכה" disabled={busy} onClick={() => openForm(t)}><Pencil size={16} /></button>
-              <button className="text-muted hover:text-off cursor-pointer shrink-0" title="ארכוב" disabled={busy} onClick={() => setConfirmDel(t)}><Trash2 size={17} /></button>
             </div>
-          ))
+            );
+          })
         )}
       </Card>
 
@@ -226,6 +318,7 @@ export function Tasks() {
                 {contacts.map((c) => <option key={c.id} value={c.id}>{c.full_name}</option>)}
               </Select>
             </label>
+            <ChecklistEditor items={form.checklist} onChange={(checklist) => setForm({ ...form, checklist })} />
             <div className="flex gap-2">
               <Button onClick={save} disabled={busy || form.title.trim().length < 2}>{busy ? 'שומר…' : 'שמירה'}</Button>
               <Button variant="ghost" onClick={() => setForm(null)}>ביטול</Button>
