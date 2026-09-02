@@ -501,9 +501,9 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
             session.data.nluPrev = null;
             // The "לחץ סולמית לסיום" hint is now baked into the nlu_listen
             // recording (one continuous sentence, one voice) — no separate TTS
-            // item. maxSilence 5s: on no speech the record returns after ~5s and
+            // item. maxSilence 3s (one timer governs both the after-speech pause and the no-speech wait; # ends instantly): returns after ~3s and
             // we replay the same message (see the empty-nlu branch below).
-            return res.send(askVoice(await nluListenSpec(), { maxSilence: 5 }));
+            return res.send(askVoice(await nluListenSpec(), { maxSilence: 3 }));
           }
           if (input === '2' || input === '3') {
             await appendPath(session.callLogId, input === '2' ? 'immediate_on' : 'immediate_off');
@@ -540,7 +540,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           // the user's request), up to 2 times, then fall back to the main menu.
           session.data.nluRetries = (session.data.nluRetries || 0) + 1;
           if (session.data.nluRetries <= 2) {
-            return res.send(askVoice(await nluListenSpec(), { maxSilence: 5 }));
+            return res.send(askVoice(await nluListenSpec(), { maxSilence: 3 }));
           }
           return res.send(await mainMenu(session, await speak('ivr.nlu_giveup', {}, 'לא זוהה דיבור, חוזרים לתפריט הראשי')));
         }
