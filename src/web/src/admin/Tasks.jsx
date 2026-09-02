@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
-import { Plus, Trash2, Pencil, Check, CalendarClock, GripVertical, ChevronDown, ListChecks, X } from 'lucide-react';
+import { Plus, Trash2, Pencil, Check, CalendarClock, GripVertical, ChevronDown, ListChecks, X, ArrowUp, ArrowDown } from 'lucide-react';
 
 // משימות — לוח מטלות פנימי לצוות: "להתקשר ללקוח", "להתקין מכשיר ל…". כל משימה
 // אופציונלית: אחראי (מנהל), תאריך יעד, וקישור למשתמש במערכת. סטטוסים רכים,
@@ -24,6 +24,21 @@ const isOverdue = (t) => t.status !== 'done' && t.due_date && String(t.due_date)
 
 const emptyForm = { title: '', notes: '', status: 'open', priority: 'normal', due_date: '', assignee_id: '', user_id: '', checklist: [] };
 const clProgress = (cl) => (cl && cl.length ? { done: cl.filter((i) => i.done).length, total: cl.length } : null);
+
+// Inline sort fields. 'manual' = the server drag-order (the default). Each other
+// field yields a comparable key; ties fall back to the manual order. Missing
+// values (no due date / no assignee) always sort to the end, in both directions.
+const STATUS_RANK = { open: 0, in_progress: 1, done: 2 };
+const PRIORITY_RANK = { high: 0, normal: 1, low: 2 };
+const SORT_FIELDS = {
+  manual: { label: 'סדר ידני' },
+  title: { label: 'כותרת', key: (t) => t.title?.toLowerCase() || '' },
+  status: { label: 'סטטוס', key: (t) => STATUS_RANK[t.status] ?? 9 },
+  priority: { label: 'דחיפות', key: (t) => PRIORITY_RANK[t.priority] ?? 9 },
+  due_date: { label: 'תאריך יעד', key: (t) => (t.due_date ? String(t.due_date).slice(0, 10) : null) },
+  assignee: { label: 'אחראי', key: (t) => (t.assignee_name ? t.assignee_name.toLowerCase() : null) },
+  progress: { label: 'התקדמות', key: (t) => { const p = clProgress(t.checklist); return p ? p.done / p.total : null; } },
+};
 
 // Subtask checklist editor inside the task modal: add / toggle / remove items.
 function ChecklistEditor({ items, onChange }) {
@@ -68,6 +83,8 @@ export function Tasks() {
   const [confirmDel, setConfirmDel] = useState(null);
   const [expanded, setExpanded] = useState({}); // task id → checklist shown
   const [dragId, setDragId] = useState(null);
+  const [sortBy, setSortBy] = useState('manual');
+  const [sortDir, setSortDir] = useState('asc');
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -134,9 +151,30 @@ export function Tasks() {
     checklist: (t.checklist || []).map((i) => ({ text: i.text, done: i.done })),
   } : { ...emptyForm, checklist: [] });
 
+  // Client-side sort over the loaded list. 'manual' keeps the server drag-order;
+  // any other field sorts by its key (missing values last), ties → manual order.
+  const sortedRows = useMemo(() => {
+    if (sortBy === 'manual') return rows;
+    const keyOf = SORT_FIELDS[sortBy].key;
+    const dir = sortDir === 'desc' ? -1 : 1;
+    return [...rows].sort((a, b) => {
+      const ka = keyOf(a);
+      const kb = keyOf(b);
+      const na = ka == null || ka === '';
+      const nb = kb == null || kb === '';
+      if (na && nb) return 0;
+      if (na) return 1; // missing → always last
+      if (nb) return -1;
+      if (ka < kb) return -1 * dir;
+      if (ka > kb) return 1 * dir;
+      return 0;
+    });
+  }, [rows, sortBy, sortDir]);
+
   // Drag reorder (native HTML5 DnD). Dropping persists the new id order; drag is
-  // disabled while filtered, where a partial reorder would be misleading.
-  const canDrag = !filtering;
+  // available only in manual order and while unfiltered (a re-sorted or partial
+  // reorder would be misleading).
+  const canDrag = !filtering && sortBy === 'manual';
   const onDrop = (targetId) => run(async () => {
     if (dragId == null || dragId === targetId) return;
     const ids = rows.map((r) => r.id);
@@ -194,13 +232,28 @@ export function Tasks() {
       </div>
       <ErrorNote error={error} />
 
+      {/* inline sort — by any field; 'סדר ידני' keeps the drag order */}
+      <div className="flex items-center gap-2 text-sm">
+        <span className="text-muted">מיון לפי:</span>
+        <Select className="py-1.5 text-sm w-32" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+          {Object.entries(SORT_FIELDS).map(([k, f]) => <option key={k} value={k}>{f.label}</option>)}
+        </Select>
+        {sortBy !== 'manual' && (
+          <Button variant="ghost" className="!px-2 !py-1" title={sortDir === 'asc' ? 'עולה' : 'יורד'}
+            onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}>
+            {sortDir === 'asc' ? <ArrowUp size={15} /> : <ArrowDown size={15} />}
+          </Button>
+        )}
+        {sortBy === 'manual' && !filtering && <span className="text-muted text-xs">— אפשר לגרור לסידור ידני</span>}
+      </div>
+
       <Card flush>
         {data == null ? (
           <p className="text-muted p-8 text-center">טוען…</p>
-        ) : rows.length === 0 ? (
+        ) : sortedRows.length === 0 ? (
           <p className="text-muted p-8 text-center">אין משימות{filtering ? ' בסינון הנוכחי' : ''} 🎉</p>
         ) : (
-          rows.map((t, i) => {
+          sortedRows.map((t, i) => {
             const prog = clProgress(t.checklist);
             const isOpen = expanded[t.id];
             return (
