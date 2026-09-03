@@ -39,6 +39,32 @@ const newExclusion = () => ({
 const signedOffset = (s) => (s.dir === 'before' ? -1 : 1) * Math.abs(Number(s.offset) || 0);
 const hebText = (d, m) => `${HEB_DAYS[(Number(d) || 1) - 1]} ${hebMonthLabel(m)}`;
 
+// Chronological display order for a plan's schedulers: day (or date) first, then
+// time of day. Anchors have no fixed clock time — sort them by their typical
+// position in the day (values are ordering ranks in minutes, not real times).
+const ANCHOR_MIN = {
+  alot_early: 250, alot: 265, misheyakir: 285, sunrise: 350, sof_shma_mga: 480,
+  sof_shma: 540, sof_tfila: 610, chatzot: 720, mincha_gedola: 750, mincha_ketana: 950,
+  plag_mincha: 1050, candles: 1120, sunset: 1140, tzeit: 1160, shabbat_end: 1180,
+  tzeit_rt: 1212, shabbat_end_rt: 1230, chatzot_layla: 1440,
+};
+const minuteOf = (s) => (s.kind === 'clock'
+  ? (Number(String(s.time).slice(0, 2)) || 0) * 60 + (Number(String(s.time).slice(3, 5)) || 0)
+  : (ANCHOR_MIN[s.kind] ?? 720) + signedOffset(s));
+const dayKey = (s) => {
+  if (s.repeat_type === 'weekly') return s.daily || !s.days.length ? 0 : Math.min(...s.days.map(Number));
+  if (s.repeat_type === 'holiday') {
+    const idx = s.holidays.map((h) => DAY_HOLIDAY_KEYS.indexOf(h)).filter((i) => i >= 0);
+    return idx.length ? Math.min(...idx) : 99;
+  }
+  if (s.calendar === 'heb') return Number(s.heb_month) * 100 + Number(s.heb_day);
+  return Number(String(s.date).replace(/-/g, '')) || 0;
+};
+const TYPE_ORDER = { weekly: 0, holiday: 1, yearly: 2, once: 3 };
+export const schedulerCompare = (a, b) =>
+  (TYPE_ORDER[a.repeat_type] ?? 9) - (TYPE_ORDER[b.repeat_type] ?? 9)
+  || dayKey(a) - dayKey(b) || minuteOf(a) - minuteOf(b);
+
 // One-line description of a scheduler — used in the plan's list and the plans tab.
 export function schedulerSummary(s) {
   const when = s.repeat_type === 'weekly'
@@ -107,7 +133,7 @@ export function planFromMembers(members) {
   return {
     plan_id: repr.plan_id, name: repr.name || '',
     relay_ids: [...new Set(members.map((m) => m.relay_id))],
-    schedulers: [...map.values()], exclusions,
+    schedulers: [...map.values()].sort(schedulerCompare), exclusions,
     member_ids: members.map((m) => m.id), legacy_ids: [],
   };
 }
