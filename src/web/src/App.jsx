@@ -58,7 +58,7 @@ function ImpersonationGuard() {
 // ── user panel shell per the mockup: sticky topbar (brand ✦ + user chip),
 //    desktop inline nav, mobile bottom tab bar ──
 const TABS = [
-  { to: '/', label: 'דשבורד', Icon: LayoutGrid, end: true },
+  { to: '/', label: 'ראשי', Icon: LayoutGrid, end: true },
   { to: '/schedules', label: 'תוכניות', Icon: CalendarClock },
   { to: '/calendar', label: 'לוח', Icon: CalendarDays },
   { to: '/history', label: 'היסטוריה', Icon: HistoryIcon },
