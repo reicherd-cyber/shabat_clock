@@ -40,11 +40,14 @@ export function invalidateSession(kind, id) {
 }
 
 // [D14] JWT HS256. user: {sub, role:'user'} 30d; admin: {sub, role} 12h;
-// impersonation: {sub:user_id, role:'user', imp:admin_id} 1h.
-export function signUserToken(userId, impAdminId = null) {
+// impersonation: {sub:user_id, role:'user', imp:admin_id} 1h;
+// demo visit: {sub:demo_user_id, role:'user', dm:real_user_id} 12h — a
+// device-less person browsing the shared משתמש בדיקה account (see services/demo.js).
+export function signUserToken(userId, impAdminId = null, demoRealId = null) {
   const payload = { sub: String(userId), role: 'user' };
   if (impAdminId) payload.imp = String(impAdminId);
-  return jwt.sign(payload, env.jwtSecret, { expiresIn: impAdminId ? '1h' : '30d' });
+  if (demoRealId) payload.dm = String(demoRealId);
+  return jwt.sign(payload, env.jwtSecret, { expiresIn: impAdminId ? '1h' : demoRealId ? '12h' : '30d' });
 }
 
 export function signAdminToken(adminId, role) {
@@ -74,7 +77,7 @@ export async function requireUser(req, res, next) {
     if (!(await subjectAlive('user', Number(t.sub), 'user'))) {
       throw new ApiError(401, 'SESSION_EXPIRED', 'החשבון אינו פעיל — יש להתחבר מחדש');
     }
-    auth = { userId: Number(t.sub), role: 'user', imp: t.imp ? Number(t.imp) : null };
+    auth = { userId: Number(t.sub), role: 'user', imp: t.imp ? Number(t.imp) : null, demo: t.dm ? Number(t.dm) : null };
   } catch (e) {
     return next(e);
   }

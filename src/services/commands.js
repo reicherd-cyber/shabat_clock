@@ -58,6 +58,16 @@ export async function sendImmediateCommand({ relayId, action, source, callId = n
 
   const commandId = await createCommand({ relayId, action, source, callId });
 
+  // Demo device (משתמש בדיקה): no hardware — the DB state IS the device.
+  if (relay.device_type === 'demo') {
+    await query(
+      'UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?',
+      [action, relayId],
+    );
+    await markCommand(commandId, 'acked');
+    return { command_id: commandId, status: 'acked' };
+  }
+
   // Shelly: absolute on/off (idempotent). Two transports — 'lan': synchronous HTTP
   // RPC to ip_address (same network only); 'mqtt': Switch.Set through the broker
   // (device connects out to us — works from anywhere). Either way the reply is the

@@ -210,6 +210,17 @@ export async function tick(now = new Date()) {
     const existing = await existingRow(s.id, occ.occurrenceUtc, occ.action);
     if (existing) continue; // device already reported (or a prior pass handled it)
 
+    // Demo device (משתמש בדיקה): no hardware — the occurrence "executes" by
+    // flipping the DB state, so the demo dashboard and history stay alive.
+    if (s.device_type === 'demo') {
+      await insertOccurrenceRow({
+        scheduleId: s.id, occurrenceUtc: occ.occurrenceUtc, occurrenceLocal: occ.occurrenceLocal,
+        action: occ.action, executedBy: 'device', status: 'executed',
+      });
+      await query('UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?', [occ.action, s.relay_id]);
+      continue;
+    }
+
     if (!s.is_online || !s.device_uid) {
       // Offline: cannot command it either — record honestly, local execution is
       // what the device is for; reconciled on reconnect [D21].
@@ -423,6 +434,10 @@ export function startScheduler() {
       if (day !== lastZmanimDay && !(p.hh === 0 && p.mm < 5)) {
         await refreshAnchoredTimes();
         lastZmanimDay = day;
+        // Nightly demo-account cleanup: visitors reset it on entry, this catches
+        // whatever the last visitor of the day left behind.
+        const { demoUserId, resetDemoUser } = await import('../services/demo.js');
+        if (await demoUserId()) await resetDemoUser();
       }
     } catch (e) { console.error('zmanim refresh:', e); }
   };

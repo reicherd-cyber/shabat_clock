@@ -280,11 +280,14 @@ async function requireRelay(conn, relayId, userId) {
 }
 
 // Bumps schedule_version + sets sync_status='pending' inside the caller's transaction;
-// returns deviceIds for the post-commit push (§5.3).
+// returns deviceIds for the post-commit push (§5.3). A demo device has no hardware
+// to sync — it stays 'synced' so the panel never shows it waiting.
 export async function bumpDevices(conn, deviceIds) {
   if (!deviceIds.length) return;
   await conn.query(
-    `UPDATE devices SET schedule_version = schedule_version + 1, sync_status = 'pending' WHERE id IN (${deviceIds.map(() => '?').join(',')})`,
+    `UPDATE devices SET schedule_version = schedule_version + 1,
+            sync_status = IF(device_type = 'demo', 'synced', 'pending')
+     WHERE id IN (${deviceIds.map(() => '?').join(',')})`,
     deviceIds,
   );
 }

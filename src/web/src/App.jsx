@@ -68,8 +68,9 @@ const TABS = [
 function UserLayout() {
   const nav = useNavigate();
   const [name, setName] = useState('');
+  const [demo, setDemo] = useState(false);
   useEffect(() => {
-    if (tokens.user) api.get('/me').then((r) => setName(r.user.full_name)).catch(() => {});
+    if (tokens.user) api.get('/me').then((r) => { setName(r.user.full_name); setDemo(Boolean(r.demo)); }).catch(() => {});
   }, []);
   // תשובות צוות שטרם נקראו — מונה על כפתור ה-?; נדגם כל דקה + מתעדכן מיד
   // כשפותחים שיחה ב-/help (אירוע support-unread-changed).
@@ -100,6 +101,11 @@ function UserLayout() {
           <span>מצב התחזות{name ? ` — צופה כ${name}` : ''}</span>
           <button className="font-medium underline whitespace-nowrap cursor-pointer hover:opacity-80"
             onClick={() => nav('/admin')}>חזרה לפאנל הניהול ←</button>
+        </div>
+      )}
+      {demo && !impersonating && (
+        <div className="bg-[#F49200] text-white text-sm px-6 py-2 text-center font-medium">
+          מצב הדגמה — אתם מנסים את המערכת על מכשיר לדוגמה. לאחר רכישת מכשיר, הכניסה תוביל לחשבון האישי שלכם.
         </div>
       )}
       <header className="flex items-center justify-between px-6 py-3.5 border-b border-line bg-bg sticky top-0 z-10">
