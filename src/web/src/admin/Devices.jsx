@@ -125,6 +125,11 @@ export default function Devices() {
     && (!fOnline || (fOnline === 'on' ? d.is_online : !d.is_online))
     && (!needle || `${d.name} ${d.owner_name} ${d.device_uid || ''} ${d.removed_uid || ''}`.toLowerCase().includes(needle)));
   const filtering = fUser || fDevice || fOnline || needle;
+  // Simulated demo devices (device-less accounts, see services/demo.js) are
+  // listed apart from the real fleet: they are always "online", never sync,
+  // and vanish by themselves once the account gets real hardware.
+  const realDevices = visibleDevices.filter((d) => d.device_type !== 'demo');
+  const demoDevices = visibleDevices.filter((d) => d.device_type === 'demo');
   // Device options track the user filter, so the two dropdowns stay consistent.
   const deviceOptions = devices.filter((d) => !fUser || String(d.user_id) === fUser);
   return (
@@ -158,7 +163,10 @@ export default function Devices() {
       </div>
       <ErrorNote error={error} />
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <p className="text-muted text-sm">{visibleDevices.length} מכשירים{filtering ? ' (מסונן)' : ''}</p>
+        <p className="text-muted text-sm">
+          {realDevices.length} מכשירים{filtering ? ' (מסונן)' : ''}
+          {demoDevices.length > 0 && <span> · {demoDevices.length} מכשירי הדגמה</span>}
+        </p>
         <div className="flex gap-2">
           <Button disabled={busy} onClick={downloadUniversal}>
             <span className="inline-flex items-center gap-1.5"><Download size={15} />1. קובץ התקנה ל-Shelly חדש</span>
@@ -167,8 +175,8 @@ export default function Devices() {
         </div>
       </div>
       {[
-        { title: 'מחוברים', list: visibleDevices.filter((d) => d.is_online), withReason: false, dot: true },
-        { title: 'מנותקים', list: visibleDevices.filter((d) => !d.is_online), withReason: true, dot: false },
+        { title: 'מחוברים', list: realDevices.filter((d) => d.is_online), withReason: false, dot: true },
+        { title: 'מנותקים', list: realDevices.filter((d) => !d.is_online), withReason: true, dot: false },
       ].map(({ title, list, withReason, dot }) => (
         <div key={title} className="space-y-2">
           <h3 className="font-bold">
@@ -274,6 +282,40 @@ export default function Devices() {
           </Card>
         </div>
       ))}
+
+      {/* Demo devices: one block per device-less account (2 simulated 4-channel
+          devices each). Read-only here — no transfer/mute/suspend, since the
+          demo is rebuilt/deleted automatically by the account's own state. */}
+      {demoDevices.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="font-bold">
+            <span className="inline-flex items-center gap-2">🧪 מכשירי הדגמה
+              <span className="text-muted text-sm font-normal">({demoDevices.length})</span></span>
+          </h3>
+          <p className="text-muted text-xs">
+            מכשירים מדומים בחשבונות ללא מכשיר אמיתי — תמיד "מחוברים", לא נספרים במכסה ובסטטיסטיקה, ונמחקים מעצמם ברגע שמשויך ללקוח מכשיר אמיתי.
+          </p>
+          <Card flush className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-right text-muted border-b border-line">
+                  <th className="p-3">שם</th><th className="p-3">לקוח</th><th className="p-3">ערוצים</th><th className="p-3">נוצר</th>
+                </tr>
+              </thead>
+              <tbody>
+                {demoDevices.map((d) => (
+                  <tr key={d.id} className="border-b border-line last:border-0">
+                    <td className="p-3 font-semibold">{d.name}<span className="text-muted text-xs font-normal ms-2">#{d.id}</span></td>
+                    <td className="p-3">{d.owner_name}</td>
+                    <td className="p-3">{d.relay_count}</td>
+                    <td className="p-3 text-muted text-xs">{new Date(d.created_at).toLocaleDateString('he-IL')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      )}
 
       {/* Prepared-devices inventory: every unit that completed the prep process. */}
       <div className="flex items-center justify-between flex-wrap gap-2 mt-6">

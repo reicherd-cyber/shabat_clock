@@ -533,7 +533,7 @@ export async function transferDevice(deviceId, targetUserId, { actor = null, cod
 
 export async function listAllDevices() {
   return query(
-    `SELECT d.id, d.user_id, u.full_name AS owner_name, d.device_uid, d.removed_uid, d.name, d.fw_version, d.timezone,
+    `SELECT d.id, d.user_id, u.full_name AS owner_name, d.device_uid, d.removed_uid, d.name, d.device_type, d.fw_version, d.timezone,
             d.relay_count, d.is_online, d.last_seen_at, d.schedule_version, d.device_ack_version,
             d.sync_status, d.sync_error, d.created_at, d.is_enabled, d.mute_alerts
      FROM devices d JOIN users u ON u.id = d.user_id ORDER BY d.id`,

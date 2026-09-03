@@ -98,7 +98,7 @@ adminRouter.get('/users', async (req, res, next) => {
   try {
     res.json(await query(
       `SELECT u.id, u.full_name, u.ivr_code, u.require_pin, u.status, u.max_devices, u.notes, u.email, u.created_at,
-              (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id) AS device_count
+              (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.device_type <> 'demo') AS device_count
        FROM users u ORDER BY u.id DESC`,
     ));
   } catch (e) { next(e); }
@@ -458,10 +458,11 @@ adminRouter.delete('/relays/:id', requireWrite, async (req, res, next) => {
 // ── monitoring ──
 adminRouter.get('/monitoring', async (req, res, next) => {
   try {
-    // Disabled/removed devices are expected to be offline — only enabled ones count.
+    // Disabled/removed devices are expected to be offline — only enabled ones count;
+    // simulated demo devices are never real hardware, so they are left out too.
     const [[online], [total], [pending], [failed24]] = await Promise.all([
-      query('SELECT COUNT(*) AS n FROM devices WHERE is_online = TRUE AND is_enabled = TRUE'),
-      query('SELECT COUNT(*) AS n FROM devices WHERE is_enabled = TRUE'),
+      query("SELECT COUNT(*) AS n FROM devices WHERE is_online = TRUE AND is_enabled = TRUE AND device_type <> 'demo'"),
+      query("SELECT COUNT(*) AS n FROM devices WHERE is_enabled = TRUE AND device_type <> 'demo'"),
       query("SELECT COUNT(*) AS n FROM commands WHERE status IN ('pending','sent')"),
       query("SELECT COUNT(*) AS n FROM commands WHERE status = 'failed' AND requested_at > UTC_TIMESTAMP() - INTERVAL 24 HOUR"),
     ]);
