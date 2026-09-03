@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { getTimes } from 'suncalc';
 import { HDate, HebrewCalendar, flags, gematriya } from '@hebcal/core';
 import { api } from '../api.js';
-import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf } from '../ui.jsx';
+import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf, Logo, Toggle } from '../ui.jsx';
 import { ChevronRight, ChevronLeft, ChevronDown, House, Check, Plus } from 'lucide-react';
 import { ScheduleFormModal, emptyForm, plusMinutes, rowToForm } from './ScheduleForm.jsx';
 
@@ -309,6 +309,64 @@ function ChannelSelect({ relays, hidden, onToggle, onAll, colorOf }) {
   );
 }
 
+// Immediate on/off from the calendar. The TelTech mark (a power-button ring) is
+// the button itself; it opens a popover with every channel's live state and a
+// switch that sends the same command as the main screen (POST /relays/:id/command).
+const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
+function QuickSwitch({ relays, colorOf, onRefresh, onError }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState({});
+  const ref = useRef(null);
+  useEffect(() => {
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+  const toggle = async (relay) => {
+    const action = relay.current_state === 'on' ? 'off' : 'on';
+    setBusy((b) => ({ ...b, [relay.id]: true }));
+    try {
+      const res = await api.post(`/relays/${relay.id}/command`, { action });
+      if (res.status !== 'acked') onError(new Error('המכשיר לא הגיב — נסו שוב'));
+      await onRefresh(); // true state, not the optimistic one
+    } catch (e) {
+      onError(e);
+    } finally {
+      setBusy((b) => ({ ...b, [relay.id]: false }));
+    }
+  };
+  const onCount = relays.filter((r) => r.current_state === 'on').length;
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen(!open)} title="הדלקה / כיבוי מיידי"
+        aria-label="הדלקה / כיבוי מיידי" aria-expanded={open}
+        className={`flex items-center gap-2 bg-surface border rounded-[10px] px-2.5 py-1.5 cursor-pointer hover:border-accent/50 ${open ? 'border-accent' : 'border-line'}`}>
+        <Logo size={22} />
+        <span className={`text-xs font-medium ${onCount ? 'text-on' : 'text-muted'}`}>{onCount}/{relays.length}</span>
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 end-0 w-[300px] bg-surface border border-line rounded-[12px] shadow-lg py-1">
+          <div className="px-3 py-2 text-xs text-muted border-b border-line">הדלקה וכיבוי מיידיים — פועל עכשיו, בלי קשר לתזמונים</div>
+          {relays.map((r) => (
+            <div key={r.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+              <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: colorOf(r.id) }} />
+              <span className="flex-1 min-w-0">
+                <span className="block truncate">{r.name}</span>
+                <span className="block text-muted text-xs truncate">{r.device}{!r.online && ' · מנותק'}</span>
+              </span>
+              <span className={`text-xs font-medium min-w-9 text-end ${r.current_state === 'on' ? 'text-on' : 'text-muted'}`}>
+                {STATE_HE[r.current_state] || STATE_HE.unknown}
+              </span>
+              <Toggle checked={r.current_state === 'on'} busy={!!busy[r.id]} disabled={!r.online} onChange={() => toggle(r)} />
+            </div>
+          ))}
+          {relays.length === 0 && <div className="px-3 py-3 text-sm text-muted">אין ערוצים</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Calendar() {
   const [view, setView] = useState('week');
   const [calMode, setCalMode] = useState('greg'); // 'greg' | 'heb' — לועזי / עברי
@@ -351,13 +409,13 @@ export default function Calendar() {
 
   const cells = useMemo(() => cellsFor(view, cursor, calMode), [view, cursor, calMode]);
 
-  useEffect(() => {
-    api.get('/devices').then((devices) => {
-      setRelays(devices.filter((d) => d.is_enabled)
-        .flatMap((d) => d.relays.filter((r) => r.is_enabled)
-          .map((r) => ({ ...r, device: d.name, device_id: d.id }))));
-    }).catch(setError);
-  }, []);
+  // Relays carry their live state + device online flag for the quick switch.
+  const loadRelays = () => api.get('/devices').then((devices) => {
+    setRelays(devices.filter((d) => d.is_enabled)
+      .flatMap((d) => d.relays.filter((r) => r.is_enabled)
+        .map((r) => ({ ...r, device: d.name, device_id: d.id, online: !!d.is_online }))));
+  });
+  useEffect(() => { loadRelays().catch(setError); }, []);
 
   // ±3-day padding keeps cross-boundary intervals pairable; display slices by
   // cells. The day and week views replay STATE, so they look back 35 days —
@@ -789,6 +847,9 @@ export default function Calendar() {
           <Button variant="ghost" className="!px-2" onClick={() => move(-1)} title="הקודם"><ChevronRight size={16} /></Button>
         </div>
         <Button variant="ghost" onClick={goToday}>היום</Button>
+        {relays.length > 0 && (
+          <QuickSwitch relays={relays} colorOf={colorOf} onRefresh={loadRelays} onError={setError} />
+        )}
         {relays.length > 1 && (
           <ChannelSelect relays={relays} hidden={hiddenRelays} colorOf={colorOf}
             onToggle={toggleRelay} onAll={toggleAll} />
