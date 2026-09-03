@@ -11,10 +11,30 @@
 // the banner + settings note).
 import { query } from '../db/pool.js';
 
-const DEVICE_NAME = 'מכשיר הדגמה';
-const RELAYS = [
-  { relay_no: 1, name: 'תאורת סלון', ivr_digit: 1, current_state: 'on' },
-  { relay_no: 2, name: 'דוד חשמל', ivr_digit: 2, current_state: 'off' },
+// Two simulated 4-channel devices (a home and a shul) so the dashboard, the
+// plans and the IVR digit map all look like a real multi-device account. IVR
+// digits are unique per user (1–20): device 1 takes 1–4, device 2 takes 5–8.
+const DEMO_DEVICES = [
+  {
+    name: 'מכשיר הדגמה — בית',
+    plan: 'תוכנית שבת — בית (דוגמה)',
+    relays: [
+      { relay_no: 1, name: 'תאורת סלון', ivr_digit: 1, current_state: 'on' },
+      { relay_no: 2, name: 'דוד חשמל', ivr_digit: 2, current_state: 'off' },
+      { relay_no: 3, name: 'מזגן', ivr_digit: 3, current_state: 'off' },
+      { relay_no: 4, name: 'תאורת חצר', ivr_digit: 4, current_state: 'off' },
+    ],
+  },
+  {
+    name: 'מכשיר הדגמה — בית כנסת',
+    plan: 'תוכנית שבת — בית כנסת (דוגמה)',
+    relays: [
+      { relay_no: 1, name: 'תאורת אולם', ivr_digit: 5, current_state: 'off' },
+      { relay_no: 2, name: 'מזגן אולם', ivr_digit: 6, current_state: 'off' },
+      { relay_no: 3, name: 'פלטה', ivr_digit: 7, current_state: 'off' },
+      { relay_no: 4, name: 'מיחם', ivr_digit: 8, current_state: 'on' },
+    ],
+  },
 ];
 
 // One reconciliation at a time per user — GET /me and GET /devices race on a
@@ -29,18 +49,24 @@ export async function ensureDemoState(userId) {
 }
 
 async function reconcile(userId) {
-  const rows = await query('SELECT id, device_type FROM devices WHERE user_id = ?', [userId]);
+  const rows = await query('SELECT id, device_type, relay_count FROM devices WHERE user_id = ? ORDER BY id', [userId]);
   const hasReal = rows.some((r) => r.device_type !== 'demo');
   const demos = rows.filter((r) => r.device_type === 'demo');
   if (hasReal) {
     for (const d of demos) await deleteDemoDevice(d.id).catch((e) => console.error(`demo device ${d.id} cleanup:`, e.message));
     return false;
   }
-  if (!rows.length) {
-    await createDemoDevice(userId).catch((e) => console.error(`demo device for user ${userId}:`, e.message));
-    return true;
+  // Demo-only account. The demo set is disposable, so a stale one (a different
+  // device count or channel layout than DEMO_DEVICES — e.g. the single
+  // 2-channel device of v2.0) is rebuilt from scratch rather than patched.
+  const stale = demos.length !== DEMO_DEVICES.length
+    || demos.some((d, i) => Number(d.relay_count) !== DEMO_DEVICES[i].relays.length);
+  if (demos.length && !stale) return true;
+  for (const d of demos) await deleteDemoDevice(d.id).catch((e) => console.error(`demo device ${d.id} rebuild:`, e.message));
+  for (const [i, spec] of DEMO_DEVICES.entries()) {
+    await createDemoDevice(userId, spec).catch((e) => console.error(`demo device ${i + 1} for user ${userId}:`, e.message));
   }
-  return demos.length > 0; // demo-only account (possibly with the demo "removed")
+  return true;
 }
 
 // Real devices arrive through these flows — the demo leaves BEFORE their quota
@@ -50,16 +76,16 @@ export async function removeDemoDevices(userId) {
   for (const d of rows) await deleteDemoDevice(d.id).catch((e) => console.error(`demo device ${d.id} cleanup:`, e.message));
 }
 
-async function createDemoDevice(userId) {
+async function createDemoDevice(userId, spec) {
   const res = await query(
     `INSERT INTO devices (user_id, device_uid, device_type, name, mqtt_secret_hash, mqtt_passwd_hash,
                           relay_count, is_online, mute_alerts, sync_status, created_by)
      VALUES (?, NULL, 'demo', ?, '', '', ?, TRUE, TRUE, 'synced', 'system:demo')`,
-    [userId, DEVICE_NAME, RELAYS.length],
+    [userId, spec.name, spec.relays.length],
   );
   const deviceId = res.insertId;
   const relayIds = [];
-  for (const r of RELAYS) {
+  for (const r of spec.relays) {
     const rr = await query(
       `INSERT INTO relays (device_id, user_id, relay_no, name, ivr_digit, current_state, state_updated_at, sort_order, created_by)
        VALUES (?,?,?,?,?,?, UTC_TIMESTAMP(), ?, 'system:demo')`,
@@ -71,7 +97,7 @@ async function createDemoDevice(userId) {
   await savePlan({
     userId,
     planId: `demo${deviceId}`,
-    name: 'תוכנית שבת (דוגמה)',
+    name: spec.plan,
     relayIds,
     schedulers: [
       { action: 'on', repeat_type: 'weekly', time: '18:00', daily: false, days: [6] },
