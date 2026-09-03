@@ -143,28 +143,22 @@ export const Badge = ({ ok, children }) => (
 
 export const CodeChip = ({ children }) => <span className="code-chip">{children}</span>;
 
-// The TelTech brand mark (2026-09 lockup): a power-button ring whose gap holds a
-// small flame — itself a ring (donut) with a spike tip and a pointed hole, echoing
-// the power symbol. Brand colors are fixed: steel-blue ring, orange flame with the
-// hole punched out (evenodd) so the background shows through; pass ring="white"
-// (or any color) for dark surfaces.
-export const Logo = ({ size = 20, ring = '#226DB5' }) => (
-  <svg viewBox="0 0 64 64" width={size} height={size} aria-hidden="true">
-    <path fill="none" stroke={ring} strokeWidth="6" strokeLinecap="round" d="M22.25 22.1 A17 17 0 1 0 41.75 22.1" />
-    <path fill="#F49200" fillRule="evenodd"
-      d="M32 1.5 Q29.8 8 28.7 11.8 A8 8 0 1 0 35.3 11.8 Q34.2 8 32 1.5 Z M32 10.5 Q31 13.6 30.2 15.6 A4 4 0 1 0 33.8 15.6 Q33 13.6 32 10.5 Z" />
-  </svg>
+// The TelTech brand (2026-09): the official artwork itself, extracted with
+// transparency into public/brand/ — mark.png (power-button ring whose gap holds a
+// flame-donut), word.png (custom type, droplet inside each e), tagline.png. Images
+// rather than SVG/text so the app matches the designer's file exactly.
+export const Logo = ({ size = 20 }) => (
+  <img src="/brand/mark.png" alt="" aria-hidden="true" draggable={false}
+    style={{ height: size, width: 'auto' }} />
 );
 
-// The TelTech wordmark from the brand lockup: "Tel" + tagline in brand navy,
-// "Tech" in the mark's steel blue.
+// size = the TelTech word height in px; the tagline scales with it at the
+// lockup's original ratio so the pair keeps the designed proportions.
 export const Wordmark = ({ size = 21, tagline = false }) => (
-  <span className="inline-flex flex-col leading-none font-sans">
-    <b dir="ltr" style={{ fontSize: size }}>
-      <span style={{ color: '#212E52' }}>Tel</span>
-      <span style={{ color: '#226DB5' }}>Tech</span>
-    </b>
-    {tagline && <span className="font-normal text-[11px] mt-1" style={{ color: '#212E52' }}>בית כשר חכם</span>}
+  <span className="inline-flex flex-col items-center">
+    <img src="/brand/word.png" alt="TelTech" draggable={false} style={{ height: size, width: 'auto' }} />
+    {tagline && <img src="/brand/tagline.png" alt="בית כשר חכם" draggable={false}
+      style={{ height: size * 0.374, width: 'auto', marginTop: size * 0.18 }} />}
   </span>
 );
 

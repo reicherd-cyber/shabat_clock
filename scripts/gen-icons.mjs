@@ -61,13 +61,14 @@ function flameShape(x, y, yTip, yJoin, w, yc, r) {
   return false;
 }
 
+// Numbers measured from the official artwork (ring midline r17 ⇒ 12.2px/unit).
 const flameMask = (px, py, size, scale) => {
   const [x, y] = norm(px, py, size, scale);
-  return flameShape(x, y, 1.5 / 64, 11.8 / 64, 3.3 / 64, 19 / 64, 8 / 64);
+  return flameShape(x, y, 6.8 / 64, 14.2 / 64, 3.6 / 64, 21 / 64, 7.7 / 64);
 };
 const flameHoleMask = (px, py, size, scale) => {
   const [x, y] = norm(px, py, size, scale);
-  return flameShape(x, y, 10.5 / 64, 15.6 / 64, 1.8 / 64, 19 / 64, 4 / 64);
+  return flameShape(x, y, 14.3 / 64, 17.8 / 64, 1.9 / 64, 21 / 64, 4.1 / 64);
 };
 
 function renderIcon(size, { maskable = false } = {}) {
