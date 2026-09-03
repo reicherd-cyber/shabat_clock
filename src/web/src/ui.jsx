@@ -143,27 +143,28 @@ export const Badge = ({ ok, children }) => (
 
 export const CodeChip = ({ children }) => <span className="code-chip">{children}</span>;
 
-// The TelTech brand mark ("flame power"): a power-button ring whose stem is a
-// Shabbat-candle flame. The ring follows currentColor — white inside the azure
-// header tile, azure via text-accent on light surfaces; the flame is brand gold
-// with a punched-out core (evenodd) so the background shows through.
-export const Logo = ({ size = 20 }) => (
+// The TelTech brand mark (2026-09 lockup): a power-button ring whose gap holds a
+// small flame — itself a ring (donut) with a spike tip and a pointed hole, echoing
+// the power symbol. Brand colors are fixed: steel-blue ring, orange flame with the
+// hole punched out (evenodd) so the background shows through; pass ring="white"
+// (or any color) for dark surfaces.
+export const Logo = ({ size = 20, ring = '#226DB5' }) => (
   <svg viewBox="0 0 64 64" width={size} height={size} aria-hidden="true">
-    <path fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round" d="M22.25 22.1 A17 17 0 1 0 41.75 22.1" />
-    <path fill="#E9A13B" fillRule="evenodd"
-      d="M32 6 C36.5 12 40 15.5 40 21 A8 8 0 0 1 24 21 C24 15.5 27.5 12 32 6 Z M32 14 C34.5 17 36 18.5 36 21 A4 4 0 0 1 28 21 C28 18.5 29.5 17 32 14 Z" />
+    <path fill="none" stroke={ring} strokeWidth="6" strokeLinecap="round" d="M22.25 22.1 A17 17 0 1 0 41.75 22.1" />
+    <path fill="#F49200" fillRule="evenodd"
+      d="M32 1.5 Q29.8 8 28.7 11.8 A8 8 0 1 0 35.3 11.8 Q34.2 8 32 1.5 Z M32 10.5 Q31 13.6 30.2 15.6 A4 4 0 1 0 33.8 15.6 Q33 13.6 32 10.5 Z" />
   </svg>
 );
 
-// The TelTech wordmark from the brand lockup: "Tel" in brand ink, "Tech" in
-// accent blue, optional "בית כשר חכם" tagline beneath.
+// The TelTech wordmark from the brand lockup: "Tel" + tagline in brand navy,
+// "Tech" in the mark's steel blue.
 export const Wordmark = ({ size = 21, tagline = false }) => (
   <span className="inline-flex flex-col leading-none font-sans">
     <b dir="ltr" style={{ fontSize: size }}>
-      <span style={{ color: '#1B2140' }}>Tel</span>
-      <span style={{ color: '#1877F2' }}>Tech</span>
+      <span style={{ color: '#212E52' }}>Tel</span>
+      <span style={{ color: '#226DB5' }}>Tech</span>
     </b>
-    {tagline && <span className="text-muted font-normal text-[11px] mt-1">בית כשר חכם</span>}
+    {tagline && <span className="font-normal text-[11px] mt-1" style={{ color: '#212E52' }}>בית כשר חכם</span>}
   </span>
 );
 

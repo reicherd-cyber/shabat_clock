@@ -1,7 +1,7 @@
 // Generates the app's favicon/PWA icon set — pure JS rasterizer (pngjs only, no
 // native image libs) so it runs anywhere without a build toolchain. Draws the same
-// mark used in the app header: the TelTech "flame power" logo — a white power-button
-// ring whose stem is a gold Shabbat-candle flame, on the brand-azure rounded square.
+// mark used in the app header: the TelTech logo — a white power-button ring whose
+// gap holds an orange flame-donut with a spike tip, on the brand-azure rounded square.
 // Run: node scripts/gen-icons.mjs   (writes into src/web/public/)
 import { PNG } from 'pngjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -12,7 +12,7 @@ mkdirSync(OUT_DIR, { recursive: true });
 
 const ACCENT = [0x18, 0x77, 0xf2]; // brand azure, matches --color-accent
 const WHITE = [0xff, 0xff, 0xff];
-const GOLD = [0xe9, 0xa1, 0x3b];   // candle-flame gold, matches the Logo component
+const GOLD = [0xf4, 0x92, 0x00];   // brand-orange flame, matches the Logo component
 const SS = 4; // supersample factor for anti-aliasing
 
 function roundedRectMask(x, y, w, h, r) {
@@ -49,24 +49,25 @@ function ringMask(px, py, size, scale) {
   return false;
 }
 
-// Teardrop: circle at (0.5, yc) radius r, plus a point tapering to (0.5, yTip).
-function teardrop(x, y, yTip, yc, r) {
+// Flame (2026-09 mark): circle at (0.5, yc) radius r plus a spike tapering from
+// half-width w at yJoin up to a point at yTip — the donut body and its tip.
+function flameShape(x, y, yTip, yJoin, w, yc, r) {
   const dx = x - 0.5, dy = y - yc;
   if (dx * dx + dy * dy <= r * r) return true;
-  if (y >= yTip && y < yc) {
-    const t = (y - yTip) / (yc - yTip);
-    return Math.abs(dx) <= r * Math.pow(t, 1.4);
+  if (y >= yTip && y < yJoin) {
+    const t = (y - yTip) / (yJoin - yTip);
+    return Math.abs(dx) <= w * Math.pow(t, 1.3);
   }
   return false;
 }
 
 const flameMask = (px, py, size, scale) => {
   const [x, y] = norm(px, py, size, scale);
-  return teardrop(x, y, 6 / 64, 21 / 64, 8 / 64);
+  return flameShape(x, y, 1.5 / 64, 11.8 / 64, 3.3 / 64, 19 / 64, 8 / 64);
 };
 const flameHoleMask = (px, py, size, scale) => {
   const [x, y] = norm(px, py, size, scale);
-  return teardrop(x, y, 14 / 64, 21 / 64, 4 / 64);
+  return flameShape(x, y, 10.5 / 64, 15.6 / 64, 1.8 / 64, 19 / 64, 4 / 64);
 };
 
 function renderIcon(size, { maskable = false } = {}) {
