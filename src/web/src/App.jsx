@@ -105,7 +105,7 @@ function UserLayout() {
       )}
       {demo && !impersonating && (
         <div className="bg-[#F49200] text-white text-sm px-6 py-2 text-center font-medium">
-          מצב הדגמה — אתם מנסים את המערכת על מכשיר לדוגמה. לאחר רכישת מכשיר, הכניסה תוביל לחשבון האישי שלכם.
+          מצב הדגמה — בחשבון שלכם מכשיר לדוגמה כדי להתנסות במערכת. כשמכשיר אמיתי יצורף לחשבון, מכשיר הדוגמה יוסר אוטומטית.
         </div>
       )}
       <header className="flex items-center justify-between px-6 py-3.5 border-b border-line bg-bg sticky top-0 z-10">

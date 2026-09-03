@@ -142,21 +142,16 @@ export default function Settings() {
   });
 
   if (!me) return <p className="text-muted">טוען…</p>;
-  // The shared demo account (משתמש בדיקה): identity is locked — no name/email/PIN
-  // changes; the server refuses them too (blockInDemo). Phones stay open (wiped
-  // on the next visitor's entry).
-  const demo = Boolean(me.demo);
   return (
     <div className="space-y-5">
       <Card>
         <h3 className="font-bold mb-1 flex items-center gap-1.5"><UserRound size={16} className="text-accent" />פרטי חשבון</h3>
-        {demo && <p className="text-sm mb-1" style={{ color: '#B45309' }}>במצב הדגמה לא ניתן לשנות את השם, כתובות האימייל והקוד הסודי.</p>}
         <div className="flex items-center gap-2 flex-wrap">
           {nameEdit == null ? (
             <>
               <span>{me.user.full_name}</span>
-              {!demo && <button title="עריכת שם" className="text-muted hover:text-ink cursor-pointer"
-                onClick={() => setNameEdit(me.user.full_name)}><Pencil size={14} /></button>}
+              <button title="עריכת שם" className="text-muted hover:text-ink cursor-pointer"
+                onClick={() => setNameEdit(me.user.full_name)}><Pencil size={14} /></button>
             </>
           ) : (
             <>
@@ -178,16 +173,16 @@ export default function Settings() {
             <div key={em.id} className="flex items-center gap-2 flex-wrap border border-line rounded-xl px-3 py-1.5">
               <span dir="ltr" className="text-sm">{em.email}</span>
               {!!em.is_primary && me.emails.length > 1 && <Badge ok>ראשי</Badge>}
-              {!em.is_primary && !demo && (
+              {!em.is_primary && (
                 <Button variant="ghost" disabled={busy} onClick={() => makePrimaryEmail(em)}>קבע כראשי</Button>
               )}
-              {!demo && <button disabled={busy} title="הסרת האימייל"
+              <button disabled={busy} title="הסרת האימייל"
                 className={`ms-auto text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
-                onClick={() => setRemovingEmail(em)}><Trash2 size={15} /></button>}
+                onClick={() => setRemovingEmail(em)}><Trash2 size={15} /></button>
             </div>
           ))}
           {emailAdd == null ? (
-            !demo && <Button variant="ghost" onClick={() => setEmailAdd('')}>
+            <Button variant="ghost" onClick={() => setEmailAdd('')}>
               <span className="inline-flex items-center gap-1"><Plus size={15} />הוספת אימייל</span>
             </Button>
           ) : (
@@ -227,9 +222,9 @@ export default function Settings() {
           </Select>
         </div>
         <p className="text-muted text-xs mt-1">קובע איך בוחרים שעה בתזמונים במכשיר הזה.</p>
-        {!demo && <Button variant="ghost" className="mt-2" onClick={() => setPinForm({ old_pin: '', new_pin: '' })}>
+        <Button variant="ghost" className="mt-2" onClick={() => setPinForm({ old_pin: '', new_pin: '' })}>
           <span className="inline-flex items-center gap-1"><KeyRound size={14} />שינוי קוד סודי</span>
-        </Button>}
+        </Button>
       </Card>
 
       <Card>
