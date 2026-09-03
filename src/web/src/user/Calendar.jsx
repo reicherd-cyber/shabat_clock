@@ -309,24 +309,24 @@ function ChannelSelect({ relays, hidden, onToggle, onAll, colorOf }) {
   );
 }
 
-// Immediate on/off from the calendar: every column head carries a button made
-// of the TelTech mark (the brand's power-ring artwork). It sends the same
-// command as the main screen (POST /relays/:id/command) for that one channel;
-// lit + green ring when the channel is on, dimmed when off, pulsing while the
-// device is asked, disabled when the device is offline.
+// Immediate on/off from the calendar: every column head carries a switch whose
+// knob is the TelTech mark (the brand's power-ring artwork) — see .mark-switch
+// in index.css. It sends the same command as the main screen
+// (POST /relays/:id/command) for that one channel; the track lights in the
+// channel's color when on, pulses while the device is asked, and is disabled
+// when the device is offline.
 const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
-function HeadSwitch({ relay, busy, onToggle }) {
+function HeadSwitch({ relay, color, busy, onToggle }) {
   const on = relay.current_state === 'on';
   const title = !relay.online ? 'המכשיר מנותק — אי אפשר להפעיל' : on ? 'כיבוי מיידי' : 'הדלקה מיידית';
   return (
-    <button type="button" title={title} aria-label={`${title}: ${relay.name}`} aria-pressed={on}
-      disabled={!relay.online || busy}
-      onClick={(e) => { e.stopPropagation(); onToggle(relay); }}
-      className={`shrink-0 inline-grid place-items-center w-8 h-8 rounded-full border transition cursor-pointer
-        disabled:cursor-not-allowed ${busy ? 'animate-pulse' : ''}
-        ${on ? 'border-on bg-on-bg shadow-[0_0_0_2px_var(--color-on-bg)]' : 'border-line bg-surface opacity-55 grayscale hover:opacity-100 hover:grayscale-0'}`}>
-      <Logo size={18} />
-    </button>
+    <label className={`mark-switch ${busy ? 'busy' : ''}`} title={title}
+      style={{ '--switch-color': color }} onClick={(e) => e.stopPropagation()}>
+      <input type="checkbox" checked={on} disabled={!relay.online || busy}
+        aria-label={`${title}: ${relay.name}`} onChange={() => onToggle(relay)} />
+      <span className="track" />
+      <span className="knob"><Logo size={17} /></span>
+    </label>
   );
 }
 
@@ -349,7 +349,7 @@ function ColumnHead({ relay, colorOf, busy, onToggle }) {
             </span>
           </div>
         </span>
-        <HeadSwitch relay={relay} busy={busy} onToggle={onToggle} />
+        <HeadSwitch relay={relay} color={colorOf(relay.id)} busy={busy} onToggle={onToggle} />
       </div>
     </div>
   );

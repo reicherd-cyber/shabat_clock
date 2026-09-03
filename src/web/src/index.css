@@ -44,6 +44,30 @@ body {
 .toggle.busy .track { opacity: .6; animation: togglepulse 1s ease-in-out infinite; }
 @keyframes togglepulse { 50% { opacity: .35; } }
 
+/* mark-switch — the calendar's immediate on/off (column heads): the same pill as
+   .toggle, but the knob carries the TelTech mark and the ON track takes the
+   channel's own color (--switch-color, the app-wide per-channel color). Knob on
+   the right = off, slides left = on — same direction as .toggle in RTL. */
+.mark-switch { position: relative; width: 58px; height: 32px; flex-shrink: 0; display: inline-block; cursor: pointer; }
+.mark-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.mark-switch .track {
+  position: absolute; inset: 0; border-radius: 99px; background: #D3DFF0;
+  box-shadow: inset 0 1px 2px rgba(27, 33, 64, .10); transition: background .2s;
+}
+.mark-switch .knob {
+  position: absolute; top: 3px; right: 3px; width: 26px; height: 26px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .28); display: grid; place-items: center;
+  transition: transform .2s;
+}
+.mark-switch .knob img { filter: grayscale(1); opacity: .5; transition: filter .2s, opacity .2s; }
+.mark-switch input:checked ~ .track { background: var(--switch-color, var(--color-accent)); }
+.mark-switch input:checked ~ .knob { transform: translateX(-26px); }
+.mark-switch input:checked ~ .knob img { filter: none; opacity: 1; }
+.mark-switch:hover .track { filter: brightness(.96); }
+.mark-switch input:focus-visible ~ .track { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.mark-switch input:disabled ~ .track, .mark-switch input:disabled ~ .knob { opacity: .45; cursor: not-allowed; }
+.mark-switch.busy .track { animation: togglepulse 1s ease-in-out infinite; }
+
 /* online/offline badge with glowing dot — mockup .badge */
 .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; padding: 3px 10px; border-radius: 99px; white-space: nowrap; }
 .badge .dot { width: 7px; height: 7px; border-radius: 50%; }
