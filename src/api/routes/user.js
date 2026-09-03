@@ -7,6 +7,7 @@ import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, setPrimaryUserEmail } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
+import { ensureDemoState } from '../../services/demo.js';
 import { patchDevice } from '../../services/devices.js';
 import { sendImmediateCommand } from '../../services/commands.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules, savePlan, previewScheduler } from '../../services/schedules.js';
@@ -28,22 +29,19 @@ const actorOf = (req) => (req.auth.imp
   : { type: 'user', id: req.auth.userId });
 const act = (req, action, entity, entityId, diff = null) => logAction(actorOf(req), action, entity, entityId, diff);
 
-// The shared משתמש בדיקה account (req.auth.demo = the visitor's real user id):
-// identity stays locked — no name/email/PIN changes on an account many people
-// share. Everything else (devices, plans, phones) is free; a reset wipes it.
-const blockInDemo = (req) => {
-  if (req.auth.demo) throw errors.forbidden('לא זמין במצב הדגמה');
-};
-
 userRouter.get('/me', async (req, res, next) => {
   try {
+    // Demo reconciliation (see services/demo.js): a device-less account gets its
+    // demo device here/on /devices; a real device's arrival deletes it. The
+    // returned flag drives the demo banner + the settings note.
+    const demo = await ensureDemoState(req.auth.userId);
     const user = await getUser(req.auth.userId);
     const phones = await query(
       'SELECT id, phone, label, is_primary, verified_at FROM user_phones WHERE user_id = ? AND deleted_at IS NULL',
       [req.auth.userId],
     );
     const emails = await listUserEmails(req.auth.userId);
-    res.json({ user, phones, emails, demo: Boolean(req.auth.demo) });
+    res.json({ user, phones, emails, demo });
   } catch (e) { next(e); }
 });
 
@@ -53,7 +51,6 @@ userRouter.patch('/me', async (req, res, next) => {
   try {
     const fields = {};
     if (req.body?.full_name !== undefined) {
-      blockInDemo(req);
       const full_name = String(req.body.full_name).trim();
       if (!full_name || full_name.length > 100) {
         throw errors.validation('full_name required, up to 100 chars', { full_name: '1-100' });
@@ -78,7 +75,6 @@ userRouter.patch('/me', async (req, res, next) => {
 
 userRouter.post('/me/pin', async (req, res, next) => {
   try {
-    blockInDemo(req);
     const { old_pin, new_pin } = req.body || {};
     const [user] = await query('SELECT * FROM users WHERE id = ?', [req.auth.userId]);
     if (!verifyPin(user, String(old_pin || ''))) throw errors.unauthenticated('Wrong PIN');
@@ -93,7 +89,6 @@ userRouter.post('/me/pin', async (req, res, next) => {
 // email field) and no PIN gate — the login session suffices.
 userRouter.post('/me/emails', async (req, res, next) => {
   try {
-    blockInDemo(req);
     const row = await addUserEmail({ userId: req.auth.userId, email: req.body?.email, actor: actorStr(actorOf(req)) });
     await act(req, 'create', 'user_email', row.id, { after: { email: row.email } });
     res.status(201).json(row);
@@ -104,7 +99,6 @@ userRouter.post('/me/emails', async (req, res, next) => {
 // hands primary (and the login-code destination) to the oldest remaining address.
 userRouter.delete('/me/emails/:id', async (req, res, next) => {
   try {
-    blockInDemo(req);
     const { removed } = await removeUserEmail({ userId: req.auth.userId, emailId: Number(req.params.id), actor: actorStr(actorOf(req)) });
     await act(req, 'delete', 'user_email', Number(req.params.id), { before: { email: removed } });
     res.json({ ok: true });
@@ -113,7 +107,6 @@ userRouter.delete('/me/emails/:id', async (req, res, next) => {
 
 userRouter.post('/me/emails/:id/primary', async (req, res, next) => {
   try {
-    blockInDemo(req);
     await setPrimaryUserEmail({ userId: req.auth.userId, emailId: Number(req.params.id), actor: actorStr(actorOf(req)) });
     await act(req, 'update', 'user_email', Number(req.params.id), { after: { is_primary: true } });
     res.json({ ok: true });
@@ -247,6 +240,7 @@ userRouter.delete('/me/phones/:id', async (req, res, next) => {
 // ── dashboard ──
 userRouter.get('/devices', async (req, res, next) => {
   try {
+    await ensureDemoState(req.auth.userId);
     res.json(await listDevicesWithRelays(req.auth.userId));
   } catch (e) { next(e); }
 });

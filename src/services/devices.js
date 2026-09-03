@@ -67,6 +67,10 @@ export function assertTimezone(tz) {
 }
 
 export async function provisionDevice({ user_id, name, relay_count, device_uid = null, timezone = 'Asia/Jerusalem', actor = null }) {
+  // A real device replaces the account's demo device — gone before the quota
+  // and digit checks so it never blocks or shifts the registration.
+  const { removeDemoDevices } = await import('./demo.js');
+  await removeDemoDevices(user_id);
   timezone = assertTimezone(timezone);
   const rc = Number(relay_count);
   if (!Number.isInteger(rc) || rc < 1 || rc > 20) throw errors.validation('relay_count must be 1–20', { relay_count: '1-20' });
@@ -196,6 +200,11 @@ async function recoverRemovedDevice(conn, device) {
 // is_enabled transitions stash/recover the device's identity (see stashRemovedDevice);
 // returns the recovery report when a device was recovered, undefined otherwise.
 export async function patchDevice(deviceId, patch, { userId = null, actor = null } = {}) {
+  // Admin owner-reassign hands the target a real device — its demo goes first.
+  if (patch.user_id !== undefined) {
+    const { removeDemoDevices } = await import('./demo.js');
+    await removeDemoDevices(Number(patch.user_id));
+  }
   let recovery;
   let passwdEntry = null;
   let shellyWipe = null;
@@ -355,6 +364,9 @@ export async function probeShelly({ transport = 'lan', ip, mac }) {
 
 // Register a probed Shelly as a device + its relays for a user. relays: [{relay_no, name, ivr_digit}].
 export async function registerShellyDevice({ userId, transport = 'lan', ip, mac, name, relays, actor = null }) {
+  // A real device replaces the account's demo device (see services/demo.js).
+  const { removeDemoDevices } = await import('./demo.js');
+  await removeDemoDevices(userId);
   const probe = await probeShelly({ transport, ip, mac }); // re-verify live + get fresh states
   if (probe.already_registered_as) throw errors.conflict('CONFLICT', `מכשיר זה כבר רשום (מספר ${probe.already_registered_as})`);
   const wanted = (relays || []).filter((r) => probe.channels.some((c) => c.relay_no === Number(r.relay_no)));
@@ -457,6 +469,9 @@ export async function transferPreview(deviceId, targetUserId) {
 // an entry keeps its current digit. Any final digit clashing at the target,
 // duplicated, or out of 1–20 rejects the whole transfer.
 export async function transferDevice(deviceId, targetUserId, { actor = null, codes = null } = {}) {
+  // The incoming real device replaces the target account's demo device.
+  const { removeDemoDevices } = await import('./demo.js');
+  await removeDemoDevices(targetUserId);
   return withTransaction(async (conn) => {
     const [dRows] = await conn.query('SELECT * FROM devices WHERE id = ? FOR UPDATE', [deviceId]);
     const device = dRows[0];

@@ -14,18 +14,6 @@ import { env } from '../../config/env.js';
 
 export const authRouter = Router();
 
-// A user login lands in their OWN account only if it ever owned a device; a
-// device-less person is signed into the shared משתמש בדיקה account instead (the
-// dm claim keeps their real id for the audit trail). See services/demo.js.
-async function userLoginPayload(userId, fullName) {
-  const { demoLoginFor } = await import('../../services/demo.js');
-  const demo = await demoLoginFor(userId).catch((e) => { console.error('demo login gate:', e.message); return null; });
-  if (demo) {
-    return { token: signUserToken(demo.id, null, userId), user: { id: demo.id, full_name: demo.full_name }, demo: true };
-  }
-  return { token: signUserToken(userId), user: { id: Number(userId), full_name: fullName } };
-}
-
 // Public login-page config — the Google client id is public by design (it ships in
 // every browser that renders the button); empty means the button is hidden.
 authRouter.get('/auth/config', (req, res) => {
@@ -82,7 +70,7 @@ authRouter.post('/auth/google', adminLoginLimiter, async (req, res, next) => {
     if (rows.length) {
       const u = rows[0];
       if (u.status !== 'active') throw errors.unauthenticated('החשבון מושעה — פנו לתמיכה');
-      return res.json(await userLoginPayload(u.id, u.full_name));
+      return res.json({ token: signUserToken(u.id), user: { id: Number(u.id), full_name: u.full_name } });
     }
     // New person. Google gives us a verified address and a display name.
     const fullName = String(claims.name || email.split('@')[0]).trim().slice(0, 100) || 'משתמש חדש';
@@ -99,7 +87,8 @@ authRouter.post('/auth/google', adminLoginLimiter, async (req, res, next) => {
     );
     await logAction({ type: 'user', id: user.id }, 'signup', 'user', user.id, { via: 'google', email, terms: true });
     res.status(201).json({
-      ...(await userLoginPayload(user.id, user.full_name)),
+      token: signUserToken(user.id),
+      user: { id: Number(user.id), full_name: user.full_name },
       created: true, pin,
     });
   } catch (e) { next(e); }
@@ -231,7 +220,7 @@ authRouter.post('/auth/otp/verify', otpVerifyIpLimiter, async (req, res, next) =
     if (!row.verified_at) {
       await query('UPDATE user_phones SET verified_at = UTC_TIMESTAMP() WHERE id = ?', [row.phone_id]);
     }
-    res.json(await userLoginPayload(row.id, row.full_name));
+    res.json({ token: signUserToken(row.id), user: { id: Number(row.id), full_name: row.full_name } });
   } catch (e) { next(e); }
 });
 

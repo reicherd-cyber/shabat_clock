@@ -434,10 +434,6 @@ export function startScheduler() {
       if (day !== lastZmanimDay && !(p.hh === 0 && p.mm < 5)) {
         await refreshAnchoredTimes();
         lastZmanimDay = day;
-        // Nightly demo-account cleanup: visitors reset it on entry, this catches
-        // whatever the last visitor of the day left behind.
-        const { demoUserId, resetDemoUser } = await import('../services/demo.js');
-        if (await demoUserId()) await resetDemoUser();
       }
     } catch (e) { console.error('zmanim refresh:', e); }
   };
