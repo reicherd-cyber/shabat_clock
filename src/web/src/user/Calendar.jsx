@@ -335,12 +335,14 @@ function HeadSwitch({ relay, color, busy, onToggle }) {
 function ColumnHead({ relay, colorOf, busy, onToggle }) {
   const on = relay.current_state === 'on';
   return (
-    <div className="flex-1 min-w-[96px] py-2 px-2 border-line border-s">
-      <div className="flex items-center justify-center gap-2">
-        <span className="min-w-0 text-center">
-          <span className="inline-flex items-center gap-1.5 max-w-full">
+    <div className="flex-1 min-w-[96px] py-2 px-2 border-line border-s @container">
+      {/* Narrow column (phone, many channels): the switch goes under the text so
+          it never eats the name; from ~200px the two sit side by side. */}
+      <div className="flex flex-col items-center gap-1.5 @[200px]:flex-row @[200px]:justify-center @[200px]:gap-2">
+        <span className="min-w-0 max-w-full text-center">
+          <span className="flex items-center justify-center gap-1.5 max-w-full">
             <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colorOf(relay.id) }} />
-            <span className="font-bold text-[13.5px] truncate">{relay.name}</span>
+            <span className="min-w-0 font-bold text-[13.5px] truncate">{relay.name}</span>
           </span>
           <div className="text-[11px] text-muted truncate">
             {relay.device}
