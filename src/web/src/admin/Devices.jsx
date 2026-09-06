@@ -121,7 +121,7 @@ export default function Devices() {
     const mac = String(shelly.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
     if (mac.length !== 12) { setError(new Error('כתובת MAC לא תקינה — 12 תווים הקסדצימליים')); return; }
     setError(null);
-    setShelly({ ...shelly, step: 'offline', offline: true, mac, relays: shelly.relays?.length ? shelly.relays : offlineRelays(2) });
+    setShelly({ ...shelly, step: 'offline', offline: true, mac, relays: shelly.relays?.length ? shelly.relays : [] });
   };
 
   if (!devices) return <p className="text-muted">טוען…</p>;
@@ -181,7 +181,7 @@ export default function Devices() {
           <Button disabled={busy} onClick={downloadUniversal}>
             <span className="inline-flex items-center gap-1.5"><Download size={15} />1. קובץ התקנה ל-Shelly חדש</span>
           </Button>
-          <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: users[0]?.id || '', name: '' })}>2. שיוך Shelly ללקוח</Button>
+          <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: '', name: '' })}>2. שיוך Shelly ללקוח</Button>
         </div>
       </div>
       {[
@@ -367,7 +367,7 @@ export default function Devices() {
                 <td className="p-3 whitespace-nowrap space-x-1 space-x-reverse">
                   {p.status === 'prepared' && (
                     <Button variant="ghost" className="!px-2 !py-1 text-xs"
-                      onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: p.mac, user_id: users[0]?.id || '', name: '' })}>
+                      onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: p.mac, user_id: '', name: '' })}>
                       הפעל ללקוח ›
                     </Button>
                   )}
@@ -395,14 +395,15 @@ export default function Devices() {
               מכשיר שהוגדר ומחובר לשרת — בחרו לקוח, הזינו את ה-MAC ולחצו "בדוק חיבור".
             </p>
             <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>
+              <option value="">בחרו לקוח…</option>
               {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
             </Select>
             <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל 80f3dac7deec)" value={shelly.mac} onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
             <ErrorNote error={error} />
-            <Button className="w-full" disabled={busy || (shelly.transport === 'mqtt' ? !shelly.mac : !shelly.ip)} onClick={shellyProbe}>בדוק חיבור ›</Button>
+            <Button className="w-full" disabled={busy || !shelly.user_id || (shelly.transport === 'mqtt' ? !shelly.mac : !shelly.ip)} onClick={shellyProbe}>בדוק חיבור ›</Button>
             {shelly.transport === 'mqtt' && (
-              <Button variant="ghost" className="w-full" disabled={busy || !shelly.mac} onClick={shellyOffline}
+              <Button variant="ghost" className="w-full" disabled={busy || !shelly.user_id || !shelly.mac} onClick={shellyOffline}
                 title="המכשיר עדיין לא הותקן או לא מחובר לאינטרנט — שייכו אותו עכשיו וההגדרה תושלם אוטומטית כשיתחבר">
                 המכשיר לא מחובר עכשיו? הוסף בלי בדיקת חיבור ›
               </Button>
@@ -419,7 +420,7 @@ export default function Devices() {
               </div>
             </Card>
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
-            <label className="text-sm flex items-center gap-2">מספר ערוצים במכשיר:
+            <label className="text-sm flex items-center gap-2">מספר ערוצים במכשיר: <span className="text-off">*</span>
               <div className="flex rounded-[10px] border border-line overflow-hidden">
                 {[1, 2, 3, 4].map((n) => (
                   <button key={n} type="button"
@@ -448,7 +449,7 @@ export default function Devices() {
             <ErrorNote error={error} />
             <div className="flex gap-2">
               <Button variant="ghost" className="flex-1" onClick={() => setShelly({ ...shelly, step: 1, offline: false })}>‹ חזרה</Button>
-              <Button className="flex-1" disabled={busy} onClick={shellyRegister}>הוסף מכשיר</Button>
+              <Button className="flex-1" disabled={busy || !shelly.relays.length} onClick={shellyRegister}>הוסף מכשיר</Button>
             </div>
           </div>
         )}
