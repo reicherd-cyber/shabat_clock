@@ -438,7 +438,7 @@ export default function Devices() {
                 <Input placeholder="שם" value={r.name}
                   onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, name: e.target.value } : x) })} />
                 <label className="text-sm flex items-center gap-1 whitespace-nowrap">קוד IVR:
-                  <Input className="w-16" inputMode="numeric" value={r.ivr_digit}
+                  <Input className="w-24" inputMode="numeric" value={r.ivr_digit}
                     onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, ivr_digit: e.target.value } : x) })} />
                 </label>
               </div>
@@ -548,7 +548,7 @@ export default function Devices() {
                 <Input placeholder="שם" value={r.name}
                   onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, name: e.target.value } : x) })} />
                 <label className="text-sm flex items-center gap-1 whitespace-nowrap">קוד IVR:
-                  <Input className="w-16" inputMode="numeric" value={r.ivr_digit}
+                  <Input className="w-24" inputMode="numeric" value={r.ivr_digit}
                     onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, ivr_digit: e.target.value } : x) })} />
                 </label>
               </div>

@@ -319,8 +319,10 @@ async function relayMenu(session, ctx) {
   // a variable min<max range left every real call stuck unanswered at this exact
   // step (confirmed via call_logs: every real call reaching RELAY_SELECT was
   // abandoned, min=1/max=2 never actually submitted on Yemot's real DTMF collection).
-  // Width only grows to 2 digits once a relay actually needs it (digit ≥ 10).
-  const width = Math.max(...relays.map((r) => r.ivr_digit)) >= 10 ? 2 : 1;
+  // Width = the longest code this user has (1 digit for 1–9, 2 for 10–99, …);
+  // codes are matched by numeric value, so a short code is keyed with leading
+  // zeros when a longer one exists (e.g. 01 when another relay is 12).
+  const width = String(Math.max(1, ...relays.map((r) => Number(r.ivr_digit) || 1))).length;
   return ask(prompt, { min: width, max: width });
 }
 

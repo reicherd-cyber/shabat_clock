@@ -2,6 +2,7 @@
 // Plaintext secret exists only in memory here and in the response — never logged,
 // never stored (bcrypt + mosquitto-format verifiers only).
 import crypto from 'node:crypto';
+import { isValidIvrDigit, IVR_DIGIT_MSG, IVR_DIGIT_RULE } from './relays.js';
 import fs from 'node:fs';
 import QRCode from 'qrcode';
 import { query, withTransaction } from '../db/pool.js';
@@ -382,7 +383,7 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
   if (wanted.length === 0) throw errors.validation('יש לבחור לפחות ערוץ אחד');
   for (const r of wanted) {
     const digit = Number(r.ivr_digit);
-    if (!Number.isInteger(digit) || digit < 1 || digit > 20) throw errors.validation('קוד IVR חייב להיות 1–20', { ivr_digit: '1-20' });
+    if (!isValidIvrDigit(digit)) throw errors.validation(IVR_DIGIT_MSG, { ivr_digit: IVR_DIGIT_RULE });
   }
   return withTransaction(async (conn) => {
     const [uRows] = await conn.query('SELECT id FROM users WHERE id = ? FOR UPDATE', [userId]);
@@ -481,7 +482,7 @@ export async function firstContactShelly(device) {
 
 // What the device's channels would look like at the target user — each one's
 // current IVR digit, whether it collides there, and a proposed replacement (the
-// lowest free digit, 1–20) — feeding the transfer modal's registration-style
+// lowest free digit) — feeding the transfer modal's registration-style
 // channel list, prefilled with the available numbers.
 export async function transferPreview(deviceId, targetUserId) {
   const relays = await query(
@@ -502,8 +503,8 @@ export async function transferPreview(deviceId, targetUserId) {
     let proposed = current;
     if (conflict) {
       while (used.has(next)) next++;
-      proposed = next <= 20 ? next : null;
-      if (proposed != null) used.add(proposed);
+      proposed = next;
+      used.add(proposed);
     }
     return { relay_id: r.id, name: r.name, current, conflict, proposed };
   });
@@ -521,7 +522,7 @@ export async function transferPreview(deviceId, targetUserId) {
 // `codes` ({relay_id: digit}) lets the admin pick each channel's IVR digit at
 // the target (the modal prefills them from transferPreview); a channel without
 // an entry keeps its current digit. Any final digit clashing at the target,
-// duplicated, or out of 1–20 rejects the whole transfer.
+// duplicated, or not a valid code rejects the whole transfer.
 export async function transferDevice(deviceId, targetUserId, { actor = null, codes = null } = {}) {
   // The incoming real device replaces the target account's demo device.
   const { removeDemoDevices } = await import('./demo.js');
@@ -548,8 +549,8 @@ export async function transferDevice(deviceId, targetUserId, { actor = null, cod
     const clashes = [];
     for (const r of mine) {
       const chosen = codes && codes[r.id] != null ? Number(codes[r.id]) : Number(r.ivr_digit);
-      if (!Number.isInteger(chosen) || chosen < 1 || chosen > 20) {
-        throw errors.validation(`קוד IVR של "${r.name}" חייב להיות 1–20`, { codes: '1-20' });
+      if (!isValidIvrDigit(chosen)) {
+        throw errors.validation(`קוד IVR של "${r.name}": ${IVR_DIGIT_MSG}`, { codes: IVR_DIGIT_RULE });
       }
       if (seen.has(chosen)) {
         throw errors.conflict('IVR_DIGIT_TAKEN', `קוד ${chosen} נבחר ליותר מערוץ אחד`);

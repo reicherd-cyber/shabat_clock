@@ -276,7 +276,7 @@ export default function Settings() {
                 </span>
                 <label className="text-sm flex items-center gap-1">
                   קוד:
-                  <Input className="w-16" inputMode="numeric" defaultValue={r.ivr_digit}
+                  <Input className="w-24" inputMode="numeric" defaultValue={r.ivr_digit}
                     onBlur={(e) => Number(e.target.value) !== r.ivr_digit && patchRelay(r, { ivr_digit: Number(e.target.value) })} />
                 </label>
                 <Select value={r.boot_behavior} onChange={(e) => patchRelay(r, { boot_behavior: e.target.value })}>

@@ -9,6 +9,14 @@ async function pushAfterCommit(deviceIds) {
   }
 }
 
+// IVR code range (2026-09-07: the 1–20 cap is gone). Any positive integer up to
+// six digits — the phone menu collects a fixed width equal to the longest code
+// the user has, so a huge code only makes dialing longer, never ambiguous.
+export const IVR_DIGIT_MAX = 999999;
+export const IVR_DIGIT_RULE = '1-999999';
+export const IVR_DIGIT_MSG = 'קוד IVR חייב להיות מספר שלם חיובי (עד 6 ספרות)';
+export const isValidIvrDigit = (d) => Number.isInteger(d) && d >= 1 && d <= IVR_DIGIT_MAX;
+
 export async function listDevicesWithRelays(userId) {
   const devices = await query(
     `SELECT id, name, is_online, last_seen_at, sync_status, fw_version, relay_count, is_enabled
@@ -55,8 +63,8 @@ export async function patchRelay({ userId, relayId, patch, force = false, actor 
     // Digit invariant: PATCH may never set ivr_digit NULL on a live row [D38].
     if ('ivr_digit' in fields) {
       const digit = Number(fields.ivr_digit);
-      if (!Number.isInteger(digit) || digit < 1 || digit > 20) {
-        throw errors.validation('ivr_digit must be 1–20', { ivr_digit: '1-20' });
+      if (!isValidIvrDigit(digit)) {
+        throw errors.validation(IVR_DIGIT_MSG, { ivr_digit: IVR_DIGIT_RULE });
       }
       const [conflict] = await conn.query(
         'SELECT id FROM relays WHERE user_id = ? AND ivr_digit = ? AND id <> ?',
@@ -106,8 +114,8 @@ export async function adminCreateRelay({ deviceId, relay_no, name, ivr_digit, so
       throw errors.validation(`relay_no must be 1–${device.relay_count}`, { relay_no: `1-${device.relay_count}` }); // [D40]
     }
     const digit = Number(ivr_digit);
-    if (!Number.isInteger(digit) || digit < 1 || digit > 20) {
-      throw errors.validation('ivr_digit is required (1–20) for a live relay', { ivr_digit: 'required 1-20' });
+    if (!isValidIvrDigit(digit)) {
+      throw errors.validation(IVR_DIGIT_MSG, { ivr_digit: 'required ' + IVR_DIGIT_RULE });
     }
     const [conflict] = await conn.query(
       'SELECT id FROM relays WHERE user_id = ? AND ivr_digit = ?', [device.user_id, digit],

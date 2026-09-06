@@ -13,7 +13,7 @@ import { query } from '../db/pool.js';
 
 // Two simulated 4-channel devices (a home and a shul) so the dashboard, the
 // plans and the IVR digit map all look like a real multi-device account. IVR
-// digits are unique per user (1–20): device 1 takes 1–4, device 2 takes 5–8.
+// digits are unique per user: device 1 takes 1–4, device 2 takes 5–8.
 const DEMO_DEVICES = [
   {
     name: 'מכשיר הדגמה — בית',
