@@ -119,6 +119,12 @@ async function handleShellyMessage(topic, buf) {
     // per-minute tick retry can land entirely outside that window; the seconds
     // right after hello are the most reliable ones the device has.
     if (isOnline && !device.is_online) {
+      // Registered before it ever connected: finish the hardware side now
+      // (fw/model, real channel count, restore_last) before the usual reconcile.
+      if (device.first_contact_pending) {
+        const { firstContactShelly } = await import('../services/devices.js');
+        await firstContactShelly(device).catch((e) => console.error(`shelly first contact ${device.device_uid}:`, e.message));
+      }
       const { reconcileShellyDevice } = await import('../services/shelly-schedules.js');
       reconcileShellyDevice(device).catch((e) => console.error('shelly reconcile:', e.message));
       if (device.sync_status !== 'synced') {

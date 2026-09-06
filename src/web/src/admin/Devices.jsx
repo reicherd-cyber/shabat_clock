@@ -37,7 +37,7 @@ export default function Devices() {
   // results are cached per device id (the אבחון button reuses them too).
   useEffect(() => {
     if (!devices) return;
-    devices.filter((d) => !d.is_online && d.device_uid && !reasons[d.id]).forEach((d) => {
+    devices.filter((d) => !d.is_online && d.device_uid && !d.first_contact_pending && !reasons[d.id]).forEach((d) => {
       adminApi.get(`/devices/${d.id}/diagnosis`)
         .then((r) => setReasons((m) => ({ ...m, [d.id]: r })))
         .catch(() => setReasons((m) => ({ ...m, [d.id]: { verdict: 'error', text: 'האבחון נכשל' } })));
@@ -109,10 +109,20 @@ export default function Devices() {
     const result = await adminApi.post('/shelly/register', {
       user_id: Number(shelly.user_id), transport: shelly.transport, ip: shelly.ip, mac: shelly.mac,
       name: shelly.name, relays: shelly.relays,
+      ...(shelly.offline ? { offline: true, relay_count: shelly.relays.length } : {}),
     });
     setShelly({ ...shelly, step: 3, result });
     await refresh();
   });
+  // Register without a connection: the admin states the channel count; the
+  // hardware side is completed automatically on the device's first hello.
+  const offlineRelays = (n) => Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, name: `ערוץ ${i + 1}`, ivr_digit: i + 1, state: 'unknown' }));
+  const shellyOffline = () => {
+    const mac = String(shelly.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+    if (mac.length !== 12) { setError(new Error('כתובת MAC לא תקינה — 12 תווים הקסדצימליים')); return; }
+    setError(null);
+    setShelly({ ...shelly, step: 'offline', offline: true, mac, relays: shelly.relays?.length ? shelly.relays : offlineRelays(2) });
+  };
 
   if (!devices) return <p className="text-muted">טוען…</p>;
   // Removed devices (is_enabled=false) are hidden by default — a toggle reveals
@@ -200,11 +210,15 @@ export default function Devices() {
                     {d.name}
                     {!!d.mute_alerts && <span className="ms-1" title="התראות מייל מושתקות למכשיר זה">🔕</span>}
                     {!d.is_enabled && <span className="ms-1"><Badge ok={false}>מושהה</Badge></span>}
+                    {!!d.first_contact_pending && d.is_enabled && (
+                      <span className="ms-1" title="נרשם ללא בדיקת חיבור — ההגדרה תושלם בחיבור הראשון"><Badge ok={false}>ממתין לחיבור ראשון</Badge></span>
+                    )}
                   </td>
                   <td className="p-3">{d.owner_name}</td>
                   {withReason && (
                     <td className="p-3 text-xs">
                       {!d.device_uid ? <span className="text-muted">לא חובר מעולם</span>
+                        : d.first_contact_pending ? <span className="text-muted">טרם התחבר — נרשם ללא בדיקת חיבור</span>
                         : reasons[d.id]
                           ? (() => {
                               const r = reasons[d.id];
@@ -374,7 +388,7 @@ export default function Devices() {
       </Card>
 
       <Modal open={!!shelly} onClose={() => setShelly(null)}
-        title={{ 1: 'שיוך Shelly ללקוח', prep: 'סקריפטים למכשיר מסוים', 2: 'שיוך Shelly — הגדרת ערוצים', 3: 'שיוך Shelly — הושלם' }[shelly?.step] || 'Shelly'}>
+        title={{ 1: 'שיוך Shelly ללקוח', prep: 'סקריפטים למכשיר מסוים', 2: 'שיוך Shelly — הגדרת ערוצים', offline: 'שיוך Shelly — ללא חיבור', 3: 'שיוך Shelly — הושלם' }[shelly?.step] || 'Shelly'}>
         {shelly?.step === 1 && (
           <div className="space-y-3">
             <p className="text-sm text-muted">
@@ -387,6 +401,55 @@ export default function Devices() {
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
             <ErrorNote error={error} />
             <Button className="w-full" disabled={busy || (shelly.transport === 'mqtt' ? !shelly.mac : !shelly.ip)} onClick={shellyProbe}>בדוק חיבור ›</Button>
+            {shelly.transport === 'mqtt' && (
+              <Button variant="ghost" className="w-full" disabled={busy || !shelly.mac} onClick={shellyOffline}
+                title="המכשיר עדיין לא הותקן או לא מחובר לאינטרנט — שייכו אותו עכשיו וההגדרה תושלם אוטומטית כשיתחבר">
+                המכשיר לא מחובר עכשיו? הוסף בלי בדיקת חיבור ›
+              </Button>
+            )}
+          </div>
+        )}
+        {shelly?.step === 'offline' && (
+          <div className="space-y-3">
+            <Card className="text-sm">
+              <div>MAC: <span dir="ltr">{shelly.mac}</span> · <b>ללא חיבור</b></div>
+              <div className="text-muted text-xs mt-1">
+                המכשיר יופיע כ"מנותק" עד שיתחבר לשרת. בחיבור הראשון יושלמו אוטומטית: זיהוי הדגם, אימות מספר הערוצים,
+                הגדרת restore_last לכל ערוץ, ומצב הערוצים.
+              </div>
+            </Card>
+            <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
+            <label className="text-sm flex items-center gap-2">מספר ערוצים במכשיר:
+              <div className="flex rounded-[10px] border border-line overflow-hidden">
+                {[1, 2, 3, 4].map((n) => (
+                  <button key={n} type="button"
+                    onClick={() => setShelly({ ...shelly, relays: offlineRelays(n).map((r, i) => shelly.relays[i] ? { ...shelly.relays[i], relay_no: r.relay_no } : r) })}
+                    className={`px-3 py-1 text-sm cursor-pointer ${shelly.relays.length === n ? 'bg-accent text-white font-bold' : 'text-muted hover:text-ink'}`}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <span className="text-muted text-xs">(Plus 1 = 1 · Pro 2 = 2 · Pro 4 = 4)</span>
+            </label>
+            {shelly.relays.map((r, i) => (
+              <div key={r.relay_no} className="flex items-center gap-2">
+                <span className="text-muted text-xs whitespace-nowrap">ערוץ {r.relay_no}</span>
+                <Input placeholder="שם" value={r.name}
+                  onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, name: e.target.value } : x) })} />
+                <label className="text-sm flex items-center gap-1 whitespace-nowrap">קוד IVR:
+                  <Input className="w-16" inputMode="numeric" value={r.ivr_digit}
+                    onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, ivr_digit: e.target.value } : x) })} />
+                </label>
+              </div>
+            ))}
+            <p className="text-off text-xs font-medium">
+              ⚠ אם בחיבור הראשון יתברר שלמכשיר יש מספר ערוצים אחר, מספר הערוצים יתוקן אוטומטית ותירשם התראה ביומן המכשיר.
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setShelly({ ...shelly, step: 1, offline: false })}>‹ חזרה</Button>
+              <Button className="flex-1" disabled={busy} onClick={shellyRegister}>הוסף מכשיר</Button>
+            </div>
           </div>
         )}
         {shelly?.step === 'prep' && !shelly.prep && (
@@ -504,7 +567,11 @@ export default function Devices() {
           <div className="space-y-3 text-center">
             <div className="text-4xl">✅</div>
             <p><b>{shelly.name}</b> נוסף בהצלחה (מכשיר מספר {shelly.result.id}, {shelly.result.relays} ממסרים).</p>
-            <p className="text-sm text-muted">הממסרים זמינים עכשיו בלוח הבקרה של המשתמש ובתפריט הטלפוני.</p>
+            <p className="text-sm text-muted">
+              {shelly.offline
+                ? 'המכשיר רשום ומחכה לחיבור הראשון — ברגע שיתחבר לשרת ההגדרה תושלם אוטומטית והוא יופיע כ"מחובר".'
+                : 'הממסרים זמינים עכשיו בלוח הבקרה של המשתמש ובתפריט הטלפוני.'}
+            </p>
             <Button className="w-full" onClick={() => setShelly(null)}>סגור</Button>
           </div>
         )}

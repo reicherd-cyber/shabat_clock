@@ -363,12 +363,33 @@ export async function probeShelly({ transport = 'lan', ip, mac }) {
 }
 
 // Register a probed Shelly as a device + its relays for a user. relays: [{relay_no, name, ivr_digit}].
-export async function registerShellyDevice({ userId, transport = 'lan', ip, mac, name, relays, actor = null }) {
+// offline=true (MQTT only): the device has never connected, so there is nothing
+// to probe — the admin states the channel count, the row is created with
+// first_contact_pending and the hardware side (fw/model, real channel count,
+// restore_last, live states) is completed by firstContactShelly() on hello.
+export async function registerShellyDevice({ userId, transport = 'lan', ip, mac, name, relays, actor = null, offline = false, relay_count = null }) {
   // A real device replaces the account's demo device (see services/demo.js).
   const { removeDemoDevices } = await import('./demo.js');
   await removeDemoDevices(userId);
-  const probe = await probeShelly({ transport, ip, mac }); // re-verify live + get fresh states
-  if (probe.already_registered_as) throw errors.conflict('CONFLICT', `מכשיר זה כבר רשום (מספר ${probe.already_registered_as})`);
+  let probe;
+  if (offline) {
+    if (transport !== 'mqtt') throw errors.validation('רישום ללא חיבור אפשרי רק דרך MQTT');
+    const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+    if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה — 12 תווים הקסדצימליים', { mac: 'invalid' });
+    const n = Number(relay_count);
+    if (!Number.isInteger(n) || n < 1 || n > 4) throw errors.validation('מספר ערוצים חייב להיות 1–4', { relay_count: '1-4' });
+    const [existing] = await query('SELECT id FROM devices WHERE is_enabled = TRUE AND device_uid = ?', [uid]);
+    if (existing) throw errors.conflict('CONFLICT', `מכשיר זה כבר רשום (מספר ${existing.id})`);
+    const [prep] = await query('SELECT model FROM prepared_devices WHERE mac = ?', [uid]);
+    probe = {
+      transport, mac: uid, model: prep?.model || null, fw_version: null,
+      channels: Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, state: 'unknown' })),
+      already_registered_as: null,
+    };
+  } else {
+    probe = await probeShelly({ transport, ip, mac }); // re-verify live + get fresh states
+    if (probe.already_registered_as) throw errors.conflict('CONFLICT', `מכשיר זה כבר רשום (מספר ${probe.already_registered_as})`);
+  }
   const wanted = (relays || []).filter((r) => probe.channels.some((c) => c.relay_no === Number(r.relay_no)));
   if (wanted.length === 0) throw errors.validation('יש לבחור לפחות ערוץ אחד');
   for (const r of wanted) {
@@ -392,10 +413,11 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     const [d] = await conn.query(
       `INSERT INTO devices
          (user_id, device_uid, device_type, transport, ip_address, name,
-          mqtt_secret_hash, mqtt_passwd_hash, relay_count, is_online, fw_version, sync_status, created_by)
-       VALUES (?,?, 'shelly', ?,?,?, '', '', ?, TRUE, ?, 'pending', ?)`,
+          mqtt_secret_hash, mqtt_passwd_hash, relay_count, is_online, first_contact_pending, fw_version, sync_status, created_by)
+       VALUES (?,?, 'shelly', ?,?,?, '', '', ?, ?, ?, ?, 'pending', ?)`,
       [userId, probe.mac, transport, transport === 'lan' ? ip : null,
-        name || `Shelly (${probe.model})`, probe.channels.length, probe.fw_version, actor ?? null],
+        name || (probe.model ? `Shelly (${probe.model})` : 'Shelly'), probe.channels.length,
+        offline ? 0 : 1, offline ? 1 : 0, probe.fw_version, actor ?? null],
     );
     for (const r of wanted) {
       const live = probe.channels.find((c) => c.relay_no === Number(r.relay_no));
@@ -409,8 +431,9 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
   }).then(async (result) => {
     // Every channel (selected or not) gets restore_last so a reboot/power cut
     // never silently flips outputs. Best-effort — the device answered the probe
-    // moments ago; a failure logs but doesn't undo the registration.
-    for (const c of probe.channels) {
+    // moments ago; a failure logs but doesn't undo the registration. An offline
+    // registration defers this to firstContactShelly().
+    for (const c of offline ? [] : probe.channels) {
       await shellySetRestoreLast({ transport, ip_address: ip, device_uid: probe.mac }, c.relay_no)
         .catch((e) => console.error(`restore_last relay ${c.relay_no} of shelly ${probe.mac}:`, e.message));
     }
@@ -423,6 +446,51 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     ).catch((e) => console.error('prepared_devices activate:', e.message));
     return result;
   });
+}
+
+// First hello of a Shelly that was registered offline: learn what the hardware
+// really is (fw/model), reconcile the admin's channel count with the real one,
+// apply restore_last to every channel (the restore_last rule), and clear the
+// flag so the health monitor starts watching it. Called from the MQTT online
+// handler; the caller then runs the usual reconcile + schedule push.
+export async function firstContactShelly(device) {
+  const uid = device.device_uid;
+  const { shellyMqttRpc } = await import('../mqtt/client.js');
+  const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 6000).catch(() => null);
+  if (!info?.result) throw new Error('no GetDeviceInfo reply');
+  const model = info.result.model || info.result.app || null;
+  const fw = info.result.ver || null;
+  let real = 0;
+  for (let relayNo = 1; relayNo <= 4; relayNo++) {
+    const r = await shellyMqttRpc(uid, 'Switch.GetStatus', { id: relayNo - 1 }, 4000).catch(() => null);
+    if (!r || r.error) break;
+    real = relayNo;
+  }
+  const events = [];
+  if (real && real !== Number(device.relay_count)) {
+    events.push(['channel_mismatch', { registered: Number(device.relay_count), real }]);
+    console.warn(`shelly ${uid}: registered with ${device.relay_count} channels, hardware has ${real}`);
+  }
+  await query(
+    `UPDATE devices SET fw_version = COALESCE(?, fw_version), relay_count = ?, first_contact_pending = FALSE,
+            name = IF(name = 'Shelly' AND ? IS NOT NULL, CONCAT('Shelly (', ?, ')'), name)
+     WHERE id = ?`,
+    [fw, real || device.relay_count, model, model, device.id],
+  );
+  for (let relayNo = 1; relayNo <= (real || device.relay_count); relayNo++) {
+    await shellySetRestoreLast({ transport: 'mqtt', device_uid: uid }, relayNo)
+      .catch((e) => console.error(`restore_last relay ${relayNo} of shelly ${uid} (first contact):`, e.message));
+  }
+  await query(
+    'UPDATE prepared_devices SET model = COALESCE(model, ?), fw_version = COALESCE(fw_version, ?) WHERE mac = ?',
+    [model, fw, uid],
+  ).catch(() => {});
+  events.push(['first_contact', { model, fw, channels: real || null }]);
+  for (const [event, payload] of events) {
+    await query('INSERT INTO device_events (device_id, event, payload) VALUES (?,?,?)', [device.id, event, JSON.stringify(payload)])
+      .catch(() => {});
+  }
+  return { model, fw, channels: real };
 }
 
 // What the device's channels would look like at the target user — each one's
@@ -534,7 +602,7 @@ export async function transferDevice(deviceId, targetUserId, { actor = null, cod
 export async function listAllDevices() {
   return query(
     `SELECT d.id, d.user_id, u.full_name AS owner_name, d.device_uid, d.removed_uid, d.name, d.device_type, d.fw_version, d.timezone,
-            d.relay_count, d.is_online, d.last_seen_at, d.schedule_version, d.device_ack_version,
+            d.relay_count, d.is_online, d.first_contact_pending, d.last_seen_at, d.schedule_version, d.device_ack_version,
             d.sync_status, d.sync_error, d.created_at, d.is_enabled, d.mute_alerts
      FROM devices d JOIN users u ON u.id = d.user_id ORDER BY d.id`,
   );

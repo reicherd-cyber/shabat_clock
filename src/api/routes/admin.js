@@ -352,8 +352,9 @@ adminRouter.post('/shelly/register', requireWrite, async (req, res, next) => {
       transport,
       ip: cleanLanIp(transport, b.ip), mac: String(b.mac || '').trim(),
       name: b.name, relays: b.relays, actor: adminActor(req),
+      offline: b.offline === true, relay_count: b.relay_count,
     });
-    await audit(req, 'register_shelly', 'device', result.id, { after: { ip: b.ip, mac: b.mac, transport: b.transport, user_id: b.user_id } });
+    await audit(req, 'register_shelly', 'device', result.id, { after: { ip: b.ip, mac: b.mac, transport: b.transport, user_id: b.user_id, offline: b.offline === true } });
     res.status(201).json(result);
   } catch (e) { next(e); }
 });
