@@ -307,7 +307,7 @@ export default function Devices() {
               <span className="text-muted text-sm font-normal">({demoDevices.length})</span></span>
           </h3>
           <p className="text-muted text-xs">
-            מכשירים מדומים בחשבונות ללא מכשיר אמיתי — תמיד "מחוברים", לא נספרים במכסה ובסטטיסטיקה, ונמחקים מעצמם ברגע שמשויך ללקוח מכשיר אמיתי.
+            מכשירים מדומים בחשבונות ללא מכשיר אמיתי — תמיד "מחוברים", לא נספרים בסטטיסטיקה, ונמחקים מעצמם ברגע שמשויך ללקוח מכשיר אמיתי.
           </p>
           <Card flush className="overflow-x-auto">
             <table className="w-full text-sm">

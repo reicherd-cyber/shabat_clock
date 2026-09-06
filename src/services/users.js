@@ -20,7 +20,7 @@ export function normalizeEmail(v) {
   return email;
 }
 
-export async function createUser({ full_name, pin, require_pin = false, max_devices = 3, notes = null, email = null, actor = null }) {
+export async function createUser({ full_name, pin, require_pin = false, notes = null, email = null, actor = null }) {
   if (!/^\d{4}$/.test(String(pin))) throw errors.validation('PIN must be 4 digits', { pin: 'must be 4 digits' });
   const pin_hash = bcrypt.hashSync(String(pin), BCRYPT_COST);
   const cleanEmail = normalizeEmail(email);
@@ -32,8 +32,8 @@ export async function createUser({ full_name, pin, require_pin = false, max_devi
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const res = await query(
-        'INSERT INTO users (full_name, ivr_code, pin_hash, require_pin, max_devices, notes, email, created_by) VALUES (?,?,?,?,?,?,?,?)',
-        [full_name, randomIvrCode(), pin_hash, require_pin ? 1 : 0, max_devices, notes, cleanEmail, actor],
+        'INSERT INTO users (full_name, ivr_code, pin_hash, require_pin, notes, email, created_by) VALUES (?,?,?,?,?,?,?)',
+        [full_name, randomIvrCode(), pin_hash, require_pin ? 1 : 0, notes, cleanEmail, actor],
       );
       if (cleanEmail) {
         await query(
@@ -190,7 +190,7 @@ export async function setUserEmailAdmin({ userId, email, actor = null }) {
 
 export async function getUser(id) {
   const rows = await query(
-    'SELECT id, full_name, ivr_code, require_pin, status, max_devices, language, zmanim_region, notes, email, created_at FROM users WHERE id = ?',
+    'SELECT id, full_name, ivr_code, require_pin, status, language, zmanim_region, notes, email, created_at FROM users WHERE id = ?',
     [id],
   );
   return rows[0] || null;

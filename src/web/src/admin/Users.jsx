@@ -102,7 +102,7 @@ export default function Users() {
       <ErrorNote error={error} />
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-muted text-sm">{shown.length} משתמשים{filtering ? ' (מסונן)' : ''}</p>
-        <Button onClick={() => setCreateForm({ full_name: '', pin: '', phone: '', email: '', require_pin: false, max_devices: 3 })}>+ משתמש חדש</Button>
+        <Button onClick={() => setCreateForm({ full_name: '', pin: '', phone: '', email: '', require_pin: false })}>+ משתמש חדש</Button>
       </div>
       <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -118,7 +118,7 @@ export default function Users() {
                 <td className="p-3 font-semibold">{u.full_name}</td>
                 <td className="p-3" dir="ltr">{u.email || <span className="text-muted">—</span>}</td>
                 <td className="p-3" dir="ltr">{u.ivr_code}</td>
-                <td className="p-3">{u.device_count}/{u.max_devices}</td>
+                <td className="p-3">{u.device_count}</td>
                 <td className="p-3"><Badge ok={u.status === 'active'}>{u.status === 'active' ? 'פעיל' : 'מושעה'}</Badge></td>
                 <td className="p-3">{u.require_pin ? 'כן' : 'לא'}</td>
                 <td className="p-3 space-x-1 space-x-reverse whitespace-nowrap">

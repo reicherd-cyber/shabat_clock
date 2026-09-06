@@ -79,11 +79,8 @@ export async function provisionDevice({ user_id, name, relay_count, device_uid =
   const passwdHash = mosquittoPasswdHash(secret);
 
   const device = await withTransaction(async (conn) => {
-    const [uRows] = await conn.query('SELECT id, max_devices FROM users WHERE id = ? FOR UPDATE', [user_id]);
+    const [uRows] = await conn.query('SELECT id FROM users WHERE id = ? FOR UPDATE', [user_id]);
     if (!uRows[0]) throw errors.notFound('NOT_FOUND', 'User not found');
-    // Removed devices are transparent to the quota — only active ones count.
-    const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_enabled = TRUE', [user_id]);
-    if (dCount[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'User device limit reached');
     const [res] = await conn.query(
       `INSERT INTO devices (user_id, device_uid, name, mqtt_secret_hash, mqtt_passwd_hash, timezone, relay_count, created_by)
        VALUES (?,?,?,?,?,?,?,?)`,
@@ -153,13 +150,6 @@ async function recoverRemovedDevice(conn, device) {
   const recovery = { restored_uid: null, lost_uid: null, lost_digits: [] };
   let passwdEntry = null;
 
-  const [uRows] = await conn.query('SELECT max_devices FROM users WHERE id = ?', [device.user_id]);
-  const [cnt] = await conn.query(
-    'SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_enabled = TRUE AND id <> ?',
-    [device.user_id, device.id],
-  );
-  if (cnt[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'המשתמש הגיע למכסת המכשירים — לא ניתן לשחזר');
-
   if (device.removed_uid) {
     const [taken] = await conn.query('SELECT id FROM devices WHERE device_uid = ?', [device.removed_uid]);
     // device_uid IS NULL guard: don't clobber a UID the same patch just set explicitly.
@@ -194,7 +184,7 @@ async function recoverRemovedDevice(conn, device) {
 }
 
 // PATCH per §3.3: rename/timezone always; relay_count & uid-set only while unflashed;
-// reassign owner in one transaction with uq_ivr + max_devices pre-checks.
+// reassign owner in one transaction with a uq_ivr pre-check.
 // userId scopes to the owner's own device and restricts the patch to name/is_enabled
 // (the user panel's rename + remove/restore use case) — admin callers omit it for full access.
 // is_enabled transitions stash/recover the device's identity (see stashRemovedDevice);
@@ -271,10 +261,8 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
 
     if (patch.user_id !== undefined && Number(patch.user_id) !== Number(device.user_id)) {
       const target = Number(patch.user_id);
-      const [uRows] = await conn.query('SELECT id, max_devices FROM users WHERE id = ? FOR UPDATE', [target]);
+      const [uRows] = await conn.query('SELECT id FROM users WHERE id = ? FOR UPDATE', [target]);
       if (!uRows[0]) throw errors.notFound('NOT_FOUND', 'Target user not found');
-      const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_enabled = TRUE', [target]);
-      if (dCount[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'Target user device limit reached');
       const [digitConflicts] = await conn.query(
         `SELECT r.ivr_digit FROM relays r
          WHERE r.device_id = ? AND r.deleted_at IS NULL AND r.ivr_digit IS NOT NULL
@@ -397,10 +385,8 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     if (!Number.isInteger(digit) || digit < 1 || digit > 20) throw errors.validation('קוד IVR חייב להיות 1–20', { ivr_digit: '1-20' });
   }
   return withTransaction(async (conn) => {
-    const [uRows] = await conn.query('SELECT id, max_devices FROM users WHERE id = ? FOR UPDATE', [userId]);
+    const [uRows] = await conn.query('SELECT id FROM users WHERE id = ? FOR UPDATE', [userId]);
     if (!uRows[0]) throw errors.notFound('NOT_FOUND', 'User not found');
-    const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_enabled = TRUE', [userId]);
-    if (dCount[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'המשתמש הגיע למכסת המכשירים');
     const [taken] = await conn.query(
       'SELECT ivr_digit FROM relays WHERE user_id = ? AND ivr_digit IN (?)',
       [userId, wanted.map((r) => Number(r.ivr_digit))],
@@ -545,12 +531,8 @@ export async function transferDevice(deviceId, targetUserId, { actor = null, cod
     const device = dRows[0];
     if (!device) throw errors.notFound('NOT_FOUND', 'Device not found');
     if (Number(device.user_id) === Number(targetUserId)) return { moved: false };
-    const [uRows] = await conn.query('SELECT id, max_devices FROM users WHERE id = ? FOR UPDATE', [targetUserId]);
+    const [uRows] = await conn.query('SELECT id FROM users WHERE id = ? FOR UPDATE', [targetUserId]);
     if (!uRows[0]) throw errors.notFound('NOT_FOUND', 'משתמש היעד לא נמצא');
-    if (device.is_enabled) {
-      const [dCount] = await conn.query('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_enabled = TRUE', [targetUserId]);
-      if (dCount[0].n >= uRows[0].max_devices) throw errors.conflict('MAX_DEVICES', 'משתמש היעד הגיע למכסת המכשירים שלו');
-    }
     const [mine] = await conn.query(
       'SELECT id, name, ivr_digit FROM relays WHERE device_id = ? AND deleted_at IS NULL AND ivr_digit IS NOT NULL ORDER BY ivr_digit',
       [deviceId],

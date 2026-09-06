@@ -97,7 +97,7 @@ adminRouter.post('/2fa/disable', async (req, res, next) => {
 adminRouter.get('/users', async (req, res, next) => {
   try {
     res.json(await query(
-      `SELECT u.id, u.full_name, u.ivr_code, u.require_pin, u.status, u.max_devices, u.notes, u.email, u.created_at,
+      `SELECT u.id, u.full_name, u.ivr_code, u.require_pin, u.status, u.notes, u.email, u.created_at,
               (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.device_type <> 'demo') AS device_count
        FROM users u ORDER BY u.id DESC`,
     ));
@@ -118,7 +118,7 @@ adminRouter.post('/users', requireWrite, async (req, res, next) => {
     const b = req.body || {};
     const user = await createUser({
       full_name: b.full_name, pin: b.pin,
-      require_pin: Boolean(b.require_pin), max_devices: b.max_devices ?? 3, notes: b.notes ?? null,
+      require_pin: Boolean(b.require_pin), notes: b.notes ?? null,
       email: b.email ?? null, actor: adminActor(req),
     });
     // Admin-created phones are verified immediately — audit-logged (§3.2 [D34]).
@@ -143,7 +143,7 @@ adminRouter.patch('/users/:id', requireWrite, async (req, res, next) => {
     const before = await getUser(req.params.id);
     if (!before) throw errors.notFound();
     const fields = {};
-    for (const k of ['full_name', 'require_pin', 'status', 'max_devices', 'notes']) {
+    for (const k of ['full_name', 'require_pin', 'status', 'notes']) {
       if (req.body?.[k] !== undefined) fields[k] = req.body[k];
     }
     if (Object.keys(fields).length) {
