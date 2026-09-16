@@ -51,6 +51,7 @@ export async function getAdminHistory(f = {}) {
     callCond.push('cl.started_at <= ?'); callParams.push(f.to);
   }
   if (f.device_id) { cmdCond.push('r.device_id = ?'); cmdParams.push(Number(f.device_id)); }
+  if (f.relay_id) { cmdCond.push('c.relay_id = ?'); cmdParams.push(Number(f.relay_id)); }
   if (f.source) { cmdCond.push('c.source = ?'); cmdParams.push(f.source); }
   if (f.action) { cmdCond.push('c.action = ?'); cmdParams.push(f.action); }
   if (f.status) { cmdCond.push('c.status = ?'); cmdParams.push(f.status); }
@@ -62,7 +63,7 @@ export async function getAdminHistory(f = {}) {
 
   let wantCmds = !f.type || f.type === 'cmd';
   let wantCalls = !f.type || f.type === 'call';
-  if (f.device_id || f.source || f.action || f.status) wantCalls = false;
+  if (f.device_id || f.relay_id || f.source || f.action || f.status) wantCalls = false;
   if (f.outcome || f.phone) wantCmds = false;
 
   if (c) {
@@ -115,7 +116,10 @@ export async function getAdminHistory(f = {}) {
   };
 }
 
-export async function getHistory({ userId, limit = 50, cursor = null }) {
+// User variant. Optional narrowing: relay_id (one channel) and kind — 'call'
+// (calls only) or a command source (ivr/web/schedule/admin). Either command
+// filter hides the calls, exactly like the admin variant does.
+export async function getHistory({ userId, limit = 50, cursor = null, relay_id = null, kind = null }) {
   limit = Math.min(Math.max(Number(limit) || 50, 1), 200);
   const c = cursor ? decodeCursor(cursor) : null;
 
@@ -124,29 +128,36 @@ export async function getHistory({ userId, limit = 50, cursor = null }) {
   let callWhere = '';
   const cmdParams = [userId];
   const callParams = [userId];
+  const SOURCES = ['ivr', 'web', 'schedule', 'admin'];
+  const source = SOURCES.includes(kind) ? kind : null;
+  const relayId = Number(relay_id) || null;
+  const wantCalls = !relayId && !source && kind !== 'cmd';
+  const wantCmds = kind !== 'call';
+  if (relayId) { cmdWhere += ' AND c.relay_id = ?'; cmdParams.push(relayId); }
+  if (source) { cmdWhere += ' AND c.source = ?'; cmdParams.push(source); }
   if (c) {
     const cts = new Date(c.ts);
     if (c.type === 'call') {
-      callWhere = 'AND (cl.started_at < ? OR (cl.started_at = ? AND cl.id < ?))';
+      callWhere += ' AND (cl.started_at < ? OR (cl.started_at = ? AND cl.id < ?))';
       callParams.push(cts, cts, c.id);
-      cmdWhere = 'AND c.requested_at <= ?'; // cmds at equal ts come after 'call'
+      cmdWhere += ' AND c.requested_at <= ?'; // cmds at equal ts come after 'call'
       cmdParams.push(cts);
     } else {
-      cmdWhere = 'AND (c.requested_at < ? OR (c.requested_at = ? AND c.id < ?))';
+      cmdWhere += ' AND (c.requested_at < ? OR (c.requested_at = ? AND c.id < ?))';
       cmdParams.push(cts, cts, c.id);
-      callWhere = 'AND cl.started_at < ?'; // calls at equal ts were already emitted
+      callWhere += ' AND cl.started_at < ?'; // calls at equal ts were already emitted
       callParams.push(cts);
     }
   }
 
-  const cmds = await query(
+  const cmds = !wantCmds ? [] : await query(
     `SELECT c.id, c.action, c.source, c.status, c.fail_reason, c.requested_at, c.relay_id, r.name AS relay_name
      FROM commands c JOIN relays r ON r.id = c.relay_id
      WHERE r.user_id = ? ${cmdWhere}
      ORDER BY c.requested_at DESC, c.id DESC LIMIT ?`,
     [...cmdParams, limit + 1],
   );
-  const calls = await query(
+  const calls = !wantCalls ? [] : await query(
     `SELECT cl.id, cl.phone, cl.menu_path, cl.outcome, cl.started_at, cl.ended_at
      FROM call_logs cl WHERE cl.user_id = ? ${callWhere}
      ORDER BY cl.started_at DESC, cl.id DESC LIMIT ?`,

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot } from '../ui.jsx';
+import { Card, Button, Select, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot } from '../ui.jsx';
 import { Lightbulb, X, PhoneCall } from 'lucide-react';
 
 // Mockup .hist rows: icon square · sentence · time at the far edge.
@@ -59,23 +59,48 @@ export default function History() {
   const colorOf = useMemo(() => channelColorOf(devices.filter((d) => d.is_enabled)
     .flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => r.id))), [devices]);
 
+  // Filters: one channel, and the kind of entry (calls, or commands by source).
+  // Both are server-side — the list is paged, so a client filter would show holes.
+  const [relayId, setRelayId] = useState('');
+  const [kind, setKind] = useState('');
+  const filtering = relayId !== '' || kind !== '';
+  const channels = devices.filter((d) => d.is_enabled)
+    .flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => ({ ...r, device_name: d.name })));
+  const multiDevice = devices.filter((d) => d.is_enabled).length > 1;
+
   const load = (reset = false) => run(async () => {
-    const q = !reset && cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
-    const res = await api.get(`/history?limit=30${q}`);
+    const q = new URLSearchParams({ limit: '30' });
+    if (!reset && cursor) q.set('cursor', cursor);
+    if (relayId) q.set('relay_id', relayId);
+    if (kind) q.set('kind', kind);
+    const res = await api.get(`/history?${q}`);
     setItems((prev) => reset ? res.items : [...prev, ...res.items]);
     setCursor(res.next_cursor);
     setDone(!res.next_cursor);
   });
-  useEffect(() => {
-    load(true);
-    api.get('/devices').then(setDevices).catch(() => {});
-  }, []);
+  useEffect(() => { load(true); }, [relayId, kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { api.get('/devices').then(setDevices).catch(() => {}); }, []);
 
   return (
     <>
       <SectionHead title="פעילות אחרונה" />
+      <div className="flex gap-2 items-center flex-wrap mb-3">
+        <Select className="py-2 text-sm flex-1 min-w-[10rem]" value={relayId} onChange={(e) => setRelayId(e.target.value)}>
+          <option value="">כל הערוצים</option>
+          {channels.map((r) => (
+            <option key={r.id} value={r.id}>{r.name}{multiDevice ? ` (${r.device_name})` : ''}</option>
+          ))}
+        </Select>
+        <Select className="py-2 text-sm flex-1 min-w-[10rem]" value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="">כל הפעולות</option>
+          <option value="cmd">פקודות בלבד</option>
+          {Object.entries(SOURCE_HE).map(([v, he]) => <option key={v} value={v}>{he}</option>)}
+          <option value="call">שיחות טלפון בלבד</option>
+        </Select>
+        {filtering && <Button variant="ghost" onClick={() => { setRelayId(''); setKind(''); }}>נקה סינון</Button>}
+      </div>
       <ErrorNote error={error} />
-      {items.length === 0 && !busy && <Card>אין פעילות עדיין.</Card>}
+      {items.length === 0 && !busy && <Card>{filtering ? 'אין פעילות שמתאימה לסינון.' : 'אין פעילות עדיין.'}</Card>}
       {items.length > 0 && (
         <Card flush>
           {items.map((it, i) => <Row key={`${it.type}:${it.id}`} item={it} first={i === 0} colorOf={colorOf} />)}

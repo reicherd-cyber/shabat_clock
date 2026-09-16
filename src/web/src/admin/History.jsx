@@ -8,28 +8,39 @@ const SOURCE_HE = { ivr: 'טלפון', web: 'אתר', schedule: 'תזמון', ad
 const STATUS_HE = { pending: 'ממתינה', sent: 'נשלחה', acked: 'בוצעה', failed: 'נכשלה' };
 const OUTCOME_HE = { command: 'פקודה', schedule: 'תזמון', status: 'בירור מצב', auth_fail: 'כשל זיהוי', abandoned: 'נותקה באמצע' };
 
-const EMPTY = { user_id: '', device_id: '', type: '', action: '', source: '', status: '', outcome: '', phone: '', fromDate: '', fromHour: '', toDate: '', toHour: '' };
+const EMPTY = { user_id: '', device_id: '', relay_id: '', type: '', action: '', source: '', status: '', outcome: '', phone: '', fromDate: '', fromHour: '', toDate: '', toHour: '' };
 
 export default function AdminHistory() {
   const [f, setF] = useState(EMPTY);
   const [users, setUsers] = useState([]);
   const [devices, setDevices] = useState([]);
+  const [relays, setRelays] = useState([]);
   const [items, setItems] = useState(null);
   const [cursor, setCursor] = useState(null);
   const { busy, error, run, setError } = useAsync();
   const set = (k) => (v) => setF((p) => ({ ...p, [k]: v }));
   const setEv = (k) => (e) => set(k)(e.target.value);
+  // Picking a device drops a channel that isn't on it.
+  const setDevice = (e) => setF((p) => {
+    const device_id = e.target.value;
+    const keep = !p.relay_id || relays.some((r) => String(r.id) === p.relay_id && (!device_id || String(r.device_id) === device_id));
+    return { ...p, device_id, relay_id: keep ? p.relay_id : '' };
+  });
+  const channelOptions = relays.filter((r) => (!f.device_id || String(r.device_id) === f.device_id)
+    && (!f.user_id || String(r.user_id) === f.user_id));
+  const deviceName = (id) => devices.find((d) => d.id === id)?.name || '';
 
   useEffect(() => {
     adminApi.get('/users').then(setUsers).catch(setError);
     adminApi.get('/devices').then(setDevices).catch(setError);
+    adminApi.get('/relays').then(setRelays).catch(setError);
   }, []);
 
   // DB stores UTC — convert the local date+hour before querying (same as CallLogs).
   const utc = (local) => new Date(local).toISOString().slice(0, 19).replace('T', ' ');
   const buildQuery = () => {
     const q = new URLSearchParams();
-    for (const k of ['user_id', 'device_id', 'type', 'action', 'source', 'status', 'outcome', 'phone']) if (f[k]) q.set(k, f[k]);
+    for (const k of ['user_id', 'device_id', 'relay_id', 'type', 'action', 'source', 'status', 'outcome', 'phone']) if (f[k]) q.set(k, f[k]);
     if (f.fromDate) q.set('from', utc(`${f.fromDate}T${(f.fromHour || '0').padStart(2, '0')}:00:00`));
     if (f.toDate) q.set('to', utc(`${f.toDate}T${(f.toHour !== '' ? f.toHour : '23').padStart(2, '0')}:59:59`));
     return q;
@@ -52,7 +63,7 @@ export default function AdminHistory() {
 
   const filtering = Object.keys(EMPTY).some((k) => f[k] !== '');
   // Server-side narrowing mirror: a command filter hides calls and vice versa (grey out the other group).
-  const cmdOnly = !!(f.device_id || f.action || f.source || f.status) || f.type === 'cmd';
+  const cmdOnly = !!(f.device_id || f.relay_id || f.action || f.source || f.status) || f.type === 'cmd';
   const callOnly = !!(f.outcome || f.phone) || f.type === 'call';
 
   return (
@@ -82,9 +93,15 @@ export default function AdminHistory() {
         </div>
         <div className={`flex gap-2 items-center flex-wrap ${callOnly ? 'opacity-40 pointer-events-none' : ''}`}>
           <span className="text-muted text-sm">פקודות:</span>
-          <Select className="py-2 text-sm w-44" value={f.device_id} onChange={setEv('device_id')}>
+          <Select className="py-2 text-sm w-44" value={f.device_id} onChange={setDevice}>
             <option value="">כל המכשירים</option>
             {devices.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.owner_name})</option>)}
+          </Select>
+          <Select className="py-2 text-sm w-44" value={f.relay_id} onChange={setEv('relay_id')}>
+            <option value="">כל הערוצים</option>
+            {channelOptions.map((r) => (
+              <option key={r.id} value={r.id}>{r.name}{f.device_id ? '' : ` (${deviceName(r.device_id)})`}</option>
+            ))}
           </Select>
           <Select className="py-2 text-sm w-32" value={f.action} onChange={setEv('action')}>
             <option value="">הדלקה וכיבוי</option>

@@ -250,6 +250,18 @@ adminRouter.get('/devices', async (req, res, next) => {
   try { res.json(await listAllDevices()); } catch (e) { next(e); }
 });
 
+// Every live channel across the fleet — feeds the channel filter on pages that
+// list per-relay data (history). Light row: no state, no schedules.
+adminRouter.get('/relays', async (req, res, next) => {
+  try {
+    res.json(await query(
+      `SELECT r.id, r.device_id, r.user_id, r.relay_no, r.name, r.is_enabled
+       FROM relays r JOIN devices d ON d.id = r.device_id
+       WHERE r.deleted_at IS NULL AND d.is_enabled = TRUE ORDER BY r.device_id, r.relay_no`,
+    ));
+  } catch (e) { next(e); }
+});
+
 // Secret + QR returned exactly once; endpoint excluded from body logging (app.js).
 adminRouter.post('/devices/provision', requireWrite, async (req, res, next) => {
   try {

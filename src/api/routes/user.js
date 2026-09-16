@@ -395,7 +395,10 @@ userRouter.delete('/schedules/:id', async (req, res, next) => {
 
 userRouter.get('/history', async (req, res, next) => {
   try {
-    res.json(await getHistory({ userId: req.auth.userId, limit: req.query.limit, cursor: req.query.cursor || null }));
+    res.json(await getHistory({
+      userId: req.auth.userId, limit: req.query.limit, cursor: req.query.cursor || null,
+      relay_id: req.query.relay_id || null, kind: req.query.kind || null,
+    }));
   } catch (e) { next(e); }
 });
 
