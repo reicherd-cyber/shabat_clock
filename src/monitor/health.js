@@ -12,13 +12,13 @@
 //    MQTT birth message otherwise mutes its schedules forever).
 //  - DB / broker outages and process bloat can't be healed from in here (pm2 owns
 //    the process, mqtt.js auto-reconnects) — they alert instead.
-// Active healing + email run only in production (or HEALTH_ACTIVE=1) so a dev
+// Active healing + email run only on the primary instance (config/role.js) so a dev
 // server sharing the prod DB observes without double-rebooting devices.
 import { monitorEventLoopDelay } from 'node:perf_hooks';
-import { env } from '../config/env.js';
+import { isPrimary } from '../config/role.js';
 import { query } from '../db/pool.js';
 import { brokerConnected } from '../mqtt/client.js';
-import { shellyCall } from '../services/shelly.js';
+import { shellyCall, shellySetRestoreLast } from '../services/shelly.js';
 import { sendEmail } from '../services/email.js';
 
 const CHECK_INTERVAL_MS = 60_000;
@@ -31,10 +31,10 @@ const ALERT_COOLDOWN_MS = 6 * 3600_000; // one email per incident kind per subje
 const REBOOT_COOLDOWN_MS = 6 * 3600_000;
 const INCIDENTS_KEPT = 30;
 
-const active = () => env.nodeEnv === 'production' || process.env.HEALTH_ACTIVE === '1';
+const active = isPrimary;
 
 const loopDelay = monitorEventLoopDelay({ resolution: 20 });
-const deviceState = new Map(); // device_id → {failures, lastUptime, expectReboot, lastRebootAt}
+const deviceState = new Map(); // device_id → {failures, lastUptime, lastOutputs, expectReboot, lastRebootAt}
 const alertTimes = new Map();  // incident key → last email epoch ms
 const incidents = [];          // newest first, capped at INCIDENTS_KEPT
 let dbFailures = 0;
@@ -73,8 +73,58 @@ const deviceEvent = (deviceId, event, payload) => (!active() ? Promise.resolve()
 
 // ── per-Shelly probe ────────────────────────────────────────
 
+const fmtDuration = (s) => {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d ? `${d} ימים ו-${h} שעות` : h ? `${h} שעות ו-${m} דקות` : `${m} דקות`;
+};
+const onOff = (b) => (b ? 'פועל' : 'כבוי');
+
+// After an unexpected reboot: did every relay come back the way it was? The
+// email used to assert "restored (restore_last)" as fixed text — device-side
+// state changes are never logged, so nobody could tell. Now the outputs seen a
+// probe earlier are compared with the ones seen now, and each channel's
+// initial_state is re-checked (and re-set) so the next reboot restores too.
+async function verifyRebootOutputs(device, before, after) {
+  const relays = await query(
+    'SELECT relay_no, name FROM relays WHERE device_id = ? AND deleted_at IS NULL ORDER BY relay_no', [device.id],
+  ).catch(() => []);
+  const nameOf = (ch) => relays.find((r) => r.relay_no === ch + 1)?.name ?? `ערוץ ${ch + 1}`;
+
+  const fixedChannels = [];
+  for (let ch = 0; ch < after.length; ch++) {
+    const cfg = await shellyCall(device, 'Switch.GetConfig', { id: ch }).catch(() => null);
+    if (cfg && cfg.initial_state !== 'restore_last') {
+      await shellySetRestoreLast(device, ch + 1).catch((e) => console.error('[health] restore_last set failed:', e.message));
+      fixedChannels.push(ch + 1);
+    }
+  }
+
+  const changed = [];
+  const lines = [];
+  for (let ch = 0; ch < after.length; ch++) {
+    const b = before?.[ch], a = after[ch];
+    if (typeof b === 'boolean' && b !== a) changed.push({ channel: ch + 1, name: nameOf(ch), before: onOff(b), after: onOff(a) });
+    lines.push(`• ${nameOf(ch)}: ${onOff(a)}${typeof b === 'boolean' ? (b === a ? ' (כמו לפני האתחול)' : ` (לפני האתחול: ${onOff(b)})`) : ''}`);
+  }
+
+  let text;
+  if (!after.length) {
+    text = 'מצב הממסרים אחרי האתחול לא נקרא — יש לבדוק ידנית.';
+  } else if (!before) {
+    text = `מצב הממסרים אחרי האתחול (המצב שלפני לא ידוע — השרת עלה לאחרונה):\n${lines.join('\n')}`;
+  } else if (changed.length) {
+    text = `שימו לב: ${changed.length} ממסרים לא חזרו למצבם שלפני האתחול:\n${lines.join('\n')}\n(אם תזמון היה אמור לפעול באותה דקה — השינוי תקין.)`;
+  } else {
+    text = `כל הממסרים חזרו למצבם שלפני האתחול:\n${lines.join('\n')}`;
+  }
+  if (fixedChannels.length) {
+    text += `\n\nהגדרת restore_last הייתה חסרה בערוצים ${fixedChannels.join(', ')} והוחזרה כעת.`;
+  }
+  return { changed, fixedChannels, text };
+}
+
 async function checkShelly(device) {
-  const st = deviceState.get(device.id) ?? { failures: 0, lastUptime: null, expectReboot: false, lastRebootAt: 0 };
+  const st = deviceState.get(device.id) ?? { failures: 0, lastUptime: null, lastOutputs: null, expectReboot: false, lastRebootAt: 0 };
   deviceState.set(device.id, st);
   const health = { id: device.id, name: device.name, reachable: false };
   // Muted device: incidents and device_events still record; only email is silenced.
@@ -119,6 +169,19 @@ async function checkShelly(device) {
   health.ram_free = sys.ram_free;
   health.fw_update = sys.available_updates?.stable?.version ?? null;
 
+  // Channel outputs + temperatures ride Switch.GetStatus; probe failures on
+  // missing channels end the scan quietly (mirrors the registration probe).
+  // The outputs are remembered from probe to probe: after a reboot they are the
+  // only record of what the relays were doing a minute earlier.
+  health.temps = [];
+  const outputs = [];
+  for (let ch = 0; ch < (device.relay_count || 2); ch++) {
+    const s = await shellyCall(device, 'Switch.GetStatus', { id: ch }).catch(() => null);
+    if (!s) break;
+    if (typeof s.output === 'boolean') outputs[ch] = s.output;
+    if (typeof s.temperature?.tC === 'number') health.temps.push(s.temperature.tC);
+  }
+
   // Uptime went backwards → the device rebooted behind our back. A reboot WE
   // commanded (self-heal below) is expected once and not an incident.
   if (st.lastUptime !== null && sys.uptime < st.lastUptime) {
@@ -126,21 +189,22 @@ async function checkShelly(device) {
       st.expectReboot = false;
     } else {
       recordIncident('unexpected_reboot', device.name, `uptime ${st.lastUptime}s → ${sys.uptime}s`);
-      await deviceEvent(device.id, 'boot', { kind: 'unexpected_reboot', uptime: sys.uptime, prev_uptime: st.lastUptime });
+      const verdict = await verifyRebootOutputs(device, st.lastOutputs, outputs);
+      await deviceEvent(device.id, 'boot', {
+        kind: 'unexpected_reboot', uptime: sys.uptime, prev_uptime: st.lastUptime,
+        outputs_before: st.lastOutputs, outputs_after: outputs,
+        changed: verdict.changed, restore_last_fixed: verdict.fixedChannels,
+      });
+      if (verdict.changed.length) {
+        recordIncident('reboot_changed_outputs', device.name, verdict.changed.map((c) => `${c.name}: ${c.before}→${c.after}`).join(', '));
+      }
       await alert(`reboot:${device.id}`, `המכשיר "${device.name}" אותחל באופן לא צפוי`,
-        `המכשיר "${device.name}" (${device.device_uid}) אותחל מעצמו (קריסה או הפסקת חשמל). המצב שוחזר אוטומטית (restore_last) — מומלץ לבדוק את יציבות החשמל/קושחה.`);
+        `המכשיר "${device.name}" (${device.device_uid}) אותחל מעצמו (קריסה או הפסקת חשמל) — היה פעיל ${fmtDuration(st.lastUptime)} לפני האתחול.\n\n${verdict.text}\n\nמומלץ לבדוק את יציבות החשמל/קושחה.`);
     }
   }
   st.lastUptime = sys.uptime;
+  if (outputs.length) st.lastOutputs = outputs;
 
-  // Channel temperatures ride Switch.GetStatus; probe failures on missing
-  // channels end the scan quietly (mirrors the registration probe).
-  health.temps = [];
-  for (let ch = 0; ch < (device.relay_count || 2); ch++) {
-    const s = await shellyCall(device, 'Switch.GetStatus', { id: ch }).catch(() => null);
-    if (!s) break;
-    if (typeof s.temperature?.tC === 'number') health.temps.push(s.temperature.tC);
-  }
   const hottest = Math.max(...health.temps, 0);
   if (hottest >= TEMP_CRITICAL_C) {
     recordIncident('high_temperature', device.name, `${hottest}°C`);

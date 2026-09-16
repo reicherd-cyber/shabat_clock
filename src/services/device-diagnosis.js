@@ -11,7 +11,7 @@ import { readFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { delimiter } from 'node:path';
-import { env } from '../config/env.js';
+import { isPrimary } from '../config/role.js';
 import { query } from '../db/pool.js';
 
 const pExecFile = promisify(execFile);
@@ -117,7 +117,7 @@ export async function diagnoseDevice(deviceId) {
 
   // Before blaming the customer: if OUR broker link is down, every device
   // looks dead — that's a service-side outage, full stop.
-  const prodHere = env.nodeEnv === 'production' || process.env.HEALTH_ACTIVE === '1';
+  const prodHere = isPrimary();
   if (prodHere) {
     const { brokerConnected } = await import('../mqtt/client.js');
     if (!brokerConnected()) {

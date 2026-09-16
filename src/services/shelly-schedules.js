@@ -22,7 +22,7 @@
 // job) and that anniversary — accepted; the retry loop closes it on the first
 // successful contact.
 import { query } from '../db/pool.js';
-import { env } from '../config/env.js';
+import { isPrimary } from '../config/role.js';
 import { shellyCall } from './shelly.js';
 import { timeToMinutes, localParts, dowOfDate } from './time.js';
 import { inExclusionRange } from './holidays.js';
@@ -34,7 +34,7 @@ const MAX_CALLS_PER_JOB = 5;     // Gen2 firmware: "limit of 5 calls per schedul
 // production (or HEALTH_ACTIVE=1, the same switch the health monitor uses) may
 // claim their syncs; LAN devices are reachable from whatever shares their network.
 export const shellySyncFromHere = (d) =>
-  d.transport !== 'mqtt' || env.nodeEnv === 'production' || process.env.HEALTH_ACTIVE === '1';
+  d.transport !== 'mqtt' || isPrimary();
 
 const pad = (n) => String(n).padStart(2, '0');
 

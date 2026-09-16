@@ -2,6 +2,7 @@
 // cred [D13]; devices use 8883 TLS with per-device creds + ACL.
 import mqtt from 'mqtt';
 import { env } from '../config/env.js';
+import { isPrimary } from '../config/role.js';
 import { query } from '../db/pool.js';
 import { buildWirePayload } from '../services/schedulePayload.js';
 import { ingestExecReport, reconcileDevice } from '../services/executions.js';
@@ -11,8 +12,14 @@ let client = null;
 const ackWaiters = new Map();      // cmd_id → resolve
 const scheduleAckTimers = new Map(); // device_id → timeout
 const lastExecDropped = new Map(); // device_id → last seen exec_dropped counter
-const shellyRpcWaiters = new Map(); // rpc id → resolve
-let shellyRpcSeq = 1;
+const shellyRpcWaiters = new Map(); // rpc id → {prefix, resolve}
+// Every server on the broker (production, staging, a local dev) shares the
+// reply topic — the device ACL lets a Shelly write to shabat-server/rpc and
+// nothing else — so each one hears every reply. Ids used to count from 1 in
+// every process, so two servers could hold the same id at once and a probe of
+// device A could resolve with device B's status. Start each process at a random
+// point in the id space, and (below) match a reply on its src as well as its id.
+let shellyRpcSeq = 1 + Math.floor(Math.random() * 1_000_000_000);
 
 // Shelly Gen2 topics: <prefix>/online (LWT), <prefix>/status/switch:N (state
 // notifications), <prefix>/rpc (requests in), replies land on <src>/rpc.
@@ -49,6 +56,12 @@ async function handleMessage(topic, buf) {
   } catch {
     return;
   }
+  // A passive server only wants the acks for commands IT sent; everything the
+  // devices report belongs to the primary (see role.js).
+  if (!isPrimary()) {
+    if (kind === 'ack') ackWaiters.get(Number(payload?.cmd_id))?.(payload);
+    return;
+  }
   if (kind === 'ack') return handleAck(uid, payload);
   if (kind === 'status') return handleStatus(uid, payload);
   if (kind === 'exec') return ingestExecReport(uid, payload);
@@ -74,9 +87,22 @@ async function handleShellyMessage(topic, buf) {
     let payload;
     try { payload = JSON.parse(text); } catch { return; }
     const waiter = shellyRpcWaiters.get(Number(payload?.id));
-    if (waiter) waiter(payload);
+    if (!waiter) return;
+    // A reply carries src = the answering device's prefix. One that names a
+    // different device than we asked is another server's conversation that
+    // happens to share our id — never let it stand in for our answer.
+    if (typeof payload.src === 'string' && payload.src !== waiter.prefix) {
+      console.warn(`MQTT rpc reply id ${payload.id} from ${payload.src} while waiting on ${waiter.prefix} — ignored`);
+      return;
+    }
+    waiter.resolve(payload);
     return;
   }
+
+  // Births, deaths and state notifications are the fleet's diary — only the
+  // primary writes it (a passive server on the same broker would double every
+  // row and run the hello-time reconcile twice).
+  if (!isPrimary()) return;
 
   const online = /^([\w.-]+)\/online$/.exec(topic);
   if (online) {
@@ -160,10 +186,13 @@ export function shellyMqttRpc(deviceUid, method, params = undefined, timeoutMs =
       shellyRpcWaiters.delete(id);
       resolve(null);
     }, timeoutMs);
-    shellyRpcWaiters.set(id, (reply) => {
-      clearTimeout(timer);
-      shellyRpcWaiters.delete(id);
-      resolve(reply);
+    shellyRpcWaiters.set(id, {
+      prefix,
+      resolve: (reply) => {
+        clearTimeout(timer);
+        shellyRpcWaiters.delete(id);
+        resolve(reply);
+      },
     });
     connectMqtt().publish(`${prefix}/rpc`, JSON.stringify(req), { qos: 1 }, (err) => {
       if (err) {
