@@ -133,7 +133,7 @@ export default function Devices() {
     && (!fUser || String(d.user_id) === fUser)
     && (!fDevice || String(d.id) === fDevice)
     && (!fOnline || (fOnline === 'on' ? d.is_online : !d.is_online))
-    && (!needle || `${d.name} ${d.owner_name} ${d.device_uid || ''} ${d.removed_uid || ''}`.toLowerCase().includes(needle)));
+    && (!needle || `${d.name} ${d.owner_name} #${d.id} ${d.device_uid || ''} ${d.removed_uid || ''}`.toLowerCase().includes(needle)));
   const filtering = fUser || fDevice || fOnline || needle;
   // Simulated demo devices (device-less accounts, see services/demo.js) are
   // listed apart from the real fleet: they are always "online", never sync,
@@ -208,6 +208,7 @@ export default function Devices() {
                 <tr className={`border-b border-line last:border-0 ${d.is_enabled ? '' : 'opacity-60'}`}>
                   <td className="p-3 font-semibold">
                     {d.name}
+                    <span className="text-muted text-xs font-normal ms-2" title="מספר המכשיר במערכת">#{d.id}</span>
                     {!!d.mute_alerts && <span className="ms-1" title="התראות מייל מושתקות למכשיר זה">🔕</span>}
                     {!d.is_enabled && <span className="ms-1"><Badge ok={false}>מושהה</Badge></span>}
                     {!!d.first_contact_pending && d.is_enabled && (
