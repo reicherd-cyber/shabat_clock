@@ -380,7 +380,13 @@ export function AdminSchedules() {
   // Dropdown options come from the full list; the rows filter client-side.
   const all = schedules || [];
   const users = [...new Map(all.filter((s) => s.user_id != null).map((s) => [s.user_id, s.user_name || `#${s.user_id}`])).entries()];
-  const devices = [...new Map(all.map((s) => [s.device_id, s.device_name])).entries()];
+  // Device options follow the chosen user; a device of someone else is dropped.
+  const devices = [...new Map(all.filter((s) => !fUser || String(s.user_id) === fUser)
+    .map((s) => [s.device_id, s.device_name])).entries()];
+  const pickUser = (user_id) => {
+    setFUser(user_id);
+    if (user_id && fDevice && !all.some((s) => String(s.device_id) === fDevice && String(s.user_id) === user_id)) setFDevice('');
+  };
   const shown = all.filter((s) =>
     (!fUser || String(s.user_id) === fUser) && (!fDevice || String(s.device_id) === fDevice));
   const filtering = fUser || fDevice;
@@ -390,7 +396,7 @@ export function AdminSchedules() {
       <div className="flex justify-between items-center gap-2 flex-wrap">
         <h2 className="font-bold text-xl">תזמונים (כל המשתמשים)</h2>
         <div className="flex gap-2 items-center flex-wrap">
-          <Select className="py-2 text-sm w-40" value={fUser} onChange={(e) => setFUser(e.target.value)}>
+          <Select className="py-2 text-sm w-40" value={fUser} onChange={(e) => pickUser(e.target.value)}>
             <option value="">כל המשתמשים</option>
             {users.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
           </Select>

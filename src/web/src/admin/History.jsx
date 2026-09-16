@@ -20,12 +20,20 @@ export default function AdminHistory() {
   const { busy, error, run, setError } = useAsync();
   const set = (k) => (v) => setF((p) => ({ ...p, [k]: v }));
   const setEv = (k) => (e) => set(k)(e.target.value);
-  // Picking a device drops a channel that isn't on it.
+  // The three dropdowns cascade: user → their devices → that device's channels.
+  // Picking upstream drops a downstream choice that no longer belongs.
+  const setUser = (e) => setF((p) => {
+    const user_id = e.target.value;
+    const device_id = !user_id || devices.some((d) => String(d.id) === p.device_id && String(d.user_id) === user_id) ? p.device_id : '';
+    const relay_id = !user_id || relays.some((r) => String(r.id) === p.relay_id && String(r.user_id) === user_id) ? p.relay_id : '';
+    return { ...p, user_id, device_id, relay_id };
+  });
   const setDevice = (e) => setF((p) => {
     const device_id = e.target.value;
     const keep = !p.relay_id || relays.some((r) => String(r.id) === p.relay_id && (!device_id || String(r.device_id) === device_id));
     return { ...p, device_id, relay_id: keep ? p.relay_id : '' };
   });
+  const deviceOptions = devices.filter((d) => !f.user_id || String(d.user_id) === f.user_id);
   const channelOptions = relays.filter((r) => (!f.device_id || String(r.device_id) === f.device_id)
     && (!f.user_id || String(r.user_id) === f.user_id));
   const deviceName = (id) => devices.find((d) => d.id === id)?.name || '';
@@ -72,7 +80,7 @@ export default function AdminHistory() {
 
       <Card className="space-y-3">
         <div className="flex gap-2 items-center flex-wrap">
-          <Select className="py-2 text-sm w-44" value={f.user_id} onChange={setEv('user_id')}>
+          <Select className="py-2 text-sm w-44" value={f.user_id} onChange={setUser}>
             <option value="">כל המשתמשים</option>
             {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
           </Select>
@@ -95,7 +103,7 @@ export default function AdminHistory() {
           <span className="text-muted text-sm">פקודות:</span>
           <Select className="py-2 text-sm w-44" value={f.device_id} onChange={setDevice}>
             <option value="">כל המכשירים</option>
-            {devices.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.owner_name})</option>)}
+            {deviceOptions.map((d) => <option key={d.id} value={d.id}>{d.name}{f.user_id ? '' : ` (${d.owner_name})`}</option>)}
           </Select>
           <Select className="py-2 text-sm w-44" value={f.relay_id} onChange={setEv('relay_id')}>
             <option value="">כל הערוצים</option>
