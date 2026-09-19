@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { env } from '../config/env.js';
-import { normalizePhone } from '../services/phone.js';
+import { normalizePhone, parsePhoneList } from '../services/phone.js';
 import { findUserByPhone, verifyPin } from '../services/users.js';
 import { isLockedOut, recordFailure } from '../services/authFailures.js';
 import { pendingPhoneAddCode } from '../services/otp.js';
@@ -14,7 +14,8 @@ import { logAction } from '../services/audit.js';
 import { startCall, setCallUser, appendPath, finishCall } from '../services/callLogs.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, createSession, endSession } from './session.js';
-import { ask, askVoice, say, sayAndHangup } from './responses.js';
+import { ask, askVoice, askRecord, say, sayAndHangup } from './responses.js';
+import { voicemailFolder, voicemailFileName, createPhoneTicket, fetchVoicemailInBackground } from '../services/voicemail.js';
 import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
 import { localParts, shiftDate } from '../services/time.js';
@@ -176,6 +177,45 @@ async function mainMenu(session, message = null) {
       : [{ t: await getText('ivr.main_menu', { name: session.userName || '' }) }];
   }
   return ask(items, { message });
+}
+
+// ── Sales menu for UNREGISTERED callers (migration 53) ──
+// An unknown caller-ID is a prospective customer, not an intruder: 1 = ordering
+// info (then 1 = leave details), 2 = order in progress → voice message. A message
+// becomes a support_messages row (source 'phone') in the admin inbox; the audio
+// is copied from Yemot by src/services/voicemail.js.
+async function salesMenu(session, message = null) {
+  session.state = 'SALES_MENU';
+  session.invalidCount = 0;
+  return ask(await speak('ivr.sales_menu', {},
+    'שלום, הגעתם לטלטק, למידע על הזמנת המערכת הקישו 1, לבירור על הזמנה בתהליך הקישו 2'), { message });
+}
+
+async function salesRecord(session, topic) {
+  const folder = await voicemailFolder();
+  const fileName = voicemailFileName(session.callLogId);
+  session.data.vmTopic = topic;
+  session.data.vmFile = `${folder}/${fileName}`;
+  session.state = 'SALES_RECORD';
+  session.invalidCount = 0;
+  await appendPath(session.callLogId, `vm:${topic}`);
+  return askRecord(await speak('ivr.sales_record', {}, 'אנא השאירו הודעה לאחר הצליל, בסיום הקישו סולמית'),
+    { folder, fileName, maxSeconds: 120 });
+}
+
+// Recording ended — # pressed / max length, or a hangup mid-message (Yemot keeps
+// the file either way, see askRecord). File the ticket now so the number is in
+// the inbox even if the audio copy lags; the WAV is fetched in the background.
+async function salesVoicemailDone(session) {
+  const ticketId = await createPhoneTicket({
+    phone: session.phone, callLogId: session.callLogId, topic: session.data.vmTopic, yemotFile: session.data.vmFile,
+  });
+  await logAction({ type: 'ivr', id: null }, 'create', 'support_message', ticketId,
+    { after: { source: 'phone', topic: session.data.vmTopic, phone: session.phone } });
+  await appendPath(session.callLogId, 'vm_saved');
+  await finishCall(session.callLogId, 'voicemail');
+  endSession(session.callId);
+  fetchVoicemailInBackground(ticketId);
 }
 
 // Schedules browser (main menu → תזמונים): plays one schedule and navigates —
@@ -400,6 +440,21 @@ const tokenValid = (given) => {
   return b.length > 0 && a.length === b.length && timingSafeEqual(a, b);
 };
 
+// Replay this webhook step against the dev server and hand its answer back to
+// Yemot verbatim. An origin gets /ivr/<our token> appended (staging copies the
+// production .env, so the token matches); a full URL containing /ivr is used
+// as-is. 25s cap: comfortably inside Yemot's wait, and the caller hears silence
+// meanwhile, so a dead dev server fails fast into the error message.
+async function forwardToDev(req) {
+  const base = env.ivrDevForwardUrl.replace(/\/+$/, '');
+  const target = base.includes('/ivr') ? base : `${base}/ivr/${encodeURIComponent(env.ivrToken)}`;
+  const qs = req.originalUrl.split('?')[1] || '';
+  const url = qs ? `${target}${target.includes('?') ? '&' : '?'}${qs}` : target;
+  const r = await fetch(url, { headers: { 'X-IVR-Forwarded': '1' }, signal: AbortSignal.timeout(25_000) });
+  if (!r.ok) throw new Error(`dev server answered ${r.status}`);
+  return r.text();
+}
+
 ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
   try {
     if (!tokenValid(req.params.token || req.query.token)) {
@@ -422,13 +477,34 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
     const callId = String(req.query.ApiCallId || '');
     if (!callId) return res.send(sayAndHangup('שגיאה'));
     const phone = normalizePhone(req.query.ApiPhone);
+
+    // ── Dev forwarding ── calls from the test phones in ivr.dev_forward_phones are
+    // proxied, step by step (hangups included), to the staging server so a new
+    // menu build is tested on the real number with the Yemot extension untouched.
+    // Only when IVR_DEV_FORWARD_URL is set (production); the marker header stops a
+    // misconfigured staging server from forwarding back (loop guard).
+    const forwarded = req.get('X-IVR-Forwarded') === '1';
+    if (env.ivrDevForwardUrl && !forwarded && phone && parsePhoneList(await getSetting('ivr.dev_forward_phones')).has(phone)) {
+      try {
+        return res.send(await forwardToDev(req));
+      } catch (e) {
+        console.error(`IVR dev forward failed (${phone}):`, e.message);
+        return res.send(sayAndHangup('שרת הבדיקות אינו זמין'));
+      }
+    }
+
     let session = getSession(callId);
 
     // Hangup notification → close the log honestly (§4.1.7).
     if (req.query.ApiHangup !== undefined || req.query.hangup === 'yes') {
       if (session) {
-        await finishCall(session.callLogId, 'abandoned');
-        endSession(callId);
+        if (session.state === 'SALES_RECORD') {
+          // Hung up while recording — the message is saved on Yemot (keep-on-hangup).
+          await salesVoicemailDone(session);
+        } else {
+          await finishCall(session.callLogId, session.data.salesInfo ? 'info' : 'abandoned');
+          endSession(callId);
+        }
       }
       return res.send('ok');
     }
@@ -440,7 +516,11 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         await finishCall(callLogId, 'auth_fail');
         return res.send(sayAndHangup(await speak('ivr.locked_out')));
       }
-      const user = await findUserByPhone(phone);
+      // Forwarded test call from a phone in ivr.dev_guest_phones: pretend the number
+      // is unregistered so the new-customer (sales) menu can be tested from a phone
+      // that is really a customer — staging shares the production DB.
+      const asGuest = forwarded && parsePhoneList(await getSetting('ivr.dev_guest_phones')).has(phone);
+      const user = asGuest ? null : await findUserByPhone(phone);
       // Suspended → treated as not found (no info leak).
       if (user && user.status === 'active') {
         session = createSession(callId, { callLogId, phone, userId: user.id, userName: user.full_name, requirePin: Boolean(user.require_pin) });
@@ -466,11 +546,12 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           t: `שלום, קוד האימות לצירוף מספר זה הוא: ${digits}, שוב: ${digits}, יש להקליד את הקוד באתר, להתראות`,
         }]));
       }
-      // Unregistered (or suspended) caller-ID → polite refusal + hangup. There is
-      // deliberately no code-entry fallback: users must call from a registered number.
-      await appendPath(callLogId, 'unknown');
-      await finishCall(callLogId, 'auth_fail');
-      return res.send(sayAndHangup(await speak('ivr.unknown_caller')));
+      // Unregistered (or suspended) caller-ID → sales menu (SALES_* states): info
+      // about ordering, or a voice message for the admin inbox. There is deliberately
+      // no code-entry path into an account: users must call from a registered number.
+      session = createSession(callId, { callLogId, phone, userId: null, userName: null });
+      await appendPath(callLogId, 'sales');
+      return res.send(await salesMenu(session));
     }
 
     // Yemot re-sends every prior val= on the query string across the whole call rather
@@ -481,6 +562,31 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
     const input = String(Array.isArray(rawVal) ? rawVal[rawVal.length - 1] : (rawVal ?? '')).trim();
 
     switch (session.state) {
+      // ── unregistered caller: sales menu → ordering info / voice message ──
+      case 'SALES_MENU': {
+        if (input === '1') {
+          await appendPath(session.callLogId, 'sales_info');
+          session.data.salesInfo = true; // hangup after this = outcome 'info'
+          session.state = 'SALES_INFO';
+          session.invalidCount = 0;
+          return res.send(ask(await speak('ivr.sales_info', {},
+            'להזמנה ולפרטים נוספים בקרו באתר שלנו, להשארת פרטים ונחזור אליכם הקישו 1, לחזרה לתפריט הקישו 2')));
+        }
+        if (input === '2') return res.send(await salesRecord(session, 'order_status'));
+        return res.send(await invalidInput(session));
+      }
+      case 'SALES_INFO': {
+        if (input === '1') return res.send(await salesRecord(session, 'order'));
+        if (input === '2' || input === '0' || input === '*') return res.send(await salesMenu(session));
+        return res.send(await invalidInput(session));
+      }
+      case 'SALES_RECORD': {
+        // Any callback in this state means the recording step finished.
+        await salesVoicemailDone(session);
+        return res.send(sayAndHangup(await speak('ivr.sales_thanks', {},
+          'תודה, ההודעה התקבלה וניצור עמכם קשר בהקדם, להתראות')));
+      }
+
       // ── auth: known caller with require_pin ──
       case 'AUTH_PIN': {
         const user = session.data.pinUser;

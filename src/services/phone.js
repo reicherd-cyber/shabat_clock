@@ -10,3 +10,9 @@ export function normalizePhone(raw) {
 export function isValidIsraeliPhone(phone) {
   return /^0\d{8,9}$/.test(phone);
 }
+
+// A settings value holding phone numbers ("050-1234567, 0521112233 ...") → Set of
+// normalized numbers. Any run of spaces/commas/semicolons/newlines separates.
+export function parsePhoneList(raw) {
+  return new Set(String(raw || '').split(/[\s,;]+/).map(normalizePhone).filter(Boolean));
+}

@@ -58,5 +58,15 @@ VALUES ('Admin', 'you@example.com', '<bcrypt hash>', 'superadmin');
   ⚠️ Phase-1 spike: verify exact response-command syntax + webhook timeout
   (`src/ivr/responses.js` is the single place to correct).
 - Daily `mysqldump` to DO Spaces, 30-day retention [D30].
+- **Unregistered callers** hear a sales menu instead of a refusal (1 = ordering info,
+  2 = order in progress → voice message, up to 2 min). Messages become `support_messages`
+  rows with `source='phone'` in the admin inbox (פניות); the WAV is copied from Yemot
+  (`DownloadFile`, needs `OTP_YEMOT_TOKEN`) into `data/voicemail/`. Recordings are written
+  to the Yemot folder in setting `ivr.voicemail_folder` (default `99`, the prompts folder).
+- **Testing the phone menu on staging** without touching Yemot: set
+  `IVR_DEV_FORWARD_URL=https://dev.kosher-teltech.com` in the PRODUCTION .env and list the
+  test phones in setting `ivr.dev_forward_phones` (admin → הגדרות). Every webhook step from
+  those numbers is proxied to staging. Numbers in `ivr.dev_guest_phones` get the
+  new-customer menu on staging even though they are registered (shared DB).
 
 Pilot ships only when the Phase-6 acceptance checklist (PLAN §6 + SPEC §9) is all green.

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { adminApi } from '../api.js';
+import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
-import { MessageSquare, Send } from 'lucide-react';
+import { MessageSquare, Send, Phone } from 'lucide-react';
 
 // פניות תמיכה: תיבת ההודעות שמשתמשים שולחים ממרכז העזרה. סטטוסים רכים והפיכים
 // (חדשה ↔ נקראה ↔ טופלה) — לעולם לא מחיקה. פתיחת פנייה חדשה מסמנת אותה כנקראה
@@ -17,11 +17,41 @@ const STATUS = {
 const TOPIC_LABELS = {
   device_offline: 'מכשיר מנותק', schedule: 'תזמון', login: 'התחברות',
   phone: 'מענה קולי', app: 'שימוש באפליקציה', other: 'אחר',
+  // הודעות קוליות מתפריט המכירות (מתקשר לא רשום): 1 = מתעניין בהזמנה, 2 = הזמנה בתהליך
+  order: 'מתעניין בהזמנה', order_status: 'הזמנה בתהליך',
 };
 const PERIODS = [
   { v: 'all', label: 'כל הזמן' }, { v: '7', label: '7 ימים' }, { v: '30', label: '30 יום' }, { v: '90', label: '90 יום' },
 ];
 const fmtTs = (ts) => new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
+// פנייה טלפונית אין לה משתמש — מציגים את המספר (או "מספר חסוי") במקום שם.
+const isPhone = (m) => m?.source === 'phone';
+const nameOf = (m) => (isPhone(m) ? (m.phone || 'מספר חסוי') : (m?.user_name || '—'));
+
+// נגן להודעה קולית: הקובץ נשלף דרך השרת עם כותרת ההרשאה (לא <audio src> ישיר),
+// כמו בדף ההקלטות. עד שההעתקה מימות הסתיימה השרת מחזיר 404 — מציעים לנסות שוב.
+function VoicePlayer({ id }) {
+  const [url, setUrl] = useState(null);
+  const [state, setState] = useState('loading'); // loading | ready | missing | error
+  const load = async () => {
+    setState('loading');
+    try {
+      const res = await fetch(`/api/v1/admin/support/${id}/audio`, { headers: { Authorization: `Bearer ${tokens.admin}` } });
+      if (res.status === 404) { setState('missing'); return; }
+      if (!res.ok) throw new Error();
+      setUrl(URL.createObjectURL(await res.blob()));
+      setState('ready');
+    } catch { setState('error'); }
+  };
+  useEffect(() => { load(); return () => { if (url) URL.revokeObjectURL(url); }; }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (state === 'ready') return <audio controls src={url} className="w-full" preload="metadata" />;
+  return (
+    <div className="flex items-center gap-2 text-sm text-muted">
+      <span>{state === 'loading' ? 'טוען הקלטה…' : state === 'missing' ? 'ההקלטה עדיין לא התקבלה מימות המשיח (בדרך כלל תוך דקה)' : 'טעינת ההקלטה נכשלה'}</span>
+      {state !== 'loading' && <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={load}>נסה שוב</Button>}
+    </div>
+  );
+}
 
 // בועת צ'אט: המשתמש בצד ההתחלה (ימין ב-RTL), הצוות בצד הסוף ובכחול.
 function ChatBubble({ who, name, ts, seen, children }) {
@@ -43,6 +73,7 @@ function ChatBubble({ who, name, ts, seen, children }) {
 export function SupportInbox() {
   const [data, setData] = useState(null); // { rows, counts }
   const [fStatus, setFStatus] = useState('');
+  const [fSource, setFSource] = useState(''); // '' | web | phone
   const [period, setPeriod] = useState('all');
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(null); // the row shown in the modal
@@ -55,6 +86,7 @@ export function SupportInbox() {
   const refresh = async () => {
     const p = new URLSearchParams();
     if (fStatus) p.set('status', fStatus);
+    if (fSource) p.set('source', fSource);
     if (search.trim()) p.set('q', search.trim());
     if (period !== 'all') {
       const d = new Date(Date.now() - Number(period) * 86400e3);
@@ -65,7 +97,7 @@ export function SupportInbox() {
   useEffect(() => {
     const t = setTimeout(() => { refresh().catch(setError); }, search ? 400 : 0);
     return () => clearTimeout(t);
-  }, [fStatus, period, search]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fStatus, fSource, period, search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setStatus = (row, status) => run(async () => {
     await adminApi.patch(`/support/${row.id}`, { status });
@@ -108,7 +140,7 @@ export function SupportInbox() {
   useEffect(() => { threadEnd.current?.scrollIntoView({ block: 'nearest' }); }, [thread]);
 
   const counts = data?.counts || {};
-  const filtering = fStatus || search || period !== 'all';
+  const filtering = fStatus || fSource || search || period !== 'all';
   const transcript = open?.transcript ? (() => { try { return JSON.parse(open.transcript); } catch { return []; } })() : [];
 
   return (
@@ -132,13 +164,18 @@ export function SupportInbox() {
           <option value="">כל הסטטוסים</option>
           {Object.entries(STATUS).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
         </Select>
+        <Select className="py-2 text-sm w-36" value={fSource} onChange={(e) => setFSource(e.target.value)}>
+          <option value="">מהאתר ומהטלפון</option>
+          <option value="web">מהאתר</option>
+          <option value="phone">הודעות קוליות</option>
+        </Select>
         <Select className="py-2 text-sm w-28" value={period} onChange={(e) => setPeriod(e.target.value)}>
           {PERIODS.map((p) => <option key={p.v} value={p.v}>{p.label}</option>)}
         </Select>
         <Input className="w-56 py-2 text-sm" placeholder="חיפוש: תוכן, שם או טלפון…"
           value={search} onChange={(e) => setSearch(e.target.value)} />
         {filtering && (
-          <Button variant="ghost" className="text-sm" onClick={() => { setFStatus(''); setPeriod('all'); setSearch(''); }}>נקה סינון</Button>
+          <Button variant="ghost" className="text-sm" onClick={() => { setFStatus(''); setFSource(''); setPeriod('all'); setSearch(''); }}>נקה סינון</Button>
         )}
       </div>
       <ErrorNote error={error} />
@@ -156,7 +193,8 @@ export function SupportInbox() {
               <span className={`text-xs font-medium rounded-full px-2 py-0.5 shrink-0 ${STATUS[m.status].cls}`}>{STATUS[m.status].label}</span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-2">
-                  <span className={`truncate ${m.status === 'new' ? 'font-bold' : 'font-medium'}`}>{m.user_name}</span>
+                  {isPhone(m) && <Phone size={13} className="shrink-0 self-center text-accent" aria-label="הודעה קולית" />}
+                  <span className={`truncate ${m.status === 'new' ? 'font-bold' : 'font-medium'}`} dir={isPhone(m) ? 'ltr' : undefined}>{nameOf(m)}</span>
                   {m.topic && <span className="text-xs text-muted shrink-0">{TOPIC_LABELS[m.topic] || m.topic}</span>}
                 </div>
                 <div className="text-sm text-muted truncate">{m.body}</div>
@@ -174,22 +212,38 @@ export function SupportInbox() {
       </Card>
 
       {/* פנייה מלאה */}
-      <Modal open={!!open} onClose={() => setOpen(null)} title={open ? `פנייה #${open.id} — ${open.user_name}` : ''}>
+      <Modal open={!!open} onClose={() => setOpen(null)} title={open ? `פנייה #${open.id} — ${nameOf(open)}` : ''}>
         {open && (
           <div className="space-y-4">
             <div className="text-sm text-muted flex flex-wrap gap-x-4 gap-y-1">
-              <span dir="ltr">{open.user_phone || '—'}</span>
-              <span dir="ltr">{open.user_email || '—'}</span>
+              {isPhone(open) ? (
+                open.phone
+                  ? <a dir="ltr" className="text-accent hover:underline" href={`tel:${open.phone}`}>{open.phone}</a>
+                  : <span>מספר חסוי</span>
+              ) : (
+                <>
+                  <span dir="ltr">{open.user_phone || '—'}</span>
+                  <span dir="ltr">{open.user_email || '—'}</span>
+                </>
+              )}
               {open.topic && <span>נושא: {TOPIC_LABELS[open.topic] || open.topic}</span>}
+              {isPhone(open) && <span>הודעה קולית מתפריט המכירות</span>}
             </div>
+
+            {/* הודעה קולית — הנגן מעל השיחה */}
+            {isPhone(open) && (
+              <div className="border border-line rounded-[10px] bg-surface2/50 px-3 py-2">
+                <VoicePlayer id={open.id} />
+              </div>
+            )}
 
             {/* השיחה: ההודעה המקורית + כל התשובות, כבועות צ'אט */}
             <div className="flex flex-col gap-2 max-h-[40vh] overflow-y-auto pe-1">
-              <ChatBubble who="user" name={open.user_name} ts={open.created_at}>{open.body}</ChatBubble>
+              <ChatBubble who="user" name={nameOf(open)} ts={open.created_at}>{open.body}</ChatBubble>
               {thread == null && <p className="text-xs text-muted text-center">טוען שיחה…</p>}
               {thread?.map((r) => (
                 <ChatBubble key={r.id} who={r.sender} ts={r.created_at}
-                  name={r.sender === 'admin' ? (r.admin_name || 'צוות') : open.user_name}
+                  name={r.sender === 'admin' ? (r.admin_name || 'צוות') : nameOf(open)}
                   seen={r.sender === 'admin' ? r.seen_at : null}>
                   {r.body}
                 </ChatBubble>
@@ -201,14 +255,16 @@ export function SupportInbox() {
             <div className="border border-line rounded-[10px] bg-surface focus-within:border-accent">
               <textarea
                 className="w-full bg-transparent px-3 py-2 min-h-[64px] resize-y focus:outline-none"
-                placeholder={`תשובה ל${open.user_name}…`} value={reply} maxLength={4000}
+                placeholder={isPhone(open) ? 'הערה פנימית: מה סוכם בשיחה החוזרת…' : `תשובה ל${open.user_name}…`} value={reply} maxLength={4000}
                 onChange={(e) => setReply(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendReply(); } }}
               />
               <div className="flex items-center justify-between gap-2 px-2 pb-2">
-                <span className="text-xs text-muted">המשתמש יראה את התשובה במרכז העזרה ויקבל מייל</span>
-                <Button className="text-sm py-1.5" onClick={sendReply} disabled={busy || !reply.trim()}>
-                  <span className="flex items-center gap-1.5"><Send size={14} />{busy ? 'שולח…' : 'שלח תשובה'}</span>
+                <span className="text-xs text-muted">
+                  {isPhone(open) ? 'המתקשר אינו רשום באתר — ההערה נשמרת לצוות בלבד, יש לחזור אליו בטלפון' : 'המשתמש יראה את התשובה במרכז העזרה ויקבל מייל'}
+                </span>
+                <Button className="text-sm py-1.5 shrink-0 whitespace-nowrap" onClick={sendReply} disabled={busy || !reply.trim()}>
+                  <span className="flex items-center gap-1.5"><Send size={14} />{busy ? 'שומר…' : (isPhone(open) ? 'שמור הערה' : 'שלח תשובה')}</span>
                 </Button>
               </div>
             </div>
@@ -239,7 +295,7 @@ export function SupportInbox() {
       <Modal open={!!confirmClose} onClose={() => setConfirmClose(null)} title="לסמן כטופלה?">
         {confirmClose && (
           <div className="space-y-4">
-            <p className="text-sm">הפנייה של <b>{confirmClose.user_name}</b> תסומן כטופלה ותרד מהתור. אפשר להחזיר אותה בכל רגע.</p>
+            <p className="text-sm">הפנייה של <b dir={isPhone(confirmClose) ? 'ltr' : undefined}>{nameOf(confirmClose)}</b> תסומן כטופלה ותרד מהתור. אפשר להחזיר אותה בכל רגע.</p>
             <div className="flex gap-2">
               <Button onClick={() => { setStatus(confirmClose, 'closed'); setConfirmClose(null); }} disabled={busy}>כן, טופלה</Button>
               <Button variant="ghost" onClick={() => setConfirmClose(null)}>ביטול</Button>

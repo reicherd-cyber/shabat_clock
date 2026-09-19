@@ -30,6 +30,7 @@ import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEn
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
 import { listReplies, markRepliesSeen, insertReply, cleanReplyBody, notifyUserOfReply } from '../../services/supportThread.js';
+import { readVoicemail, fetchVoicemail } from '../../services/voicemail.js';
 import { brokerConnected } from '../../mqtt/client.js';
 import { healthSnapshot } from '../../monitor/health.js';
 import { generateSecret, otpauthUri, verifyTotp } from '../../services/totp.js';
@@ -864,21 +865,25 @@ adminRouter.get('/support', async (req, res, next) => {
     const params = [];
     if (req.query.status) { cond.push('m.status = ?'); params.push(String(req.query.status)); }
     if (req.query.user_id) { cond.push('m.user_id = ?'); params.push(Number(req.query.user_id)); }
+    // source: 'web' (a registered user, from /help) or 'phone' (voice message
+    // left on the sales menu by an unregistered caller — no user row).
+    if (['web', 'phone'].includes(String(req.query.source))) { cond.push('m.source = ?'); params.push(String(req.query.source)); }
     if (req.query.from) { cond.push('m.created_at >= ?'); params.push(String(req.query.from)); }
     if (req.query.to) { cond.push('m.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(String(req.query.to)); }
     if (req.query.q) {
-      cond.push('(m.body LIKE ? OR u.full_name LIKE ? OR EXISTS (SELECT 1 FROM user_phones p WHERE p.user_id = u.id AND p.phone LIKE ?))');
+      cond.push('(m.body LIKE ? OR m.phone LIKE ? OR u.full_name LIKE ? OR EXISTS (SELECT 1 FROM user_phones p WHERE p.user_id = u.id AND p.phone LIKE ?))');
       const like = `%${String(req.query.q)}%`;
-      params.push(like, like, like);
+      params.push(like, like, like, like);
     }
     const rows = await query(
-      `SELECT m.id, m.user_id, m.topic, m.body, m.transcript, m.status, m.created_at, m.updated_at, m.updated_by,
+      `SELECT m.id, m.user_id, m.source, m.phone, m.topic, m.body, m.transcript, m.status, m.created_at, m.updated_at, m.updated_by,
+              (m.audio_file IS NOT NULL) AS has_audio,
               u.full_name AS user_name, u.email AS user_email,
               (SELECT COUNT(*) FROM support_replies r WHERE r.message_id = m.id AND r.deleted_at IS NULL) AS reply_count,
               (SELECT r.sender FROM support_replies r WHERE r.message_id = m.id AND r.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1) AS last_sender,
               (SELECT r.created_at FROM support_replies r WHERE r.message_id = m.id AND r.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1) AS last_reply_at,
-              (SELECT p.phone FROM user_phones p WHERE p.user_id = u.id AND p.deleted_at IS NULL ORDER BY p.is_primary DESC, p.id LIMIT 1) AS user_phone
-         FROM support_messages m JOIN users u ON u.id = m.user_id
+              COALESCE(m.phone, (SELECT p.phone FROM user_phones p WHERE p.user_id = u.id AND p.deleted_at IS NULL ORDER BY p.is_primary DESC, p.id LIMIT 1)) AS user_phone
+         FROM support_messages m LEFT JOIN users u ON u.id = m.user_id
         WHERE ${cond.join(' AND ')} ORDER BY m.id DESC LIMIT 500`,
       params,
     );
@@ -918,8 +923,31 @@ adminRouter.get('/support/:id/replies', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Voice message audio (source 'phone'). Served from data/voicemail/; when the
+// background copy from Yemot has not landed yet, one more fetch is tried inline
+// so a click a minute after the call usually just works. 404 = not there yet.
+adminRouter.get('/support/:id/audio', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const [m] = await query("SELECT id FROM support_messages WHERE id = ? AND source = 'phone' AND deleted_at IS NULL", [id]);
+    if (!m) throw errors.notFound();
+    let buf = readVoicemail(id);
+    if (!buf) {
+      // A Yemot/config failure here is "not available yet", not a server error.
+      const got = await fetchVoicemail(id, { retries: false })
+        .catch((e) => { console.warn(`voicemail ${id} inline fetch:`, e.message); return false; });
+      if (got) buf = readVoicemail(id);
+    }
+    if (!buf) throw errors.notFound('NOT_FOUND', 'ההקלטה עדיין לא התקבלה מימות המשיח');
+    res.set('Content-Type', 'audio/wav');
+    res.set('Cache-Control', 'no-store');
+    res.send(buf);
+  } catch (e) { next(e); }
+});
+
 // Answering = engaging: a 'new' ticket becomes 'read'. Closed tickets stay
-// closed (a follow-up answer doesn't reopen the queue). The user gets an email.
+// closed (a follow-up answer doesn't reopen the queue). The user gets an email;
+// a phone ticket has no user — the reply is an internal note (call-back log).
 adminRouter.post('/support/:id/replies', requireWrite, async (req, res, next) => {
   try {
     const id = Number(req.params.id);
@@ -933,7 +961,7 @@ adminRouter.post('/support/:id/replies', requireWrite, async (req, res, next) =>
       await query('UPDATE support_messages SET status = ?, updated_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?', [status, adminActor(req), id]);
     }
     audit(req, 'support_reply', 'support_message', id, { reply_id: replyId });
-    notifyUserOfReply({ userId: m.user_id, messageId: id, body });
+    if (m.user_id) notifyUserOfReply({ userId: m.user_id, messageId: id, body });
     res.status(201).json({ id: replyId, status });
   } catch (e) { next(e); }
 });

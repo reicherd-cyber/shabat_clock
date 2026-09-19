@@ -144,9 +144,17 @@ export function CallFlow() {
           <Arrow label="קוד שגוי" />
           <Node k="auth_fail" title="פרטים שגויים" kind="err" {...nodeProps} hint="עד 3 ניסיונות" />
         </Lane>
-        <Lane title="מספר לא מזוהה" chip="?">
-          <Node k="unknown_caller" title="המספר אינו רשום" kind="end" {...nodeProps}
-            hint="ההודעה מושמעת והשיחה מתנתקת — אין אפשרות הזדהות בקוד" />
+        <Lane title="מספר לא מזוהה — לקוח חדש" chip="?">
+          <Node k="sales_menu" title="תפריט מכירות" kind="menu" {...nodeProps}
+            hint="מתקשר שאינו רשום. אין כניסה לחשבון בקוד — רק מידע או השארת הודעה" />
+          <Arrow chip="1" label="מידע על הזמנה" />
+          <Node k="sales_info" title="מידע על הזמנת המערכת" {...nodeProps}
+            hint="בסוף ההודעה: 1 = השארת פרטים (הקלטה), 2 = חזרה לתפריט" />
+          <Arrow chip="2" label="הזמנה בתהליך / השארת הודעה" />
+          <Node k="sales_record" title="השארת הודעה קולית" {...nodeProps}
+            hint="מוקלט עד 2 דקות, סולמית מסיימת. ההודעה נכנסת ל״פניות״ עם מספר הטלפון וההקלטה" />
+          <Arrow />
+          <Node k="sales_thanks" title="תודה וניתוק" kind="end" {...nodeProps} />
         </Lane>
       </div>
       <div className="grid gap-3 md:grid-cols-2 mt-2">

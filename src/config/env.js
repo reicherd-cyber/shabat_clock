@@ -36,6 +36,11 @@ export const env = {
   port: Number(process.env.PORT || 3001),
   db: parseDatabaseUrl(required('DATABASE_URL')),
   ivrToken: required('IVR_TOKEN'),
+  // Production only: calls from the phones listed in setting ivr.dev_forward_phones
+  // are proxied to this dev/staging server (origin, e.g. https://dev.example.com —
+  // /ivr/<token> is appended; a full URL containing /ivr is used as-is). Empty =
+  // no forwarding. The dev server leaves it empty (see router.js loop guard).
+  ivrDevForwardUrl: process.env.IVR_DEV_FORWARD_URL || '',
   mqtt: {
     url: process.env.MQTT_URL || 'mqtt://localhost:1883',
     username: process.env.MQTT_SERVER_USER || '',
