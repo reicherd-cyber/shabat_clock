@@ -244,6 +244,8 @@ export function MenuPath({ path }) {
 
 export function CallLogs() {
   const [logs, setLogs] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [userId, setUserId] = useState('');
   const [phone, setPhone] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [fromHour, setFromHour] = useState('');
@@ -253,29 +255,36 @@ export function CallLogs() {
 
   // Date + optional hour filter server-side. No hour → the whole day; with an hour →
   // from the start of that hour (מ־) / to the end of that hour (עד). DB stores UTC —
-  // the local date+hour is converted before querying. Phone filters client-side so it
-  // reacts on every keystroke.
+  // the local date+hour is converted before querying. The user dropdown is also
+  // server-side (user_id). Phone filters client-side so it reacts on every keystroke.
+  useEffect(() => { adminApi.get('/users').then(setUsers).catch(setError); }, []);
   const utc = (local) => new Date(local).toISOString().slice(0, 19).replace('T', ' ');
   const from = fromDate ? utc(`${fromDate}T${fromHour !== '' ? fromHour.padStart(2, '0') : '00'}:00:00`) : '';
   const to = toDate ? utc(`${toDate}T${toHour !== '' ? toHour.padStart(2, '0') : '23'}:59:59`) : '';
   useEffect(() => {
     run(async () => {
       const q = new URLSearchParams();
+      if (userId) q.set('user_id', userId);
       if (from) q.set('from', from);
       if (to) q.set('to', to);
-      setLogs(await adminApi.get(`/call-logs${from || to ? `?${q}` : ''}`));
+      const qs = q.toString();
+      setLogs(await adminApi.get(`/call-logs${qs ? `?${qs}` : ''}`));
     }).catch(setError);
-  }, [from, to]);
+  }, [userId, from, to]);
 
   const digits = phone.replace(/\D/g, '');
   const shown = (logs || []).filter((l) => !digits || String(l.phone).replace(/\D/g, '').includes(digits));
-  const filtering = digits || from || to;
+  const filtering = digits || userId || from || to;
 
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center gap-2 flex-wrap">
         <h2 className="font-bold text-xl">יומני שיחות</h2>
         <div className="flex gap-2 items-center flex-wrap">
+          <Select className="py-2 text-sm w-44" value={userId} onChange={(e) => setUserId(e.target.value)}>
+            <option value="">כל המשתמשים</option>
+            {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+          </Select>
           <Input dir="ltr" className="w-40" placeholder="סינון לפי טלפון" value={phone} onChange={(e) => setPhone(e.target.value)} />
           <label className="text-muted text-sm flex items-center gap-1">מ־
             <Input type="date" className="w-auto" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
@@ -286,7 +295,7 @@ export function CallLogs() {
             <HourSelect value={toHour} onChange={setToHour} />
           </label>
           {filtering && (
-            <Button variant="ghost" onClick={() => { setPhone(''); setFromDate(''); setFromHour(''); setToDate(''); setToHour(''); }}>נקה סינון</Button>
+            <Button variant="ghost" onClick={() => { setUserId(''); setPhone(''); setFromDate(''); setFromHour(''); setToDate(''); setToHour(''); }}>נקה סינון</Button>
           )}
         </div>
       </div>
@@ -296,20 +305,21 @@ export function CallLogs() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-2">מתי</th><th className="p-2">טלפון</th><th className="p-2">מסלול תפריט</th><th className="p-2">תוצאה</th>
+              <th className="p-2">מתי</th><th className="p-2">משתמש</th><th className="p-2">טלפון</th><th className="p-2">מסלול תפריט</th><th className="p-2">תוצאה</th>
             </tr>
           </thead>
           <tbody>
             {shown.map((l) => (
               <tr key={l.id} className="border-b border-line last:border-0">
                 <td className="p-2 whitespace-nowrap">{new Date(l.started_at).toLocaleString('he-IL')}</td>
+                <td className="p-2 whitespace-nowrap">{l.user_name || <span className="text-muted">לא רשום</span>}</td>
                 <td className="p-2" dir="ltr">{l.phone}</td>
                 <td className="p-2"><MenuPath path={l.menu_path} /></td>
                 <td className="p-2"><Badge ok={!['auth_fail', 'abandoned'].includes(l.outcome)}>{OUTCOME_LABELS[l.outcome] || l.outcome || '—'}</Badge></td>
               </tr>
             ))}
             {shown.length === 0 && logs && (
-              <tr><td className="p-4 text-muted text-center" colSpan={4}>לא נמצאו שיחות</td></tr>
+              <tr><td className="p-4 text-muted text-center" colSpan={5}>לא נמצאו שיחות</td></tr>
             )}
           </tbody>
         </table>

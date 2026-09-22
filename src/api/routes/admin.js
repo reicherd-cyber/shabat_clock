@@ -628,12 +628,15 @@ adminRouter.get('/call-logs', async (req, res, next) => {
   try {
     const cond = [];
     const params = [];
-    if (req.query.phone) { cond.push('phone = ?'); params.push(normalizePhone(req.query.phone)); }
-    if (req.query.user_id) { cond.push('user_id = ?'); params.push(Number(req.query.user_id)); }
-    if (req.query.from) { cond.push('started_at >= ?'); params.push(req.query.from); }
-    if (req.query.to) { cond.push('started_at <= ?'); params.push(req.query.to); }
+    if (req.query.phone) { cond.push('cl.phone = ?'); params.push(normalizePhone(req.query.phone)); }
+    if (req.query.user_id) { cond.push('cl.user_id = ?'); params.push(Number(req.query.user_id)); }
+    if (req.query.from) { cond.push('cl.started_at >= ?'); params.push(req.query.from); }
+    if (req.query.to) { cond.push('cl.started_at <= ?'); params.push(req.query.to); }
+    // user_name: who the caller was identified as (NULL for unregistered callers).
     res.json(await query(
-      `SELECT * FROM call_logs ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''} ORDER BY id DESC LIMIT 500`,
+      `SELECT cl.*, u.full_name AS user_name
+       FROM call_logs cl LEFT JOIN users u ON u.id = cl.user_id
+       ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''} ORDER BY cl.id DESC LIMIT 500`,
       params,
     ));
   } catch (e) { next(e); }
