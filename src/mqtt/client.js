@@ -3,6 +3,7 @@
 import mqtt from 'mqtt';
 import { env } from '../config/env.js';
 import { isPrimary } from '../config/role.js';
+import { replyIsFrom } from './reply-src.js';
 import { query } from '../db/pool.js';
 import { buildWirePayload } from '../services/schedulePayload.js';
 import { ingestExecReport, reconcileDevice } from '../services/executions.js';
@@ -12,7 +13,7 @@ let client = null;
 const ackWaiters = new Map();      // cmd_id → resolve
 const scheduleAckTimers = new Map(); // device_id → timeout
 const lastExecDropped = new Map(); // device_id → last seen exec_dropped counter
-const shellyRpcWaiters = new Map(); // rpc id → {prefix, resolve}
+const shellyRpcWaiters = new Map(); // rpc id → {prefix, uid, resolve}
 // Every server on the broker (production, staging, a local dev) shares the
 // reply topic — the device ACL lets a Shelly write to shabat-server/rpc and
 // nothing else — so each one hears every reply. Ids used to count from 1 in
@@ -88,10 +89,12 @@ async function handleShellyMessage(topic, buf) {
     try { payload = JSON.parse(text); } catch { return; }
     const waiter = shellyRpcWaiters.get(Number(payload?.id));
     if (!waiter) return;
-    // A reply carries src = the answering device's prefix. One that names a
+    // A reply carries src = the answering device's name. One that names a
     // different device than we asked is another server's conversation that
-    // happens to share our id — never let it stand in for our answer.
-    if (typeof payload.src === 'string' && payload.src !== waiter.prefix) {
+    // happens to share our id — never let it stand in for our answer. The name
+    // is NOT always our prefix (fw 1.6.x answers 'shellypro4pm-<mac>'), so
+    // compare the mac only — see reply-src.js.
+    if (!replyIsFrom(payload.src, waiter.uid)) {
       console.warn(`MQTT rpc reply id ${payload.id} from ${payload.src} while waiting on ${waiter.prefix} — ignored`);
       return;
     }
@@ -188,6 +191,7 @@ export function shellyMqttRpc(deviceUid, method, params = undefined, timeoutMs =
     }, timeoutMs);
     shellyRpcWaiters.set(id, {
       prefix,
+      uid: deviceUid,
       resolve: (reply) => {
         clearTimeout(timer);
         shellyRpcWaiters.delete(id);
