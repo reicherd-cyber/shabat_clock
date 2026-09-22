@@ -1,7 +1,7 @@
 // Admin history: merged commands + call_logs for ALL users, every field filterable.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Badge, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync } from '../ui.jsx';
 import { HourSelect, MenuPath } from './Misc.jsx';
 
 const SOURCE_HE = { ivr: 'טלפון', web: 'אתר', schedule: 'תזמון', admin: 'מנהל' };
@@ -22,8 +22,7 @@ export default function AdminHistory() {
   const setEv = (k) => (e) => set(k)(e.target.value);
   // The three dropdowns cascade: user → their devices → that device's channels.
   // Picking upstream drops a downstream choice that no longer belongs.
-  const setUser = (e) => setF((p) => {
-    const user_id = e.target.value;
+  const setUser = (user_id) => setF((p) => {
     const device_id = !user_id || devices.some((d) => String(d.id) === p.device_id && String(d.user_id) === user_id) ? p.device_id : '';
     const relay_id = !user_id || relays.some((r) => String(r.id) === p.relay_id && String(r.user_id) === user_id) ? p.relay_id : '';
     return { ...p, user_id, device_id, relay_id };
@@ -80,10 +79,8 @@ export default function AdminHistory() {
 
       <Card className="space-y-3">
         <div className="flex gap-2 items-center flex-wrap">
-          <Select className="py-2 text-sm w-44" value={f.user_id} onChange={setUser}>
-            <option value="">כל המשתמשים</option>
-            {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-          </Select>
+          <SearchSelect className="w-48" value={f.user_id} onChange={setUser} allLabel="כל המשתמשים" placeholder="חיפוש משתמש…"
+            options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: u.ivr_code }))} />
           <Select className="py-2 text-sm w-36" value={f.type} onChange={setEv('type')}>
             <option value="">פקודות ושיחות</option>
             <option value="cmd">פקודות בלבד</option>

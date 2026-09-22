@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot } from '../ui.jsx';
 import { UserRound, House } from 'lucide-react';
 import { ProviderBalances } from './ProviderBalances.jsx';
 
@@ -281,10 +281,8 @@ export function CallLogs() {
       <div className="flex justify-between items-center gap-2 flex-wrap">
         <h2 className="font-bold text-xl">יומני שיחות</h2>
         <div className="flex gap-2 items-center flex-wrap">
-          <Select className="py-2 text-sm w-44" value={userId} onChange={(e) => setUserId(e.target.value)}>
-            <option value="">כל המשתמשים</option>
-            {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-          </Select>
+          <SearchSelect className="w-48" value={userId} onChange={setUserId} allLabel="כל המשתמשים" placeholder="חיפוש משתמש…"
+            options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: u.ivr_code }))} />
           <Input dir="ltr" className="w-40" placeholder="סינון לפי טלפון" value={phone} onChange={(e) => setPhone(e.target.value)} />
           <label className="text-muted text-sm flex items-center gap-1">מ־
             <Input type="date" className="w-auto" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />

@@ -215,6 +215,68 @@ export function Modal({ open, onClose, title, children, closable = true }) {
   );
 }
 
+// Type-to-filter dropdown for long lists (users…). `options` = [{ value, label, hint? }];
+// `value` is the selected option's value ('' = nothing / the `allLabel` choice).
+// Closed: shows the selected label. Open: the same box becomes a search field and
+// the list under it narrows on every keystroke (label or hint substring).
+// Enter picks the first match, Escape/outside click closes without changing.
+export function SearchSelect({ value, onChange, options, allLabel = 'הכל', placeholder = 'חיפוש…', className = '' }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const box = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const away = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [open]);
+  const selected = options.find((o) => String(o.value) === String(value));
+  const s = q.trim().toLowerCase();
+  const shown = s
+    ? options.filter((o) => o.label.toLowerCase().includes(s) || (o.hint || '').toLowerCase().includes(s))
+    : options;
+  const pick = (v) => { onChange(v); setOpen(false); setQ(''); };
+  return (
+    <div ref={box} className={`relative ${className}`}>
+      <input
+        className={`border border-line rounded-[10px] px-3 py-2 pl-7 bg-surface w-full text-sm focus:outline-none focus:border-accent ${selected ? 'font-medium' : ''}`}
+        value={open ? q : (selected ? selected.label : allLabel)}
+        placeholder={open ? placeholder : allLabel}
+        onFocus={() => { setOpen(true); setQ(''); }}
+        onClick={() => setOpen(true)}
+        onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') { setOpen(false); setQ(''); e.currentTarget.blur(); }
+          if (e.key === 'Enter' && s && shown[0]) { pick(shown[0].value); e.currentTarget.blur(); }
+        }}
+      />
+      {selected && !open ? (
+        <button type="button" className="absolute left-2 top-1/2 -translate-y-1/2 text-muted hover:text-ink leading-none cursor-pointer" title="נקה"
+          onMouseDown={(e) => e.preventDefault()} onClick={() => pick('')}>×</button>
+      ) : (
+        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-muted text-xs pointer-events-none">▾</span>
+      )}
+      {open && (
+        <div className="absolute z-30 mt-1 w-full min-w-48 max-h-64 overflow-y-auto bg-surface border border-line rounded-[10px] shadow-card">
+          {!s && (
+            <button type="button" className={`w-full text-right px-3 py-2 text-sm hover:bg-surface2 cursor-pointer ${!selected ? 'text-muted' : ''}`}
+              onMouseDown={(e) => e.preventDefault()} onClick={() => pick('')}>{allLabel}</button>
+          )}
+          {shown.map((o) => (
+            <button key={o.value} type="button"
+              className={`w-full text-right px-3 py-2 text-sm hover:bg-surface2 cursor-pointer flex justify-between gap-2 ${selected && String(o.value) === String(selected.value) ? 'bg-surface2 font-medium' : ''}`}
+              onMouseDown={(e) => e.preventDefault()} onClick={() => pick(o.value)}>
+              <span>{o.label}</span>
+              {o.hint && <span className="text-muted text-xs" dir="ltr">{o.hint}</span>}
+            </button>
+          ))}
+          {shown.length === 0 && <div className="px-3 py-2 text-sm text-muted">אין התאמות</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function useAsync() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
