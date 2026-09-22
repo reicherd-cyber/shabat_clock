@@ -9,9 +9,10 @@
 // fleet — 23,000+ "ignored" lines, every command shelly_unreachable, all those
 // units flipped offline while the broker held their live sessions.
 //
-// The MAC after the last '-' is the only stable part, so match on that.
+// The mac is the only stable part, so the name is accepted whatever model
+// word (shellypro1/2/3/4pm, shellyplus…, future ones) or separator precedes
+// it — it just has to END with the unit's mac, case-insensitively.
 export function replyIsFrom(src, uid) {
   if (typeof src !== 'string') return true; // no src at all — nothing to check against
-  const mac = src.slice(src.lastIndexOf('-') + 1).toLowerCase();
-  return mac === String(uid).toLowerCase();
+  return src.toLowerCase().endsWith(String(uid).toLowerCase());
 }
