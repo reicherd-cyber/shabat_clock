@@ -698,11 +698,18 @@ export async function registeredDevice(uid) {
 
 // Validate + mint broker credentials for one device and return its RPC bodies.
 // Shared by the admin onboard flow and the universal installer's prepare endpoint.
-async function mintDeviceCreds(mac, { allowRegistered = false } = {}) {
+// disclose: whether the refusal may name the owner. Only the authenticated admin
+// flows get that (their confirm modal shows it); the PUBLIC prepare endpoint must
+// not — a file holder could otherwise map MACs to customer names.
+async function mintDeviceCreds(mac, { allowRegistered = false, disclose = false } = {}) {
   const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה — 12 תווים הקסדצימליים', { mac: 'invalid' });
   const reg = await registeredDevice(uid);
   if (reg && !allowRegistered) {
+    if (!disclose) {
+      throw errors.conflict('DEVICE_REGISTERED',
+        `המכשיר ${uid} כבר רשום במערכת ולא ניתן להגדיר אותו מחדש מדף ההתקנה — פנו למנהל המערכת.`);
+    }
     const e = errors.conflict('DEVICE_REGISTERED',
       `המכשיר ${uid} כבר רשום ללקוח ${reg.user_name} (${reg.name}). הגדרה מחדש תנתק אותו מהשרת — פנו למנהל המערכת.`);
     e.fields = { registered: { device_id: reg.id, device_name: reg.name, user_name: reg.user_name } };
@@ -731,7 +738,7 @@ const statusUrlFor = (uid, statusBase) =>
 
 export async function onboardShelly({ mac, statusBase = '', confirm = false }) {
   const { appVersion } = await import('../config/version.js');
-  const { uid, bodies } = await mintDeviceCreds(mac, { allowRegistered: confirm });
+  const { uid, bodies } = await mintDeviceCreds(mac, { allowRegistered: confirm, disclose: true });
   const stamp = `# script version ${appVersion.commit} — generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC\n`;
   return {
     mac: uid,
@@ -821,7 +828,7 @@ export async function setInstallerTokenRevoked(id, revoked, adminId) {
 // saved home Wi-Fi, and a reboot. Once the device dials in, prepStatus()
 // upgrades it over MQTT to the verified user_ca.pem config.
 export async function prepLinks({ mac, wifiSsid, wifiPass, confirm = false }) {
-  const { uid, bodies } = await mintDeviceCreds(mac, { allowRegistered: confirm });
+  const { uid, bodies } = await mintDeviceCreds(mac, { allowRegistered: confirm, disclose: true });
   const mqttCfg = JSON.parse(bodies.mqtt).params.config;
   mqttCfg.ssl_ca = '*';
   const base = 'http://192.168.33.1/rpc';
@@ -876,7 +883,7 @@ export async function prepStatus({ mac, adminId = null }) {
 // is not an admin.
 export async function prepareDevice({ mac, statusBase, jti }) {
   const tok = await liveInstallerToken(jti);
-  const { uid, bodies } = await mintDeviceCreds(mac, { allowRegistered: false });
+  const { uid, bodies } = await mintDeviceCreds(mac, { allowRegistered: false, disclose: false });
   await query(
     'UPDATE installer_tokens SET use_count = use_count + 1, last_used_at = UTC_TIMESTAMP(), last_mac = ? WHERE id = ?',
     [uid, tok.id]);
