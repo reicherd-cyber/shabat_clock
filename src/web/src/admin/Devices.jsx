@@ -21,15 +21,21 @@ export default function Devices() {
   const [reasons, setReasons] = useState({});             // device id → diagnosis result (offline table's סיבה column)
   const [inventory, setInventory] = useState([]);         // prepared_devices rows
   const [showActivated, setShowActivated] = useState(false);
+  const [installers, setInstallers] = useState([]);       // issued universal installer files (installer_tokens)
+  const [showDeadInstallers, setShowDeadInstallers] = useState(false);
+  const [installerForm, setInstallerForm] = useState(null); // {audience:'', label:''} — audience is a deliberate choice, never preselected
+  const [revoking, setRevoking] = useState(null);         // installer file pending revoke confirm
+  const [onboardConfirm, setOnboardConfirm] = useState(null); // {mac, registered:{user_name, device_name}} — re-mint for a live device
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
-    const [d, u, inv] = await Promise.all([
-      adminApi.get('/devices'), adminApi.get('/users'), adminApi.get('/shelly/inventory'),
+    const [d, u, inv, ins] = await Promise.all([
+      adminApi.get('/devices'), adminApi.get('/users'), adminApi.get('/shelly/inventory'), adminApi.get('/shelly/installers'),
     ]);
     setDevices(d);
     setUsers(u);
     setInventory(inv);
+    setInstallers(ins);
   };
   useEffect(() => { refresh().catch(setError); }, []);
 
@@ -64,9 +70,17 @@ export default function Devices() {
   // Side branch 'prep': a NEW remote device that has never dialed our broker — the server
   // mints its broker credentials and returns a one-time setup script for a person on the
   // device's LAN; after they run it, "בדוק חיבור" resumes the normal probe flow.
-  const shellyOnboard = () => run(async () => {
-    const prep = await adminApi.post('/shelly/onboard', { mac: shelly.mac });
-    setShelly({ ...shelly, step: 'prep', mac: prep.mac, prep, copied: null });
+  // A MAC that is a live customer device answers 409 DEVICE_REGISTERED: re-minting
+  // rotates the password that device is using, so the admin confirms first.
+  const shellyOnboard = (confirm = false) => run(async () => {
+    try {
+      const prep = await adminApi.post('/shelly/onboard', { mac: shelly.mac, ...(confirm ? { confirm: true } : {}) });
+      setOnboardConfirm(null);
+      setShelly({ ...shelly, step: 'prep', mac: prep.mac, prep, copied: null });
+    } catch (e) {
+      if (e.code === 'DEVICE_REGISTERED' && !confirm) { setOnboardConfirm({ mac: shelly.mac, registered: e.fields?.registered || {} }); return; }
+      throw e;
+    }
   });
 
   const copyScript = async (kind, text) => {
@@ -86,15 +100,27 @@ export default function Devices() {
     URL.revokeObjectURL(a.href);
   };
   // Created-on date in the filename — tells stale files apart (the universal one
-  // expires after 30 days, and regenerating a per-device one rotates its password).
+  // expires after 3–7 days, and regenerating a per-device one rotates its password).
   const today = () => new Date().toISOString().slice(0, 10);
   const downloadPhonePage = () => downloadHtml(`shelly-setup-${shelly.prep.mac}-${today()}.html`, shelly.prep.script_html);
 
   // One reusable file for any device — the helper types the MAC on the page itself.
+  // Who gets it decides validity + contents (internal: 7 days + saved Wi-Fi prefill;
+  // external: 3 days, no Wi-Fi), so the download goes through a small form.
+  const openInstallerForm = () => { setError(null); setInstallerForm({ audience: '', label: '' }); };
   const downloadUniversal = () => run(async () => {
-    const { script_html } = await adminApi.post('/shelly/universal-installer', {});
-    downloadHtml(`shelly-setup-${today()}.html`, script_html);
+    const { script_html, audience, valid_days } = await adminApi.post('/shelly/universal-installer', installerForm);
+    downloadHtml(`shelly-setup-${audience}-${today()}.html`, script_html);
+    setInstallerForm(null);
+    await refresh();
+    return valid_days;
   });
+  const setInstallerRevoked = (row, revoked) => run(async () => {
+    await adminApi.post(`/shelly/installers/${row.id}/${revoked ? 'revoke' : 'restore'}`, {});
+    setRevoking(null);
+    await refresh();
+  });
+  const fmtDT = (v) => (v ? String(v).replace('T', ' ').slice(0, 16) : '—');
 
 
   const shellyProbe = () => run(async () => {
@@ -178,10 +204,7 @@ export default function Devices() {
           {demoDevices.length > 0 && <span> · {demoDevices.length} מכשירי הדגמה</span>}
         </p>
         <div className="flex gap-2">
-          <Button disabled={busy} onClick={downloadUniversal}>
-            <span className="inline-flex items-center gap-1.5"><Download size={15} />1. קובץ התקנה ל-Shelly חדש</span>
-          </Button>
-          <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: '', name: '' })}>2. שיוך Shelly ללקוח</Button>
+          <Button variant="ghost" onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: '', user_id: '', name: '' })}>שיוך Shelly ללקוח</Button>
         </div>
       </div>
       {[
@@ -332,6 +355,66 @@ export default function Devices() {
         </div>
       )}
 
+      {/* Issued universal installer files: each is a revocable token. The download
+          button sits here, above the list it appends to. */}
+      <div className="flex items-center justify-between flex-wrap gap-2 mt-6">
+        <h3 className="font-bold">
+          קבצי התקנה ל-Shelly חדש
+          <span className="text-muted text-sm font-normal ms-2">
+            {installers.filter((t) => t.is_live).length} בתוקף
+          </span>
+        </h3>
+        <div className="flex items-center gap-3 flex-wrap">
+          <label className="flex items-center gap-1.5 text-sm">
+            <input type="checkbox" checked={showDeadInstallers} onChange={(e) => setShowDeadInstallers(e.target.checked)} />
+            הצג גם שבוטלו / פגי תוקף ({installers.filter((t) => !t.is_live).length})
+          </label>
+          <Button disabled={busy} onClick={openInstallerForm}>
+            <span className="inline-flex items-center gap-1.5"><Download size={15} />קובץ התקנה חדש</span>
+          </Button>
+        </div>
+      </div>
+      <Card flush className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-right text-muted border-b border-line">
+              <th className="p-3">נוצר</th><th className="p-3">נמען</th><th className="p-3">הערה</th>
+              <th className="p-3">תוקף עד</th><th className="p-3">שימושים</th><th className="p-3">סטטוס</th><th className="p-3">פעולות</th>
+            </tr>
+          </thead>
+          <tbody>
+            {installers.filter((t) => showDeadInstallers || t.is_live).map((t) => (
+              <tr key={t.id} className="border-b border-line last:border-0">
+                <td className="p-3 text-xs whitespace-nowrap">{fmtDT(t.created_at)}<div className="text-muted">{t.admin_name || ''}</div></td>
+                <td className="p-3 text-xs">{t.audience === 'external' ? 'לקוח / גורם חיצוני' : 'מתקין פנימי'}</td>
+                <td className="p-3 text-xs">{t.label || '—'}</td>
+                <td className="p-3 text-xs whitespace-nowrap">{fmtDT(t.expires_at)}</td>
+                <td className="p-3 text-xs">
+                  {t.use_count}
+                  {t.last_mac && <div className="text-muted" dir="ltr">{t.last_mac} · {fmtDT(t.last_used_at)}</div>}
+                </td>
+                <td className="p-3">
+                  {t.revoked_at
+                    ? <span className="text-xs">בוטל {fmtDT(t.revoked_at)}{t.revoked_by_name ? ` · ${t.revoked_by_name}` : ''}</span>
+                    : t.is_live ? <Badge ok>בתוקף</Badge> : <Badge>פג תוקף</Badge>}
+                </td>
+                <td className="p-3 whitespace-nowrap">
+                  {t.is_live && (
+                    <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => { setError(null); setRevoking(t); }}>בטל קובץ</Button>
+                  )}
+                  {t.revoked_at && (
+                    <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => setInstallerRevoked(t, false)}>שחזר</Button>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {installers.filter((t) => showDeadInstallers || t.is_live).length === 0 && (
+              <tr><td colSpan={7} className="p-6 text-center text-muted">אין קבצי התקנה בתוקף — "קובץ התקנה חדש" מנפיק אחד</td></tr>
+            )}
+          </tbody>
+        </table>
+      </Card>
+
       {/* Prepared-devices inventory: every unit that completed the prep process. */}
       <div className="flex items-center justify-between flex-wrap gap-2 mt-6">
         <h3 className="font-bold">
@@ -466,16 +549,16 @@ export default function Devices() {
             <ErrorNote error={error} />
             <div className="flex gap-2">
               <Button variant="ghost" className="flex-1" onClick={() => setShelly({ ...shelly, step: 'config' })}>‹ חזרה</Button>
-              <Button className="flex-1" disabled={busy || !shelly.mac} onClick={shellyOnboard}>צור פרטי חיבור וסקריפט ›</Button>
+              <Button className="flex-1" disabled={busy || !shelly.mac} onClick={() => shellyOnboard()}>צור פרטי חיבור וסקריפט ›</Button>
             </div>
             <div className="border-t border-line pt-3">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium">אין לכם את ה-MAC? דף התקנה לנייד — כל מכשיר</span>
-                <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={downloadUniversal}>הורדה</Button>
+                <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={openInstallerForm}>הורדה</Button>
               </div>
               <p className="text-muted text-xs mt-1">
                 קובץ אחד לכל המכשירים: מי שבשטח פותח אותו בטלפון, מקליד את ה-MAC מהמדבקה
-                שעל המכשיר ולוחץ התקנה. תקף 30 יום — שלחו בערוץ פרטי בלבד.
+                שעל המכשיר ולוחץ התקנה. תקף 3–7 ימים לפי הנמען, וניתן לביטול מרשימת הקבצים בעמוד המכשירים.
               </p>
             </div>
             <div className="border-t border-line pt-3">
@@ -681,6 +764,75 @@ export default function Devices() {
                   alert(`המכשיר הועבר. קודים שהשתנו:\n${res.reassigned.map((x) => `${x.relay}: ${x.from} ← ${x.to}`).join('\n')}`);
                 }
               })}>העבר</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!installerForm} onClose={() => setInstallerForm(null)} title="קובץ התקנה ל-Shelly חדש">
+        {installerForm && (
+          <div className="space-y-3">
+            <p className="text-sm text-muted">
+              מי שמחזיק בקובץ יכול ליצור פרטי חיבור לשרת לכל מכשיר חדש (לא למכשירים שכבר רשומים ללקוח).
+              בחרו למי הוא מיועד — זה קובע את תוקפו ואת תוכנו.
+            </p>
+            <div className="grid gap-2">
+              {[
+                { v: 'internal', title: 'מתקין פנימי (שלנו)', desc: 'תקף 7 ימים · כולל את ה-Wi-Fi השמור שלכם כברירת מחדל בטופס' },
+                { v: 'external', title: 'לקוח / גורם חיצוני', desc: 'תקף 3 ימים · ללא פרטי Wi-Fi — הלקוח מקליד את הרשת שלו' },
+              ].map((o) => (
+                <button key={o.v} type="button"
+                  className={`text-right rounded-xl border p-3 cursor-pointer transition ${installerForm.audience === o.v ? 'border-accent bg-accent/5' : 'border-line bg-surface hover:border-[#B9CBE8]'}`}
+                  onClick={() => setInstallerForm({ ...installerForm, audience: o.v })}>
+                  <div className="font-medium text-sm">{o.title}</div>
+                  <div className="text-muted text-xs mt-0.5">{o.desc}</div>
+                </button>
+              ))}
+            </div>
+            <Input placeholder="הערה (למי נשלח / לאיזו התקנה) — אופציונלי" value={installerForm.label} maxLength={80}
+              onChange={(e) => setInstallerForm({ ...installerForm, label: e.target.value })} />
+            <p className="text-xs text-muted">שלחו בערוץ פרטי בלבד. קובץ שדלף מבטלים מרשימת הקבצים — הביטול תופס מיד.</p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setInstallerForm(null)}>ביטול</Button>
+              <Button className="flex-1" disabled={busy || !installerForm.audience} onClick={downloadUniversal}>
+                <span className="inline-flex items-center gap-1.5"><Download size={15} />הורד קובץ</span>
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!revoking} onClose={() => setRevoking(null)} title="ביטול קובץ התקנה">
+        {revoking && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              לבטל את הקובץ מ-{fmtDT(revoking.created_at)}{revoking.label ? ` («${revoking.label}»)` : ''}?
+              מי שינסה להתקין איתו יקבל "קובץ ההתקנה בוטל". ניתן לשחזר מכאן כל עוד לא פג תוקפו.
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setRevoking(null)}>השאר בתוקף</Button>
+              <Button variant="danger" className="flex-1" disabled={busy} onClick={() => setInstallerRevoked(revoking, true)}>בטל קובץ</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!onboardConfirm} onClose={() => setOnboardConfirm(null)} title="המכשיר כבר רשום ללקוח">
+        {onboardConfirm && (
+          <div className="space-y-3">
+            <p className="text-off text-sm font-semibold">⚠ אזהרה</p>
+            <p className="text-sm">
+              המכשיר <b dir="ltr">{onboardConfirm.mac}</b> רשום ללקוח <b>{onboardConfirm.registered.user_name || '—'}</b>
+              {onboardConfirm.registered.device_name ? <> ({onboardConfirm.registered.device_name})</> : null}.
+              יצירת פרטי חיבור חדשים מחליפה את הסיסמה שהמכשיר משתמש בה — הוא יתנתק מהשרת
+              בהתחברות הבאה ויחזור רק אחרי שהסקריפט/דף ההתקנה החדש ירוץ עליו.
+            </p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setOnboardConfirm(null)}>ביטול</Button>
+              <Button variant="danger" className="flex-1" disabled={busy} onClick={() => shellyOnboard(true)}>צור פרטי חיבור חדשים</Button>
             </div>
           </div>
         )}

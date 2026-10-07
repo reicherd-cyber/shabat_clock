@@ -150,3 +150,12 @@ export const onboardStatusLimiter = limited({ windowMs: 60_000, limit: 30 });
 // Batch prep sessions (several devices back-to-back, with the page's own
 // retries) blew the old 10/10min and read as "no internet" on the phone.
 export const onboardPrepareLimiter = limited({ windowMs: 10 * 60_000, limit: 30 });
+// …and per installer FILE, not just per IP: one leaked universal file must not be
+// able to churn the broker from many addresses. Keyed on the token's jti (decoded,
+// not verified — a forged jti only buckets itself; the route verifies the
+// signature). check=1 polls are exempt (they mint nothing).
+export const onboardPrepareTokenLimiter = limited({
+  windowMs: 60 * 60_000, limit: 20,
+  keyGenerator: (req) => `tok:${jwt.decode(String(req.query.token || ''))?.jti || req.ip}`,
+  skip: (req) => String(req.query.check || '') === '1',
+});

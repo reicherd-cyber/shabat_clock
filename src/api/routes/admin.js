@@ -281,26 +281,60 @@ adminRouter.post('/devices/provision', requireWrite, async (req, res, next) => {
 // embeds the fresh password, so it is returned once and never logged/audited.
 adminRouter.post('/shelly/onboard', requireWrite, async (req, res, next) => {
   try {
+    // A MAC that is a live customer device answers 409 DEVICE_REGISTERED unless the
+    // admin confirmed — re-minting rotates the password that device is using.
     const { onboardShelly } = await import('../../services/shellyOnboard.js');
-    const result = await onboardShelly({ mac: req.body?.mac, statusBase: `${req.protocol}://${req.get('host')}` });
-    await audit(req, 'onboard_shelly', 'device', null, { after: { mac: result.mac } });
+    const result = await onboardShelly({
+      mac: req.body?.mac, statusBase: `${req.protocol}://${req.get('host')}`, confirm: req.body?.confirm === true,
+    });
+    await audit(req, 'onboard_shelly', 'device', null, { after: { mac: result.mac, confirmed_registered: req.body?.confirm === true } });
     res.json(result);
   } catch (e) { next(e); }
 });
 
 // Universal phone installer — no MAC needed here; the on-site helper types it and the
-// page mints that device's credentials via the public prepare endpoint (30-day token).
+// page mints that device's credentials via the public prepare endpoint. Each file is
+// an installer_tokens row (revocable); audience decides TTL + whether the admin's
+// saved Wi-Fi rides along (internal only — never into a customer's hands).
 adminRouter.post('/shelly/universal-installer', requireWrite, async (req, res, next) => {
   try {
-    // The admin's saved home Wi-Fi rides the file as an editable prefill.
     const [row] = await query('SELECT default_wifi_ssid, default_wifi_pass FROM admins WHERE id = ?', [req.auth.adminId]);
     const { universalInstaller } = await import('../../services/shellyOnboard.js');
-    const result = universalInstaller({
+    const result = await universalInstaller({
       statusBase: `${req.protocol}://${req.get('host')}`, adminId: req.auth.adminId,
+      audience: String(req.body?.audience || ''), label: req.body?.label,
       wifiSsid: row?.default_wifi_ssid || '', wifiPass: row?.default_wifi_pass || '',
     });
-    await audit(req, 'universal_installer', 'device', null);
+    await audit(req, 'universal_installer', 'installer_token', null,
+      { after: { audience: result.audience, valid_days: result.valid_days, jti: result.jti, label: req.body?.label || null } });
     res.json(result);
+  } catch (e) { next(e); }
+});
+
+// Issued installer files: who made them, for whom, how often used, live/revoked.
+adminRouter.get('/shelly/installers', async (req, res, next) => {
+  try {
+    const { listInstallerTokens } = await import('../../services/shellyOnboard.js');
+    res.json(await listInstallerTokens());
+  } catch (e) { next(e); }
+});
+
+// Revoke = soft flip (restorable until the file's own expiry). A revoked file's
+// prepare calls answer "קובץ ההתקנה בוטל" on the phone.
+adminRouter.post('/shelly/installers/:id/revoke', requireWrite, async (req, res, next) => {
+  try {
+    const { setInstallerTokenRevoked } = await import('../../services/shellyOnboard.js');
+    await setInstallerTokenRevoked(Number(req.params.id), true, req.auth.adminId);
+    await audit(req, 'revoke', 'installer_token', Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+adminRouter.post('/shelly/installers/:id/restore', requireWrite, async (req, res, next) => {
+  try {
+    const { setInstallerTokenRevoked } = await import('../../services/shellyOnboard.js');
+    await setInstallerTokenRevoked(Number(req.params.id), false, req.auth.adminId);
+    await audit(req, 'restore', 'installer_token', Number(req.params.id));
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
@@ -327,8 +361,8 @@ adminRouter.post('/shelly/prep', requireSuperadmin, async (req, res, next) => {
     // The screen's current values win (per-device override); account default fills gaps.
     const [row] = await query('SELECT default_wifi_ssid, default_wifi_pass FROM admins WHERE id = ?', [req.auth.adminId]);
     const { prepLinks } = await import('../../services/shellyOnboard.js');
-    const result = prepLinks({
-      mac: req.body?.mac,
+    const result = await prepLinks({
+      mac: req.body?.mac, confirm: req.body?.confirm === true,
       wifiSsid: String(req.body?.wifi_ssid ?? '') || row?.default_wifi_ssid || '',
       wifiPass: String(req.body?.wifi_pass ?? '') || row?.default_wifi_pass || '',
     });

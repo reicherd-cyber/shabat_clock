@@ -284,7 +284,7 @@ exit 1
 //  - per-device: uid + RPC bodies + status URL baked in (b/statusUrl set, prepareUrl '')
 //  - universal:  the helper types the MAC; the page asks the server to mint that
 //    device's credentials at install time (GET prepareUrl&mac=..., authorized by the
-//    30-day installer token in the URL), then proceeds identically.
+//    installer token in the URL — a revocable installer_tokens row), then proceeds identically.
 function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
   // Injected as JS string literals — the RPC bodies are JSON (no backticks/quotes issues
   // beyond '); JSON.stringify once more makes them safe literals.
@@ -531,7 +531,7 @@ async function mintCreds(){
  if(!r){verdict('אין חיבור לשרת. אם הרגע עברתם רשת — המתינו כמה שניות ולחצו שוב; אחרת ודאו שהטלפון על Wi-Fi עם אינטרנט (או הפעילו גלישה).','warn');return false}
  if(!r.ok){
   const e=await r.json().catch(()=>null);
-  verdict('השרת לא אישר את הבקשה: '+((e&&e.error&&e.error.message)||('שגיאה '+r.status))+'. אם הקובץ ישן מ-30 יום — בקשו קובץ חדש.','bad');
+  verdict('השרת לא אישר את הבקשה: '+((e&&e.error&&e.error.message)||('שגיאה '+r.status))+'. אם הקובץ ישן, בוטל, או שהמכשיר כבר רשום ללקוח — פנו למנהל המערכת לקובץ חדש.','bad');
   return false}
  const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
  log('פרטי חיבור נוצרו ✓','ok');
@@ -681,11 +681,33 @@ async function stageInstall(){
 </script></body></html>`;
 }
 
+// A MAC that is a live customer device. Minting for it REPLACES the broker
+// password that device is using, so it drops at its next reconnect — the one
+// thing a leaked or mistyped installer file could break. The public prepare
+// endpoint refuses outright; the admin flow needs an explicit confirm.
+// A unit registered offline (assigned to a customer before it ever connected,
+// first_contact_pending) has no working credentials to lose — the installer file
+// is exactly how it gets its first ones, so it is not "registered" here.
+export async function registeredDevice(uid) {
+  const [row] = await query(
+    `SELECT d.id, d.name, u.full_name AS user_name
+     FROM devices d JOIN users u ON u.id = d.user_id
+     WHERE d.device_uid = ? AND d.is_enabled = TRUE AND d.first_contact_pending = FALSE`, [uid]);
+  return row || null;
+}
+
 // Validate + mint broker credentials for one device and return its RPC bodies.
 // Shared by the admin onboard flow and the universal installer's prepare endpoint.
-function mintDeviceCreds(mac) {
+async function mintDeviceCreds(mac, { allowRegistered = false } = {}) {
   const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה — 12 תווים הקסדצימליים', { mac: 'invalid' });
+  const reg = await registeredDevice(uid);
+  if (reg && !allowRegistered) {
+    const e = errors.conflict('DEVICE_REGISTERED',
+      `המכשיר ${uid} כבר רשום ללקוח ${reg.user_name} (${reg.name}). הגדרה מחדש תנתק אותו מהשרת — פנו למנהל המערכת.`);
+    e.fields = { registered: { device_id: reg.id, device_name: reg.name, user_name: reg.user_name } };
+    throw e;
+  }
   if (!env.deviceBroker.host) {
     throw errors.validation('חיבור מכשירים מרחוק אינו מוגדר בשרת זה (DEVICE_MQTT_HOST)');
   }
@@ -707,9 +729,9 @@ function mintDeviceCreds(mac) {
 const statusUrlFor = (uid, statusBase) =>
   `${statusBase}/api/v1/shelly-onboard/status?token=${jwt.sign({ p: 'shelly-onboard', uid }, env.jwtSecret, { expiresIn: '48h' })}`;
 
-export async function onboardShelly({ mac, statusBase = '' }) {
+export async function onboardShelly({ mac, statusBase = '', confirm = false }) {
   const { appVersion } = await import('../config/version.js');
-  const { uid, bodies } = mintDeviceCreds(mac);
+  const { uid, bodies } = await mintDeviceCreds(mac, { allowRegistered: confirm });
   const stamp = `# script version ${appVersion.commit} — generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC\n`;
   return {
     mac: uid,
@@ -722,24 +744,74 @@ export async function onboardShelly({ mac, statusBase = '' }) {
   };
 }
 
-// Universal installer: one downloadable page valid INSTALLER_TTL for any device — the
-// helper types the MAC and the page mints that device's credentials at install time.
-// The embedded token is the authorization: whoever holds the file can create broker
-// credentials (not app access) until it expires, so it's shared privately like the
-// per-device scripts. adm (the generating admin) is carried into the audit log.
-const INSTALLER_TTL = '30d';
-
-export function universalInstaller({ statusBase, adminId, wifiSsid = '', wifiPass = '' }) {
+// Universal installer: one downloadable page valid for any device — the helper types
+// the MAC and the page mints that device's credentials at install time. The embedded
+// token is the authorization: whoever holds the file can create broker credentials
+// (not app access) until it expires or is revoked. Every file is a row in
+// installer_tokens (keyed by the token's jti) so a leaked copy can be cancelled.
+//   internal — our own installers: 7 days, the admin's saved Wi-Fi as a prefill.
+//   external — a customer / third party: 3 days, no Wi-Fi (it would leak the
+//              admin's home password to every recipient).
+export const INSTALLER_AUDIENCES = { internal: { days: 7 }, external: { days: 3 } };
+export async function universalInstaller({ statusBase, adminId, audience, label = '', wifiSsid = '', wifiPass = '' }) {
   if (!env.deviceBroker.host) {
     throw errors.validation('חיבור מכשירים מרחוק אינו מוגדר בשרת זה (DEVICE_MQTT_HOST)');
   }
-  const token = jwt.sign({ p: 'shelly-onboard-any', adm: adminId }, env.jwtSecret, { expiresIn: INSTALLER_TTL });
+  const aud = INSTALLER_AUDIENCES[audience];
+  if (!aud) throw errors.validation('יש לבחור למי מיועד הקובץ', { audience: 'internal|external' });
+  const jti = crypto.randomBytes(16).toString('hex');
+  const days = aud.days;
+  await query(
+    `INSERT INTO installer_tokens (jti, admin_id, audience, label, expires_at)
+     VALUES (?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? DAY))`,
+    [jti, adminId, audience, String(label || '').trim().slice(0, 80) || null, days]);
+  const token = jwt.sign({ p: 'shelly-onboard-any', adm: adminId, jti }, env.jwtSecret, { expiresIn: `${days}d` });
   const prepareUrl = `${statusBase}/api/v1/shelly-onboard/prepare?token=${token}`;
+  const wifi = audience === 'internal' ? { ssid: wifiSsid, pass: wifiPass } : {};
   return {
-    script_html: htmlPage(null, null, null, prepareUrl, `${env.deviceBroker.host}:${env.deviceBroker.port}`,
-      { ssid: wifiSsid, pass: wifiPass }),
-    valid_days: 30,
+    script_html: htmlPage(null, null, null, prepareUrl, `${env.deviceBroker.host}:${env.deviceBroker.port}`, wifi),
+    valid_days: days,
+    audience,
+    jti,
   };
+}
+
+// The jwt signature only proves the file came from us; the row says whether it is
+// still allowed to act. Returns the row (callers bump usage after a mint).
+export async function liveInstallerToken(jti) {
+  if (!jti) throw errors.unauthenticated('קובץ ההתקנה ישן — יש לבקש קובץ חדש');
+  const [row] = await query('SELECT * FROM installer_tokens WHERE jti = ?', [jti]);
+  if (!row) throw errors.unauthenticated('קובץ ההתקנה אינו מוכר — יש לבקש קובץ חדש');
+  if (row.revoked_at) throw errors.unauthenticated('קובץ ההתקנה בוטל — יש לבקש קובץ חדש');
+  // Expiry judged by the database clock (UTC DATETIME vs. a host-zone Date in JS).
+  const [live] = await query('SELECT 1 AS ok FROM installer_tokens WHERE id = ? AND expires_at > UTC_TIMESTAMP()', [row.id]);
+  if (!live) throw errors.unauthenticated('קובץ ההתקנה פג תוקף — יש לבקש קובץ חדש');
+  return row;
+}
+
+export async function listInstallerTokens() {
+  return query(
+    `SELECT t.id, t.jti, t.audience, t.label, t.created_at, t.expires_at, t.revoked_at,
+            t.use_count, t.last_used_at, t.last_mac,
+            (t.revoked_at IS NULL AND t.expires_at > UTC_TIMESTAMP()) AS is_live,
+            a.name AS admin_name, r.name AS revoked_by_name
+     FROM installer_tokens t
+     LEFT JOIN admins a ON a.id = t.admin_id
+     LEFT JOIN admins r ON r.id = t.revoked_by
+     ORDER BY t.id DESC LIMIT 200`);
+}
+
+// Soft status flip, restorable while the token has not expired.
+export async function setInstallerTokenRevoked(id, revoked, adminId) {
+  const [row] = await query('SELECT id FROM installer_tokens WHERE id = ?', [id]);
+  if (!row) throw errors.notFound();
+  if (revoked) {
+    await query('UPDATE installer_tokens SET revoked_at = UTC_TIMESTAMP(), revoked_by = ? WHERE id = ?', [adminId, id]);
+  } else {
+    const [live] = await query('SELECT 1 AS ok FROM installer_tokens WHERE id = ? AND expires_at > UTC_TIMESTAMP()', [id]);
+    if (!live) throw errors.conflict('EXPIRED', 'הקובץ כבר פג תוקף — אין מה לשחזר, הנפיקו קובץ חדש');
+    await query('UPDATE installer_tokens SET revoked_at = NULL, revoked_by = NULL WHERE id = ?', [id]);
+  }
 }
 
 // ── Home-prep flow (superadmin, no file) ──
@@ -748,8 +820,8 @@ export function universalInstaller({ statusBase, adminId, wifiSsid = '', wifiPas
 // server config (interim ssl "*" — the device holds no CA yet), the admin's
 // saved home Wi-Fi, and a reboot. Once the device dials in, prepStatus()
 // upgrades it over MQTT to the verified user_ca.pem config.
-export function prepLinks({ mac, wifiSsid, wifiPass }) {
-  const { uid, bodies } = mintDeviceCreds(mac);
+export async function prepLinks({ mac, wifiSsid, wifiPass, confirm = false }) {
+  const { uid, bodies } = await mintDeviceCreds(mac, { allowRegistered: confirm });
   const mqttCfg = JSON.parse(bodies.mqtt).params.config;
   mqttCfg.ssl_ca = '*';
   const base = 'http://192.168.33.1/rpc';
@@ -798,9 +870,16 @@ export async function prepStatus({ mac, adminId = null }) {
   return { status: 'securing' };
 }
 
-// Called by the public prepare endpoint once the installer token is verified.
-export function prepareDevice({ mac, statusBase }) {
-  const { uid, bodies } = mintDeviceCreds(mac);
+// Called by the public prepare endpoint once the installer token's signature is
+// verified. The jti must still be live (not revoked / expired in the DB), and a
+// MAC that belongs to a registered customer device is refused — the file holder
+// is not an admin.
+export async function prepareDevice({ mac, statusBase, jti }) {
+  const tok = await liveInstallerToken(jti);
+  const { uid, bodies } = await mintDeviceCreds(mac, { allowRegistered: false });
+  await query(
+    'UPDATE installer_tokens SET use_count = use_count + 1, last_used_at = UTC_TIMESTAMP(), last_mac = ? WHERE id = ?',
+    [uid, tok.id]);
   return {
     mac: uid,
     bodies: { putCa: bodies.putCa, mqtt: bodies.mqtt, noVerify: bodies.mqttNoVerify, reboot: bodies.reboot, sntp: bodies.sntp },
