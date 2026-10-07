@@ -26,6 +26,7 @@ export default function Devices() {
   const [installerForm, setInstallerForm] = useState(null); // {audience:'', label:''} — audience is a deliberate choice, never preselected
   const [revoking, setRevoking] = useState(null);         // installer file pending revoke confirm
   const [onboardConfirm, setOnboardConfirm] = useState(null); // {mac, registered:{user_name, device_name}} — re-mint for a live device
+  const [reinstall, setReinstall] = useState(null);       // {device, done?} — factory-reset device: re-mint + per-device installer file
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => {
@@ -114,6 +115,15 @@ export default function Devices() {
     setInstallerForm(null);
     await refresh();
     return valid_days;
+  });
+  // A factory-reset Shelly lost its broker credentials; the per-device installer
+  // file (one MAC, no reusable token) is how it gets new ones. Re-minting rotates
+  // the password, so a device that is still ONLINE would drop — the modal says so.
+  const reinstallDevice = () => run(async () => {
+    const d = reinstall.device;
+    const prep = await adminApi.post('/shelly/onboard', { mac: d.device_uid, confirm: true });
+    downloadHtml(`shelly-setup-${prep.mac}-${today()}.html`, prep.script_html);
+    setReinstall({ device: d, done: true });
   });
   const setInstallerRevoked = (row, revoked) => run(async () => {
     await adminApi.post(`/shelly/installers/${row.id}/${revoked ? 'revoke' : 'restore'}`, {});
@@ -290,6 +300,11 @@ export default function Devices() {
                                   .then((r) => setDiagnosis((x) => (x?.device?.id === d.id ? { device: d, ...r } : x)))
                                   .catch((e) => setDiagnosis((x) => (x?.device?.id === d.id ? { device: d, error: e.message } : x)));
                               }}>אבחון</Button>
+                          )}
+                          {d.device_type === 'shelly' && !!d.device_uid && d.is_enabled && (
+                            <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                              title="המכשיר אופס להגדרות יצרן? קובץ התקנה למכשיר הזה בלבד"
+                              onClick={() => { setError(null); setReinstall({ device: d }); }}>התקנה מחדש</Button>
                           )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             onClick={() => setTransferForm({ device: d, user_id: '' })}>העבר ללקוח</Button>
@@ -815,6 +830,43 @@ export default function Devices() {
               <Button variant="ghost" className="flex-1" onClick={() => setRevoking(null)}>השאר בתוקף</Button>
               <Button variant="danger" className="flex-1" disabled={busy} onClick={() => setInstallerRevoked(revoking, true)}>בטל קובץ</Button>
             </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!reinstall} onClose={() => setReinstall(null)} title={`התקנה מחדש — "${reinstall?.device?.name || ''}"`}>
+        {reinstall && !reinstall.done && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              למכשיר <b dir="ltr">{reinstall.device.device_uid}</b> ייווצרו פרטי חיבור חדשים לשרת, ויורד קובץ התקנה
+              לנייד שתקף <b>למכשיר הזה בלבד</b>. שלחו אותו ללקוח בערוץ פרטי — הוא פותח אותו בטלפון ליד המכשיר
+              ועוקב אחרי השלבים. השיוך, הערוצים והתזמונים נשארים כפי שהם.
+            </p>
+            {reinstall.device.is_online
+              ? (
+                <p className="text-off text-sm font-semibold">
+                  ⚠ המכשיר מחובר כרגע! פרטי החיבור הישנים יפסיקו לעבוד והוא יתנתק עד שהקובץ ירוץ עליו.
+                  המשיכו רק אם המכשיר באמת אופס.
+                </p>
+              )
+              : <p className="text-sm text-muted">המכשיר מנותק — אם אופס להגדרות יצרן, פרטי החיבור הישנים כבר אינם עליו ואין מה להפסיד.</p>}
+            <p className="text-xs text-muted">הקובץ מכיל את סיסמת החיבור של המכשיר — בקשו מהלקוח למחוק אותו בסיום.</p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setReinstall(null)}>ביטול</Button>
+              <Button variant={reinstall.device.is_online ? 'danger' : 'primary'} className="flex-1" disabled={busy} onClick={reinstallDevice}>
+                <span className="inline-flex items-center gap-1.5"><Download size={15} />צור פרטי חיבור והורד קובץ</span>
+              </Button>
+            </div>
+          </div>
+        )}
+        {reinstall && reinstall.done && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              הקובץ <span dir="ltr" className="code-chip">shelly-setup-{reinstall.device.device_uid}-{today()}.html</span> ירד למחשב.
+              שלחו אותו ללקוח; כשהמכשיר יתחבר הוא יופיע כאן כמחובר מעצמו.
+            </p>
+            <Button className="w-full" onClick={() => setReinstall(null)}>סגור</Button>
           </div>
         )}
       </Modal>
