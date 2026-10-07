@@ -9,7 +9,7 @@ import { isLockedOut, recordFailure } from '../services/authFailures.js';
 import { pendingPhoneAddCode } from '../services/otp.js';
 import { enabledRelaysForUser } from '../services/relays.js';
 import { sendImmediateCommand } from '../services/commands.js';
-import { createSchedule, deleteSchedule, listSchedules, describeScheduleHe, validateScheduleRules } from '../services/schedules.js';
+import { createSchedule, deleteSchedule, updateSchedule, listSchedules, describeScheduleHe, validateScheduleRules } from '../services/schedules.js';
 import { logAction } from '../services/audit.js';
 import { startCall, setCallUser, appendPath, finishCall } from '../services/callLogs.js';
 import { getText, getSetting } from '../services/settings.js';
@@ -61,6 +61,14 @@ async function runNluActions(session) {
       // Soft delete (restorable) — same service the web app uses.
       await deleteSchedule({ userId: session.userId, scheduleId: a.schedule_id, actor: `ivr:${session.userId}` });
       await logAction({ type: 'ivr', id: session.userId }, 'delete', 'schedule', a.schedule_id, { after: { via: 'nlu' } });
+    } else if (a.kind === 'plan_toggle') {
+      // Stop/start a תוכנית = flip is_enabled on each member row — the same
+      // per-row PATCH the web plan toggle issues (nothing deleted, restorable).
+      const is_enabled = a.action === 'on';
+      for (const id of a.schedule_ids) {
+        await updateSchedule({ userId: session.userId, scheduleId: id, patch: { is_enabled }, actor: `ivr:${session.userId}` });
+        await logAction({ type: 'ivr', id: session.userId }, 'update', 'schedule', id, { after: { is_enabled, plan_key: a.plan_key, via: 'nlu' } });
+      }
     } else {
       const date = ymdForDay(a.day, tz);
       const fields = a.action === 'off'
@@ -84,7 +92,7 @@ async function nluConfirmItems(actions) {
   for (const a of actions) {
     // Schedule create/delete have free-form summaries — read them as TTS; the
     // recorded-fragment juxtaposition below only fits the fixed on/off verbs.
-    if (a.kind === 'recurring' || a.kind === 'delete_schedule') {
+    if (a.kind === 'recurring' || a.kind === 'delete_schedule' || a.kind === 'plan_toggle') {
       items.push({ t: `${a.summary},` });
       continue;
     }

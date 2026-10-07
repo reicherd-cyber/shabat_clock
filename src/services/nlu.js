@@ -28,7 +28,7 @@ const SCHEMA = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          kind: { type: 'string', enum: ['immediate', 'timed', 'recurring', 'delete_schedule'] },
+          kind: { type: 'string', enum: ['immediate', 'timed', 'recurring', 'delete_schedule', 'plan_toggle'] },
           // All kinds except delete_schedule (which targets schedule_id instead).
           relay_id: { type: ['integer', 'null'] },
           // immediate/timed only.
@@ -47,8 +47,11 @@ const SCHEMA = {
           off_time: { type: ['string', 'null'] },
           // delete_schedule only: an id from the existing-schedules list.
           schedule_id: { type: ['integer', 'null'] },
+          // plan_toggle only: a key from the plans list; action on = start the
+          // plan (enable all its schedules), off = stop it (disable them).
+          plan_key: { type: ['string', 'null'] },
         },
-        required: ['kind', 'relay_id', 'action', 'time', 'day', 'on_day', 'on_time', 'off_day', 'off_time', 'schedule_id'],
+        required: ['kind', 'relay_id', 'action', 'time', 'day', 'on_day', 'on_time', 'off_day', 'off_time', 'schedule_id', 'plan_key'],
       },
     },
   },
@@ -76,13 +79,45 @@ async function logUsage({ userId, phone, text, model, usage }) {
   );
 }
 
-function buildSystemPrompt(relays, schedules, tz, nowParts, prevText) {
+// The user's תוכניות as the web page shows them: rows sharing a plan_id form one
+// plan; a standalone row (legacy per-channel, dashboard quick-off, calendar once)
+// is a single-channel plan of its own (key s<id>). "Stop/start a plan" flips
+// is_enabled on every member row — exactly what the web toggle does.
+export function groupPlans(schedules) {
+  const byPlan = new Map();
+  const loose = [];
+  for (const s of schedules) {
+    if (!s.plan_id) { loose.push(s); continue; }
+    if (!byPlan.has(s.plan_id)) byPlan.set(s.plan_id, []);
+    byPlan.get(s.plan_id).push(s);
+  }
+  const entry = (key, members) => {
+    const channels = [...new Set(members.map((m) => m.relay_name))];
+    const named = members[0].name && !/^תזמון \d+$/.test(members[0].name) ? members[0].name : null;
+    return {
+      key,
+      name: named || (members.length === 1 ? describeScheduleHe(members[0]) : `תוכנית לממסרים ${channels.join(', ')}`),
+      enabled: members.some((m) => m.is_enabled),
+      channels,
+      schedule_ids: members.map((m) => m.id),
+    };
+  };
+  return [
+    ...[...byPlan.entries()].map(([pid, members]) => entry(pid, members)),
+    ...loose.map((s) => entry(`s${s.id}`, [s])),
+  ];
+}
+
+function buildSystemPrompt(relays, schedules, plans, tz, nowParts, prevText) {
   const list = relays
     .map((r) => `- relay_id ${r.id}: "${r.name}" (מכשיר: "${r.device_name}", מצב נוכחי: ${r.current_state === 'on' ? 'דולק' : 'כבוי'})`)
     .join('\n');
   const schedList = schedules.length
     ? schedules.map((s) => `- schedule_id ${s.id}: ${describeScheduleHe(s)}`).join('\n')
     : '(אין תזמונים)';
+  const planList = plans.length
+    ? plans.map((p) => `- plan_key ${p.key}: "${p.name}" (${p.enabled ? 'פעילה' : 'מושבתת'}; ממסרים: ${p.channels.join(', ')}; ${p.schedule_ids.length} תזמונים)`).join('\n')
+    : '(אין תוכניות)';
   const hhmm = `${String(nowParts.hh).padStart(2, '0')}:${String(nowParts.mm).padStart(2, '0')}`;
   return `אתה מפרש פקודות בעברית עבור מערכת "שעון שבת" ששולטת בממסרים (relays) של משתמש.
 השעה המקומית הנוכחית של המשתמש: ${hhmm} (אזור זמן ${tz}).
@@ -92,6 +127,9 @@ ${list}
 
 התזמונים הקיימים של המשתמש:
 ${schedList}
+
+התוכניות של המשתמש (תוכנית = קבוצת תזמונים בשם, שאפשר להפעיל או לעצור כיחידה):
+${planList}
 
 הטקסט מגיע מזיהוי דיבור טלפוני באיכות ירודה — מילים עשויות להגיע משובשות אך דומות פונטית לבקשה האמיתית (למשל "אבל זה כלום עכשיו" הוא שיבוש של "כבה את הסלון עכשיו"). לפני שאתה מוותר, נסה לשחזר את הבקשה הסבירה ביותר לפי דמיון צלילי לשמות הממסרים ולפעולות הדלקה/כיבוי/תזמון. אם השחזור ברור מספיק — פרש אותו כרגיל.
 ${prevText ? `
@@ -103,6 +141,7 @@ ${prevText ? `
 - "timed" = הדלקה/כיבוי חד פעמי בשעה עתידית. חשב את השעה בפורמט HH:MM (24 שעות) ואת היום (today/tomorrow) לפי השעה הנוכחית. "בעוד N דקות/שעות" = הוסף לשעה הנוכחית; אם התוצאה אחרי חצות, day=tomorrow.
 - "recurring" = תזמון קבוע שחוזר: "כל יום ב..." → on_day/off_day = null; "כל יום שלישי" → יום בשבוע (1=ראשון, 2=שני, 3=שלישי, 4=רביעי, 5=חמישי, 6=שישי, 7=שבת). מלא on_time/off_time בפורמט HH:MM. מותר צד אחד בלבד (רק הדלקה או רק כיבוי) — השאר את הצד השני null. ההבחנה: "מחר בשמונה" = timed; "כל יום בשמונה" / "בכל שבת" = recurring.
 - "delete_schedule" = מחיקת תזמון קיים: בחר schedule_id מרשימת התזמונים למעלה לפי ההתאמה הטובה ביותר לתיאור המשתמש (ממסר, סוג, שעות). אם הבקשה מכוונת לכמה תזמונים ("תמחק את כל התזמונים של הדוד") — החזר פעולת מחיקה לכל אחד מהם.
+- "plan_toggle" = עצירה או הפעלה של תוכנית קיימת, בלי למחוק אותה: בחר plan_key מרשימת התוכניות למעלה לפי שם התוכנית או הממסרים שבה; action off = עצירה/השבתה ("עצור", "תפסיק", "השבת", "בטל זמנית", "כבה את התוכנית"), action on = הפעלה/חידוש ("הפעל", "תתחיל", "החזר", "הדלק את התוכנית"). ההבחנה מממסר: המילים תוכנית/תזמונים ("עצור את התוכנית של הסלון", "תפסיק את תוכנית שבת") = plan_toggle; "כבה את הסלון" בלי המילה תוכנית = immediate. "עצור את כל התוכניות" = פעולת plan_toggle לכל תוכנית ברשימה. גם תוכנית שכבר במצב המבוקש — החזר אותה (המערכת תציין זאת).
 - בחר relay_id רק מהרשימה למעלה. התאם לפי שם הממסר (למשל "סלון", "מטבח") גם אם הניסוח חלקי.
 - שעה עמומה בלי ציון בוקר/ערב — בחר את הפירוש הסביר בבית: "בשעה שלוש" לתזמון של פלטה או דוד לשבת = 15:00 ולא 03:00 בלילה; "בשמונה" בערב שישי = 20:00. שעות לילה קטנות (00:00–05:00) רק כשהמשתמש אמר במפורש לילה או לפנות בוקר.
 - בקשה אחת יכולה להכיל כמה פעולות — פרק משפט מורכב לכל חלקיו והחזר פעולה נפרדת לכל חלק. למשל "תדליק את הדוד בשש ותכבה את הסלון בעוד עשר דקות" = שתי פעולות; "תדליק את הדוד מעכשיו עד שמונה" = הדלקה מיידית + כיבוי timed בשעה 20:00; "כל יום שישי תדליק את הפלטה בארבע ותכבה במוצאי שבת בעשר" = recurring אחד עם שני צדדים.
@@ -139,6 +178,7 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
   ]);
   if (relays.length === 0) throw errors.validation('אין ממסרים פעילים לחשבון זה');
 
+  const plans = groupPlans(schedules);
   const tz = relays[0].timezone || 'Asia/Jerusalem';
   const nowParts = localParts(new Date(), tz);
   const client = new Anthropic({ apiKey: env.anthropic.apiKey });
@@ -151,7 +191,7 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
     // (Sonnet 5 default) thinking tokens can eat the budget before the JSON.
     thinking: { type: 'disabled' },
     output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-    system: buildSystemPrompt(relays, schedules, tz, nowParts, prevText),
+    system: buildSystemPrompt(relays, schedules, plans, tz, nowParts, prevText),
     messages: [{ role: 'user', content: clean }],
   };
 
@@ -195,8 +235,22 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
 
   const byId = new Map(relays.map((r) => [r.id, r]));
   const schedById = new Map(schedules.map((s) => [s.id, s]));
+  const planByKey = new Map(plans.map((p) => [p.key, p]));
   const actions = [];
   for (const a of parsed.actions || []) {
+    if (a.kind === 'plan_toggle') {
+      const plan = planByKey.get(String(a.plan_key ?? ''));
+      if (!plan || (a.action !== 'on' && a.action !== 'off')) continue;
+      const on = a.action === 'on';
+      // No quotes/colons/dots — this line is read over the phone (see ivr/responses.js).
+      const already = plan.enabled === on ? (on ? ', היא כבר פעילה' : ', היא כבר מושבתת') : '';
+      actions.push({
+        kind: 'plan_toggle', plan_key: plan.key, plan_name: plan.name, action: a.action,
+        schedule_ids: plan.schedule_ids,
+        summary: `${on ? 'הפעלת' : 'עצירת'} התוכנית ${plan.name}${already}`,
+      });
+      continue;
+    }
     // Ids are re-checked against the lists we offered — anything else is dropped
     // defensively, as are recurring shapes the schedule validator would reject.
     if (a.kind === 'delete_schedule') {
