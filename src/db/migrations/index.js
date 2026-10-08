@@ -53,6 +53,7 @@ import { migrate52 } from './migrate52.js';
 import { migrate53 } from './migrate53.js';
 import { migrate54 } from './migrate54.js';
 import { migrate55 } from './migrate55.js';
+import { migrate56 } from './migrate56.js';
 
 export const migrations = [
   { version: 1, up: migrate1 },
@@ -110,4 +111,5 @@ export const migrations = [
   { version: 53, up: migrate53 },
   { version: 54, up: migrate54 },
   { version: 55, up: migrate55 },
+  { version: 56, up: migrate56 },
 ];

@@ -21,6 +21,7 @@ import { brokerConnected } from '../mqtt/client.js';
 import { shellyCall, shellySetRestoreLast } from '../services/shelly.js';
 import { sendEmail } from '../services/email.js';
 import { describeReset, RESET_HEADLINE } from './reset-reason.js';
+import { learnOnPower, worthSaving, judgeLoads, DEAD_RELAY_PROBES } from './dead-relay.js';
 
 const CHECK_INTERVAL_MS = 60_000;
 const RAM_CRITICAL_BYTES = 30_000;      // healthy Pro 2 idles ~120k free; panics start near zero
@@ -124,6 +125,74 @@ async function verifyRebootOutputs(device, before, after) {
   return { changed, fixedChannels, text };
 }
 
+// Is the relay REALLY switched? (dead-relay.js has the why and the rules.)
+// Learns each channel's ON draw, flags "every loaded channel ON yet nothing
+// flows" after DEAD_RELAY_PROBES minutes, reboots the unit once (restore_last
+// brings the outputs back), and if the outputs are still dead after that
+// reboot calls it hardware. Firmware error flags on a channel (overvoltage,
+// overpower, overtemp…) are recorded when they appear.
+async function verifyLoads(device, st, health, channels, alert) {
+  const metered = channels.filter((c) => c && c.apower !== null);
+  if (!metered.length) return;
+  const relays = await query(
+    'SELECT id, relay_no, name, on_power_w FROM relays WHERE device_id = ? AND deleted_at IS NULL', [device.id],
+  ).catch(() => []);
+  const byCh = new Map(relays.map((r) => [r.relay_no - 1, r]));
+  const learned = new Map(relays.map((r) => [r.relay_no - 1, r.on_power_w == null ? null : Number(r.on_power_w)]));
+
+  for (const c of metered) {
+    const r = byCh.get(c.ch);
+    if (!r) continue;
+    const next = learnOnPower(learned.get(c.ch), c.on, c.apower);
+    if (worthSaving(learned.get(c.ch), next) && active()) {
+      // updated_at is the humans' column (action-log convention) — a learned reading isn't an edit.
+      await query('UPDATE relays SET on_power_w = ? WHERE id = ?', [next, r.id]).catch(() => {});
+      learned.set(c.ch, next);
+    }
+  }
+
+  const { dead, allDead } = judgeLoads(metered, learned);
+  health.channels = metered.map((c) => ({
+    ch: c.ch + 1, name: byCh.get(c.ch)?.name ?? null, on: c.on, apower: c.apower,
+    expected_w: learned.get(c.ch), dead: dead.includes(c.ch), errors: c.errors,
+  }));
+
+  const errored = metered.filter((c) => c.errors.length);
+  const errKey = errored.map((c) => `${c.ch + 1}:${c.errors.join('+')}`).join(',');
+  if (errKey !== (st.lastSwitchErrors ?? '')) {
+    st.lastSwitchErrors = errKey;
+    if (errKey) {
+      recordIncident('switch_errors', device.name, errKey);
+      await deviceEvent(device.id, 'error', { kind: 'switch_errors', channels: errored.map((c) => ({ ch: c.ch + 1, errors: c.errors })) });
+    }
+  }
+
+  st.deadProbes = allDead ? (st.deadProbes ?? 0) + 1 : 0;
+  if (!allDead) { st.deadRebooted = false; return; }
+  const names = dead.map((ch) => `${byCh.get(ch)?.name ?? `ערוץ ${ch + 1}`} (צפוי ~${Math.round(learned.get(ch))}W, נמדד ${metered.find((c) => c.ch === ch).apower}W)`);
+
+  if (st.deadProbes === DEAD_RELAY_PROBES) {
+    recordIncident('relay_not_switching', device.name, names.join(', '));
+    await deviceEvent(device.id, 'error', { kind: 'relay_not_switching', channels: dead.map((ch) => ch + 1), detail: names });
+    let healed = '';
+    if (active() && Date.now() - st.lastRebootAt > REBOOT_COOLDOWN_MS) {
+      st.lastRebootAt = Date.now();
+      st.expectReboot = true;
+      st.deadRebooted = true;
+      await deviceEvent(device.id, 'error', { kind: 'auto_reboot_dead_relay', channels: dead.map((ch) => ch + 1) });
+      await shellyCall(device, 'Shelly.Reboot').catch((e) => console.error('[health] reboot failed:', e.message));
+      healed = '\n\nבוצע אתחול יזום למכשיר (המצב של הממסרים נשמר ומשוחזר אוטומטית). אם הצריכה לא חוזרת אחרי האתחול — תישלח התראה נוספת: תקלת חומרה.';
+    }
+    await alert(`deadrelay:${device.id}`, `המכשיר "${device.name}" — ממסרים דולקים אך לא מעבירים חשמל`,
+      `במכשיר "${device.name}" (${device.device_uid}) הקושחה מדווחת שהממסרים הבאים דולקים, אבל כבר ${DEAD_RELAY_PROBES} דקות לא זורם דרכם חשמל:\n${names.map((n) => `• ${n}`).join('\n')}\n\nזה הדפוס של ממסר שלא נסגר פיזית (למשל נפילת מתח פנימית ביחידה) — המכשיר "עונה" אבל הצרכנים כבויים.${healed}`);
+  } else if (st.deadProbes === DEAD_RELAY_PROBES * 2 && st.deadRebooted) {
+    recordIncident('relay_hw_fault', device.name, names.join(', '));
+    await deviceEvent(device.id, 'error', { kind: 'relay_hw_fault', channels: dead.map((ch) => ch + 1), detail: names });
+    await alert(`deadrelay-hw:${device.id}`, `המכשיר "${device.name}" — חשד לתקלת חומרה`,
+      `גם אחרי אתחול יזום, הממסרים במכשיר "${device.name}" (${device.device_uid}) דולקים לפי הקושחה אך לא מעבירים חשמל:\n${names.map((n) => `• ${n}`).join('\n')}\n\nסביר שזו תקלת חומרה ביחידה (ספק כוח פנימי / ממסרים). מומלץ לנתק ולחבר חשמל ליחידה, ואם זה חוזר — להחליף אותה במסגרת האחריות.`);
+  }
+}
+
 async function checkShelly(device) {
   const st = deviceState.get(device.id) ?? { failures: 0, lastUptime: null, lastOutputs: null, expectReboot: false, lastRebootAt: 0 };
   deviceState.set(device.id, st);
@@ -176,11 +245,17 @@ async function checkShelly(device) {
   // only record of what the relays were doing a minute earlier.
   health.temps = [];
   const outputs = [];
+  const channels = []; // {ch, on, apower|null, errors[]} — metering only on PM models
   for (let ch = 0; ch < (device.relay_count || 2); ch++) {
     const s = await shellyCall(device, 'Switch.GetStatus', { id: ch }).catch(() => null);
     if (!s) break;
     if (typeof s.output === 'boolean') outputs[ch] = s.output;
     if (typeof s.temperature?.tC === 'number') health.temps.push(s.temperature.tC);
+    channels[ch] = {
+      ch, on: s.output === true,
+      apower: typeof s.apower === 'number' ? s.apower : null,
+      errors: Array.isArray(s.errors) ? s.errors : [],
+    };
   }
 
   // Uptime went backwards → the device rebooted behind our back. A reboot WE
@@ -215,6 +290,8 @@ async function checkShelly(device) {
   }
   st.lastUptime = sys.uptime;
   if (outputs.length) st.lastOutputs = outputs;
+
+  await verifyLoads(device, st, health, channels, alert);
 
   const hottest = Math.max(...health.temps, 0);
   if (hottest >= TEMP_CRITICAL_C) {

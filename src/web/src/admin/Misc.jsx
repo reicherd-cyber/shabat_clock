@@ -34,6 +34,8 @@ const INCIDENT_LABELS = {
   unreachable: 'מכשיר לא מגיב', unexpected_reboot: 'אתחול לא צפוי', auto_reboot: 'אתחול יזום (זיכרון נמוך)',
   high_temperature: 'חום גבוה', online_flag_healed: 'תוקן דגל מנותק', db_down: 'מסד נתונים לא מגיב',
   broker_down: 'ברוקר מנותק', server_heap: 'זיכרון שרת גבוה',
+  relay_not_switching: 'ממסרים דולקים ללא צריכה', relay_hw_fault: 'חשד לתקלת חומרה', switch_errors: 'שגיאת ערוץ (קושחה)',
+  reboot_changed_outputs: 'אתחול שינה ממסרים',
 };
 
 // Deep-health tiles fed by the server-side monitor (src/monitor/health.js).
@@ -127,6 +129,13 @@ export function DeviceHealth() {
               {d.temps?.length > 0 && <span className="text-muted" dir="ltr">{d.temps.map((t) => `${Math.round(t)}°C`).join(' / ')}</span>}
               {d.fw_update && <Badge ok={false}>עדכון קושחה {d.fw_update}</Badge>}
               {d.auto_rebooted && <Badge ok={false}>אותחל יזומות</Badge>}
+              {d.channels?.map((c) => (
+                <span key={c.ch} className={`text-xs ${c.dead || c.errors?.length ? 'text-red-600 font-bold' : 'text-muted'}`}
+                  title={c.expected_w != null ? `צריכה אופיינית כשדולק: ~${Math.round(c.expected_w)}W` : 'עומס טרם נלמד'}>
+                  {c.name || `ערוץ ${c.ch}`}: {c.on ? `${Math.round(c.apower)}W` : 'כבוי'}{c.errors?.length ? ` ⚠ ${c.errors.join(',')}` : ''}
+                </span>
+              ))}
+              {d.channels?.some((c) => c.dead) && <Badge ok={false}>דולק ללא צריכה</Badge>}
             </>}
           </div>
         ))}

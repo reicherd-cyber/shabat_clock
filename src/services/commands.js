@@ -45,6 +45,36 @@ async function markCommand(id, status, failReason = null) {
   );
 }
 
+// The Switch.Set reply only says the firmware ACCEPTED the command. A unit
+// whose relays have dropped (2026-09-10, device 14: white screen, internal
+// rail sag) acks happily while nothing moves. So, off the caller's clock, read
+// the channel back after the load had time to start: output disagreeing with
+// what was asked flips the command to failed; ON with a known load drawing
+// nothing is logged for the health monitor's dead-relay verdict (which needs
+// every loaded channel dead before it acts — one idle thermostat is not a fault).
+const VERIFY_AFTER_MS = 2500;
+async function verifySwitched(relay, action, commandId) {
+  await new Promise((r) => setTimeout(r, VERIFY_AFTER_MS));
+  const { shellyCall } = await import('./shelly.js');
+  const s = await shellyCall(relay, 'Switch.GetStatus', { id: relay.relay_no - 1 }).catch(() => null);
+  if (!s || typeof s.output !== 'boolean') return;
+  const wantOn = action === 'on';
+  if (s.output !== wantOn) {
+    await markCommand(commandId, 'failed', 'not_switched');
+    await query("INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
+      [relay.device_id, JSON.stringify({ kind: 'not_switched', relay_no: relay.relay_no, wanted: action, output: s.output, command_id: Number(commandId) })]);
+    return;
+  }
+  if (!wantOn || typeof s.apower !== 'number') return;
+  const { MIN_LEARNED_W, DEAD_W } = await import('../monitor/dead-relay.js');
+  const [row] = await query('SELECT on_power_w FROM relays WHERE id = ?', [relay.id]);
+  const expected = row?.on_power_w == null ? null : Number(row.on_power_w);
+  if (expected != null && expected >= MIN_LEARNED_W && s.apower < DEAD_W) {
+    await query("INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
+      [relay.device_id, JSON.stringify({ kind: 'switch_no_load', relay_no: relay.relay_no, expected_w: expected, apower: s.apower, command_id: Number(commandId) })]);
+  }
+}
+
 // Full immediate flow: insert → offline check → publish → block ≤5s for ack.
 // Returns {command_id, status, fail_reason} — the caller (IVR or web) reports truth.
 export async function sendImmediateCommand({ relayId, action, source, callId = null }) {
@@ -81,6 +111,7 @@ export async function sendImmediateCommand({ relayId, action, source, callId = n
         [action, relayId],
       );
       await markCommand(commandId, 'acked');
+      verifySwitched(relay, action, commandId).catch((e) => console.error('[commands] verify:', e.message));
       return { command_id: commandId, status: 'acked' };
     } catch (e) {
       await markCommand(commandId, 'failed', 'shelly_unreachable');
