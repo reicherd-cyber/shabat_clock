@@ -21,7 +21,7 @@ import { brokerConnected } from '../mqtt/client.js';
 import { shellyCall, shellySetRestoreLast } from '../services/shelly.js';
 import { sendEmail } from '../services/email.js';
 import { describeReset, RESET_HEADLINE } from './reset-reason.js';
-import { learnOnPower, worthSaving, idleCandidates, judgeLoads, noFlow, DEAD_RELAY_PROBES, IDLE_PROBES_TO_LEARN } from './dead-relay.js';
+import { learnOnPower, worthSaving, idleCandidates, judgeLoads, trackDeadOnsets, DEAD_RELAY_PROBES, IDLE_PROBES_TO_LEARN } from './dead-relay.js';
 
 const CHECK_INTERVAL_MS = 60_000;
 const RAM_CRITICAL_BYTES = 30_000;      // healthy Pro 2 idles ~120k free; panics start near zero
@@ -37,9 +37,10 @@ const active = isPrimary;
 
 const loopDelay = monitorEventLoopDelay({ resolution: 20 });
 // device_id → per-unit probe memory: {failures, lastUptime, lastOutputs, expectReboot,
-// lastRebootAt} from checkShelly, plus verifyLoads' learned (Map ch→W), probeNo,
-// deadSince (Map ch→probe), deadProbes/deadAlerted/deadRebootProbe/lastDeadRebootAt/
-// deadHwAlerted, lastSwitchErrors — all initialised lazily with ??=, lost on restart.
+// lastRebootAt} from checkShelly, plus verifyLoads' learned (Map ch→W),
+// deadProbes/deadAlerted/deadRebootProbe/lastDeadRebootAt/deadHwAlerted,
+// lastSwitchErrors — all initialised lazily with ??=, lost on restart (dead
+// onsets are the exception: they live in relays.dead_since).
 const deviceState = new Map();
 const alertTimes = new Map();  // incident key → last email epoch ms
 const incidents = [];          // newest first, capped at INCIDENTS_KEPT
@@ -139,7 +140,7 @@ async function verifyLoads(device, st, health, channels, alert) {
   const metered = channels.filter((c) => c && c.apower !== null);
   if (!metered.length) return;
   const relays = await query(
-    'SELECT id, relay_no, name, on_power_w, on_idle_probes FROM relays WHERE device_id = ? AND deleted_at IS NULL', [device.id],
+    'SELECT id, relay_no, name, on_power_w, on_idle_probes, dead_since FROM relays WHERE device_id = ? AND deleted_at IS NULL', [device.id],
   ).catch((e) => { console.error('[health] relays read:', e.message); return []; });
   const byCh = new Map(relays.map((r) => [r.relay_no - 1, r]));
   const stored = new Map(relays.map((r) => [r.relay_no - 1, r.on_power_w == null ? null : Number(r.on_power_w)]));
@@ -175,22 +176,27 @@ async function verifyLoads(device, st, health, channels, alert) {
   }
 
   // When did each channel enter its ON-and-no-flow state? A rail drop silences
-  // every channel in the same probe; wall switches are flipped one at a time
-  // (dead-relay.js droppedTogether). Probe numbers, not clocks — the device's
-  // missed probes (reboot, Wi-Fi blip) don't count as time passing.
-  st.probeNo = (st.probeNo ?? 0) + 1;
-  st.deadSince ??= new Map();
-  for (const c of metered) {
-    if (c.on && noFlow(c)) { if (!st.deadSince.has(c.ch)) st.deadSince.set(c.ch, st.probeNo); } else st.deadSince.delete(c.ch);
+  // every channel in the same instant; wall switches are flipped one at a time
+  // (dead-relay.js droppedTogether). Onsets live in relays.dead_since so a
+  // restart neither forgets them nor stamps every already-dead channel "now".
+  const known = new Map(relays.filter((r) => r.dead_since).map((r) => [r.relay_no - 1, new Date(r.dead_since).getTime()]));
+  const { onsets, changes } = trackDeadOnsets(known, metered, Date.now());
+  if (active()) {
+    for (const { ch, since } of changes) {
+      const r = byCh.get(ch);
+      if (r) await query('UPDATE relays SET dead_since = ? WHERE id = ?', [since == null ? null : new Date(since), r.id]).catch(() => {});
+    }
   }
 
-  const { dead, allDead } = judgeLoads(metered, learned, idles, st.deadSince);
-  health.probe_no = st.probeNo;
-  health.dead_together = allDead; // false with dead channels showing = the simultaneity gate vetoed
+  const { watched, dead, together, allDead } = judgeLoads(metered, learned, idles, onsets);
+  // The verdict and its parts, so a dead channel that raised nothing is
+  // explainable on the admin page (too few watched? not all dead? not together?).
+  health.unit_dead = allDead;
+  health.dead_gate = { watched: watched.length, dead: dead.length, together };
   health.channels = metered.map((c) => ({
     ch: c.ch + 1, name: byCh.get(c.ch)?.name ?? null, on: c.on, apower: c.apower, current: c.current,
     expected_w: learned.get(c.ch), idles: idles.has(c.ch), dead: dead.includes(c.ch),
-    dead_since_probe: st.deadSince.get(c.ch) ?? null, errors: c.errors,
+    dead_since: onsets.has(c.ch) ? new Date(onsets.get(c.ch)).toISOString() : null, errors: c.errors,
   }));
 
   const errored = metered.filter((c) => c.errors.length);

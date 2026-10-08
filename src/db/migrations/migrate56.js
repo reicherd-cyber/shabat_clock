@@ -8,8 +8,13 @@
 //                   drawing normally. Past IDLE_PROBES_TO_LEARN the channel is
 //                   exempt from the dead-relay verdict — a zero on it is the
 //                   load's own doing.
+//  dead_since     — when the channel entered its current ON-and-no-flow state
+//                   (NULL otherwise). Persisted so a server restart neither
+//                   forgets an onset nor invents one: the simultaneity rule
+//                   compares these across channels.
 export async function migrate56(conn) {
   await conn.query(`ALTER TABLE relays
     ADD COLUMN on_power_w DECIMAL(8,1) NULL AFTER current_state,
-    ADD COLUMN on_idle_probes SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER on_power_w`);
+    ADD COLUMN on_idle_probes SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER on_power_w,
+    ADD COLUMN dead_since DATETIME NULL AFTER on_idle_probes`);
 }

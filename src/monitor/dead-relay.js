@@ -14,12 +14,18 @@
 // minute), thirty of them do; (2) the verdict needs at least MIN_WATCHED
 // channels, all dead at once — one lone channel at 0W proves nothing (a boiler
 // alone at night would otherwise earn the unit a reboot and a "replace it"
-// email); (3) held for DEAD_RELAY_PROBES consecutive minutes.
+// email); (3) those channels must have gone dead TOGETHER (droppedTogether);
+// (4) held for DEAD_RELAY_PROBES consecutive minutes.
 //
-// Known blind spot, by construction: a SINGLE relay whose contact fails while
-// its siblings work reads exactly like an idle thermostat and ends up exempt.
-// This check is for the whole unit going dead; one bad contact is the
-// customer's "the boiler never heats" call.
+// Known blind spots, by construction: a SINGLE relay whose contact fails while
+// its siblings work reads exactly like an idle thermostat and ends up exempt;
+// and a rail drop is only recognised through channels that were drawing at
+// that moment — a watched channel already idling ON (a boiler not yet past
+// IDLE_PROBES_TO_LEARN, a lamp wall-switched off earlier) carries an older
+// onset and cannot pair, so a drop that catches just one drawing channel plus
+// such idlers goes unnoticed until two channels are switched on into it
+// together. This check is for the whole unit going dead; one bad contact is
+// the customer's "the boiler never heats" call.
 export const MIN_LEARNED_W = 15;   // learned draw below this: no load worth watching (standby, LED)
 export const DEAD_A = 0.005;       // current below this while ON: nothing flows through the relay
 export const DEAD_W = 0.5;         // fallback for a model that meters power but not current
@@ -68,11 +74,56 @@ export function idleCandidates(channels, learned) {
     .map((c) => c.ch);
 }
 
+// Onset bookkeeping for the simultaneity rule. known: Map ch → epoch ms the
+// channel entered its current ON-and-no-flow state (null/absent = not in that
+// state), as persisted in relays.dead_since so a server restart neither forgets
+// an onset nor invents one. Returns the new map plus the changes to persist.
+// A channel that was NOT read this probe (the probe stops at the first failed
+// Switch.GetStatus) is reset to unknown rather than left stale — a stale onset
+// could neither pair with a later drop nor be cleared by a draw nobody saw.
+export function trackDeadOnsets(known, channels, nowMs) {
+  const onsets = new Map();
+  const changes = [];
+  const read = new Set(channels.filter(Boolean).map((c) => c.ch));
+  for (const c of channels) {
+    if (!c) continue;
+    const prev = known.get(c.ch) ?? null;
+    const next = c.on && typeof c.apower === 'number' && noFlow(c) ? (prev ?? nowMs) : null;
+    if (next != null) onsets.set(c.ch, next);
+    if (next !== prev) changes.push({ ch: c.ch, since: next });
+  }
+  for (const [ch, prev] of known) {
+    if (!read.has(ch) && prev != null) changes.push({ ch, since: null });
+  }
+  return { onsets, changes };
+}
+
+// Simultaneity: a dead rail silences every channel in the same instant; wall
+// switches are flipped one at a time. The verdict needs at least MIN_WATCHED
+// dead channels whose onsets lie within DROP_WINDOW_MS of each other — onset,
+// not last draw, so that a rail which died at night with the loads OFF is
+// caught the moment the morning schedule switches two lights on into it.
+// Channels that went dead at other times neither help nor block.
+//
+// Resolution is one probe (60s) and the per-channel reads inside a probe are
+// sequential, so a drop can straddle two probes — hence 90s, never one probe.
+// This separates "minutes apart" (wall switches on the way out of the
+// building, a thermostat that idled earlier) from "same instant"; two
+// mechanical switches flipped within the same minute still look like a drop.
+export const DROP_WINDOW_MS = 90_000;
+export function droppedTogether(dead, deadSince, window = DROP_WINDOW_MS) {
+  const times = dead.map((ch) => deadSince.get(ch)).filter((p) => p != null).sort((a, b) => a - b);
+  for (let i = 0; i + MIN_WATCHED - 1 < times.length; i++) {
+    if (times[i + MIN_WATCHED - 1] - times[i] <= window) return true;
+  }
+  return false;
+}
+
 // channels: [{ ch (0-based), on, apower|null, current? }], learned: Map ch → on_power_w|null,
-// idles: Set of thermostat-like ch, deadSince: Map ch → probe number at which the
-// channel entered its current ON-and-no-flow state (see droppedTogether)
-// → { watched: [ch…], dead: [ch…], allDead } — allDead is THE unit verdict.
-export function judgeLoads(channels, learned, idles = new Set(), deadSince = null) {
+// idles: Set of thermostat-like ch, deadSince: Map ch → onset ms (trackDeadOnsets)
+// → { watched, dead, together, allDead } — allDead is THE unit verdict; the
+// parts are returned so a veto is explainable (which gate said no).
+export function judgeLoads(channels, learned, idles, deadSince) {
   const watched = [];
   const dead = [];
   for (const c of channels) {
@@ -82,34 +133,7 @@ export function judgeLoads(channels, learned, idles = new Set(), deadSince = nul
     watched.push(c.ch);
     if (noFlow(c)) dead.push(c.ch);
   }
-  const allDead = watched.length >= MIN_WATCHED && dead.length === watched.length
-    && (deadSince == null || droppedTogether(dead, deadSince));
-  return { watched, dead, allDead };
-}
-
-// Simultaneity: a dead rail silences every channel in the same instant; wall
-// switches are flipped one at a time. deadSince maps ch → the probe at which
-// the channel ENTERED its ON-and-no-flow state (cleared whenever it draws or
-// is off). The verdict needs at least MIN_WATCHED dead channels whose onsets
-// lie within DROP_WINDOW_PROBES of each other. Onset, not last draw, so that a
-// rail which died at night with the loads OFF is caught the moment the morning
-// schedule switches two lights on into it (both onsets in the same probe), and
-// a unit already dead when the server starts is judged from its first probe.
-// Channels that went dead at other times neither help nor block.
-//
-// Resolution is one probe (60s), and the per-channel reads inside a probe are
-// sequential, so a drop can straddle two probe numbers — hence a window of 1,
-// never 0. This separates "minutes apart" (wall switches on the way out of
-// the building, a thermostat that idled earlier) from "same instant"; two
-// mechanical switches flipped within the same minute still look like a drop.
-// Known blind spot: a rail drop that catches only ONE loaded channel on at
-// that moment (the other already off at its wall switch) is not detected until
-// two channels are switched on into it together.
-export const DROP_WINDOW_PROBES = 1;
-export function droppedTogether(dead, deadSince, window = DROP_WINDOW_PROBES) {
-  const times = dead.map((ch) => deadSince.get(ch)).filter((p) => p != null).sort((a, b) => a - b);
-  for (let i = 0; i + MIN_WATCHED - 1 < times.length; i++) {
-    if (times[i + MIN_WATCHED - 1] - times[i] <= window) return true;
-  }
-  return false;
+  const together = droppedTogether(dead, deadSince);
+  const allDead = watched.length >= MIN_WATCHED && dead.length === watched.length && together;
+  return { watched, dead, together, allDead };
 }

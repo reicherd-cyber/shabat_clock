@@ -130,13 +130,19 @@ export function DeviceHealth() {
               {d.fw_update && <Badge ok={false}>עדכון קושחה {d.fw_update}</Badge>}
               {d.auto_rebooted && <Badge ok={false}>אותחל יזומות</Badge>}
               {d.channels?.map((c) => (
-                <span key={c.ch} className={`text-xs ${c.dead || c.errors?.length ? 'text-red-600 font-bold' : 'text-muted'}`}
+                <span key={c.ch} className={`text-xs ${(c.dead && d.unit_dead) || c.errors?.length ? 'text-red-600 font-bold' : 'text-muted'}`}
                   title={c.idles ? 'עומס תרמוסטטי (נראה במנוחה ב-0W) — לא נכלל בבדיקת הממסרים'
                     : c.expected_w != null ? `צריכה אופיינית כשדולק: ~${Math.round(c.expected_w)}W` : 'עומס טרם נלמד'}>
-                  {c.name || `ערוץ ${c.ch}`}: {c.on ? `${Math.round(c.apower)}W${c.current != null ? ` / ${Math.round(c.current * 1000)}mA` : ''}` : 'כבוי'}{c.errors?.length ? ` ⚠ ${c.errors.join(',')}` : ''}
+                  {c.name || `ערוץ ${c.ch}`}: {c.on ? `${Math.round(c.apower)}W${c.current != null ? ` / ${Math.round(c.current * 1000)}mA` : ''}` : 'כבוי'}{c.dead && !d.unit_dead ? ' · ללא צריכה' : ''}{c.errors?.length ? ` ⚠ ${c.errors.join(',')}` : ''}
                 </span>
               ))}
-              {d.channels?.some((c) => c.dead) && <Badge ok={false}>דולק ללא צריכה</Badge>}
+              {/* Red only on the UNIT verdict — a single channel at 0W is a wall switch or a thermostat until the gates agree (dead-relay.js). */}
+              {d.unit_dead && <Badge ok={false}>ממסרים דולקים ללא צריכה — אתחול</Badge>}
+              {!d.unit_dead && d.dead_gate?.dead > 0 && (
+                <span className="text-muted text-xs" title="ערוצים ללא צריכה שלא הגיעו לפסק דין: נדרשים לפחות 2 ערוצים עם עומס ידוע, כולם ללא זרם, שנפלו יחד">
+                  ({d.dead_gate.dead}/{d.dead_gate.watched} ללא זרם{d.dead_gate.watched >= 2 && d.dead_gate.dead === d.dead_gate.watched && !d.dead_gate.together ? ', לא יחד' : ''})
+                </span>
+              )}
             </>}
           </div>
         ))}
