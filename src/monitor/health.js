@@ -20,6 +20,7 @@ import { query } from '../db/pool.js';
 import { brokerConnected } from '../mqtt/client.js';
 import { shellyCall, shellySetRestoreLast } from '../services/shelly.js';
 import { sendEmail } from '../services/email.js';
+import { describeReset, RESET_HEADLINE } from './reset-reason.js';
 
 const CHECK_INTERVAL_MS = 60_000;
 const RAM_CRITICAL_BYTES = 30_000;      // healthy Pro 2 idles ~120k free; panics start near zero
@@ -188,18 +189,28 @@ async function checkShelly(device) {
     if (st.expectReboot) {
       st.expectReboot = false;
     } else {
-      recordIncident('unexpected_reboot', device.name, `uptime ${st.lastUptime}s → ${sys.uptime}s`);
+      // reset_reason (see reset-reason.js) is the unit's own word on WHY —
+      // a power cut and a firmware panic no longer read the same.
+      const reset = describeReset(sys.reset_reason);
+      recordIncident('unexpected_reboot', device.name, `uptime ${st.lastUptime}s → ${sys.uptime}s, reset_reason ${sys.reset_reason ?? '?'} (${reset.cat})`);
       const verdict = await verifyRebootOutputs(device, st.lastOutputs, outputs);
       await deviceEvent(device.id, 'boot', {
         kind: 'unexpected_reboot', uptime: sys.uptime, prev_uptime: st.lastUptime,
+        reset_reason: sys.reset_reason ?? null, reset_category: reset.cat,
+        fw_update: health.fw_update,
         outputs_before: st.lastOutputs, outputs_after: outputs,
         changed: verdict.changed, restore_last_fixed: verdict.fixedChannels,
       });
       if (verdict.changed.length) {
         recordIncident('reboot_changed_outputs', device.name, verdict.changed.map((c) => `${c.name}: ${c.before}→${c.after}`).join(', '));
       }
-      await alert(`reboot:${device.id}`, `המכשיר "${device.name}" אותחל באופן לא צפוי`,
-        `המכשיר "${device.name}" (${device.device_uid}) אותחל מעצמו (קריסה או הפסקת חשמל) — היה פעיל ${fmtDuration(st.lastUptime)} לפני האתחול.\n\n${verdict.text}\n\nמומלץ לבדוק את יציבות החשמל/קושחה.`);
+      const advice = reset.cat === 'crash'
+        ? `זו קריסה של הקושחה, לא בעיית חשמל. ${health.fw_update ? `קיים עדכון קושחה (${health.fw_update}) — מומלץ לעדכן.` : 'מומלץ לבדוק אם קיים עדכון קושחה.'}`
+        : reset.cat === 'power'
+          ? 'המכשיר לא קרס — החשמל אליו נותק. אם הלקוח כיבה והדליק אותו בכוונה (למשל אחרי מסך תקוע), זה יירשם בדיוק כך — כדאי לשאול. אחרת: לבדוק את יציבות החשמל באתר.'
+          : 'מומלץ לבדוק את יציבות החשמל/קושחה.';
+      await alert(`reboot:${device.id}`, `המכשיר "${device.name}" אותחל — ${RESET_HEADLINE[reset.cat]}`,
+        `המכשיר "${device.name}" (${device.device_uid}) אותחל מעצמו — היה פעיל ${fmtDuration(st.lastUptime)} לפני האתחול.\n\nסיבת האתחול לפי המכשיר: ${reset.he}.\n${advice}\n\n${verdict.text}`);
     }
   }
   st.lastUptime = sys.uptime;
