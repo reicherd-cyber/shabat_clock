@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { getTimes } from 'suncalc';
 import { HDate, HebrewCalendar, flags, gematriya } from '@hebcal/core';
 import { api } from '../api.js';
-import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf, Logo } from '../ui.jsx';
+import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf, Logo, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
 import { ChevronRight, ChevronLeft, ChevronDown, House, Check, Plus } from 'lucide-react';
 import { ScheduleFormModal, emptyForm, plusMinutes, rowToForm } from './ScheduleForm.jsx';
 
@@ -408,13 +408,27 @@ export default function Calendar() {
   useEffect(() => { loadRelays().catch(setError); }, []);
 
   // Immediate command from a column head; the true state is re-read afterwards.
+  // The server verifies the order against the channel meter (services/commands.js
+  // verifyCommand) — the verdict is shown for 8s above the grid, not just "accepted".
   const [busyRelays, setBusyRelays] = useState({});
+  const [notice, setNotice] = useState(null); // { text, warn }
+  const noticeTimer = useRef(null);
+  const flash = (text, warn) => {
+    clearTimeout(noticeTimer.current);
+    setNotice({ text, warn });
+    noticeTimer.current = setTimeout(() => setNotice(null), 8000);
+  };
   const toggleNow = async (relay) => {
     const action = relay.current_state === 'on' ? 'off' : 'on';
     setBusyRelays((b) => ({ ...b, [relay.id]: true }));
     try {
       const res = await api.post(`/relays/${relay.id}/command`, { action });
-      if (res.status !== 'acked') setError(new Error('המכשיר לא הגיב — נסו שוב'));
+      if (res.status !== 'acked') {
+        setError(new Error(FAIL_HE[res.fail_reason] || 'המכשיר לא הגיב — נסו שוב'));
+      } else if (VERIFY_HE[res.verify]) {
+        const warn = VERIFY_WARN.has(res.verify);
+        flash(`${warn ? '⚠' : '✓'} ${relay.name}: ${VERIFY_HE[res.verify]}${res.verify === 'flow' && res.verify_ma != null ? ` (${res.verify_ma}mA)` : ''}`, warn);
+      }
       await loadRelays();
     } catch (e) {
       setError(e);
@@ -847,6 +861,9 @@ export default function Calendar() {
         )}
       </div>
       <ErrorNote error={error} />
+      {notice && (
+        <div className={`rounded-lg px-4 py-2 text-[13px] font-medium ${notice.warn ? 'bg-off-bg text-off' : 'bg-on-bg text-on'}`}>{notice.text}</div>
+      )}
 
       {view === 'month' ? <MonthGrid /> : view === 'day' ? <DayGrid /> : <WeekGrid />}
 
