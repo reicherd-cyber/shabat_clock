@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef } from 'react';
 import { api } from '../api.js';
-import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, Input, TimeInput, useInterval, channelColorOf, ChannelDot } from '../ui.jsx';
+import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, Input, TimeInput, useInterval, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
 import { House, Timer, TriangleAlert } from 'lucide-react';
 
 const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
@@ -22,16 +22,6 @@ function relativeHe(ts) {
 // (serif name + online badge) + relay rows (code chip · name · state · toggle).
 // Polls every 10s [D28]; toggle is optimistic-off with a busy pulse until the
 // 5s command round-trip resolves.
-const VERIFY_NOTICE = {
-  flow: (r) => `✓ אומת: המכשיר פועל${r.verify_ma != null ? ` (${r.verify_ma}mA)` : ''}`,
-  off_ok: () => '✓ אומת: המכשיר כבוי',
-  no_flow: () => '⚠ הממסר הודלק אך אין צריכת חשמל — בדקו את מתג המכשיר',
-};
-const CMD_FAIL_HE = {
-  stuck_on: 'שימו לב: המכשיר לא כבה בפועל — החשמל עדיין זורם אליו',
-  not_switched: 'המכשיר לא ביצע את הפקודה — נסו שוב',
-};
-
 export default function Dashboard() {
   const [me, setMe] = useState(null);
   const [devices, setDevices] = useState(null);
@@ -41,6 +31,14 @@ export default function Dashboard() {
   // Quick "turn off at…" — a one-sided once-schedule (OFF only) on a lit relay.
   const [quickOff, setQuickOff] = useState(null); // { relayId, time }
   const [notices, setNotices] = useState({}); // relayId -> confirmation text
+  // One timer per relay: a new notice replaces the old one and restarts its
+  // 8s, so an earlier "done" can't wipe a later warning early.
+  const noticeTimers = useRef({});
+  const flash = (relayId, text) => {
+    clearTimeout(noticeTimers.current[relayId]);
+    setNotices((n) => ({ ...n, [relayId]: text }));
+    noticeTimers.current[relayId] = setTimeout(() => setNotices((n) => ({ ...n, [relayId]: null })), 8000);
+  };
 
   useInterval(async () => {
     try {
@@ -64,11 +62,11 @@ export default function Dashboard() {
     try {
       const res = await api.post(`/relays/${relay.id}/command`, { action });
       if (res.status !== 'acked') {
-        setError(new Error(CMD_FAIL_HE[res.fail_reason] || 'המכשיר לא הגיב — נסו שוב'));
-      } else if (VERIFY_NOTICE[res.verify]) {
+        setError(new Error(FAIL_HE[res.fail_reason] || 'המכשיר לא הגיב — נסו שוב'));
+      } else if (VERIFY_HE[res.verify]) {
         // What the channel meter saw after the command — not just "accepted".
-        setNotices((n) => ({ ...n, [relay.id]: VERIFY_NOTICE[res.verify](res) }));
-        setTimeout(() => setNotices((n) => ({ ...n, [relay.id]: null })), 8000);
+        const warn = VERIFY_WARN.has(res.verify);
+        flash(relay.id, `${warn ? '⚠' : '✓'} ${VERIFY_HE[res.verify]}${res.verify === 'flow' && res.verify_ma != null ? ` (${res.verify_ma}mA)` : ''}`);
       }
       setDevices(await api.get('/devices')); // true state, not the optimistic one
     } catch (e) {
@@ -87,8 +85,7 @@ export default function Dashboard() {
     try {
       await api.post('/schedules', { relay_id: relay.id, repeat_type: 'once', off_time: quickOff.time, off_date });
       setQuickOff(null);
-      setNotices((n) => ({ ...n, [relay.id]: `✓ יכבה ${off_date === today ? 'היום' : 'מחר'} בשעה ${quickOff.time}` }));
-      setTimeout(() => setNotices((n) => ({ ...n, [relay.id]: null })), 8000);
+      flash(relay.id, `✓ יכבה ${off_date === today ? 'היום' : 'מחר'} בשעה ${quickOff.time}`);
     } catch (e) {
       setError(e);
     } finally {
@@ -165,7 +162,7 @@ export default function Dashboard() {
                   </div>
                 )}
                 {notices[r.id] && (
-                  <div className="px-5 pb-3 text-[12.5px] font-medium text-on">{notices[r.id]}</div>
+                  <div className={`px-5 pb-3 text-[12.5px] font-medium ${notices[r.id].startsWith('⚠') ? 'text-off' : 'text-on'}`}>{notices[r.id]}</div>
                 )}
               </div>
             ))}

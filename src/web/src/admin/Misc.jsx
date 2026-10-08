@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
 import { UserRound, House } from 'lucide-react';
 import { ProviderBalances } from './ProviderBalances.jsx';
 
@@ -366,7 +366,7 @@ export function Commands() {
                 <td className="p-2">{c.relay_name}</td>
                 <td className="p-2">{c.action === 'on' ? 'הדלקה' : 'כיבוי'}</td>
                 <td className="p-2" dir="ltr">{c.source}</td>
-                <td className="p-2"><Badge ok={c.status === 'acked' && c.verify !== 'no_flow'}>{c.status}{c.fail_reason ? ` (${c.fail_reason})` : ''}{c.verify ? ` · ${c.verify}${c.verify_ma != null ? ` ${c.verify_ma}mA` : ''}` : ''}</Badge></td>
+                <td className="p-2"><Badge ok={c.status === 'acked' && !VERIFY_WARN.has(c.verify)}>{c.status}{c.fail_reason ? ` (${FAIL_HE[c.fail_reason] || c.fail_reason})` : ''}{VERIFY_HE[c.verify] ? ` · ${VERIFY_HE[c.verify]}` : ''}{c.verify_ma != null ? ` · ${c.verify_ma}mA` : ''}</Badge></td>
               </tr>
             ))}
             {rows && rows.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-muted">אין פקודות</td></tr>}

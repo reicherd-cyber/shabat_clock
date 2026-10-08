@@ -1,7 +1,7 @@
 // Admin history: merged commands + call_logs for ALL users, every field filterable.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
 import { HourSelect, MenuPath } from './Misc.jsx';
 
 const SOURCE_HE = { ivr: 'טלפון', web: 'אתר', schedule: 'תזמון', admin: 'מנהל' };
@@ -156,7 +156,7 @@ export default function AdminHistory() {
                     {' — '}{d.action === 'on' ? 'הדלקה' : 'כיבוי'} · {SOURCE_HE[d.source] || d.source}
                   </td>
                   <td className="p-2">
-                    <Badge ok={d.status === 'acked' && d.verify !== 'no_flow'}>{STATUS_HE[d.status] || d.status}{d.fail_reason ? ` (${d.fail_reason})` : ''}{d.verify ? ` · ${d.verify}${d.verify_ma != null ? ` ${d.verify_ma}mA` : ''}` : ''}</Badge>
+                    <Badge ok={d.status === 'acked' && !VERIFY_WARN.has(d.verify)}>{STATUS_HE[d.status] || d.status}{d.fail_reason ? ` (${FAIL_HE[d.fail_reason] || d.fail_reason})` : ''}{VERIFY_HE[d.verify] ? ` · ${VERIFY_HE[d.verify]}` : ''}{d.verify_ma != null ? ` · ${d.verify_ma}mA` : ''}</Badge>
                   </td>
                 </tr>
               ) : (

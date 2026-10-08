@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Select, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot } from '../ui.jsx';
+import { Card, Button, Select, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
 import { Lightbulb, X, PhoneCall } from 'lucide-react';
 
 // Mockup .hist rows: icon square · sentence · time at the far edge.
@@ -19,10 +19,6 @@ function fmtTime(ts) {
   return `${d.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: '2-digit' })} ${time}`;
 }
 
-// Command verification by the channel meter (services/commands.js verifyCommand).
-const VERIFY_HE = { flow: 'אומת: פועל', off_ok: 'אומת: כבוי', no_flow: 'הממסר הודלק אך אין צריכת חשמל — בדקו את מתג המכשיר' };
-const FAIL_HE = { offline: ' (המכשיר לא היה מחובר)', stuck_on: ' (המכשיר לא כבה בפועל)', not_switched: ' (המכשיר לא ביצע את הפקודה)' };
-
 function Row({ item, first, colorOf }) {
   const d = item.data;
   const isCmd = item.type === 'cmd';
@@ -39,8 +35,8 @@ function Row({ item, first, colorOf }) {
           <>
             {d.relay_id != null && <ChannelDot color={colorOf(d.relay_id)} size={9} className="me-1.5 -mb-px" />}
             <b>{d.relay_name}</b> {d.action === 'on' ? 'הודלק' : 'כובה'} {SOURCE_HE[d.source] || ''}
-            {d.status === 'failed' && <span className="text-off"> — נכשל{FAIL_HE[d.fail_reason] || ''}</span>}
-            {d.status === 'acked' && VERIFY_HE[d.verify] && <span className={d.verify === 'no_flow' ? 'text-off' : 'text-muted'}> — {VERIFY_HE[d.verify]}</span>}
+            {d.status === 'failed' && <span className="text-off"> — נכשל{FAIL_HE[d.fail_reason] ? ` (${FAIL_HE[d.fail_reason]})` : ''}</span>}
+            {d.status === 'acked' && VERIFY_HE[d.verify] && <span className={VERIFY_WARN.has(d.verify) ? 'text-off' : 'text-muted'}> — {VERIFY_HE[d.verify]}</span>}
           </>
         ) : (
           <>

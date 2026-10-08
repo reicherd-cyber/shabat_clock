@@ -52,10 +52,12 @@ async function markCommand(id, status, failReason = null, v = null) {
 // (2026-09-10, device 14: white screen, internal rail sag) acks happily while
 // nothing moves. So the channel is read back once the load had a moment to
 // settle, and the caller reports what the METER saw, not what the firmware said:
-//   flow         — ON and current flows through the contact: confirmed
+//   flow         — ON and the load is drawing real power: confirmed working
+//   closed       — ON, the contact is closed (milliamps flow) but the load draws
+//                  next to nothing: it is off at its own switch / thermostat
 //   off_ok       — OFF and nothing flows: confirmed
-//   no_flow      — ON accepted but nothing flows: the load may be off at its own
-//                  switch / thermostat, or the relay is dead (the health monitor
+//   no_flow      — ON accepted but nothing flows at all: the load may be off at
+//                  its own switch, or the relay is dead (the health monitor
 //                  decides across channels — one reading can't tell)
 //   stuck_on     — OFF accepted but current still flows: the contact did not open
 //   not_switched — the firmware reports the opposite output
@@ -66,24 +68,39 @@ async function markCommand(id, status, failReason = null, v = null) {
 // switch still leaks milliamps through a closed contact; an open relay reads 0.
 const VERIFY_AFTER_MS = 2000;
 const VERIFY_FAILS = new Set(['stuck_on', 'not_switched']);
+// Never throws: the ack is already in, and a hiccup here must not turn a
+// switched relay into a reported failure — it degrades to 'unverified'.
 async function verifyCommand(relay, action, commandId) {
-  await new Promise((r) => setTimeout(r, VERIFY_AFTER_MS).unref());
-  const { shellyCall, channelFor } = await import('./shelly.js');
-  const { noFlow } = await import('../monitor/dead-relay.js');
-  const s = await shellyCall(relay, 'Switch.GetStatus', { id: channelFor(relay.relay_no) }).catch(() => null);
-  if (!s || typeof s.output !== 'boolean') return { verify: 'unverified', ma: null, output: null };
-  // A newer command for this relay during the wait (a schedule firing in the
-  // same second) means the reading is no longer about THIS order.
-  const [{ last_cmd }] = await query('SELECT MAX(id) AS last_cmd FROM commands WHERE relay_id = ?', [relay.id]);
-  if (Number(last_cmd) !== Number(commandId)) return { verify: 'unverified', ma: null, output: s.output };
-  const wantOn = action === 'on';
-  const ma = typeof s.current === 'number' ? Math.round(s.current * 1000) : null;
-  let verify;
-  if (s.output !== wantOn) verify = 'not_switched';
-  else if (typeof s.current !== 'number' && typeof s.apower !== 'number') verify = 'unmetered';
-  else if (wantOn) verify = noFlow(s) ? 'no_flow' : 'flow';
-  else verify = noFlow(s) ? 'off_ok' : 'stuck_on';
-  return { verify, ma, output: s.output };
+  try {
+    await new Promise((r) => setTimeout(r, VERIFY_AFTER_MS).unref());
+    const { shellyCall, channelFor } = await import('./shelly.js');
+    const { noFlow, MIN_LEARNED_W } = await import('../monitor/dead-relay.js');
+    const s = await shellyCall(relay, 'Switch.GetStatus', { id: channelFor(relay.relay_no) }).catch(() => null);
+    if (!s || typeof s.output !== 'boolean') return { verify: 'unverified', ma: null, output: null };
+    // Intent may have moved on during the wait: a newer command, or a local
+    // schedule / the wall switch (those land in current_state via the status
+    // topic without a commands row). Then the reading is not about THIS order
+    // and the device is not wrong about it.
+    const [cur] = await query(
+      'SELECT current_state, (SELECT MAX(id) FROM commands WHERE relay_id = ?) AS last_cmd FROM relays WHERE id = ?',
+      [relay.id, relay.id],
+    );
+    if (!cur || Number(cur.last_cmd) !== Number(commandId) || cur.current_state !== action) {
+      return { verify: 'unverified', ma: null, output: s.output };
+    }
+    const wantOn = action === 'on';
+    const ma = typeof s.current === 'number' ? Math.round(s.current * 1000) : null;
+    let verify;
+    if (s.output !== wantOn) verify = 'not_switched';
+    else if (typeof s.current !== 'number' && typeof s.apower !== 'number') verify = 'unmetered';
+    else if (!wantOn) verify = noFlow(s) ? 'off_ok' : 'stuck_on';
+    else if (noFlow(s)) verify = 'no_flow';
+    else verify = typeof s.apower === 'number' && s.apower >= MIN_LEARNED_W ? 'flow' : 'closed';
+    return { verify, ma, output: s.output };
+  } catch (e) {
+    console.error('[commands] verify:', e.message);
+    return { verify: 'unverified', ma: null, output: null };
+  }
 }
 
 // Full immediate flow: insert → offline check → publish → block ≤5s for ack.
@@ -117,30 +134,34 @@ export async function sendImmediateCommand({ relayId, action, source, callId = n
     try {
       const { shellyDispatch } = await import('./shelly.js');
       await shellyDispatch(relay, relay.relay_no, action === 'on');
-      await query(
-        `UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?`,
-        [action, relayId],
-      );
-      const v = await verifyCommand(relay, action, commandId);
-      if (VERIFY_FAILS.has(v.verify)) {
-        // The meter is the truth about the relay state: stuck_on = still feeding
-        // the load; not_switched = whatever the firmware actually shows.
-        const physical = v.verify === 'stuck_on' ? 'on' : (v.output ? 'on' : 'off');
-        await query('UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?', [physical, relayId]);
-        await markCommand(commandId, 'failed', v.verify, v);
-        // Passive servers on the shared DB never take notes (config/role.js).
-        if (isPrimary()) {
-          await query("INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
-            [relay.device_id, JSON.stringify({ kind: v.verify, relay_no: relay.relay_no, wanted: action, output: v.output, ma: v.ma, command_id: Number(commandId) })]);
-        }
-        return { command_id: commandId, status: 'failed', fail_reason: v.verify, verify: v.verify, verify_ma: v.ma };
-      }
-      await markCommand(commandId, 'acked', null, v);
-      return { command_id: commandId, status: 'acked', verify: v.verify, verify_ma: v.ma };
     } catch (e) {
       await markCommand(commandId, 'failed', 'shelly_unreachable');
       return { command_id: commandId, status: 'failed', fail_reason: 'shelly_unreachable' };
     }
+    await query(
+      `UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?`,
+      [action, relayId],
+    );
+    const v = await verifyCommand(relay, action, commandId);
+    if (VERIFY_FAILS.has(v.verify)) {
+      // not_switched: the firmware's output is what the status topic keeps
+      // reporting — record that. stuck_on: the firmware says OFF while current
+      // flows; the status ingester would overwrite an "on" written here within
+      // seconds, so that condition lives in the command, the event and the
+      // notice, not in current_state.
+      if (v.verify === 'not_switched') {
+        await query('UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?', [v.output ? 'on' : 'off', relayId]);
+      }
+      await markCommand(commandId, 'failed', v.verify, v);
+      // Passive servers on the shared DB never take notes (config/role.js).
+      if (isPrimary()) {
+        await query("INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
+          [relay.device_id, JSON.stringify({ kind: v.verify, relay_no: relay.relay_no, wanted: action, output: v.output, ma: v.ma, command_id: Number(commandId) })]);
+      }
+      return { command_id: commandId, status: 'failed', fail_reason: v.verify, verify: v.verify, verify_ma: v.ma };
+    }
+    await markCommand(commandId, 'acked', null, v);
+    return { command_id: commandId, status: 'acked', verify: v.verify, verify_ma: v.ma };
   }
 
   if (!relay.is_online || !relay.device_uid) {

@@ -1,5 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 
+// Command verification verdicts (services/commands.js verifyCommand) and
+// failure reasons — one wording for the dashboard notice, user/admin history
+// and the admin commands table.
+export const VERIFY_HE = {
+  flow: 'אומת: המכשיר פועל',
+  closed: 'הממסר נסגר ומתח מגיע למכשיר, אך הוא כמעט לא צורך — ייתכן שהוא כבוי במתג שלו',
+  off_ok: 'אומת: כבוי',
+  no_flow: 'הממסר הודלק אך אין צריכת חשמל — בדקו את מתג המכשיר',
+};
+export const VERIFY_WARN = new Set(['closed', 'no_flow']);
+export const FAIL_HE = {
+  offline: 'המכשיר לא היה מחובר', timeout: 'המכשיר לא ענה', shelly_unreachable: 'המכשיר לא הגיב',
+  stuck_on: 'המכשיר לא כבה בפועל — החשמל עדיין זורם אליו', not_switched: 'המכשיר לא ביצע את הפקודה',
+};
+
 export const DAY_NAMES = { 1: 'ראשון', 2: 'שני', 3: 'שלישי', 4: 'רביעי', 5: 'חמישי', 6: 'שישי', 7: 'שבת' };
 
 // ── channel colors ──

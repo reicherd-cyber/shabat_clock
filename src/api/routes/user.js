@@ -260,7 +260,8 @@ userRouter.patch('/devices/:id', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// Same relay gate as §1.1 rule 4; blocks ≤5s and returns the true final status.
+// Same relay gate as §1.1 rule 4; blocks for the ack plus a ~2s meter read-back
+// (services/commands.js verifyCommand) and returns the true final status + verdict.
 userRouter.post('/relays/:id/command', async (req, res, next) => {
   try {
     const [relay] = await query(

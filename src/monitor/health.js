@@ -314,6 +314,7 @@ async function checkShelly(device) {
     channels[ch] = {
       ch, on: s.output === true,
       apower: typeof s.apower === 'number' ? s.apower : null,
+      current: typeof s.current === 'number' ? s.current : null,
       errors: Array.isArray(s.errors) ? s.errors : [],
     };
   }

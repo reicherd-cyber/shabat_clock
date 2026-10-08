@@ -41,14 +41,17 @@ function nextYmd(ymd) {
 // caller can report honestly — schedules are just DB rows and can't fail this way.
 async function runNluActions(session) {
   const tz = session.data.nluTz;
-  let unacked = 0;
-  const results = [];
+  // Immediate orders go out together: each one blocks ~2s on its meter
+  // read-back (services/commands.js verifyCommand), and "כבה הכל" on a
+  // 4-channel unit run serially would leave the caller in dead air.
+  const immediate = [];
   for (const a of session.data.nluActions) {
     if (a.kind === 'immediate') {
-      const result = await sendImmediateCommand({ relayId: a.relay_id, action: a.action, source: 'ivr', callId: session.callLogId });
-      results.push(result);
-      await logAction({ type: 'ivr', id: session.userId }, 'command', 'relay', a.relay_id, { after: { action: a.action, status: result.status, via: 'nlu' } });
-      if (result.status !== 'acked') unacked += 1;
+      immediate.push(sendImmediateCommand({ relayId: a.relay_id, action: a.action, source: 'ivr', callId: session.callLogId })
+        .then(async (result) => {
+          await logAction({ type: 'ivr', id: session.userId }, 'command', 'relay', a.relay_id, { after: { action: a.action, status: result.status, verify: result.verify, via: 'nlu' } });
+          return result;
+        }));
     } else if (a.kind === 'recurring') {
       const fields = {
         on_day_of_week: a.on_day, on_time: a.on_time,
@@ -83,6 +86,8 @@ async function runNluActions(session) {
       await logAction({ type: 'ivr', id: session.userId }, 'create', 'schedule', created.id, { after: { relay_id: a.relay_id, ...fields, via: 'nlu' } });
     }
   }
+  const results = await Promise.all(immediate);
+  const unacked = results.filter((x) => x.status !== 'acked').length;
   return { unacked, results };
 }
 
@@ -399,6 +404,7 @@ async function cmdFeedback(result) {
     return speak('ivr.cmd_offline');
   }
   if (result.verify === 'flow' || result.verify === 'off_ok') return speak('ivr.cmd_verified', {}, 'הפקודה בוצעה ואומתה');
+  if (result.verify === 'closed') return speak('ivr.cmd_closed', {}, 'הפקודה בוצעה, המכשיר מקבל חשמל אך כמעט אינו צורך, ייתכן שהוא כבוי במתג שלו');
   if (result.verify === 'no_flow') return speak('ivr.cmd_no_flow', {}, 'הפקודה התקבלה, אך לא נמדדת צריכת חשמל במכשיר, ייתכן שהוא כבוי במתג שלו');
   return speak('ivr.cmd_ok');
 }
