@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { getTimes } from 'suncalc';
 import { HDate, HebrewCalendar, flags, gematriya } from '@hebcal/core';
 import { api } from '../api.js';
@@ -330,16 +331,71 @@ function HeadSwitch({ relay, color, busy, onToggle }) {
   );
 }
 
+// Full text of a block for the hover tooltip: the ON and OFF moments spelled
+// out (what the block itself only has room to abbreviate).
+const blockTitle = (s) => {
+  if (s.gap) return s.label || 'כבוי';
+  if (s.from && s.to) return `הדלקה ${s.from} · כיבוי ${s.to}`;
+  if (s.to) return `כיבוי ${s.to}`;
+  if (s.from) return `הדלקה ${s.from}`;
+  return s.label || 'דולק כל היום';
+};
+
+// ── instant hover tooltip ──
+// Blocks and column heads truncate their text (narrow lanes drop it entirely),
+// so hovering shows the FULL title at once — the native title attribute is
+// slow to appear and clips long Hebrew text. `bind(title, lines)` returns the
+// mouse handlers; `node` is the floating card (portal, follows the cursor,
+// clamped to the viewport). Touch has no hover — tap opens the editor as before.
+function useHoverTip() {
+  const [tip, setTip] = useState(null); // { x, y, title, lines }
+  const place = (e) => ({ x: e.clientX, y: e.clientY });
+  const bind = (title, lines = []) => ({
+    onMouseEnter: (e) => setTip({ ...place(e), title, lines: lines.filter(Boolean) }),
+    onMouseMove: (e) => setTip((t) => (t ? { ...t, ...place(e) } : t)),
+    onMouseLeave: () => setTip(null),
+  });
+  const node = tip ? <HoverTipCard {...tip} /> : null;
+  return { bind, node, hide: () => setTip(null) };
+}
+
+function HoverTipCard({ x, y, title, lines }) {
+  const ref = useRef(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const w = el.offsetWidth; const h = el.offsetHeight;
+    const vw = window.innerWidth; const vh = window.innerHeight;
+    // RTL: open to the left of the cursor; flip/clamp at the edges.
+    let left = x - w - 12;
+    if (left < 8) left = Math.min(vw - w - 8, x + 16);
+    let top = y + 18;
+    if (top + h > vh - 8) top = Math.max(8, y - h - 12);
+    setPos({ left, top });
+  }, [x, y, title, lines]);
+  return createPortal(
+    <div ref={ref} dir="rtl" role="tooltip"
+      className="fixed z-[70] pointer-events-none max-w-[300px] rounded-lg bg-ink text-white shadow-lg px-3 py-2 text-[13px] leading-snug"
+      style={{ left: pos.left, top: pos.top }}>
+      <div className="font-bold break-words">{title}</div>
+      {lines.map((l, i) => <div key={i} className="text-white/80 break-words">{l}</div>)}
+    </div>,
+    document.body,
+  );
+}
+
 // One relay column head (week/day matrix + month grid share it): color dot,
 // name, device + live state, and the immediate switch.
-function ColumnHead({ relay, colorOf, busy, onToggle }) {
+function ColumnHead({ relay, colorOf, busy, onToggle, tip }) {
   const on = relay.current_state === 'on';
+  const stateHe = !relay.online ? 'מנותק' : (STATE_HE[relay.current_state] || STATE_HE.unknown);
   return (
     <div className="flex-1 min-w-[96px] py-2 px-2 border-line border-s @container">
       {/* Narrow column (phone, many channels): the switch goes under the text so
           it never eats the name; from ~200px the two sit side by side. */}
       <div className="flex flex-col items-center gap-1.5 @[200px]:flex-row @[200px]:justify-center @[200px]:gap-2">
-        <span className="min-w-0 max-w-full text-center">
+        <span className="min-w-0 max-w-full text-center" {...(tip ? tip(relay.name, [relay.device, stateHe]) : {})}>
           <span className="flex items-center justify-center gap-1.5 max-w-full">
             <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colorOf(relay.id) }} />
             <span className="min-w-0 font-bold text-[13.5px] truncate">{relay.name}</span>
@@ -347,7 +403,7 @@ function ColumnHead({ relay, colorOf, busy, onToggle }) {
           <div className="text-[11px] text-muted truncate">
             {relay.device}
             <span className={`ms-1 ${!relay.online ? 'text-off' : on ? 'text-on' : ''}`}>
-              · {!relay.online ? 'מנותק' : (STATE_HE[relay.current_state] || STATE_HE.unknown)}
+              · {stateHe}
             </span>
           </div>
         </span>
@@ -368,6 +424,7 @@ export default function Calendar() {
   const [schedForm, setSchedForm] = useState(null); // new-schedule modal, opened IN the calendar
   const [reload, setReload] = useState(0);
   const { error, setError } = useAsync();
+  const hoverTip = useHoverTip();
 
   // Open the shared schedule form right here — no page hop; the Hebrew-date
   // fields default to the clicked day's Hebrew date.
@@ -596,8 +653,8 @@ export default function Calendar() {
           return (
             <div key={j}
               className={`absolute px-2 py-0.5 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50 ${stateColors ? '' : 'rounded-md'}`}
-              onClick={(e) => { e.stopPropagation(); openEdit(s.sid); }}
-              title={`${s.label} · ${s.relay_name} · ${s.device_name} — לחיצה לעריכה`}
+              onClick={(e) => { e.stopPropagation(); hoverTip.hide(); openEdit(s.sid); }}
+              {...hoverTip.bind(blockTitle(s), [`${s.relay_name} · ${s.device_name}`, 'לחיצה לעריכה'])}
               style={{
                 top: (s.startMin / 60) * HOUR_PX,
                 height: h,
@@ -698,7 +755,7 @@ export default function Calendar() {
             <div className="flex border-b border-line bg-surface2/60">
               <div className="w-14 shrink-0 sticky start-0 bg-surface2 z-20" />
               {shownRelays.map((r) => (
-                <ColumnHead key={r.id} relay={r} colorOf={colorOf} busy={!!busyRelays[r.id]} onToggle={toggleNow} />
+                <ColumnHead key={r.id} relay={r} colorOf={colorOf} busy={!!busyRelays[r.id]} onToggle={toggleNow} tip={hoverTip.bind} />
               ))}
             </div>
             {events == null ? (
@@ -715,7 +772,7 @@ export default function Calendar() {
                       <div key={c.date} className={`absolute inset-x-0 text-center
                         ${c.date === todayStr ? 'bg-[#E4EFFE]' : hi.chag ? 'bg-[#FBF3DC]' : ''}`}
                         style={{ top: i * BAND_H, height: BAND_H, ...(i > 0 ? { borderTop: '3px solid rgba(43,58,103,0.45)' } : {}) }}
-                        title={hi.holiday || undefined}>
+                        {...(hi.holiday ? hoverTip.bind(hi.holiday, [hebFullDate(hi.hd)]) : {})}>
                         <div className={`${BAND_H >= 70 ? 'pt-2.5 text-[11.5px]' : 'pt-0.5 text-[10px]'} text-muted leading-tight`}>{DAY_NAMES[c.dow]}</div>
                         <div className={`mx-auto mt-0.5 min-w-6 h-6 px-1 grid place-items-center rounded-full text-[13px] font-bold
                           ${c.date === todayStr ? 'bg-accent text-white' : ''}`}>
@@ -753,8 +810,8 @@ export default function Calendar() {
                       const h = Math.max(7, ((s.endMin - s.startMin) / 1440) * BAND_H - 1);
                       return (
                         <div key={`${c.date}-${j}`} className="absolute px-1.5 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50"
-                          onClick={(e) => { e.stopPropagation(); openEdit(s.sid); }}
-                          title={`${segLabel(s)} · ${r.name} — לחיצה לעריכה`}
+                          onClick={(e) => { e.stopPropagation(); hoverTip.hide(); openEdit(s.sid); }}
+                          {...hoverTip.bind(blockTitle(s), [`${r.name} · ${r.device}`, 'לחיצה לעריכה'])}
                           style={{
                             top, height: h, insetInlineStart: 2, insetInlineEnd: 2,
                             backgroundColor: `color-mix(in srgb, ${colorOf(r.id)} 25%, white)`,
@@ -798,7 +855,7 @@ export default function Calendar() {
             <div className="flex border-b border-line bg-surface2/60">
               <div className="w-14 shrink-0 sticky start-0 bg-surface2 z-20" />
               {shownRelays.map((r) => (
-                <ColumnHead key={r.id} relay={r} colorOf={colorOf} busy={!!busyRelays[r.id]} onToggle={toggleNow} />
+                <ColumnHead key={r.id} relay={r} colorOf={colorOf} busy={!!busyRelays[r.id]} onToggle={toggleNow} tip={hoverTip.bind} />
               ))}
             </div>
             {events == null ? (
@@ -866,6 +923,7 @@ export default function Calendar() {
       )}
 
       {view === 'month' ? <MonthGrid /> : view === 'day' ? <DayGrid /> : <WeekGrid />}
+      {hoverTip.node}
 
       {/* creating from the calendar stays in the calendar */}
       <ScheduleFormModal initial={schedForm} relays={relays}
