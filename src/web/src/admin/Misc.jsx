@@ -366,7 +366,7 @@ export function Commands() {
                 <td className="p-2">{c.relay_name}</td>
                 <td className="p-2">{c.action === 'on' ? 'הדלקה' : 'כיבוי'}</td>
                 <td className="p-2" dir="ltr">{c.source}</td>
-                <td className="p-2"><Badge ok={c.status === 'acked'}>{c.status}{c.fail_reason ? ` (${c.fail_reason})` : ''}</Badge></td>
+                <td className="p-2"><Badge ok={c.status === 'acked' && c.verify !== 'no_flow'}>{c.status}{c.fail_reason ? ` (${c.fail_reason})` : ''}{c.verify ? ` · ${c.verify}${c.verify_ma != null ? ` ${c.verify_ma}mA` : ''}` : ''}</Badge></td>
               </tr>
             ))}
             {rows && rows.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-muted">אין פקודות</td></tr>}

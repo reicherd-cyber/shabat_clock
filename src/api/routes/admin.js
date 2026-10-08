@@ -539,7 +539,7 @@ adminRouter.get('/commands', async (req, res, next) => {
     if (req.query.status === 'pending') cond.push("c.status IN ('pending','sent')");
     else if (req.query.status === 'failed') cond.push("c.status = 'failed' AND c.requested_at > UTC_TIMESTAMP() - INTERVAL 24 HOUR");
     res.json(await query(
-      `SELECT c.id, c.action, c.source, c.status, c.fail_reason, c.requested_at, c.acked_at,
+      `SELECT c.id, c.action, c.source, c.status, c.fail_reason, c.verify, c.verify_ma, c.requested_at, c.acked_at,
               r.name AS relay_name, d.name AS device_name, u.full_name AS owner_name
        FROM commands c
        JOIN relays r ON r.id = c.relay_id

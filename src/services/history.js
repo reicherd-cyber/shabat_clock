@@ -82,7 +82,7 @@ export async function getAdminHistory(f = {}) {
   }
 
   const cmds = !wantCmds ? [] : await query(
-    `SELECT c.id, c.action, c.source, c.status, c.fail_reason, c.requested_at,
+    `SELECT c.id, c.action, c.source, c.status, c.fail_reason, c.verify, c.verify_ma, c.requested_at,
             r.name AS relay_name, d.name AS device_name, r.user_id, u.full_name AS owner_name
      FROM commands c
      JOIN relays r ON r.id = c.relay_id
@@ -151,7 +151,7 @@ export async function getHistory({ userId, limit = 50, cursor = null, relay_id =
   }
 
   const cmds = !wantCmds ? [] : await query(
-    `SELECT c.id, c.action, c.source, c.status, c.fail_reason, c.requested_at, c.relay_id, r.name AS relay_name
+    `SELECT c.id, c.action, c.source, c.status, c.fail_reason, c.verify, c.verify_ma, c.requested_at, c.relay_id, r.name AS relay_name
      FROM commands c JOIN relays r ON r.id = c.relay_id
      WHERE r.user_id = ? ${cmdWhere}
      ORDER BY c.requested_at DESC, c.id DESC LIMIT ?`,

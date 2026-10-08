@@ -156,7 +156,7 @@ export default function AdminHistory() {
                     {' — '}{d.action === 'on' ? 'הדלקה' : 'כיבוי'} · {SOURCE_HE[d.source] || d.source}
                   </td>
                   <td className="p-2">
-                    <Badge ok={d.status === 'acked'}>{STATUS_HE[d.status] || d.status}{d.fail_reason ? ` (${d.fail_reason})` : ''}</Badge>
+                    <Badge ok={d.status === 'acked' && d.verify !== 'no_flow'}>{STATUS_HE[d.status] || d.status}{d.fail_reason ? ` (${d.fail_reason})` : ''}{d.verify ? ` · ${d.verify}${d.verify_ma != null ? ` ${d.verify_ma}mA` : ''}` : ''}</Badge>
                   </td>
                 </tr>
               ) : (

@@ -42,9 +42,11 @@ function nextYmd(ymd) {
 async function runNluActions(session) {
   const tz = session.data.nluTz;
   let unacked = 0;
+  const results = [];
   for (const a of session.data.nluActions) {
     if (a.kind === 'immediate') {
       const result = await sendImmediateCommand({ relayId: a.relay_id, action: a.action, source: 'ivr', callId: session.callLogId });
+      results.push(result);
       await logAction({ type: 'ivr', id: session.userId }, 'command', 'relay', a.relay_id, { after: { action: a.action, status: result.status, via: 'nlu' } });
       if (result.status !== 'acked') unacked += 1;
     } else if (a.kind === 'recurring') {
@@ -81,7 +83,7 @@ async function runNluActions(session) {
       await logAction({ type: 'ivr', id: session.userId }, 'create', 'schedule', created.id, { after: { relay_id: a.relay_id, ...fields, via: 'nlu' } });
     }
   }
-  return unacked;
+  return { unacked, results };
 }
 
 // Confirmation readback for voice commands, composed from neural-voice fragments
@@ -381,11 +383,24 @@ async function runImmediate(session, relay) {
     relayId: relay.id, action, source: 'ivr', callId: session.callLogId,
   });
   await logAction({ type: 'ivr', id: session.userId }, 'command', 'relay', relay.id, { after: { action, status: result.status } });
-  await appendPath(session.callLogId, result.status === 'acked' ? 'ok' : `fail:${result.fail_reason}`);
+  await appendPath(session.callLogId, result.status === 'acked' ? `ok:${result.verify || 'acked'}` : `fail:${result.fail_reason}`);
   await finishCall(session.callLogId, 'command');
   // [D19] back to MAIN, not hangup — allow another action.
-  const feedback = await speak(result.status === 'acked' ? 'ivr.cmd_ok' : 'ivr.cmd_offline');
-  return mainMenu(session, feedback);
+  return mainMenu(session, await cmdFeedback(result));
+}
+
+// What the channel meter saw after the command (services/commands.js
+// verifyCommand), spoken honestly. Inline fallbacks; recordings via
+// scripts/ivr-audio.mjs once the texts settle.
+async function cmdFeedback(result) {
+  if (result.status !== 'acked') {
+    if (result.fail_reason === 'stuck_on') return speak('ivr.cmd_stuck_on', {}, 'שימו לב, המכשיר לא כובה בפועל, החשמל עדיין זורם אליו');
+    if (result.fail_reason === 'not_switched') return speak('ivr.cmd_not_switched', {}, 'אירעה שגיאה, המכשיר לא ביצע את הפקודה');
+    return speak('ivr.cmd_offline');
+  }
+  if (result.verify === 'flow' || result.verify === 'off_ok') return speak('ivr.cmd_verified', {}, 'הפקודה בוצעה ואומתה');
+  if (result.verify === 'no_flow') return speak('ivr.cmd_no_flow', {}, 'הפקודה התקבלה, אך לא נמדדת צריכת חשמל במכשיר, ייתכן שהוא כבוי במתג שלו');
+  return speak('ivr.cmd_ok');
 }
 
 async function runStatus(session) {
@@ -690,18 +705,19 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       case 'NLU_CONFIRM': {
         if (input === '2') return res.send(await mainMenu(session));
         if (input !== '1') return res.send(await invalidInput(session));
-        let unacked;
+        let unacked; let results;
         try {
-          unacked = await runNluActions(session);
+          ({ unacked, results } = await runNluActions(session));
         } catch (e) {
           console.error('IVR NLU execute error:', e);
           return res.send(await mainMenu(session, await speak('ivr.nlu_exec_error', {}, 'אירעה שגיאה בביצוע הבקשה')));
         }
         await appendPath(session.callLogId, unacked ? 'nlu_fail_exec' : 'nlu_done');
         await finishCall(session.callLogId, 'command');
-        const feedback = unacked
-          ? await speak('ivr.cmd_offline')
-          : await speak('ivr.nlu_done', {}, 'הבקשה בוצעה');
+        // One honest verdict: the first failure, else the first "accepted but
+        // nothing flows", else done.
+        const worst = results.find((x) => x.status !== 'acked') || results.find((x) => x.verify === 'no_flow');
+        const feedback = worst ? await cmdFeedback(worst) : await speak('ivr.nlu_done', {}, 'הבקשה בוצעה');
         return res.send(await mainMenu(session, feedback));
       }
 

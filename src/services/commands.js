@@ -38,46 +38,52 @@ export async function createCommand({ relayId, action, source, callId = null, sc
   return res.insertId;
 }
 
-async function markCommand(id, status, failReason = null) {
+async function markCommand(id, status, failReason = null, v = null) {
   await query(
-    `UPDATE commands SET status = ?, fail_reason = ?, acked_at = IF(? = 'acked', UTC_TIMESTAMP(), acked_at)
+    `UPDATE commands SET status = ?, fail_reason = ?, acked_at = IF(? = 'acked', UTC_TIMESTAMP(), acked_at),
+            verify = ?, verify_ma = ?
      WHERE id = ?`,
-    [status, failReason, status, id],
+    [status, failReason, status, v?.verify ?? null, v?.ma ?? null, id],
   );
 }
 
-// The Switch.Set reply only says the firmware ACCEPTED the command. A unit
-// whose relays have dropped (2026-09-10, device 14: white screen, internal
-// rail sag) acks happily while nothing moves. So, off the caller's clock, read
-// the channel back: output disagreeing with what was asked flips the command
-// to failed and corrects the relay state. Whether a load actually DRAWS is the
-// health monitor's call (dead-relay.js) — a single reading can't tell a dead
-// relay from an idle thermostat. Primary instance only: passive servers on the
-// shared DB never take notes (config/role.js).
-const VERIFY_AFTER_MS = 2500;
-async function verifySwitched(relay, action, commandId) {
-  if (!isPrimary()) return;
+// Verification after the firmware's ack (2026-10-08). The Switch.Set reply only
+// says the firmware ACCEPTED the command — a unit whose relays have dropped
+// (2026-09-10, device 14: white screen, internal rail sag) acks happily while
+// nothing moves. So the channel is read back once the load had a moment to
+// settle, and the caller reports what the METER saw, not what the firmware said:
+//   flow         — ON and current flows through the contact: confirmed
+//   off_ok       — OFF and nothing flows: confirmed
+//   no_flow      — ON accepted but nothing flows: the load may be off at its own
+//                  switch / thermostat, or the relay is dead (the health monitor
+//                  decides across channels — one reading can't tell)
+//   stuck_on     — OFF accepted but current still flows: the contact did not open
+//   not_switched — the firmware reports the opposite output
+//   unmetered    — a model without a current reading (Pro 2)
+//   unverified   — the read-back itself failed, or a newer command took over
+// stuck_on / not_switched flip the command to failed. "Nothing flows" is judged
+// on current, not watts (monitor/dead-relay.js noFlow): a load off at its own
+// switch still leaks milliamps through a closed contact; an open relay reads 0.
+const VERIFY_AFTER_MS = 2000;
+const VERIFY_FAILS = new Set(['stuck_on', 'not_switched']);
+async function verifyCommand(relay, action, commandId) {
   await new Promise((r) => setTimeout(r, VERIFY_AFTER_MS).unref());
-  // Intent may have moved on meanwhile — a newer command, a local schedule or
-  // the wall switch (both land in current_state via the status topic). Then
-  // this command is history and the device is not wrong about it.
-  const stillCurrent = async () => {
-    const [cur] = await query(
-      'SELECT current_state, (SELECT MAX(id) FROM commands WHERE relay_id = ?) AS last_cmd FROM relays WHERE id = ?',
-      [relay.id, relay.id],
-    );
-    return !!cur && Number(cur.last_cmd) === Number(commandId) && cur.current_state === action;
-  };
-  if (!(await stillCurrent())) return;
   const { shellyCall, channelFor } = await import('./shelly.js');
+  const { noFlow } = await import('../monitor/dead-relay.js');
   const s = await shellyCall(relay, 'Switch.GetStatus', { id: channelFor(relay.relay_no) }).catch(() => null);
-  if (!s || typeof s.output !== 'boolean' || s.output === (action === 'on')) return;
-  // The RPC itself can take seconds — nothing may have superseded us meanwhile.
-  if (!(await stillCurrent())) return;
-  await markCommand(commandId, 'failed', 'not_switched');
-  await query('UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?', [s.output ? 'on' : 'off', relay.id]);
-  await query("INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
-    [relay.device_id, JSON.stringify({ kind: 'not_switched', relay_no: relay.relay_no, wanted: action, output: s.output, command_id: Number(commandId) })]);
+  if (!s || typeof s.output !== 'boolean') return { verify: 'unverified', ma: null, output: null };
+  // A newer command for this relay during the wait (a schedule firing in the
+  // same second) means the reading is no longer about THIS order.
+  const [{ last_cmd }] = await query('SELECT MAX(id) AS last_cmd FROM commands WHERE relay_id = ?', [relay.id]);
+  if (Number(last_cmd) !== Number(commandId)) return { verify: 'unverified', ma: null, output: s.output };
+  const wantOn = action === 'on';
+  const ma = typeof s.current === 'number' ? Math.round(s.current * 1000) : null;
+  let verify;
+  if (s.output !== wantOn) verify = 'not_switched';
+  else if (typeof s.current !== 'number' && typeof s.apower !== 'number') verify = 'unmetered';
+  else if (wantOn) verify = noFlow(s) ? 'no_flow' : 'flow';
+  else verify = noFlow(s) ? 'off_ok' : 'stuck_on';
+  return { verify, ma, output: s.output };
 }
 
 // Full immediate flow: insert → offline check → publish → block ≤5s for ack.
@@ -115,9 +121,22 @@ export async function sendImmediateCommand({ relayId, action, source, callId = n
         `UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?`,
         [action, relayId],
       );
-      await markCommand(commandId, 'acked');
-      verifySwitched(relay, action, commandId).catch((e) => console.error('[commands] verify:', e.message));
-      return { command_id: commandId, status: 'acked' };
+      const v = await verifyCommand(relay, action, commandId);
+      if (VERIFY_FAILS.has(v.verify)) {
+        // The meter is the truth about the relay state: stuck_on = still feeding
+        // the load; not_switched = whatever the firmware actually shows.
+        const physical = v.verify === 'stuck_on' ? 'on' : (v.output ? 'on' : 'off');
+        await query('UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?', [physical, relayId]);
+        await markCommand(commandId, 'failed', v.verify, v);
+        // Passive servers on the shared DB never take notes (config/role.js).
+        if (isPrimary()) {
+          await query("INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
+            [relay.device_id, JSON.stringify({ kind: v.verify, relay_no: relay.relay_no, wanted: action, output: v.output, ma: v.ma, command_id: Number(commandId) })]);
+        }
+        return { command_id: commandId, status: 'failed', fail_reason: v.verify, verify: v.verify, verify_ma: v.ma };
+      }
+      await markCommand(commandId, 'acked', null, v);
+      return { command_id: commandId, status: 'acked', verify: v.verify, verify_ma: v.ma };
     } catch (e) {
       await markCommand(commandId, 'failed', 'shelly_unreachable');
       return { command_id: commandId, status: 'failed', fail_reason: 'shelly_unreachable' };

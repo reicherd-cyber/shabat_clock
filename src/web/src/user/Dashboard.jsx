@@ -22,6 +22,16 @@ function relativeHe(ts) {
 // (serif name + online badge) + relay rows (code chip · name · state · toggle).
 // Polls every 10s [D28]; toggle is optimistic-off with a busy pulse until the
 // 5s command round-trip resolves.
+const VERIFY_NOTICE = {
+  flow: (r) => `✓ אומת: המכשיר פועל${r.verify_ma != null ? ` (${r.verify_ma}mA)` : ''}`,
+  off_ok: () => '✓ אומת: המכשיר כבוי',
+  no_flow: () => '⚠ הממסר הודלק אך אין צריכת חשמל — בדקו את מתג המכשיר',
+};
+const CMD_FAIL_HE = {
+  stuck_on: 'שימו לב: המכשיר לא כבה בפועל — החשמל עדיין זורם אליו',
+  not_switched: 'המכשיר לא ביצע את הפקודה — נסו שוב',
+};
+
 export default function Dashboard() {
   const [me, setMe] = useState(null);
   const [devices, setDevices] = useState(null);
@@ -53,7 +63,13 @@ export default function Dashboard() {
     setBusyRelays((b) => ({ ...b, [relay.id]: true }));
     try {
       const res = await api.post(`/relays/${relay.id}/command`, { action });
-      if (res.status !== 'acked') setError(new Error('המכשיר לא הגיב — נסו שוב'));
+      if (res.status !== 'acked') {
+        setError(new Error(CMD_FAIL_HE[res.fail_reason] || 'המכשיר לא הגיב — נסו שוב'));
+      } else if (VERIFY_NOTICE[res.verify]) {
+        // What the channel meter saw after the command — not just "accepted".
+        setNotices((n) => ({ ...n, [relay.id]: VERIFY_NOTICE[res.verify](res) }));
+        setTimeout(() => setNotices((n) => ({ ...n, [relay.id]: null })), 8000);
+      }
       setDevices(await api.get('/devices')); // true state, not the optimistic one
     } catch (e) {
       setError(e);
