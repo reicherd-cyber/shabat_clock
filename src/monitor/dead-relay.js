@@ -82,3 +82,20 @@ export function judgeLoads(channels, learned, idles = new Set()) {
   }
   return { watched, dead, allDead: watched.length >= MIN_WATCHED && dead.length === watched.length };
 }
+
+// Simultaneity: a dead rail drops every channel in the same instant; wall
+// switches are flipped one at a time, seconds or minutes apart. lastDraw maps
+// ch → the probe number at which the channel was last seen drawing. The verdict
+// needs at least MIN_WATCHED dead channels that stopped drawing within
+// DROP_WINDOW_PROBES of each other; channels that went dead later (switched on
+// into an already-dead unit) neither help nor block. A channel never seen
+// drawing since the server started can't be placed in time and doesn't count —
+// so a unit that was already dead at deploy gets no verdict until it revives.
+export const DROP_WINDOW_PROBES = 1;
+export function droppedTogether(dead, lastDraw, window = DROP_WINDOW_PROBES) {
+  const times = dead.map((ch) => lastDraw.get(ch)).filter((p) => p != null).sort((a, b) => a - b);
+  for (let i = 0; i + MIN_WATCHED - 1 < times.length; i++) {
+    if (times[i + MIN_WATCHED - 1] - times[i] <= window) return true;
+  }
+  return false;
+}

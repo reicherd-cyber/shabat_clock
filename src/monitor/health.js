@@ -21,7 +21,7 @@ import { brokerConnected } from '../mqtt/client.js';
 import { shellyCall, shellySetRestoreLast } from '../services/shelly.js';
 import { sendEmail } from '../services/email.js';
 import { describeReset, RESET_HEADLINE } from './reset-reason.js';
-import { learnOnPower, worthSaving, idleCandidates, judgeLoads, DEAD_RELAY_PROBES, IDLE_PROBES_TO_LEARN } from './dead-relay.js';
+import { learnOnPower, worthSaving, idleCandidates, judgeLoads, noFlow, droppedTogether, DEAD_RELAY_PROBES, IDLE_PROBES_TO_LEARN } from './dead-relay.js';
 
 const CHECK_INTERVAL_MS = 60_000;
 const RAM_CRITICAL_BYTES = 30_000;      // healthy Pro 2 idles ~120k free; panics start near zero
@@ -170,7 +170,16 @@ async function verifyLoads(device, st, health, channels, alert) {
     }
   }
 
-  const { dead, allDead } = judgeLoads(metered, learned, idles);
+  // When did each channel last draw? A rail drop silences every channel in the
+  // same probe; wall switches are flipped one at a time (dead-relay.js
+  // droppedTogether). Probe numbers, not clocks — the device's missed probes
+  // (reboot, Wi-Fi blip) don't count as time passing.
+  st.probeNo = (st.probeNo ?? 0) + 1;
+  st.lastDraw ??= new Map();
+  for (const c of metered) if (c.on && !noFlow(c)) st.lastDraw.set(c.ch, st.probeNo);
+
+  const { dead, allDead: allDeadNow } = judgeLoads(metered, learned, idles);
+  const allDead = allDeadNow && droppedTogether(dead, st.lastDraw);
   health.channels = metered.map((c) => ({
     ch: c.ch + 1, name: byCh.get(c.ch)?.name ?? null, on: c.on, apower: c.apower, current: c.current,
     expected_w: learned.get(c.ch), idles: idles.has(c.ch), dead: dead.includes(c.ch), errors: c.errors,

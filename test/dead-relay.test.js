@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { learnOnPower, worthSaving, idleCandidates, judgeLoads, noFlow, MIN_LEARNED_W } from '../src/monitor/dead-relay.js';
+import { learnOnPower, worthSaving, idleCandidates, judgeLoads, noFlow, droppedTogether, MIN_LEARNED_W } from '../src/monitor/dead-relay.js';
 
 test('noFlow: judged on current when reported — a standby trickle proves the contact is closed', () => {
   assert.equal(noFlow({ apower: 0, current: 0.011 }), false);   // device 10 ch4, 2026-10-08: 0W but 11mA
@@ -66,6 +66,19 @@ test('idleCandidates: idle-while-sibling-draws is evidence; idle-while-all-idle 
   assert.deepEqual(idleCandidates([{ ch: 0, on: true, apower: 0 }, { ch: 1, on: true, apower: 0 }], learned), []);
   assert.deepEqual(idleCandidates([{ ch: 0, on: true, apower: 38 }, { ch: 2, on: true, apower: 0 }], learned), []); // ch2 never had a load
   assert.deepEqual(idleCandidates([{ ch: 0, on: true, apower: 38 }, { ch: 1, on: false, apower: 0 }], learned), []); // off is not idle
+});
+
+test('droppedTogether: a rail drop stops every channel in the same minute; wall switches do not', () => {
+  // both lights last drew at probe 40 → dropped together
+  assert.equal(droppedTogether([0, 3], new Map([[0, 40], [3, 40]])), true);
+  assert.equal(droppedTogether([0, 3], new Map([[0, 40], [3, 41]])), true);   // adjacent probes still count
+  // one switched off at the wall at 12, the other at 40 → not a rail drop
+  assert.equal(droppedTogether([0, 3], new Map([[0, 12], [3, 40]])), false);
+  // a channel switched on into an already-dead unit later doesn't block the pair that dropped together
+  assert.equal(droppedTogether([0, 1, 3], new Map([[0, 40], [1, 20], [3, 40]])), true);
+  // never seen drawing (server just started) → can't be placed in time
+  assert.equal(droppedTogether([0, 3], new Map([[0, 40]])), false);
+  assert.equal(droppedTogether([0], new Map([[0, 40]])), false);
 });
 
 test('judgeLoads: nothing watched → never dead (unmetered Pro 2, or no load learned yet)', () => {
