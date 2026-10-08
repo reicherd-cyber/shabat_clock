@@ -61,14 +61,19 @@ async function verifySwitched(relay, action, commandId) {
   // Intent may have moved on meanwhile — a newer command, a local schedule or
   // the wall switch (both land in current_state via the status topic). Then
   // this command is history and the device is not wrong about it.
-  const [cur] = await query(
-    'SELECT current_state, (SELECT MAX(id) FROM commands WHERE relay_id = ?) AS last_cmd FROM relays WHERE id = ?',
-    [relay.id, relay.id],
-  );
-  if (!cur || Number(cur.last_cmd) !== Number(commandId) || cur.current_state !== action) return;
+  const stillCurrent = async () => {
+    const [cur] = await query(
+      'SELECT current_state, (SELECT MAX(id) FROM commands WHERE relay_id = ?) AS last_cmd FROM relays WHERE id = ?',
+      [relay.id, relay.id],
+    );
+    return !!cur && Number(cur.last_cmd) === Number(commandId) && cur.current_state === action;
+  };
+  if (!(await stillCurrent())) return;
   const { shellyCall, channelFor } = await import('./shelly.js');
   const s = await shellyCall(relay, 'Switch.GetStatus', { id: channelFor(relay.relay_no) }).catch(() => null);
   if (!s || typeof s.output !== 'boolean' || s.output === (action === 'on')) return;
+  // The RPC itself can take seconds — nothing may have superseded us meanwhile.
+  if (!(await stillCurrent())) return;
   await markCommand(commandId, 'failed', 'not_switched');
   await query('UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?', [s.output ? 'on' : 'off', relay.id]);
   await query("INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",

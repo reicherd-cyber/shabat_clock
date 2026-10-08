@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { learnOnPower, worthSaving, learnIdles, judgeLoads, MIN_LEARNED_W } from '../src/monitor/dead-relay.js';
+import { learnOnPower, worthSaving, idleCandidates, judgeLoads, MIN_LEARNED_W } from '../src/monitor/dead-relay.js';
 
 test('learning: only ON readings with a real load teach; up instantly, down slowly', () => {
   assert.equal(learnOnPower(null, false, 60), null);
@@ -53,11 +53,11 @@ test('judgeLoads: known thermostat channels are not watched', () => {
   assert.equal(v.allDead, false);
 });
 
-test('learnIdles: idle-while-sibling-draws marks a thermostat load; idle-while-all-idle teaches nothing', () => {
-  assert.deepEqual(learnIdles([{ ch: 0, on: true, apower: 38 }, { ch: 1, on: true, apower: 0 }], learned, new Set()), [1]);
-  assert.deepEqual(learnIdles([{ ch: 0, on: true, apower: 0 }, { ch: 1, on: true, apower: 0 }], learned, new Set()), []);
-  assert.deepEqual(learnIdles([{ ch: 0, on: true, apower: 38 }, { ch: 1, on: true, apower: 0 }], learned, new Set([1])), []);
-  assert.deepEqual(learnIdles([{ ch: 0, on: true, apower: 38 }, { ch: 2, on: true, apower: 0 }], learned, new Set()), []); // ch2 never had a load
+test('idleCandidates: idle-while-sibling-draws is evidence; idle-while-all-idle is not', () => {
+  assert.deepEqual(idleCandidates([{ ch: 0, on: true, apower: 38 }, { ch: 1, on: true, apower: 0 }], learned), [1]);
+  assert.deepEqual(idleCandidates([{ ch: 0, on: true, apower: 0 }, { ch: 1, on: true, apower: 0 }], learned), []);
+  assert.deepEqual(idleCandidates([{ ch: 0, on: true, apower: 38 }, { ch: 2, on: true, apower: 0 }], learned), []); // ch2 never had a load
+  assert.deepEqual(idleCandidates([{ ch: 0, on: true, apower: 38 }, { ch: 1, on: false, apower: 0 }], learned), []); // off is not idle
 });
 
 test('judgeLoads: nothing watched → never dead (unmetered Pro 2, or no load learned yet)', () => {

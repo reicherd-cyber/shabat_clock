@@ -21,7 +21,7 @@ import { brokerConnected } from '../mqtt/client.js';
 import { shellyCall, shellySetRestoreLast } from '../services/shelly.js';
 import { sendEmail } from '../services/email.js';
 import { describeReset, RESET_HEADLINE } from './reset-reason.js';
-import { learnOnPower, worthSaving, learnIdles, judgeLoads, DEAD_RELAY_PROBES } from './dead-relay.js';
+import { learnOnPower, worthSaving, idleCandidates, judgeLoads, DEAD_RELAY_PROBES, IDLE_PROBES_TO_LEARN } from './dead-relay.js';
 
 const CHECK_INTERVAL_MS = 60_000;
 const RAM_CRITICAL_BYTES = 30_000;      // healthy Pro 2 idles ~120k free; panics start near zero
@@ -135,30 +135,39 @@ async function verifyLoads(device, st, health, channels, alert) {
   const metered = channels.filter((c) => c && c.apower !== null);
   if (!metered.length) return;
   const relays = await query(
-    'SELECT id, relay_no, name, on_power_w, on_idles FROM relays WHERE device_id = ? AND deleted_at IS NULL', [device.id],
-  ).catch(() => []);
+    'SELECT id, relay_no, name, on_power_w, on_idle_probes FROM relays WHERE device_id = ? AND deleted_at IS NULL', [device.id],
+  ).catch((e) => { console.error('[health] relays read:', e.message); return []; });
   const byCh = new Map(relays.map((r) => [r.relay_no - 1, r]));
   const stored = new Map(relays.map((r) => [r.relay_no - 1, r.on_power_w == null ? null : Number(r.on_power_w)]));
-  const idles = new Set(relays.filter((r) => r.on_idles).map((r) => r.relay_no - 1));
+  const idles = new Set(relays.filter((r) => Number(r.on_idle_probes) >= IDLE_PROBES_TO_LEARN).map((r) => r.relay_no - 1));
 
   // The learned draw drifts in memory every probe; the DB copy is refreshed once
   // the drift amounts to >5% (a per-minute UPDATE for a 0.1W wobble is churn).
+  // A NULL in the DB wins over memory — a fresh row (re-register, admin reset)
+  // starts over rather than inheriting the old load's number.
   // updated_at is the humans' column (action-log convention) — learning isn't an edit.
   st.learned ??= new Map();
   const learned = new Map();
   for (const c of metered) {
     const r = byCh.get(c.ch);
     if (!r) continue;
-    const next = learnOnPower(st.learned.get(c.ch) ?? stored.get(c.ch), c.on, c.apower);
+    const prev = stored.get(c.ch) == null ? null : (st.learned.get(c.ch) ?? stored.get(c.ch));
+    const next = learnOnPower(prev, c.on, c.apower);
     st.learned.set(c.ch, next);
     learned.set(c.ch, next);
     if (worthSaving(stored.get(c.ch), next) && active()) {
       await query('UPDATE relays SET on_power_w = ? WHERE id = ?', [next, r.id]).catch(() => {});
     }
   }
-  for (const ch of learnIdles(metered, learned, idles)) {
-    idles.add(ch);
-    if (active()) await query('UPDATE relays SET on_idles = 1 WHERE id = ?', [byCh.get(ch).id]).catch(() => {});
+  // Thermostat evidence accumulates per relay; the count is capped at the
+  // threshold so a long-known urn doesn't cost an UPDATE a minute forever.
+  for (const ch of idleCandidates(metered, learned)) {
+    const r = byCh.get(ch);
+    const n = Number(r.on_idle_probes) + 1;
+    if (n >= IDLE_PROBES_TO_LEARN) idles.add(ch);
+    if (n <= IDLE_PROBES_TO_LEARN && active()) {
+      await query('UPDATE relays SET on_idle_probes = ? WHERE id = ?', [n, r.id]).catch(() => {});
+    }
   }
 
   const { dead, allDead } = judgeLoads(metered, learned, idles);
@@ -192,17 +201,16 @@ async function verifyLoads(device, st, health, channels, alert) {
   const names = dead.map((ch) => `${byCh.get(ch)?.name ?? `ערוץ ${ch + 1}`} (צפוי ~${Math.round(learned.get(ch))}W, נמדד ${metered.find((c) => c.ch === ch).apower}W)`);
   const bullets = names.map((n) => `• ${n}`).join('\n');
 
+  // Dead again within the cooldown of a reboot that had revived it: that IS the
+  // hardware verdict — there is no second reboot to wait for.
+  const recurrence = st.deadRebootProbe == null && st.lastDeadRebootAt != null
+    && Date.now() - st.lastDeadRebootAt < REBOOT_COOLDOWN_MS;
   let rebootedNow = false;
-  if (st.deadRebootProbe == null && active() && Date.now() - st.lastRebootAt > REBOOT_COOLDOWN_MS) {
-    st.lastRebootAt = Date.now();
-    const ok = await shellyCall(device, 'Shelly.Reboot').then(() => true)
-      .catch((e) => { console.error('[health] reboot failed:', e.message); return false; });
-    if (ok) {
-      st.expectReboot = true;
-      st.deadRebootProbe = st.deadProbes;
-      rebootedNow = true;
-      await deviceEvent(device.id, 'error', { kind: 'auto_reboot_dead_relay', channels: chList });
-    }
+  if (st.deadRebootProbe == null && !recurrence && await tryReboot(device, st)) {
+    st.deadRebootProbe = st.deadProbes;
+    st.lastDeadRebootAt = Date.now();
+    rebootedNow = true;
+    await deviceEvent(device.id, 'error', { kind: 'auto_reboot_dead_relay', channels: chList });
   }
 
   if (!st.deadAlerted) {
@@ -216,13 +224,33 @@ async function verifyLoads(device, st, health, channels, alert) {
       `במכשיר "${device.name}" (${device.device_uid}) הקושחה מדווחת שהממסרים הבאים דולקים, אבל כבר ${st.deadProbes} דקות לא זורם דרכם חשמל:\n${bullets}\n\nזה הדפוס של ממסר שלא נסגר פיזית (למשל נפילת מתח פנימית ביחידה) — המכשיר "עונה" אבל הצרכנים כבויים.${healed}`);
   }
 
-  if (st.deadRebootProbe != null && !st.deadHwAlerted && st.deadProbes >= st.deadRebootProbe + DEAD_RELAY_PROBES) {
+  const stillDeadAfterReboot = st.deadRebootProbe != null && st.deadProbes >= st.deadRebootProbe + DEAD_RELAY_PROBES;
+  if (!st.deadHwAlerted && (recurrence || stillDeadAfterReboot)) {
     st.deadHwAlerted = true;
-    recordIncident('relay_hw_fault', device.name, names.join(', '));
-    await deviceEvent(device.id, 'error', { kind: 'relay_hw_fault', channels: chList, detail: names });
+    recordIncident('relay_hw_fault', device.name, `${recurrence ? 'dead again after reboot: ' : ''}${names.join(', ')}`);
+    await deviceEvent(device.id, 'error', { kind: 'relay_hw_fault', recurrence, channels: chList, detail: names });
+    const lead = recurrence
+      ? `אתחול יזום החזיר את הממסרים לפעולה, אבל תוך פחות מ-${Math.round(REBOOT_COOLDOWN_MS / 3600_000)} שעות הם מתו שוב:`
+      : 'גם אחרי אתחול יזום, הממסרים דולקים לפי הקושחה אך לא מעבירים חשמל:';
     await alert(`deadrelay-hw:${device.id}`, `המכשיר "${device.name}" — חשד לתקלת חומרה`,
-      `גם אחרי אתחול יזום, הממסרים במכשיר "${device.name}" (${device.device_uid}) דולקים לפי הקושחה אך לא מעבירים חשמל:\n${bullets}\n\nסביר שזו תקלת חומרה ביחידה (ספק כוח פנימי / ממסרים). מומלץ לנתק ולחבר חשמל ליחידה, ואם זה חוזר — להחליף אותה במסגרת האחריות.`);
+      `${lead} (מכשיר "${device.name}", ${device.device_uid})\n${bullets}\n\nסביר שזו תקלת חומרה ביחידה (ספק כוח פנימי / ממסרים). מומלץ לנתק ולחבר חשמל ליחידה, ואם זה חוזר — להחליף אותה במסגרת האחריות.`);
   }
+}
+
+// A controlled Shelly.Reboot, at most once per REBOOT_COOLDOWN_MS per unit.
+// The cooldown stamp and the "expect the uptime drop" flag are set only when
+// the device accepted the call — a failed RPC must neither burn the cooldown
+// nor swallow the next genuine crash as expected. restore_last on every
+// channel is what makes a reboot safe: the outputs come back as they were.
+async function tryReboot(device, st) {
+  if (!active() || Date.now() - st.lastRebootAt <= REBOOT_COOLDOWN_MS) return false;
+  const ok = await shellyCall(device, 'Shelly.Reboot').then(() => true)
+    .catch((e) => { console.error('[health] reboot failed:', e.message); return false; });
+  if (ok) {
+    st.lastRebootAt = Date.now();
+    st.expectReboot = true;
+  }
+  return ok;
 }
 
 async function checkShelly(device) {
@@ -335,15 +363,9 @@ async function checkShelly(device) {
 
   // Self-heal 1: heap exhaustion precedes the panics that bit us — reboot on OUR
   // terms while it still answers. restore_last guarantees the outputs survive.
-  if (sys.ram_free != null && sys.ram_free < RAM_CRITICAL_BYTES
-      && active() && Date.now() - st.lastRebootAt > REBOOT_COOLDOWN_MS) {
-    st.lastRebootAt = Date.now();
+  if (sys.ram_free != null && sys.ram_free < RAM_CRITICAL_BYTES && await tryReboot(device, st)) {
     recordIncident('auto_reboot', device.name, `ram_free ${sys.ram_free}B < ${RAM_CRITICAL_BYTES}B`);
     await deviceEvent(device.id, 'error', { kind: 'auto_reboot_low_ram', ram_free: sys.ram_free });
-    // Expect the uptime drop only if the reboot was actually accepted — a flag
-    // left set by a failed RPC would swallow the next genuine crash as "expected".
-    st.expectReboot = await shellyCall(device, 'Shelly.Reboot').then(() => true)
-      .catch((e) => { console.error('[health] reboot failed:', e.message); return false; });
     await alert(`autoreboot:${device.id}`, `אתחול יזום למכשיר "${device.name}"`,
       `זיכרון המכשיר "${device.name}" ירד ל-${sys.ram_free} בתים — בוצע אתחול יזום למניעת קריסה. המצב שוחזר אוטומטית.`);
     health.auto_rebooted = true;
