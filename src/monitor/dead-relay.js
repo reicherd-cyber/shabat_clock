@@ -69,8 +69,10 @@ export function idleCandidates(channels, learned) {
 }
 
 // channels: [{ ch (0-based), on, apower|null, current? }], learned: Map ch → on_power_w|null,
-// idles: Set of thermostat-like ch → { watched: [ch…], dead: [ch…], allDead }
-export function judgeLoads(channels, learned, idles = new Set()) {
+// idles: Set of thermostat-like ch, deadSince: Map ch → probe number at which the
+// channel entered its current ON-and-no-flow state (see droppedTogether)
+// → { watched: [ch…], dead: [ch…], allDead } — allDead is THE unit verdict.
+export function judgeLoads(channels, learned, idles = new Set(), deadSince = null) {
   const watched = [];
   const dead = [];
   for (const c of channels) {
@@ -80,20 +82,32 @@ export function judgeLoads(channels, learned, idles = new Set()) {
     watched.push(c.ch);
     if (noFlow(c)) dead.push(c.ch);
   }
-  return { watched, dead, allDead: watched.length >= MIN_WATCHED && dead.length === watched.length };
+  const allDead = watched.length >= MIN_WATCHED && dead.length === watched.length
+    && (deadSince == null || droppedTogether(dead, deadSince));
+  return { watched, dead, allDead };
 }
 
-// Simultaneity: a dead rail drops every channel in the same instant; wall
-// switches are flipped one at a time, seconds or minutes apart. lastDraw maps
-// ch → the probe number at which the channel was last seen drawing. The verdict
-// needs at least MIN_WATCHED dead channels that stopped drawing within
-// DROP_WINDOW_PROBES of each other; channels that went dead later (switched on
-// into an already-dead unit) neither help nor block. A channel never seen
-// drawing since the server started can't be placed in time and doesn't count —
-// so a unit that was already dead at deploy gets no verdict until it revives.
+// Simultaneity: a dead rail silences every channel in the same instant; wall
+// switches are flipped one at a time. deadSince maps ch → the probe at which
+// the channel ENTERED its ON-and-no-flow state (cleared whenever it draws or
+// is off). The verdict needs at least MIN_WATCHED dead channels whose onsets
+// lie within DROP_WINDOW_PROBES of each other. Onset, not last draw, so that a
+// rail which died at night with the loads OFF is caught the moment the morning
+// schedule switches two lights on into it (both onsets in the same probe), and
+// a unit already dead when the server starts is judged from its first probe.
+// Channels that went dead at other times neither help nor block.
+//
+// Resolution is one probe (60s), and the per-channel reads inside a probe are
+// sequential, so a drop can straddle two probe numbers — hence a window of 1,
+// never 0. This separates "minutes apart" (wall switches on the way out of
+// the building, a thermostat that idled earlier) from "same instant"; two
+// mechanical switches flipped within the same minute still look like a drop.
+// Known blind spot: a rail drop that catches only ONE loaded channel on at
+// that moment (the other already off at its wall switch) is not detected until
+// two channels are switched on into it together.
 export const DROP_WINDOW_PROBES = 1;
-export function droppedTogether(dead, lastDraw, window = DROP_WINDOW_PROBES) {
-  const times = dead.map((ch) => lastDraw.get(ch)).filter((p) => p != null).sort((a, b) => a - b);
+export function droppedTogether(dead, deadSince, window = DROP_WINDOW_PROBES) {
+  const times = dead.map((ch) => deadSince.get(ch)).filter((p) => p != null).sort((a, b) => a - b);
   for (let i = 0; i + MIN_WATCHED - 1 < times.length; i++) {
     if (times[i + MIN_WATCHED - 1] - times[i] <= window) return true;
   }

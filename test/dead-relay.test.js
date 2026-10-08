@@ -68,17 +68,47 @@ test('idleCandidates: idle-while-sibling-draws is evidence; idle-while-all-idle 
   assert.deepEqual(idleCandidates([{ ch: 0, on: true, apower: 38 }, { ch: 1, on: false, apower: 0 }], learned), []); // off is not idle
 });
 
-test('droppedTogether: a rail drop stops every channel in the same minute; wall switches do not', () => {
-  // both lights last drew at probe 40 → dropped together
+test('droppedTogether: a rail drop silences channels in the same minute; wall switches do not', () => {
+  // both lights went dead at probe 40 → dropped together
   assert.equal(droppedTogether([0, 3], new Map([[0, 40], [3, 40]])), true);
-  assert.equal(droppedTogether([0, 3], new Map([[0, 40], [3, 41]])), true);   // adjacent probes still count
+  assert.equal(droppedTogether([0, 3], new Map([[0, 40], [3, 41]])), true);   // a drop can straddle two probes
+  assert.equal(droppedTogether([0, 3], new Map([[0, 40], [3, 42]])), false);  // window boundary
   // one switched off at the wall at 12, the other at 40 → not a rail drop
   assert.equal(droppedTogether([0, 3], new Map([[0, 12], [3, 40]])), false);
-  // a channel switched on into an already-dead unit later doesn't block the pair that dropped together
+  // a channel that went dead at another time neither helps nor blocks the pair
   assert.equal(droppedTogether([0, 1, 3], new Map([[0, 40], [1, 20], [3, 40]])), true);
-  // never seen drawing (server just started) → can't be placed in time
-  assert.equal(droppedTogether([0, 3], new Map([[0, 40]])), false);
+  assert.equal(droppedTogether([0, 1, 3], new Map([[0, 40], [1, 20], [3, 60]])), false);
+  // a lone channel is never a pair
   assert.equal(droppedTogether([0], new Map([[0, 40]])), false);
+  assert.equal(droppedTogether([0, 3], new Map([[0, 40]])), false);
+});
+
+test('judgeLoads with onsets: the unit verdict is gated by simultaneity', () => {
+  const dead2 = [{ ch: 0, on: true, apower: 0, current: 0 }, { ch: 3, on: true, apower: 0, current: 0 }];
+  // the morning case: rail died at night, schedule switched both lights on at probe 500 → both onsets 500
+  assert.equal(judgeLoads(dead2, learned, new Set(), new Map([[0, 500], [3, 500]])).allDead, true);
+  // wall switches flipped half an hour apart
+  assert.equal(judgeLoads(dead2, learned, new Set(), new Map([[0, 470], [3, 500]])).allDead, false);
+  // no onset map → the ungated rule (as before)
+  assert.equal(judgeLoads(dead2, learned).allDead, true);
+});
+
+test('onset bookkeeping: a dead channel keeps its onset for the whole streak, any draw or off clears it', () => {
+  // mirrors verifyLoads: deadSince set on entering ON-and-no-flow, deleted otherwise
+  const deadSince = new Map();
+  const step = (probeNo, chans) => {
+    for (const c of chans) {
+      if (c.on && !(c.current >= 0.005)) { if (!deadSince.has(c.ch)) deadSince.set(c.ch, probeNo); } else deadSince.delete(c.ch);
+    }
+  };
+  step(1, [{ ch: 0, on: true, current: 0.3 }]);   // drawing
+  step(2, [{ ch: 0, on: true, current: 0 }]);     // dead at 2
+  step(3, [{ ch: 0, on: true, current: 0 }]);     // still 2
+  assert.equal(deadSince.get(0), 2);
+  step(4, [{ ch: 0, on: false, current: 0 }]);    // off clears
+  assert.equal(deadSince.has(0), false);
+  step(5, [{ ch: 0, on: true, current: 0.011 }]); // a standby trickle is alive
+  assert.equal(deadSince.has(0), false);
 });
 
 test('judgeLoads: nothing watched → never dead (unmetered Pro 2, or no load learned yet)', () => {
