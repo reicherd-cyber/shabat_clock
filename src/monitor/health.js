@@ -21,7 +21,7 @@ import { brokerConnected } from '../mqtt/client.js';
 import { shellyCall, shellySetRestoreLast } from '../services/shelly.js';
 import { sendEmail } from '../services/email.js';
 import { describeReset, RESET_HEADLINE } from './reset-reason.js';
-import { learnOnPower, worthSaving, judgeLoads, DEAD_RELAY_PROBES } from './dead-relay.js';
+import { learnOnPower, worthSaving, learnIdles, judgeLoads, DEAD_RELAY_PROBES } from './dead-relay.js';
 
 const CHECK_INTERVAL_MS = 60_000;
 const RAM_CRITICAL_BYTES = 30_000;      // healthy Pro 2 idles ~120k free; panics start near zero
@@ -135,26 +135,36 @@ async function verifyLoads(device, st, health, channels, alert) {
   const metered = channels.filter((c) => c && c.apower !== null);
   if (!metered.length) return;
   const relays = await query(
-    'SELECT id, relay_no, name, on_power_w FROM relays WHERE device_id = ? AND deleted_at IS NULL', [device.id],
+    'SELECT id, relay_no, name, on_power_w, on_idles FROM relays WHERE device_id = ? AND deleted_at IS NULL', [device.id],
   ).catch(() => []);
   const byCh = new Map(relays.map((r) => [r.relay_no - 1, r]));
-  const learned = new Map(relays.map((r) => [r.relay_no - 1, r.on_power_w == null ? null : Number(r.on_power_w)]));
+  const stored = new Map(relays.map((r) => [r.relay_no - 1, r.on_power_w == null ? null : Number(r.on_power_w)]));
+  const idles = new Set(relays.filter((r) => r.on_idles).map((r) => r.relay_no - 1));
 
+  // The learned draw drifts in memory every probe; the DB copy is refreshed once
+  // the drift amounts to >5% (a per-minute UPDATE for a 0.1W wobble is churn).
+  // updated_at is the humans' column (action-log convention) — learning isn't an edit.
+  st.learned ??= new Map();
+  const learned = new Map();
   for (const c of metered) {
     const r = byCh.get(c.ch);
     if (!r) continue;
-    const next = learnOnPower(learned.get(c.ch), c.on, c.apower);
-    if (worthSaving(learned.get(c.ch), next) && active()) {
-      // updated_at is the humans' column (action-log convention) — a learned reading isn't an edit.
+    const next = learnOnPower(st.learned.get(c.ch) ?? stored.get(c.ch), c.on, c.apower);
+    st.learned.set(c.ch, next);
+    learned.set(c.ch, next);
+    if (worthSaving(stored.get(c.ch), next) && active()) {
       await query('UPDATE relays SET on_power_w = ? WHERE id = ?', [next, r.id]).catch(() => {});
-      learned.set(c.ch, next);
     }
   }
+  for (const ch of learnIdles(metered, learned, idles)) {
+    idles.add(ch);
+    if (active()) await query('UPDATE relays SET on_idles = 1 WHERE id = ?', [byCh.get(ch).id]).catch(() => {});
+  }
 
-  const { dead, allDead } = judgeLoads(metered, learned);
+  const { dead, allDead } = judgeLoads(metered, learned, idles);
   health.channels = metered.map((c) => ({
     ch: c.ch + 1, name: byCh.get(c.ch)?.name ?? null, on: c.on, apower: c.apower,
-    expected_w: learned.get(c.ch), dead: dead.includes(c.ch), errors: c.errors,
+    expected_w: learned.get(c.ch), idles: idles.has(c.ch), dead: dead.includes(c.ch), errors: c.errors,
   }));
 
   const errored = metered.filter((c) => c.errors.length);
@@ -167,29 +177,51 @@ async function verifyLoads(device, st, health, channels, alert) {
     }
   }
 
-  st.deadProbes = allDead ? (st.deadProbes ?? 0) + 1 : 0;
-  if (!allDead) { st.deadRebooted = false; return; }
+  // One "dead streak" = consecutive all-dead probes. Per streak: one incident +
+  // email at DEAD_RELAY_PROBES, one reboot as soon as the cooldown allows it
+  // (not only on that exact probe), and one hardware verdict if the outputs are
+  // still dead DEAD_RELAY_PROBES probes after the reboot. Probes the unit
+  // misses while rebooting return before this point, so the streak survives them.
+  if (!allDead) {
+    st.deadProbes = 0; st.deadAlerted = false; st.deadRebootProbe = null; st.deadHwAlerted = false;
+    return;
+  }
+  st.deadProbes = (st.deadProbes ?? 0) + 1;
+  if (st.deadProbes < DEAD_RELAY_PROBES) return;
+  const chList = dead.map((ch) => ch + 1);
   const names = dead.map((ch) => `${byCh.get(ch)?.name ?? `ערוץ ${ch + 1}`} (צפוי ~${Math.round(learned.get(ch))}W, נמדד ${metered.find((c) => c.ch === ch).apower}W)`);
+  const bullets = names.map((n) => `• ${n}`).join('\n');
 
-  if (st.deadProbes === DEAD_RELAY_PROBES) {
-    recordIncident('relay_not_switching', device.name, names.join(', '));
-    await deviceEvent(device.id, 'error', { kind: 'relay_not_switching', channels: dead.map((ch) => ch + 1), detail: names });
-    let healed = '';
-    if (active() && Date.now() - st.lastRebootAt > REBOOT_COOLDOWN_MS) {
-      st.lastRebootAt = Date.now();
+  let rebootedNow = false;
+  if (st.deadRebootProbe == null && active() && Date.now() - st.lastRebootAt > REBOOT_COOLDOWN_MS) {
+    st.lastRebootAt = Date.now();
+    const ok = await shellyCall(device, 'Shelly.Reboot').then(() => true)
+      .catch((e) => { console.error('[health] reboot failed:', e.message); return false; });
+    if (ok) {
       st.expectReboot = true;
-      st.deadRebooted = true;
-      await deviceEvent(device.id, 'error', { kind: 'auto_reboot_dead_relay', channels: dead.map((ch) => ch + 1) });
-      await shellyCall(device, 'Shelly.Reboot').catch((e) => console.error('[health] reboot failed:', e.message));
-      healed = '\n\nבוצע אתחול יזום למכשיר (המצב של הממסרים נשמר ומשוחזר אוטומטית). אם הצריכה לא חוזרת אחרי האתחול — תישלח התראה נוספת: תקלת חומרה.';
+      st.deadRebootProbe = st.deadProbes;
+      rebootedNow = true;
+      await deviceEvent(device.id, 'error', { kind: 'auto_reboot_dead_relay', channels: chList });
     }
+  }
+
+  if (!st.deadAlerted) {
+    st.deadAlerted = true;
+    recordIncident('relay_not_switching', device.name, names.join(', '));
+    await deviceEvent(device.id, 'error', { kind: 'relay_not_switching', channels: chList, detail: names });
+    const healed = rebootedNow
+      ? '\n\nבוצע אתחול יזום למכשיר (המצב של הממסרים נשמר ומשוחזר אוטומטית). אם הצריכה לא חוזרת אחרי האתחול — תישלח התראה נוספת: תקלת חומרה.'
+      : '\n\nאתחול יזום יבוצע אוטומטית ברגע שתקופת הצינון מאתחול קודם תסתיים.';
     await alert(`deadrelay:${device.id}`, `המכשיר "${device.name}" — ממסרים דולקים אך לא מעבירים חשמל`,
-      `במכשיר "${device.name}" (${device.device_uid}) הקושחה מדווחת שהממסרים הבאים דולקים, אבל כבר ${DEAD_RELAY_PROBES} דקות לא זורם דרכם חשמל:\n${names.map((n) => `• ${n}`).join('\n')}\n\nזה הדפוס של ממסר שלא נסגר פיזית (למשל נפילת מתח פנימית ביחידה) — המכשיר "עונה" אבל הצרכנים כבויים.${healed}`);
-  } else if (st.deadProbes === DEAD_RELAY_PROBES * 2 && st.deadRebooted) {
+      `במכשיר "${device.name}" (${device.device_uid}) הקושחה מדווחת שהממסרים הבאים דולקים, אבל כבר ${st.deadProbes} דקות לא זורם דרכם חשמל:\n${bullets}\n\nזה הדפוס של ממסר שלא נסגר פיזית (למשל נפילת מתח פנימית ביחידה) — המכשיר "עונה" אבל הצרכנים כבויים.${healed}`);
+  }
+
+  if (st.deadRebootProbe != null && !st.deadHwAlerted && st.deadProbes >= st.deadRebootProbe + DEAD_RELAY_PROBES) {
+    st.deadHwAlerted = true;
     recordIncident('relay_hw_fault', device.name, names.join(', '));
-    await deviceEvent(device.id, 'error', { kind: 'relay_hw_fault', channels: dead.map((ch) => ch + 1), detail: names });
+    await deviceEvent(device.id, 'error', { kind: 'relay_hw_fault', channels: chList, detail: names });
     await alert(`deadrelay-hw:${device.id}`, `המכשיר "${device.name}" — חשד לתקלת חומרה`,
-      `גם אחרי אתחול יזום, הממסרים במכשיר "${device.name}" (${device.device_uid}) דולקים לפי הקושחה אך לא מעבירים חשמל:\n${names.map((n) => `• ${n}`).join('\n')}\n\nסביר שזו תקלת חומרה ביחידה (ספק כוח פנימי / ממסרים). מומלץ לנתק ולחבר חשמל ליחידה, ואם זה חוזר — להחליף אותה במסגרת האחריות.`);
+      `גם אחרי אתחול יזום, הממסרים במכשיר "${device.name}" (${device.device_uid}) דולקים לפי הקושחה אך לא מעבירים חשמל:\n${bullets}\n\nסביר שזו תקלת חומרה ביחידה (ספק כוח פנימי / ממסרים). מומלץ לנתק ולחבר חשמל ליחידה, ואם זה חוזר — להחליף אותה במסגרת האחריות.`);
   }
 }
 
@@ -306,10 +338,12 @@ async function checkShelly(device) {
   if (sys.ram_free != null && sys.ram_free < RAM_CRITICAL_BYTES
       && active() && Date.now() - st.lastRebootAt > REBOOT_COOLDOWN_MS) {
     st.lastRebootAt = Date.now();
-    st.expectReboot = true;
     recordIncident('auto_reboot', device.name, `ram_free ${sys.ram_free}B < ${RAM_CRITICAL_BYTES}B`);
     await deviceEvent(device.id, 'error', { kind: 'auto_reboot_low_ram', ram_free: sys.ram_free });
-    await shellyCall(device, 'Shelly.Reboot').catch((e) => console.error('[health] reboot failed:', e.message));
+    // Expect the uptime drop only if the reboot was actually accepted — a flag
+    // left set by a failed RPC would swallow the next genuine crash as "expected".
+    st.expectReboot = await shellyCall(device, 'Shelly.Reboot').then(() => true)
+      .catch((e) => { console.error('[health] reboot failed:', e.message); return false; });
     await alert(`autoreboot:${device.id}`, `אתחול יזום למכשיר "${device.name}"`,
       `זיכרון המכשיר "${device.name}" ירד ל-${sys.ram_free} בתים — בוצע אתחול יזום למניעת קריסה. המצב שוחזר אוטומטית.`);
     health.auto_rebooted = true;

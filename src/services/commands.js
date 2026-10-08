@@ -3,6 +3,7 @@
 import { query } from '../db/pool.js';
 import { errors } from '../config/errors.js';
 import { ACK_TIMEOUT_MS } from '../config/constants.js';
+import { isPrimary } from '../config/role.js';
 
 // §5.4 invariant (acceptance test 16): a schedule-sourced command must carry its
 // execution row, and its schedule_id/action are COPIED from that row — the scheduler
@@ -48,31 +49,30 @@ async function markCommand(id, status, failReason = null) {
 // The Switch.Set reply only says the firmware ACCEPTED the command. A unit
 // whose relays have dropped (2026-09-10, device 14: white screen, internal
 // rail sag) acks happily while nothing moves. So, off the caller's clock, read
-// the channel back after the load had time to start: output disagreeing with
-// what was asked flips the command to failed; ON with a known load drawing
-// nothing is logged for the health monitor's dead-relay verdict (which needs
-// every loaded channel dead before it acts — one idle thermostat is not a fault).
+// the channel back: output disagreeing with what was asked flips the command
+// to failed and corrects the relay state. Whether a load actually DRAWS is the
+// health monitor's call (dead-relay.js) — a single reading can't tell a dead
+// relay from an idle thermostat. Primary instance only: passive servers on the
+// shared DB never take notes (config/role.js).
 const VERIFY_AFTER_MS = 2500;
 async function verifySwitched(relay, action, commandId) {
-  await new Promise((r) => setTimeout(r, VERIFY_AFTER_MS));
-  const { shellyCall } = await import('./shelly.js');
-  const s = await shellyCall(relay, 'Switch.GetStatus', { id: relay.relay_no - 1 }).catch(() => null);
-  if (!s || typeof s.output !== 'boolean') return;
-  const wantOn = action === 'on';
-  if (s.output !== wantOn) {
-    await markCommand(commandId, 'failed', 'not_switched');
-    await query("INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
-      [relay.device_id, JSON.stringify({ kind: 'not_switched', relay_no: relay.relay_no, wanted: action, output: s.output, command_id: Number(commandId) })]);
-    return;
-  }
-  if (!wantOn || typeof s.apower !== 'number') return;
-  const { MIN_LEARNED_W, DEAD_W } = await import('../monitor/dead-relay.js');
-  const [row] = await query('SELECT on_power_w FROM relays WHERE id = ?', [relay.id]);
-  const expected = row?.on_power_w == null ? null : Number(row.on_power_w);
-  if (expected != null && expected >= MIN_LEARNED_W && s.apower < DEAD_W) {
-    await query("INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
-      [relay.device_id, JSON.stringify({ kind: 'switch_no_load', relay_no: relay.relay_no, expected_w: expected, apower: s.apower, command_id: Number(commandId) })]);
-  }
+  if (!isPrimary()) return;
+  await new Promise((r) => setTimeout(r, VERIFY_AFTER_MS).unref());
+  // Intent may have moved on meanwhile — a newer command, a local schedule or
+  // the wall switch (both land in current_state via the status topic). Then
+  // this command is history and the device is not wrong about it.
+  const [cur] = await query(
+    'SELECT current_state, (SELECT MAX(id) FROM commands WHERE relay_id = ?) AS last_cmd FROM relays WHERE id = ?',
+    [relay.id, relay.id],
+  );
+  if (!cur || Number(cur.last_cmd) !== Number(commandId) || cur.current_state !== action) return;
+  const { shellyCall, channelFor } = await import('./shelly.js');
+  const s = await shellyCall(relay, 'Switch.GetStatus', { id: channelFor(relay.relay_no) }).catch(() => null);
+  if (!s || typeof s.output !== 'boolean' || s.output === (action === 'on')) return;
+  await markCommand(commandId, 'failed', 'not_switched');
+  await query('UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP() WHERE id = ?', [s.output ? 'on' : 'off', relay.id]);
+  await query("INSERT INTO device_events (device_id, event, payload) VALUES (?, 'error', ?)",
+    [relay.device_id, JSON.stringify({ kind: 'not_switched', relay_no: relay.relay_no, wanted: action, output: s.output, command_id: Number(commandId) })]);
 }
 
 // Full immediate flow: insert → offline check → publish → block ≤5s for ack.

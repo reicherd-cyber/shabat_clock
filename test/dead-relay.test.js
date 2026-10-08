@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { learnOnPower, worthSaving, judgeLoads, MIN_LEARNED_W } from '../src/monitor/dead-relay.js';
+import { learnOnPower, worthSaving, learnIdles, judgeLoads, MIN_LEARNED_W } from '../src/monitor/dead-relay.js';
 
 test('learning: only ON readings with a real load teach; up instantly, down slowly', () => {
   assert.equal(learnOnPower(null, false, 60), null);
@@ -12,15 +12,24 @@ test('learning: only ON readings with a real load teach; up instantly, down slow
   assert.equal(learnOnPower(1500, false, 0), 1500);
 });
 
-test('worthSaving: first value always, then only a >5% move', () => {
+test('drift accumulates in memory and is saved once it passes 5% of the stored value', () => {
+  const stored = 1500;
+  let mem = stored;
+  let saved = 0;
+  for (let i = 0; i < 5; i++) {
+    mem = learnOnPower(mem, true, 100);
+    if (worthSaving(stored, mem)) saved++;
+  }
+  assert.ok(mem < 1200, `drifted to ${mem}`);
+  assert.ok(saved >= 1, 'a sustained lower draw must eventually reach the DB');
   assert.equal(worthSaving(null, 60), true);
   assert.equal(worthSaving(60, 61), false);
-  assert.equal(worthSaving(60, 70), true);
   assert.equal(worthSaving(60, null), false);
 });
 
+const learned = new Map([[0, 40], [1, 1500], [2, 5], [3, 60]]);
+
 test('judgeLoads: one idle channel is not a verdict, every watched channel dead is', () => {
-  const learned = new Map([[0, 40], [1, 1500], [2, 5], [3, 60]]);
   // lights on and drawing, AC on but thermostat idle → not all dead
   let v = judgeLoads([{ ch: 0, on: true, apower: 38 }, { ch: 1, on: true, apower: 0 }, { ch: 2, on: true, apower: 0 }, { ch: 3, on: false, apower: 0 }], learned);
   assert.deepEqual(v.watched, [0, 1]);     // ch2: learned draw too small; ch3: off
@@ -30,6 +39,25 @@ test('judgeLoads: one idle channel is not a verdict, every watched channel dead 
   v = judgeLoads([{ ch: 0, on: true, apower: 0 }, { ch: 1, on: false, apower: 0 }, { ch: 2, on: false, apower: 0 }, { ch: 3, on: true, apower: 0.2 }], learned);
   assert.deepEqual(v.dead, [0, 3]);
   assert.equal(v.allDead, true);
+});
+
+test('judgeLoads: a lone loaded channel at 0W (boiler at night) is never a verdict', () => {
+  const v = judgeLoads([{ ch: 1, on: true, apower: 0 }, { ch: 0, on: false, apower: 0 }], learned);
+  assert.deepEqual(v.dead, [1]);
+  assert.equal(v.allDead, false);
+});
+
+test('judgeLoads: known thermostat channels are not watched', () => {
+  const v = judgeLoads([{ ch: 0, on: true, apower: 0 }, { ch: 1, on: true, apower: 0 }], learned, new Set([1]));
+  assert.deepEqual(v.watched, [0]);
+  assert.equal(v.allDead, false);
+});
+
+test('learnIdles: idle-while-sibling-draws marks a thermostat load; idle-while-all-idle teaches nothing', () => {
+  assert.deepEqual(learnIdles([{ ch: 0, on: true, apower: 38 }, { ch: 1, on: true, apower: 0 }], learned, new Set()), [1]);
+  assert.deepEqual(learnIdles([{ ch: 0, on: true, apower: 0 }, { ch: 1, on: true, apower: 0 }], learned, new Set()), []);
+  assert.deepEqual(learnIdles([{ ch: 0, on: true, apower: 38 }, { ch: 1, on: true, apower: 0 }], learned, new Set([1])), []);
+  assert.deepEqual(learnIdles([{ ch: 0, on: true, apower: 38 }, { ch: 2, on: true, apower: 0 }], learned, new Set()), []); // ch2 never had a load
 });
 
 test('judgeLoads: nothing watched → never dead (unmetered Pro 2, or no load learned yet)', () => {

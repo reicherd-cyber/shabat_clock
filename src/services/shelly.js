@@ -3,7 +3,7 @@
 // Actions are absolute on/off (matches the system's idempotent command model).
 const HTTP_TIMEOUT_MS = 5000;
 
-function channelFor(relayNo) {
+export function channelFor(relayNo) {
   return Number(relayNo) - 1;
 }
 

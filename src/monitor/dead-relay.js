@@ -7,12 +7,16 @@
 //
 // Each relay learns its typical ON draw (relays.on_power_w) from the minute
 // probes; a channel is only "watched" once that draw is a real load. A
-// thermostat-driven load (AC compressor, urn) legitimately idles near zero, so a
-// single dead channel proves nothing — the verdict is "every watched channel is
-// dead at once", held for DEAD_RELAY_PROBES consecutive minutes.
+// thermostat-driven load (AC compressor, urn, boiler) legitimately idles at
+// zero, so: (1) a channel seen idling while a sibling draws normally is marked
+// on_idles and never watched again; (2) the verdict needs at least MIN_WATCHED
+// channels, all dead at once — one lone channel at 0W proves nothing (a boiler
+// alone at night would otherwise earn the unit a reboot and a "replace it"
+// email); (3) held for DEAD_RELAY_PROBES consecutive minutes.
 export const MIN_LEARNED_W = 15;   // learned draw below this: no load worth watching (standby, LED)
 export const DEAD_W = 0.5;         // reading below this while ON: nothing flows through the relay
 export const DEAD_RELAY_PROBES = 10; // consecutive minutes before it's an incident
+export const MIN_WATCHED = 2;      // fewer loaded channels ON than this → no verdict possible
 
 // Learned typical ON power: jumps up instantly, drifts down 5%/probe toward
 // lower readings (a season's AC at full tilt doesn't pin the number forever).
@@ -25,25 +29,39 @@ export function learnOnPower(prev, on, apower) {
 }
 const round1 = (x) => Math.round(x * 10) / 10;
 
-// Write the learned number only when it moved — a per-minute UPDATE per relay
-// for a 0.1W wobble is churn.
-export function worthSaving(prev, next) {
+// Persist the learned number only when it has moved >5% from the STORED value —
+// the caller keeps the drifting copy in memory, so small steps add up and get
+// saved once they amount to something.
+export function worthSaving(stored, next) {
   if (next == null) return false;
-  if (prev == null) return true;
-  return Math.abs(next - prev) / prev > 0.05;
+  if (stored == null) return true;
+  return Math.abs(next - stored) / stored > 0.05;
 }
 
-// channels: [{ ch (0-based), on, apower|null }], learned: Map ch → on_power_w|null
-// → { watched: [ch…], dead: [ch…], allDead }
-export function judgeLoads(channels, learned) {
+const loaded = (c) => c && c.on && typeof c.apower === 'number';
+
+// Channels proven thermostat-like this probe: ON, a real load learned, reading
+// idle — while a sibling on the same unit is drawing normally (so the relay
+// rail is alive and this zero is the load's own doing). Not already known.
+export function learnIdles(channels, learned, idles) {
+  const alive = channels.some((c) => loaded(c) && c.apower >= MIN_LEARNED_W);
+  if (!alive) return [];
+  return channels
+    .filter((c) => loaded(c) && c.apower < DEAD_W && (learned.get(c.ch) ?? 0) >= MIN_LEARNED_W && !idles.has(c.ch))
+    .map((c) => c.ch);
+}
+
+// channels: [{ ch (0-based), on, apower|null }], learned: Map ch → on_power_w|null,
+// idles: Set of thermostat-like ch → { watched: [ch…], dead: [ch…], allDead }
+export function judgeLoads(channels, learned, idles = new Set()) {
   const watched = [];
   const dead = [];
   for (const c of channels) {
-    if (!c || !c.on || typeof c.apower !== 'number') continue;
+    if (!loaded(c) || idles.has(c.ch)) continue;
     const w = learned.get(c.ch);
     if (w == null || w < MIN_LEARNED_W) continue;
     watched.push(c.ch);
     if (c.apower < DEAD_W) dead.push(c.ch);
   }
-  return { watched, dead, allDead: watched.length > 0 && dead.length === watched.length };
+  return { watched, dead, allDead: watched.length >= MIN_WATCHED && dead.length === watched.length };
 }

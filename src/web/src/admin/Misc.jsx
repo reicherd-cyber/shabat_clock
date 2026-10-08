@@ -131,7 +131,8 @@ export function DeviceHealth() {
               {d.auto_rebooted && <Badge ok={false}>אותחל יזומות</Badge>}
               {d.channels?.map((c) => (
                 <span key={c.ch} className={`text-xs ${c.dead || c.errors?.length ? 'text-red-600 font-bold' : 'text-muted'}`}
-                  title={c.expected_w != null ? `צריכה אופיינית כשדולק: ~${Math.round(c.expected_w)}W` : 'עומס טרם נלמד'}>
+                  title={c.idles ? 'עומס תרמוסטטי (נראה במנוחה ב-0W) — לא נכלל בבדיקת הממסרים'
+                    : c.expected_w != null ? `צריכה אופיינית כשדולק: ~${Math.round(c.expected_w)}W` : 'עומס טרם נלמד'}>
                   {c.name || `ערוץ ${c.ch}`}: {c.on ? `${Math.round(c.apower)}W` : 'כבוי'}{c.errors?.length ? ` ⚠ ${c.errors.join(',')}` : ''}
                 </span>
               ))}
