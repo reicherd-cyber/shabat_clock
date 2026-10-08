@@ -21,7 +21,8 @@
 // This check is for the whole unit going dead; one bad contact is the
 // customer's "the boiler never heats" call.
 export const MIN_LEARNED_W = 15;   // learned draw below this: no load worth watching (standby, LED)
-export const DEAD_W = 0.5;         // reading below this while ON: nothing flows through the relay
+export const DEAD_A = 0.005;       // current below this while ON: nothing flows through the relay
+export const DEAD_W = 0.5;         // fallback for a model that meters power but not current
 export const DEAD_RELAY_PROBES = 10; // consecutive minutes before it's an incident
 export const MIN_WATCHED = 2;      // fewer loaded channels ON than this → no verdict possible
 export const IDLE_PROBES_TO_LEARN = 30; // cumulative idle-with-live-sibling probes before "thermostat"
@@ -48,6 +49,13 @@ export function worthSaving(stored, next) {
 
 const loaded = (c) => c && c.on && typeof c.apower === 'number';
 
+// "Nothing flows" is judged on CURRENT, not watts: a load switched off at its
+// own wall switch or idling on its thermostat still leaks milliamps through a
+// closed contact (LED drivers, an AC indoor unit, anything with electronics —
+// the 2026-10-08 probe showed 11–13mA at 0–1W on such channels), while an
+// open relay reads exactly 0.000A. Watts stay the yardstick for "has a load".
+export const noFlow = (c) => (typeof c.current === 'number' ? c.current < DEAD_A : c.apower < DEAD_W);
+
 // Channels idling THIS probe that could be thermostat-driven: ON, a real load
 // learned, reading idle — while a sibling on the same unit is drawing normally
 // (so the relay rail is alive and this zero is the load's own doing). The
@@ -56,11 +64,11 @@ export function idleCandidates(channels, learned) {
   const alive = channels.some((c) => loaded(c) && c.apower >= MIN_LEARNED_W);
   if (!alive) return [];
   return channels
-    .filter((c) => loaded(c) && c.apower < DEAD_W && (learned.get(c.ch) ?? 0) >= MIN_LEARNED_W)
+    .filter((c) => loaded(c) && noFlow(c) && (learned.get(c.ch) ?? 0) >= MIN_LEARNED_W)
     .map((c) => c.ch);
 }
 
-// channels: [{ ch (0-based), on, apower|null }], learned: Map ch → on_power_w|null,
+// channels: [{ ch (0-based), on, apower|null, current? }], learned: Map ch → on_power_w|null,
 // idles: Set of thermostat-like ch → { watched: [ch…], dead: [ch…], allDead }
 export function judgeLoads(channels, learned, idles = new Set()) {
   const watched = [];
@@ -70,7 +78,7 @@ export function judgeLoads(channels, learned, idles = new Set()) {
     const w = learned.get(c.ch);
     if (w == null || w < MIN_LEARNED_W) continue;
     watched.push(c.ch);
-    if (c.apower < DEAD_W) dead.push(c.ch);
+    if (noFlow(c)) dead.push(c.ch);
   }
   return { watched, dead, allDead: watched.length >= MIN_WATCHED && dead.length === watched.length };
 }

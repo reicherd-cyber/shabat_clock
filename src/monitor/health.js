@@ -172,7 +172,7 @@ async function verifyLoads(device, st, health, channels, alert) {
 
   const { dead, allDead } = judgeLoads(metered, learned, idles);
   health.channels = metered.map((c) => ({
-    ch: c.ch + 1, name: byCh.get(c.ch)?.name ?? null, on: c.on, apower: c.apower,
+    ch: c.ch + 1, name: byCh.get(c.ch)?.name ?? null, on: c.on, apower: c.apower, current: c.current,
     expected_w: learned.get(c.ch), idles: idles.has(c.ch), dead: dead.includes(c.ch), errors: c.errors,
   }));
 
@@ -198,7 +198,7 @@ async function verifyLoads(device, st, health, channels, alert) {
   st.deadProbes = (st.deadProbes ?? 0) + 1;
   if (st.deadProbes < DEAD_RELAY_PROBES) return;
   const chList = dead.map((ch) => ch + 1);
-  const names = dead.map((ch) => `${byCh.get(ch)?.name ?? `ערוץ ${ch + 1}`} (צפוי ~${Math.round(learned.get(ch))}W, נמדד ${metered.find((c) => c.ch === ch).apower}W)`);
+  const names = dead.map((ch) => `${byCh.get(ch)?.name ?? `ערוץ ${ch + 1}`} (צפוי ~${Math.round(learned.get(ch))}W, נמדד ${metered.find((c) => c.ch === ch).apower}W / ${Math.round((metered.find((c) => c.ch === ch).current ?? 0) * 1000)}mA)`);
   const bullets = names.map((n) => `• ${n}`).join('\n');
 
   // Dead again within the cooldown of a reboot that had revived it: that IS the
@@ -305,7 +305,7 @@ async function checkShelly(device) {
   // only record of what the relays were doing a minute earlier.
   health.temps = [];
   const outputs = [];
-  const channels = []; // {ch, on, apower|null, errors[]} — metering only on PM models
+  const channels = []; // {ch, on, apower|null, current|null, errors[]} — metering only on PM models
   for (let ch = 0; ch < (device.relay_count || 2); ch++) {
     const s = await shellyCall(device, 'Switch.GetStatus', { id: ch }).catch(() => null);
     if (!s) break;

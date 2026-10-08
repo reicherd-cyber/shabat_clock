@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { learnOnPower, worthSaving, idleCandidates, judgeLoads, MIN_LEARNED_W } from '../src/monitor/dead-relay.js';
+import { learnOnPower, worthSaving, idleCandidates, judgeLoads, noFlow, MIN_LEARNED_W } from '../src/monitor/dead-relay.js';
+
+test('noFlow: judged on current when reported — a standby trickle proves the contact is closed', () => {
+  assert.equal(noFlow({ apower: 0, current: 0.011 }), false);   // device 10 ch4, 2026-10-08: 0W but 11mA
+  assert.equal(noFlow({ apower: 1, current: 0.013 }), false);
+  assert.equal(noFlow({ apower: 0, current: 0 }), true);        // an open relay: exactly nothing
+  assert.equal(noFlow({ apower: 0 }), true);                    // no current field → watts fallback
+  assert.equal(noFlow({ apower: 3 }), false);
+});
 
 test('learning: only ON readings with a real load teach; up instantly, down slowly', () => {
   assert.equal(learnOnPower(null, false, 60), null);
