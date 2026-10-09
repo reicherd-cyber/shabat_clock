@@ -76,13 +76,16 @@ const EXIT_FOR = { tzeit: 'shabbat_end', tzeit_rt: 'shabbat_end_rt' };
 const onEve = (x) => NIGHT_KINDS.has(x.kind) || (x.kind === 'clock' && minuteOf(x) >= 19 * 60 + 30);
 const dayKeysOf = (x) => (x.holidays || []).filter((h) => DAY_HOLIDAY_KEYS.includes(h));
 const sameDay = (a, b) => dayKeysOf(a).some((h) => dayKeysOf(b).includes(h));
-// Every (off, on) pair in the plan where the OFF lands on the eve before the ON.
+// The OFF (on the eve) precedes this ON when the ON is daytime (next civil
+// day), or when both sit on the eve and the ON's rank comes later (ON צאת
+// הכוכבים with OFF שקיעה: off 16:40, on 17:20 — stays on all week too).
+const offBeforeOn = (off, on) => !onEve(on) || minuteOf(on) > minuteOf(off);
+// Every (off, on) pair in the plan where the OFF lands before the ON.
 export function eveOffProblems(schedulers) {
   const hol = schedulers.filter((x) => x && x.repeat_type === 'holiday' && x.action);
   const out = [];
   for (const off of hol.filter((x) => x.action === 'off' && NIGHT_KINDS.has(x.kind))) {
-    const on = hol.find((x) => x.action === 'on' && !onEve(x) && sameDay(x, off));
-    if (on) out.push({ off, on });
+    for (const on of hol.filter((x) => x.action === 'on' && sameDay(x, off) && offBeforeOn(off, x))) out.push({ off, on });
   }
   return out;
 }
@@ -580,7 +583,7 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
               </p>
             )}
             {eveOffProblems(plan.schedulers).map((p) => (
-              <p key={p.off.uid} className="text-xs text-off bg-off-bg rounded-xl px-3 py-2">
+              <p key={`${p.off.uid}-${p.on.uid}`} className="text-xs text-off bg-off-bg rounded-xl px-3 py-2">
                 ⚠ "{schedulerSummary(p.off)}" יחול בליל שבת — לפני "{schedulerSummary(p.on)}", והמכשיר יישאר דולק. לכיבוי במוצאי שבת ערכו אותו ובחרו "צאת שבת".
               </p>
             ))}

@@ -133,7 +133,6 @@ export async function manualEvents({ userId, from, days }) {
      JOIN relays r ON r.id = c.relay_id
      JOIN devices d ON d.id = r.device_id
      WHERE c.status = 'acked' AND c.source IN ('web','ivr','admin')
-       AND (c.verify IS NULL OR c.verify NOT IN ('stuck_on','not_switched'))
        AND r.user_id = ? AND r.deleted_at IS NULL AND d.is_enabled = TRUE
        AND c.requested_at >= DATE_SUB(?, INTERVAL 1 DAY)
      ORDER BY c.requested_at`,
@@ -145,7 +144,9 @@ export async function manualEvents({ userId, from, days }) {
     const date = ymdStr(p);
     if (date < fromStr || date > endStr) continue;
     out.push({
-      schedule_id: null, repeat_type: null, reversed: false, manual: true, source: c.source,
+      // seq = requested_at order: two switches in the same minute replay in
+      // the order they were pressed (OFF then ON ends ON), not ON-before-OFF.
+      schedule_id: null, repeat_type: null, reversed: false, manual: true, source: c.source, seq: out.length,
       relay_id: Number(c.relay_id), relay_name: c.relay_name,
       device_id: Number(c.device_id), device_name: c.device_name,
       date, time: `${pad2(p.hh)}:${pad2(p.mm)}`, action: c.action,
@@ -169,6 +170,7 @@ export async function calendarTimeline({ userId, from, days }) {
     const ka = key(a); const kb = key(b);
     if (ka !== kb) return ka < kb ? -1 : 1;
     if (sid(a) !== sid(b)) return sid(a) - sid(b);
+    if (a.manual && b.manual) return a.seq - b.seq;
     return a.action === b.action ? 0 : (a.action === 'on' ? -1 : 1);
   });
 }

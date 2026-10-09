@@ -487,8 +487,7 @@ export default function Calendar() {
         const warn = VERIFY_WARN.has(res.verify);
         flash(`${warn ? '⚠' : '✓'} ${relay.name}: ${VERIFY_HE[res.verify]}${res.verify === 'flow' && res.verify_ma != null ? ` (${res.verify_ma}mA)` : ''}`, warn);
       }
-      await loadRelays();
-      setReload((n) => n + 1); // the switch is now part of the timeline; `now` moves with it
+      setReload((n) => n + 1); // refetches timeline + relays: the switch is in it, `now` moves with it
     } catch (e) {
       setError(e);
     } finally {
@@ -501,10 +500,19 @@ export default function Calendar() {
   // enough for month-long yearly ranges whose ON fired weeks before the window.
   const fetchFrom = shiftYmd(cells[0].date, -35);
   const fetchDays = cells.length + 37;
+  // A new WINDOW shows the loader; a refresh of the same window (quick switch,
+  // the periodic tick) keeps the grid up and swaps the data underneath. The
+  // relays are refreshed together with the timeline — the reality pin compares
+  // the two, and a stale current_state would pin the wrong state.
+  const lastWindow = useRef(null);
   useEffect(() => {
-    setEvents(null);
-    api.get(`/schedules/calendar?from=${fetchFrom}&days=${fetchDays}`)
-      .then((r) => { setEvents(r.events); setNow(r.now || null); })
+    const key = `${fetchFrom}/${fetchDays}`;
+    if (lastWindow.current !== key) { lastWindow.current = key; setEvents(null); }
+    Promise.all([
+      api.get(`/schedules/calendar?from=${fetchFrom}&days=${fetchDays}`),
+      reload ? loadRelays() : null,
+    ])
+      .then(([r]) => { setEvents(r.events); setNow(r.now || null); })
       .catch(setError);
   }, [fetchFrom, fetchDays, reload]);
 
