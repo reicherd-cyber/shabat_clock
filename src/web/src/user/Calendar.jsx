@@ -488,6 +488,7 @@ export default function Calendar() {
         flash(`${warn ? '⚠' : '✓'} ${relay.name}: ${VERIFY_HE[res.verify]}${res.verify === 'flow' && res.verify_ma != null ? ` (${res.verify_ma}mA)` : ''}`, warn);
       }
       await loadRelays();
+      setReload((n) => n + 1); // the switch is now part of the timeline; `now` moves with it
     } catch (e) {
       setError(e);
     } finally {
@@ -509,7 +510,10 @@ export default function Calendar() {
 
   useEffect(() => {
     const t = setInterval(() => setNowTick(Date.now()), 60000);
-    return () => clearInterval(t);
+    // The timeline's "now" and any switches made elsewhere (phone, another
+    // tab) come from the server — refresh it every few minutes while open.
+    const r = setInterval(() => setReload((n) => n + 1), 5 * 60000);
+    return () => { clearInterval(t); clearInterval(r); };
   }, []);
 
   // Fixed color per relay id — the shared app-wide assignment (ui.jsx), so the
@@ -589,10 +593,15 @@ export default function Calendar() {
       if (!m.has(ev.relay_id)) m.set(ev.relay_id, []);
       m.get(ev.relay_id).push(ev);
     }
-    if (now) {
+    // The pin only makes sense when the loaded window contains "now" (a month
+    // far ahead has none of today's events to replay up to) and the device is
+    // actually reporting — an offline unit's current_state is a stale memory.
+    const fetchEnd = shiftYmd(fetchFrom, fetchDays - 1);
+    if (now && now.date >= fetchFrom && now.date <= fetchEnd) {
       const nowKey = `${now.date}T${now.time}`;
       const keyOf = (ev) => `${ev.date}T${ev.time}`;
       for (const r of relays) {
+        if (!r.online) continue;
         const real = r.current_state === 'on' ? 'on' : r.current_state === 'off' ? 'off' : null;
         if (!real) continue;
         const list = m.get(r.id) || [];
@@ -605,7 +614,7 @@ export default function Calendar() {
       }
     }
     return m;
-  }, [events, relays, now]);
+  }, [events, relays, now, fetchFrom, fetchDays]);
 
   // Flat state ribbon for one relay on one day: green segments wherever the
   // channel is scheduled ON — including a block carried in from yesterday's

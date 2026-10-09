@@ -65,17 +65,26 @@ const dayKey = (s) => {
 // before a daytime הדלקה of the same day; the exit anchor is "צאת שבת". A real
 // plan did this 2026-10-09 (מנחה שב"ק: ON 16:30, OFF צאת הכוכבים+60 → the OFF
 // landed on Friday and the AC would have stayed on all week).
+// Only DAY keys are affected: on a מוצאי key every anchor resolves on the day
+// itself. The server's rule for a clock ON is "at/after the eve's sunset =
+// the night"; without a date the client can't know that sunset (16:40 in
+// winter, 19:50 in summer), so anything before 19:30 is treated as daytime —
+// erring toward warning, since the miss (a summer ON at 18:00 paired with a
+// Friday-night OFF) is exactly the bug class this catches.
 const NIGHT_KINDS = new Set(['sunset', 'tzeit', 'tzeit_rt', 'chatzot_layla', 'candles']);
 const EXIT_FOR = { tzeit: 'shabbat_end', tzeit_rt: 'shabbat_end_rt' };
-const onEve = (x) => NIGHT_KINDS.has(x.kind) || (x.kind === 'clock' && minuteOf(x) >= 17 * 60);
-const sameHoliday = (a, b) => (a.holidays || []).some((h) => (b.holidays || []).includes(h));
-export function eveOffProblem(schedulers) {
+const onEve = (x) => NIGHT_KINDS.has(x.kind) || (x.kind === 'clock' && minuteOf(x) >= 19 * 60 + 30);
+const dayKeysOf = (x) => (x.holidays || []).filter((h) => DAY_HOLIDAY_KEYS.includes(h));
+const sameDay = (a, b) => dayKeysOf(a).some((h) => dayKeysOf(b).includes(h));
+// Every (off, on) pair in the plan where the OFF lands on the eve before the ON.
+export function eveOffProblems(schedulers) {
   const hol = schedulers.filter((x) => x && x.repeat_type === 'holiday' && x.action);
+  const out = [];
   for (const off of hol.filter((x) => x.action === 'off' && NIGHT_KINDS.has(x.kind))) {
-    const on = hol.find((x) => x.action === 'on' && !onEve(x) && sameHoliday(x, off));
-    if (on) return { off, on };
+    const on = hol.find((x) => x.action === 'on' && !onEve(x) && sameDay(x, off));
+    if (on) out.push({ off, on });
   }
-  return null;
+  return out;
 }
 
 const TYPE_ORDER = { weekly: 0, holiday: 1, yearly: 2, once: 3 };
@@ -283,8 +292,7 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
     || (anchored && (s.offset === '' || Number.isNaN(Number(s.offset))));
   const previous = others.filter((o) => o.uid !== s.uid);
   // Shown while editing either side of a שבת pair whose OFF lands on the eve.
-  const found = eveOffProblem([...previous, s]);
-  const eveProblem = found && (found.off.uid === s.uid || found.on.uid === s.uid) ? found : null;
+  const eveProblem = eveOffProblems([...previous, s]).find((p) => p.off.uid === s.uid || p.on.uid === s.uid) || null;
   return (
     <div className="space-y-3">
       {/* what the plan already holds — a glance back, with a way to fix any of them */}
@@ -571,14 +579,11 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
                 עדיין אין תזמונים — הוסיפו עם "הוסף תזמון" למטה. כל תזמון הוא פעולה אחת: הדלקה או כיבוי.
               </p>
             )}
-            {(() => {
-              const p = eveOffProblem(plan.schedulers);
-              return p && (
-                <p className="text-xs text-off bg-off-bg rounded-xl px-3 py-2">
-                  ⚠ "{schedulerSummary(p.off)}" יחול בליל שבת — לפני "{schedulerSummary(p.on)}", והמכשיר יישאר דולק. לכיבוי במוצאי שבת ערכו אותו ובחרו "צאת שבת".
-                </p>
-              );
-            })()}
+            {eveOffProblems(plan.schedulers).map((p) => (
+              <p key={p.off.uid} className="text-xs text-off bg-off-bg rounded-xl px-3 py-2">
+                ⚠ "{schedulerSummary(p.off)}" יחול בליל שבת — לפני "{schedulerSummary(p.on)}", והמכשיר יישאר דולק. לכיבוי במוצאי שבת ערכו אותו ובחרו "צאת שבת".
+              </p>
+            ))}
             {plan.schedulers.map((s, i) => (
               <div key={s.uid} className="flex items-center gap-2 border border-line rounded-xl px-3 py-2">
                 <span className="text-xs text-muted w-4 shrink-0">{i + 1}</span>

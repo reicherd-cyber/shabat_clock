@@ -9,7 +9,12 @@ import { resolveForDate, DEFAULT_REGION } from './zmanim.js';
 import { holidaySideEvents, parseHolidayKeys, yearlyRangesAround, inExclusionRange } from './holidays.js';
 
 const pad2 = (n) => String(n).padStart(2, '0');
-const ymdStr = (dt) => `${dt.y}-${pad2(dt.mo)}-${pad2(dt.d)}`;
+export const ymdStr = (dt) => `${dt.y}-${pad2(dt.mo)}-${pad2(dt.d)}`;
+// The clock the timeline is keyed on — same wall-time format as every event.
+export function calendarNow(tz = 'Asia/Jerusalem', at = new Date()) {
+  const p = localParts(at, tz);
+  return { date: ymdStr(p), time: `${pad2(p.hh)}:${pad2(p.mm)}` };
+}
 const ymdParts = (v) => {
   const [y, mo, d] = String(v).slice(0, 10).split('-').map(Number);
   return { y, mo, d };
@@ -128,6 +133,7 @@ export async function manualEvents({ userId, from, days }) {
      JOIN relays r ON r.id = c.relay_id
      JOIN devices d ON d.id = r.device_id
      WHERE c.status = 'acked' AND c.source IN ('web','ivr','admin')
+       AND (c.verify IS NULL OR c.verify NOT IN ('stuck_on','not_switched'))
        AND r.user_id = ? AND r.deleted_at IS NULL AND d.is_enabled = TRUE
        AND c.requested_at >= DATE_SUB(?, INTERVAL 1 DAY)
      ORDER BY c.requested_at`,
@@ -148,16 +154,21 @@ export async function manualEvents({ userId, from, days }) {
   return out;
 }
 
-// Scheduled + manual, chronological (ties: ON before OFF, as expandSchedules).
+// Scheduled + manual, chronological. Ties keep expandSchedules' order exactly
+// (lower schedule id first, then ON before OFF); a manual switch in the same
+// minute as a scheduled event sorts after it — the person acted on what the
+// schedule had just done.
 export async function calendarTimeline({ userId, from, days }) {
   const [scheduled, manual] = await Promise.all([
     calendarEvents({ userId, from, days }),
     manualEvents({ userId, from, days }),
   ]);
   const key = (e) => `${e.date}T${e.time}`;
+  const sid = (e) => (e.schedule_id == null ? Number.MAX_SAFE_INTEGER : e.schedule_id);
   return [...scheduled, ...manual].sort((a, b) => {
     const ka = key(a); const kb = key(b);
     if (ka !== kb) return ka < kb ? -1 : 1;
+    if (sid(a) !== sid(b)) return sid(a) - sid(b);
     return a.action === b.action ? 0 : (a.action === 'on' ? -1 : 1);
   });
 }
