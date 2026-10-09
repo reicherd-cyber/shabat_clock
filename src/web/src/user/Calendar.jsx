@@ -418,6 +418,7 @@ export default function Calendar() {
   const [calMode, setCalMode] = useState('greg'); // 'greg' | 'heb' — לועזי / עברי
   const [cursor, setCursor] = useState(() => { const t = new Date(); return new Date(t.getFullYear(), t.getMonth(), t.getDate()); });
   const [events, setEvents] = useState(null);
+  const [now, setNow] = useState(null); // server clock (local date/time) for the reality pin
   const [relays, setRelays] = useState([]);
   const [hiddenRelays, setHiddenRelays] = useState(new Set());
   const [nowTick, setNowTick] = useState(Date.now());
@@ -502,7 +503,7 @@ export default function Calendar() {
   useEffect(() => {
     setEvents(null);
     api.get(`/schedules/calendar?from=${fetchFrom}&days=${fetchDays}`)
-      .then((r) => setEvents(r.events))
+      .then((r) => { setEvents(r.events); setNow(r.now || null); })
       .catch(setError);
   }, [fetchFrom, fetchDays, reload]);
 
@@ -577,14 +578,34 @@ export default function Calendar() {
   // All events per relay, chronological (the server sorts) — the day matrix
   // replays them like the device would (ON/OFF are absolute) to know the
   // channel's true state at every minute of the shown day.
+  // The timeline from the server holds scheduled events AND acknowledged manual
+  // switches. At "now" the relay's own reported state wins over whatever the
+  // replay says (a missed schedule, a device-side switch); the future continues
+  // from there until the next scheduled event — "scheduled ON but switched off
+  // by the user shows OFF until the next הדלקה" (2026-10-09).
   const eventsByRelay = useMemo(() => {
     const m = new Map();
     for (const ev of (events || [])) {
       if (!m.has(ev.relay_id)) m.set(ev.relay_id, []);
       m.get(ev.relay_id).push(ev);
     }
+    if (now) {
+      const nowKey = `${now.date}T${now.time}`;
+      const keyOf = (ev) => `${ev.date}T${ev.time}`;
+      for (const r of relays) {
+        const real = r.current_state === 'on' ? 'on' : r.current_state === 'off' ? 'off' : null;
+        if (!real) continue;
+        const list = m.get(r.id) || [];
+        let replayed = 'off';
+        for (const ev of list) { if (keyOf(ev) > nowKey) break; replayed = ev.action; }
+        if (replayed === real) continue;
+        list.push({ relay_id: r.id, relay_name: r.name, device_name: r.device, schedule_id: null, sync: true, date: now.date, time: now.time, action: real });
+        list.sort((a, b) => (keyOf(a) < keyOf(b) ? -1 : keyOf(a) > keyOf(b) ? 1 : 0));
+        m.set(r.id, list);
+      }
+    }
     return m;
-  }, [events]);
+  }, [events, relays, now]);
 
   // Flat state ribbon for one relay on one day: green segments wherever the
   // channel is scheduled ON — including a block carried in from yesterday's
@@ -599,14 +620,17 @@ export default function Calendar() {
       sid = ev.schedule_id;
     }
     const segs = [];
+    // Manual switches and the reality pin are marked on the block's times.
+    const tag = (ev) => (ev.sync ? ' (בפועל)' : ev.manual ? ' (ידני)' : '');
     let cur = on ? { startMin: 0, sid, cont: 'up', from: null } : null;
     for (const ev of list) {
       if (ev.date !== dayStr) continue;
       const m = toMin(ev.time);
       if (ev.action === 'on' && !cur) {
-        cur = { startMin: m, sid: ev.schedule_id, from: ev.time };
+        cur = { startMin: m, sid: ev.schedule_id, from: ev.time + tag(ev) };
       } else if (ev.action === 'off' && cur) {
-        segs.push({ ...cur, endMin: Math.max(m, cur.startMin + 1), to: ev.time, label: cur.from ? `${cur.from}–${ev.time}` : `עד ${ev.time}` });
+        const to = ev.time + tag(ev);
+        segs.push({ ...cur, endMin: Math.max(m, cur.startMin + 1), to, label: cur.from ? `${cur.from}–${to}` : `עד ${to}` });
         cur = null;
       }
     }
@@ -653,8 +677,8 @@ export default function Calendar() {
           return (
             <div key={j}
               className={`absolute px-2 py-0.5 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50 ${stateColors ? '' : 'rounded-md'}`}
-              onClick={(e) => { e.stopPropagation(); hoverTip.hide(); openEdit(s.sid); }}
-              {...hoverTip.bind(blockTitle(s), [`${s.relay_name} · ${s.device_name}`, 'לחיצה לעריכה'])}
+              onClick={(e) => { e.stopPropagation(); hoverTip.hide(); if (s.sid) openEdit(s.sid); }}
+              {...hoverTip.bind(blockTitle(s), [`${s.relay_name} · ${s.device_name}`, s.sid ? 'לחיצה לעריכה' : 'מצב בפועל — לא תזמון'])}
               style={{
                 top: (s.startMin / 60) * HOUR_PX,
                 height: h,
@@ -810,8 +834,8 @@ export default function Calendar() {
                       const h = Math.max(7, ((s.endMin - s.startMin) / 1440) * BAND_H - 1);
                       return (
                         <div key={`${c.date}-${j}`} className="absolute px-1.5 overflow-hidden text-ink shadow-sm cursor-pointer hover:ring-1 hover:ring-accent/50"
-                          onClick={(e) => { e.stopPropagation(); hoverTip.hide(); openEdit(s.sid); }}
-                          {...hoverTip.bind(blockTitle(s), [`${r.name} · ${r.device}`, 'לחיצה לעריכה'])}
+                          onClick={(e) => { e.stopPropagation(); hoverTip.hide(); if (s.sid) openEdit(s.sid); }}
+                          {...hoverTip.bind(blockTitle(s), [`${r.name} · ${r.device}`, s.sid ? 'לחיצה לעריכה' : 'מצב בפועל — לא תזמון'])}
                           style={{
                             top, height: h, insetInlineStart: 2, insetInlineEnd: 2,
                             backgroundColor: `color-mix(in srgb, ${colorOf(r.id)} 25%, white)`,

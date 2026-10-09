@@ -60,6 +60,24 @@ const dayKey = (s) => {
   if (s.calendar === 'heb') return Number(s.heb_month) * 100 + Number(s.heb_day);
   return Number(String(s.date).replace(/-/g, '')) || 0;
 };
+// A שבת/חג plan whose כיבוי is anchored to the NIGHT (שקיעה / צאת הכוכבים /
+// חצות הלילה / כניסת שבת) resolves on the evening that STARTS the day — i.e.
+// before a daytime הדלקה of the same day; the exit anchor is "צאת שבת". A real
+// plan did this 2026-10-09 (מנחה שב"ק: ON 16:30, OFF צאת הכוכבים+60 → the OFF
+// landed on Friday and the AC would have stayed on all week).
+const NIGHT_KINDS = new Set(['sunset', 'tzeit', 'tzeit_rt', 'chatzot_layla', 'candles']);
+const EXIT_FOR = { tzeit: 'shabbat_end', tzeit_rt: 'shabbat_end_rt' };
+const onEve = (x) => NIGHT_KINDS.has(x.kind) || (x.kind === 'clock' && minuteOf(x) >= 17 * 60);
+const sameHoliday = (a, b) => (a.holidays || []).some((h) => (b.holidays || []).includes(h));
+export function eveOffProblem(schedulers) {
+  const hol = schedulers.filter((x) => x && x.repeat_type === 'holiday' && x.action);
+  for (const off of hol.filter((x) => x.action === 'off' && NIGHT_KINDS.has(x.kind))) {
+    const on = hol.find((x) => x.action === 'on' && !onEve(x) && sameHoliday(x, off));
+    if (on) return { off, on };
+  }
+  return null;
+}
+
 const TYPE_ORDER = { weekly: 0, holiday: 1, yearly: 2, once: 3 };
 export const schedulerCompare = (a, b) =>
   (TYPE_ORDER[a.repeat_type] ?? 9) - (TYPE_ORDER[b.repeat_type] ?? 9)
@@ -264,6 +282,9 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
     || (!anchored && !s.time)
     || (anchored && (s.offset === '' || Number.isNaN(Number(s.offset))));
   const previous = others.filter((o) => o.uid !== s.uid);
+  // Shown while editing either side of a שבת pair whose OFF lands on the eve.
+  const found = eveOffProblem([...previous, s]);
+  const eveProblem = found && (found.off.uid === s.uid || found.on.uid === s.uid) ? found : null;
   return (
     <div className="space-y-3">
       {/* what the plan already holds — a glance back, with a way to fix any of them */}
@@ -374,6 +395,17 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
               ? 'זמן שקיעה/צאת הכוכבים על "יום" = הערב שבו הוא נכנס (ליל שבת); על "מוצאי" = הערב שאחרי היציאה.'
               : 'שעה קבועה על "יום": בוקר וצהריים = היום עצמו, שעת ערב = הלילה שבו הוא נכנס (23:00 בשבת = ליל שבת).'}
           </p>
+        )}
+        {eveProblem && (
+          <div className="rounded-lg bg-off-bg text-off text-xs px-3 py-2 space-y-1.5">
+            <div>
+              ⚠ הכיבוי ב{anchorLabel(eveProblem.off.kind, 'holiday')} יחול בערב שבו נכנס היום (ליל שבת) — לפני ההדלקה
+              {' '}"{schedulerSummary(eveProblem.on)}". המכשיר יישאר דולק עד שמישהו יכבה אותו. לכיבוי במוצאי שבת בחרו "צאת שבת".
+            </div>
+            {eveProblem.off.uid === s.uid && (
+              <Button variant="ghost" onClick={() => set({ kind: EXIT_FOR[s.kind] || 'shabbat_end' })}>החלף ל"צאת שבת"</Button>
+            )}
+          </div>
         )}
       </div>)}
       {s.action && anchored && (
@@ -539,6 +571,14 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
                 עדיין אין תזמונים — הוסיפו עם "הוסף תזמון" למטה. כל תזמון הוא פעולה אחת: הדלקה או כיבוי.
               </p>
             )}
+            {(() => {
+              const p = eveOffProblem(plan.schedulers);
+              return p && (
+                <p className="text-xs text-off bg-off-bg rounded-xl px-3 py-2">
+                  ⚠ "{schedulerSummary(p.off)}" יחול בליל שבת — לפני "{schedulerSummary(p.on)}", והמכשיר יישאר דולק. לכיבוי במוצאי שבת ערכו אותו ובחרו "צאת שבת".
+                </p>
+              );
+            })()}
             {plan.schedulers.map((s, i) => (
               <div key={s.uid} className="flex items-center gap-2 border border-line rounded-xl px-3 py-2">
                 <span className="text-xs text-muted w-4 shrink-0">{i + 1}</span>

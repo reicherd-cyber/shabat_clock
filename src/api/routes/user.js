@@ -14,7 +14,7 @@ import { createSchedule, updateSchedule, deleteSchedule, listSchedules, savePlan
 import { getHistory } from '../../services/history.js';
 import { logAction, actorStr } from '../../services/audit.js';
 import { REGIONS } from '../../services/zmanim.js';
-import { calendarEvents } from '../../services/calendar.js';
+import { calendarTimeline } from '../../services/calendar.js';
 import { localParts } from '../../services/time.js';
 import { answerSupportQuestion } from '../../services/support.js';
 import { listReplies, markRepliesSeen, insertReply, cleanReplyBody } from '../../services/supportThread.js';
@@ -305,7 +305,15 @@ userRouter.get('/schedules/calendar', async (req, res, next) => {
     const p = localParts(new Date(), 'Asia/Jerusalem');
     const from = m ? { y: +m[1], mo: +m[2], d: +m[3] } : { y: p.y, mo: p.mo, d: p.d };
     const days = Math.min(Math.max(Number(req.query.days) || 42, 1), 92);
-    res.json({ from, days, events: await calendarEvents({ userId: req.auth.userId, from, days }) });
+    // `now` lets the client pin the replayed state to the relay's real state at
+    // this moment (manual switches are in the timeline; the device's own state
+    // is the truth from here on until the next scheduled event).
+    const pad2 = (n) => String(n).padStart(2, '0');
+    res.json({
+      from, days,
+      now: { date: `${p.y}-${pad2(p.mo)}-${pad2(p.d)}`, time: `${pad2(p.hh)}:${pad2(p.mm)}` },
+      events: await calendarTimeline({ userId: req.auth.userId, from, days }),
+    });
   } catch (e) { next(e); }
 });
 

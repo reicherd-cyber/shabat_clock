@@ -4,7 +4,7 @@
 // holiday schedules expand every שבת/חג block in range — so the calendar shows
 // the real future times, not just the upcoming one.
 import { query } from '../db/pool.js';
-import { shiftDate, dowOfDate, timeToMinutes, minutesToHHMM } from './time.js';
+import { shiftDate, dowOfDate, timeToMinutes, minutesToHHMM, localParts } from './time.js';
 import { resolveForDate, DEFAULT_REGION } from './zmanim.js';
 import { holidaySideEvents, parseHolidayKeys, yearlyRangesAround, inExclusionRange } from './holidays.js';
 
@@ -110,6 +110,56 @@ export function expandSchedules(rows, { from, days }) {
     return a.action === b.action ? 0 : (a.action === 'on' ? -1 : 1);
   });
   return events;
+}
+
+// What actually happened: acknowledged manual switches (web / phone / admin)
+// as dated events in the device's local time, so the calendar's state replay
+// reflects reality — "scheduled ON but the user switched it off" shows OFF
+// until the next scheduled ON (user ask 2026-10-09). Schedule-sourced
+// commands are the projected events themselves; failed ones never moved
+// anything. Past only — the future is the schedules'.
+export async function manualEvents({ userId, from, days }) {
+  const fromStr = ymdStr(from);
+  const endStr = ymdStr(shiftDate(from, days - 1));
+  const rows = await query(
+    `SELECT c.action, c.source, c.requested_at, r.id AS relay_id, r.name AS relay_name,
+            d.id AS device_id, d.name AS device_name, d.timezone
+     FROM commands c
+     JOIN relays r ON r.id = c.relay_id
+     JOIN devices d ON d.id = r.device_id
+     WHERE c.status = 'acked' AND c.source IN ('web','ivr','admin')
+       AND r.user_id = ? AND r.deleted_at IS NULL AND d.is_enabled = TRUE
+       AND c.requested_at >= DATE_SUB(?, INTERVAL 1 DAY)
+     ORDER BY c.requested_at`,
+    [userId, `${fromStr} 00:00:00`],
+  );
+  const out = [];
+  for (const c of rows) {
+    const p = localParts(new Date(c.requested_at), c.timezone || 'Asia/Jerusalem');
+    const date = ymdStr(p);
+    if (date < fromStr || date > endStr) continue;
+    out.push({
+      schedule_id: null, repeat_type: null, reversed: false, manual: true, source: c.source,
+      relay_id: Number(c.relay_id), relay_name: c.relay_name,
+      device_id: Number(c.device_id), device_name: c.device_name,
+      date, time: `${pad2(p.hh)}:${pad2(p.mm)}`, action: c.action,
+    });
+  }
+  return out;
+}
+
+// Scheduled + manual, chronological (ties: ON before OFF, as expandSchedules).
+export async function calendarTimeline({ userId, from, days }) {
+  const [scheduled, manual] = await Promise.all([
+    calendarEvents({ userId, from, days }),
+    manualEvents({ userId, from, days }),
+  ]);
+  const key = (e) => `${e.date}T${e.time}`;
+  return [...scheduled, ...manual].sort((a, b) => {
+    const ka = key(a); const kb = key(b);
+    if (ka !== kb) return ka < kb ? -1 : 1;
+    return a.action === b.action ? 0 : (a.action === 'on' ? -1 : 1);
+  });
 }
 
 export async function calendarEvents({ userId, from, days }) {
