@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Children, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 // Command verification verdicts (services/commands.js verifyCommand) and
@@ -257,8 +257,8 @@ export function SearchSelect({ value, onChange, options, allLabel = 'הכל', pl
     <div ref={box} className={`relative ${className}`}>
       <input
         className={`border border-line rounded-[10px] px-3 py-2 pl-7 bg-surface w-full text-sm focus:outline-none focus:border-accent ${selected ? 'font-medium' : ''}`}
-        value={open ? q : (selected ? selected.label : allLabel)}
-        placeholder={open ? placeholder : allLabel}
+        value={open ? q : (selected ? selected.label : (allLabel ?? ''))}
+        placeholder={open ? placeholder : (allLabel ?? placeholder)}
         onFocus={() => { setOpen(true); setQ(''); }}
         onClick={() => setOpen(true)}
         onChange={(e) => { setQ(e.target.value); setOpen(true); }}
@@ -267,7 +267,7 @@ export function SearchSelect({ value, onChange, options, allLabel = 'הכל', pl
           if (e.key === 'Enter' && s && shown[0]) { pick(shown[0].value); e.currentTarget.blur(); }
         }}
       />
-      {selected && !open ? (
+      {selected && !open && allLabel != null ? (
         <button type="button" className="absolute left-2 top-1/2 -translate-y-1/2 text-muted hover:text-ink leading-none cursor-pointer" title="נקה"
           onMouseDown={(e) => e.preventDefault()} onClick={() => pick('')}>×</button>
       ) : (
@@ -275,7 +275,7 @@ export function SearchSelect({ value, onChange, options, allLabel = 'הכל', pl
       )}
       {open && (
         <div className="absolute z-30 mt-1 w-full min-w-48 max-h-64 overflow-y-auto bg-surface border border-line rounded-[10px] shadow-card">
-          {!s && (
+          {!s && allLabel != null && (
             <button type="button" className={`w-full text-right px-3 py-2 text-sm hover:bg-surface2 cursor-pointer ${!selected ? 'text-muted' : ''}`}
               onMouseDown={(e) => e.preventDefault()} onClick={() => pick('')}>{allLabel}</button>
           )}
@@ -291,6 +291,26 @@ export function SearchSelect({ value, onChange, options, allLabel = 'הכל', pl
         </div>
       )}
     </div>
+  );
+}
+
+// Type-to-search drop-in for a filter <Select>: keeps the <option> children
+// (the ''-valued one, if any, is the "all" choice; none → no clearing) and the
+// event-shaped onChange, renders SearchSelect so every filter can be typed into.
+export function FilterSelect({ value, onChange, children, className = '', placeholder = 'חיפוש…' }) {
+  const options = [];
+  let allLabel = null;
+  for (const c of Children.toArray(children)) {
+    if (!c || !c.props) continue;
+    const label = Children.toArray(c.props.children).map((x) => (typeof x === 'string' || typeof x === 'number' ? String(x) : '')).join('').trim();
+    const v = c.props.value ?? label;
+    if (String(v) === '') { allLabel = label || 'הכל'; continue; }
+    options.push({ value: String(v), label, hint: c.props['data-hint'] });
+  }
+  const cls = /\bw-|\bflex-1\b|\bmin-w-/.test(className) ? className : `${className} w-44`;
+  return (
+    <SearchSelect className={cls} value={value == null ? '' : String(value)} onChange={(v) => onChange({ target: { value: v } })}
+      options={options} allLabel={allLabel} placeholder={placeholder} />
   );
 }
 
@@ -381,12 +401,12 @@ export const RANGE_LOG = [...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom'];
 
 export function HourSelect({ value, onChange }) {
   return (
-    <Select className="py-2 text-sm" value={value} onChange={(e) => onChange(e.target.value)}>
+    <FilterSelect className="w-28" value={value} onChange={(e) => onChange(e.target.value)} placeholder="שעה…">
       <option value="">כל היום</option>
       {Array.from({ length: 24 }, (_, h) => (
         <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
       ))}
-    </Select>
+    </FilterSelect>
   );
 }
 
@@ -396,9 +416,9 @@ export function HourSelect({ value, onChange }) {
 export function RangeFilter({ value, onChange, keys = RANGE_DEFAULT, custom = {}, onCustom, hours = false, className = 'w-44' }) {
   return (
     <>
-      <Select className={`py-2 text-sm ${className}`} value={value} onChange={(e) => onChange(e.target.value)} aria-label="תקופה">
+      <FilterSelect className={className} value={value} onChange={(e) => onChange(e.target.value)} placeholder="תקופה…">
         {keys.map((k) => <option key={k} value={k}>{RANGE_LABELS[k] || k}</option>)}
-      </Select>
+      </FilterSelect>
       {value === 'custom' && (
         <>
           <label className="text-muted text-sm flex items-center gap-1">מ־

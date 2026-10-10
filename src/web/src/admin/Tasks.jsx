@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
+import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead , FilterSelect } from '../ui.jsx';
 import { Plus, Trash2, Pencil, Check, CalendarClock, GripVertical, ChevronDown, ListChecks, X, ArrowUp, ArrowDown } from 'lucide-react';
 
 // משימות — לוח מטלות פנימי לצוות: "להתקשר ללקוח", "להתקין מכשיר ל…". כל משימה
@@ -222,15 +222,15 @@ export function Tasks() {
         <Button className="!py-2" onClick={() => openForm(null)}>
           <span className="inline-flex items-center gap-1"><Plus size={15} />משימה חדשה</span>
         </Button>
-        <Select className="py-2 text-sm w-36" value={fAssignee} onChange={(e) => setFAssignee(e.target.value)}>
+        <FilterSelect className="py-2 text-sm w-36" value={fAssignee} onChange={(e) => setFAssignee(e.target.value)}>
           <option value="">כל האחראים</option>
           <option value="none">ללא אחראי</option>
           {assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </Select>
-        <Select className="py-2 text-sm w-32" value={fPriority} onChange={(e) => setFPriority(e.target.value)}>
+        </FilterSelect>
+        <FilterSelect className="py-2 text-sm w-32" value={fPriority} onChange={(e) => setFPriority(e.target.value)}>
           <option value="">כל הדחיפויות</option>
           {Object.entries(PRIORITY).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}
-        </Select>
+        </FilterSelect>
         <label className="flex items-center gap-1.5 text-sm">
           <input type="checkbox" checked={overdueOnly} onChange={(e) => setOverdueOnly(e.target.checked)} />
           באיחור בלבד{overdueCount ? ` (${overdueCount})` : ''}
@@ -249,9 +249,9 @@ export function Tasks() {
       {/* inline sort — by any field; 'סדר ידני' keeps the drag order */}
       <div className="flex items-center gap-2 text-sm">
         <span className="text-muted">מיון לפי:</span>
-        <Select className="py-1.5 text-sm w-32" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+        <FilterSelect className="py-1.5 text-sm w-32" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
           {Object.entries(SORT_FIELDS).map(([k, f]) => <option key={k} value={k}>{f.label}</option>)}
-        </Select>
+        </FilterSelect>
         {sortBy !== 'manual' && (
           <Button variant="ghost" className="!px-2 !py-1" title={sortDir === 'asc' ? 'עולה' : 'יורד'}
             onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
+import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead , FilterSelect } from '../ui.jsx';
 import { Plus, Phone, Trash2 } from 'lucide-react';
 import { IL_CITIES } from '../cities.js';
 
@@ -161,14 +161,14 @@ export function Crm() {
 
       {/* סינון */}
       <div className="flex gap-2 flex-wrap items-center">
-        <Select className="py-2 text-sm w-36" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+        <FilterSelect className="py-2 text-sm w-36" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
           <option value="">כל הסטטוסים</option>
           {Object.entries(STATUS).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
-        </Select>
-        <Select className="py-2 text-sm w-36" value={fSource} onChange={(e) => setFSource(e.target.value)}>
+        </FilterSelect>
+        <FilterSelect className="py-2 text-sm w-36" value={fSource} onChange={(e) => setFSource(e.target.value)}>
           <option value="">כל המקורות</option>
           {(data?.sources || []).map((s) => <option key={s} value={s}>{s}</option>)}
-        </Select>
+        </FilterSelect>
         <Input className="w-56 py-2 text-sm" placeholder="חיפוש: שם, טלפון, עיר, הערות…"
           value={search} onChange={(e) => setSearch(e.target.value)} />
         <label className="flex items-center gap-1 text-sm text-muted">

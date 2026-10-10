@@ -2,7 +2,7 @@
 // Anthropic ($) side by side, filterable by period.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
+import { Card, Button, Input, Select, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_HOURS, RANGE_DAYS , FilterSelect } from '../ui.jsx';
 
 const C_EXPENSE = '#e11d48'; // money-color convention: costs are red
 
@@ -76,10 +76,10 @@ export default function VoiceCosts() {
         <div className="flex gap-2 items-center flex-wrap">
           <RangeFilter value={period} onChange={setPeriod} keys={PERIOD_KEYS} className="w-40"
             custom={{ fromDate, toDate }} onCustom={(p) => { if ('fromDate' in p) setFromDate(p.fromDate); if ('toDate' in p) setToDate(p.toDate); }} />
-          <Select className="py-2 text-sm w-40" value={userId} onChange={(e) => setUserId(e.target.value)}>
+          <FilterSelect className="py-2 text-sm w-40" value={userId} onChange={(e) => setUserId(e.target.value)}>
             <option value="">כל המשתמשים</option>
             {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-          </Select>
+          </FilterSelect>
           <Input dir="ltr" className="w-36 py-2 text-sm" placeholder="סינון לפי טלפון" value={phone} onChange={(e) => setPhone(e.target.value)} />
           <Input className="w-44 py-2 text-sm" placeholder="חיפוש בטקסט שנאמר" value={search} onChange={(e) => setSearch(e.target.value)} />
           {filtering && (

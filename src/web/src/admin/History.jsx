@@ -1,7 +1,7 @@
 // Admin history: merged commands + call_logs for ALL users, every field filterable.
 import { useEffect, useMemo, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG , FilterSelect } from '../ui.jsx';
 import { MenuPath } from './Misc.jsx';
 
 const SOURCE_HE = { ivr: 'טלפון', web: 'אתר', schedule: 'תזמון', admin: 'מנהל' };
@@ -83,48 +83,48 @@ export default function AdminHistory() {
         <div className="flex gap-2 items-center flex-wrap">
           <SearchSelect className="w-48" value={f.user_id} onChange={setUser} allLabel="כל המשתמשים" placeholder="חיפוש משתמש…"
             options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: `#${u.id}`, search: u.ivr_code }))} />
-          <Select className="py-2 text-sm w-36" value={f.type} onChange={setEv('type')}>
+          <FilterSelect className="py-2 text-sm w-36" value={f.type} onChange={setEv('type')}>
             <option value="">פקודות ושיחות</option>
             <option value="cmd">פקודות בלבד</option>
             <option value="call">שיחות בלבד</option>
-          </Select>
+          </FilterSelect>
           <RangeFilter value={f.range} onChange={set('range')} keys={RANGE_LOG} hours
             custom={f} onCustom={(p) => setF((x) => ({ ...x, ...p }))} />
           {filtering && <Button variant="ghost" onClick={() => setF(EMPTY)}>נקה סינון</Button>}
         </div>
         <div className={`flex gap-2 items-center flex-wrap ${callOnly ? 'opacity-40 pointer-events-none' : ''}`}>
           <span className="text-muted text-sm">פקודות:</span>
-          <Select className="py-2 text-sm w-44" value={f.device_id} onChange={setDevice}>
+          <FilterSelect className="py-2 text-sm w-44" value={f.device_id} onChange={setDevice}>
             <option value="">כל המכשירים</option>
             {deviceOptions.map((d) => <option key={d.id} value={d.id}>{d.name}{f.user_id ? '' : ` (${d.owner_name})`}</option>)}
-          </Select>
-          <Select className="py-2 text-sm w-44" value={f.relay_id} onChange={setEv('relay_id')}>
+          </FilterSelect>
+          <FilterSelect className="py-2 text-sm w-44" value={f.relay_id} onChange={setEv('relay_id')}>
             <option value="">כל הערוצים</option>
             {channelOptions.map((r) => (
               <option key={r.id} value={r.id}>{r.name}{f.device_id ? '' : ` (${deviceName(r.device_id)})`}</option>
             ))}
-          </Select>
-          <Select className="py-2 text-sm w-32" value={f.action} onChange={setEv('action')}>
+          </FilterSelect>
+          <FilterSelect className="py-2 text-sm w-32" value={f.action} onChange={setEv('action')}>
             <option value="">הדלקה וכיבוי</option>
             <option value="on">הדלקה</option>
             <option value="off">כיבוי</option>
-          </Select>
-          <Select className="py-2 text-sm w-32" value={f.source} onChange={setEv('source')}>
+          </FilterSelect>
+          <FilterSelect className="py-2 text-sm w-32" value={f.source} onChange={setEv('source')}>
             <option value="">כל המקורות</option>
             {Object.entries(SOURCE_HE).map(([v, he]) => <option key={v} value={v}>{he}</option>)}
-          </Select>
-          <Select className="py-2 text-sm w-32" value={f.status} onChange={setEv('status')}>
+          </FilterSelect>
+          <FilterSelect className="py-2 text-sm w-32" value={f.status} onChange={setEv('status')}>
             <option value="">כל הסטטוסים</option>
             {Object.entries(STATUS_HE).map(([v, he]) => <option key={v} value={v}>{he}</option>)}
-          </Select>
+          </FilterSelect>
         </div>
         <div className={`flex gap-2 items-center flex-wrap ${cmdOnly ? 'opacity-40 pointer-events-none' : ''}`}>
           <span className="text-muted text-sm">שיחות:</span>
           <Input dir="ltr" className="w-40 py-2 text-sm" placeholder="סינון לפי טלפון" value={f.phone} onChange={setEv('phone')} />
-          <Select className="py-2 text-sm w-36" value={f.outcome} onChange={setEv('outcome')}>
+          <FilterSelect className="py-2 text-sm w-36" value={f.outcome} onChange={setEv('outcome')}>
             <option value="">כל התוצאות</option>
             {Object.entries(OUTCOME_HE).map(([v, he]) => <option key={v} value={v}>{he}</option>)}
-          </Select>
+          </FilterSelect>
         </div>
       </Card>
 

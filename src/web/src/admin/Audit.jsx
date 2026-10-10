@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ShieldCheck, UserRound, Phone, Cog, ChevronDown, ChevronUp } from 'lucide-react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, DAY_NAMES, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, ymdLocal, RANGE_LOG, niceCeil } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, DAY_NAMES, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, ymdLocal, RANGE_LOG, niceCeil , FilterSelect } from '../ui.jsx';
 
 // ── vocabulary ──
 // Actor kinds: label, icon, chart hue. Palette validated (dataviz validator, light
@@ -594,19 +594,19 @@ export default function Audit() {
       <Card className="flex flex-wrap items-center gap-2 !py-3">
         <RangeFilter value={period} onChange={setPeriod} keys={RANGE_LOG} className="w-auto"
           custom={{ fromDate, toDate }} onCustom={(p) => { if ('fromDate' in p) setFromDate(p.fromDate); if ('toDate' in p) setToDate(p.toDate); }} />
-        <Select className="text-sm !py-2" value={actorType} onChange={(e) => { setActorType(e.target.value); setActor(''); }} aria-label="סוג גורם">
+        <FilterSelect className="text-sm !py-2" value={actorType} onChange={(e) => { setActorType(e.target.value); setActor(''); }} aria-label="סוג גורם">
           <option value="">כל הגורמים</option>
           {ACTOR_ORDER.map((k) => <option key={k} value={k}>{ACTORS[k].plural}</option>)}
-        </Select>
+        </FilterSelect>
         <SearchSelect className="w-48" value={actor} onChange={setActor} options={actorOptions} allLabel="גורם מסוים…" placeholder="חיפוש לפי שם…" />
-        <Select className="text-sm !py-2 max-w-[11rem]" value={entity} onChange={(e) => { setEntity(e.target.value); setAction(''); }} aria-label="ישות">
+        <FilterSelect className="text-sm !py-2 max-w-[11rem]" value={entity} onChange={(e) => { setEntity(e.target.value); setAction(''); }} aria-label="ישות">
           <option value="">כל הישויות</option>
           {entityOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </Select>
-        <Select className="text-sm !py-2 max-w-[13rem]" value={action} onChange={(e) => pickAction(e.target.value)} aria-label="פעולה">
+        </FilterSelect>
+        <FilterSelect className="text-sm !py-2 max-w-[13rem]" value={action} onChange={(e) => pickAction(e.target.value)} aria-label="פעולה">
           <option value="">כל הפעולות</option>
           {actionOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </Select>
+        </FilterSelect>
         <Input className="w-44 !py-2 text-sm" placeholder="חיפוש חופשי…" value={q} onChange={(e) => setQ(e.target.value)} />
         {filtering && <Button variant="ghost" className="text-sm" onClick={clear}>נקה סינון</Button>}
       </Card>

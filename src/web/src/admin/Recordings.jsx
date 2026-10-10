@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync , FilterSelect } from '../ui.jsx';
 import { Play, Pencil, Mic, Volume2, LoaderCircle, Upload, RotateCcw, Square, CircleDot, History, Download, Trash2, CloudUpload } from 'lucide-react';
 
 // Every IVR prompt recording on Yemot: what it says, which voice, and whether the
@@ -279,15 +279,15 @@ export function Recordings() {
             </Button>
           )}
           <Input className="w-44 py-2 text-sm" placeholder="חיפוש בשם / טקסט" value={q} onChange={(e) => setQ(e.target.value)} />
-          <Select className="py-2 text-sm" value={fVoice} onChange={(e) => setFVoice(e.target.value)}>
+          <FilterSelect className="py-2 text-sm" value={fVoice} onChange={(e) => setFVoice(e.target.value)}>
             <option value="">כל הקולות</option>
             {data.voices.map((v) => <option key={v} value={v}>{VOICE_HE[v] || v}</option>)}
-          </Select>
-          <Select className="py-2 text-sm" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+          </FilterSelect>
+          <FilterSelect className="py-2 text-sm" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
             <option value="">כל הסטטוסים</option>
             <option value="active">הקלטה פעילה</option>
             <option value="fallback">הקראת טקסט (TTS)</option>
-          </Select>
+          </FilterSelect>
           {filtering && (
             <Button variant="ghost" onClick={() => { setQ(''); setFVoice(''); setFStatus(''); }}>נקה סינון</Button>
           )}

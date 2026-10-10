@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, ErrorNote, useAsync, niceCeil, Stat, fmtBytes, fmtInt, fmtUptime, fmtWhen } from '../ui.jsx';
+import { Card, Button, Input, Select, ErrorNote, useAsync, niceCeil, Stat, fmtBytes, fmtInt, fmtUptime, fmtWhen , FilterSelect } from '../ui.jsx';
 
 // What each table holds, in Hebrew, and where its data is browsed in the admin.
 const TABLES_HE = {
@@ -158,14 +158,14 @@ export default function Database() {
       <Card className="flex flex-wrap items-center gap-2 !py-3">
         <Input className="w-48 !py-2 text-sm" placeholder="חיפוש טבלה…" value={q} onChange={(e) => setQ(e.target.value)} />
         {engines.length > 1 && (
-          <Select className="text-sm !py-2" value={engine} onChange={(e) => setEngine(e.target.value)}>
+          <FilterSelect className="text-sm !py-2" value={engine} onChange={(e) => setEngine(e.target.value)}>
             <option value="">כל המנועים</option>
             {engines.map((en) => <option key={en} value={en}>{en}</option>)}
-          </Select>
+          </FilterSelect>
         )}
-        <Select className="text-sm !py-2" value={sort} onChange={(e) => setSort(e.target.value)}>
+        <FilterSelect className="text-sm !py-2" value={sort} onChange={(e) => setSort(e.target.value)}>
           {Object.entries(SORTS).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
-        </Select>
+        </FilterSelect>
         <label className="text-sm flex items-center gap-1.5 cursor-pointer">
           <input type="checkbox" checked={nonEmpty} onChange={(e) => setNonEmpty(e.target.checked)} />רק טבלאות עם נתונים
         </label>

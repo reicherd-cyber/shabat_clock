@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Select, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG } from '../ui.jsx';
+import { Card, Button, Select, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG , FilterSelect } from '../ui.jsx';
 
 const EMPTY_CUSTOM = { fromDate: '', fromHour: '', toDate: '', toHour: '' };
 import { Lightbulb, X, PhoneCall } from 'lucide-react';
@@ -95,18 +95,18 @@ export default function History() {
     <>
       <SectionHead title="פעילות אחרונה" />
       <div className="flex gap-2 items-center flex-wrap mb-3">
-        <Select className="py-2 text-sm flex-1 min-w-[10rem]" value={relayId} onChange={(e) => setRelayId(e.target.value)}>
+        <FilterSelect className="py-2 text-sm flex-1 min-w-[10rem]" value={relayId} onChange={(e) => setRelayId(e.target.value)}>
           <option value="">כל הערוצים</option>
           {channels.map((r) => (
             <option key={r.id} value={r.id}>{r.name}{multiDevice ? ` (${r.device_name})` : ''}</option>
           ))}
-        </Select>
-        <Select className="py-2 text-sm flex-1 min-w-[10rem]" value={kind} onChange={(e) => setKind(e.target.value)}>
+        </FilterSelect>
+        <FilterSelect className="py-2 text-sm flex-1 min-w-[10rem]" value={kind} onChange={(e) => setKind(e.target.value)}>
           <option value="">כל הפעולות</option>
           <option value="cmd">פקודות בלבד</option>
           {Object.entries(SOURCE_HE).map(([v, he]) => <option key={v} value={v}>{he}</option>)}
           <option value="call">שיחות טלפון בלבד</option>
-        </Select>
+        </FilterSelect>
         <RangeFilter value={range} onChange={setRange} keys={RANGE_LOG} hours className="flex-1 min-w-[10rem]"
           custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />
         {filtering && <Button variant="ghost" onClick={() => { setRelayId(''); setKind(''); setRange('all'); setCustom(EMPTY_CUSTOM); }}>נקה סינון</Button>}

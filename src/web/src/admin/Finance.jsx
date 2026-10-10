@@ -5,7 +5,7 @@
 // tooltips) as the validator requires.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, RangeFilter, rangeBounds, ymdLocal, niceCeil } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, RangeFilter, rangeBounds, ymdLocal, niceCeil , FilterSelect } from '../ui.jsx';
 
 const C_INCOME = '#006e00';
 const C_EXPENSE = '#e11d48';
@@ -188,23 +188,23 @@ export default function Finance() {
       <div className="flex gap-2 items-center flex-wrap">
         <RangeFilter value={period} onChange={setPeriod} keys={PERIOD_KEYS}
           custom={{ fromDate, toDate }} onCustom={(p) => { if ('fromDate' in p) setFromDate(p.fromDate); if ('toDate' in p) setToDate(p.toDate); }} />
-        <Select className="py-2 text-sm w-36" value={fKind} onChange={(e) => setFKind(e.target.value)}>
+        <FilterSelect className="py-2 text-sm w-36" value={fKind} onChange={(e) => setFKind(e.target.value)}>
           <option value="">הכנסות והוצאות</option>
           <option value="income">הכנסות בלבד</option>
           <option value="expense">הוצאות בלבד</option>
-        </Select>
-        <Select className="py-2 text-sm w-36" value={fCategory} onChange={(e) => setFCategory(e.target.value)}>
+        </FilterSelect>
+        <FilterSelect className="py-2 text-sm w-36" value={fCategory} onChange={(e) => setFCategory(e.target.value)}>
           <option value="">כל הקטגוריות</option>
           {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-        </Select>
-        <Select className="py-2 text-sm w-32" value={fRecurrence} onChange={(e) => setFRecurrence(e.target.value)}>
+        </FilterSelect>
+        <FilterSelect className="py-2 text-sm w-32" value={fRecurrence} onChange={(e) => setFRecurrence(e.target.value)}>
           <option value="">כל התדירויות</option>
           {Object.entries(REC_HE).map(([v, he]) => <option key={v} value={v}>{he}</option>)}
-        </Select>
-        <Select className="py-2 text-sm w-36" value={fAdmin} onChange={(e) => setFAdmin(e.target.value)}>
+        </FilterSelect>
+        <FilterSelect className="py-2 text-sm w-36" value={fAdmin} onChange={(e) => setFAdmin(e.target.value)}>
           <option value="">כל המשתמשים</option>
           {admins.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </Select>
+        </FilterSelect>
         <Input className="w-44 py-2 text-sm" placeholder="חיפוש בשם / הערה" value={search} onChange={(e) => setSearch(e.target.value)} />
         {filtering && (
           <Button variant="ghost" onClick={() => { setPeriod('12m'); setFromDate(''); setToDate(''); setFKind(''); setFCategory(''); setFRecurrence(''); setFAdmin(''); setSearch(''); }}>נקה סינון</Button>

@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, Stat, fmtUptime } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, Stat, fmtUptime , FilterSelect } from '../ui.jsx';
 import { UserRound, House } from 'lucide-react';
 import { ProviderBalances } from './ProviderBalances.jsx';
 
@@ -67,16 +67,16 @@ export function DeviceHealth() {
         <h2 className="font-bold text-xl">בריאות מכשירים</h2>
         <div className="flex gap-2 items-center flex-wrap">
           <Input className="w-40" placeholder="חיפוש לפי שם" value={q} onChange={(e) => setQ(e.target.value)} />
-          <Select className="py-2 text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
+          <FilterSelect className="py-2 text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">כל הסטטוסים</option>
             <option value="reachable">מגיב</option>
             <option value="unreachable">לא מגיב</option>
             <option value="prod_only">מנוטר בפרודקשן</option>
-          </Select>
-          <Select className="py-2 text-sm" value={kind} onChange={(e) => setKind(e.target.value)}>
+          </FilterSelect>
+          <FilterSelect className="py-2 text-sm" value={kind} onChange={(e) => setKind(e.target.value)}>
             <option value="">כל סוגי האירועים</option>
             {Object.entries(INCIDENT_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-          </Select>
+          </FilterSelect>
           {filtering && (
             <Button variant="ghost" onClick={() => { setQ(''); setStatus(''); setKind(''); }}>נקה סינון</Button>
           )}
@@ -378,14 +378,14 @@ export function AdminSchedules() {
       <div className="flex justify-between items-center gap-2 flex-wrap">
         <h2 className="font-bold text-xl">תזמונים (כל המשתמשים)</h2>
         <div className="flex gap-2 items-center flex-wrap">
-          <Select className="py-2 text-sm w-40" value={fUser} onChange={(e) => pickUser(e.target.value)}>
+          <FilterSelect className="py-2 text-sm w-40" value={fUser} onChange={(e) => pickUser(e.target.value)}>
             <option value="">כל המשתמשים</option>
             {users.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-          </Select>
-          <Select className="py-2 text-sm w-40" value={fDevice} onChange={(e) => setFDevice(e.target.value)}>
+          </FilterSelect>
+          <FilterSelect className="py-2 text-sm w-40" value={fDevice} onChange={(e) => setFDevice(e.target.value)}>
             <option value="">כל המכשירים</option>
             {devices.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-          </Select>
+          </FilterSelect>
           {filtering && (
             <Button variant="ghost" onClick={() => { setFUser(''); setFDevice(''); }}>נקה סינון</Button>
           )}

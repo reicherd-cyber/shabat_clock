@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi, tokens } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync , FilterSelect } from '../ui.jsx';
 import { Pencil, Trash2 } from 'lucide-react';
 
 export default function Users() {
@@ -93,11 +93,11 @@ export default function Users() {
         <h2 className="font-bold text-xl">משתמשים</h2>
         <div className="flex gap-2 items-center flex-wrap">
           <Input className="w-48 py-2 text-sm" placeholder="חיפוש שם / אימייל / קוד" value={q} onChange={(e) => setQ(e.target.value)} />
-          <Select className="py-2 text-sm" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+          <FilterSelect className="py-2 text-sm" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
             <option value="">כל הסטטוסים</option>
             <option value="active">פעיל</option>
             <option value="suspended">מושעה</option>
-          </Select>
+          </FilterSelect>
           {filtering && (
             <Button variant="ghost" onClick={() => { setQ(''); setFStatus(''); }}>נקה סינון</Button>
           )}

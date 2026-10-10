@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Download } from 'lucide-react';
-import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync , FilterSelect } from '../ui.jsx';
 
 // Provisioning modal shows the secret + QR EXACTLY ONCE with an explicit
 // "I saved it" confirmation before it can be closed (§7).
@@ -188,19 +188,19 @@ export default function Devices() {
         <h2 className="font-bold text-xl">מכשירים</h2>
         <div className="flex gap-2 items-center flex-wrap">
           <Input className="w-44 py-2 text-sm" placeholder="חיפוש שם / לקוח / UID" value={q} onChange={(e) => setQ(e.target.value)} />
-          <Select className="py-2 text-sm w-40" value={fUser} onChange={(e) => { setFUser(e.target.value); setFDevice(''); }}>
+          <FilterSelect className="py-2 text-sm w-40" value={fUser} onChange={(e) => { setFUser(e.target.value); setFDevice(''); }}>
             <option value="">כל המשתמשים</option>
             {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-          </Select>
-          <Select className="py-2 text-sm w-40" value={fDevice} onChange={(e) => setFDevice(e.target.value)}>
+          </FilterSelect>
+          <FilterSelect className="py-2 text-sm w-40" value={fDevice} onChange={(e) => setFDevice(e.target.value)}>
             <option value="">כל המכשירים</option>
             {deviceOptions.map((d) => <option key={d.id} value={d.id}>{d.owner_name} — {d.name}</option>)}
-          </Select>
-          <Select className="py-2 text-sm" value={fOnline} onChange={(e) => setFOnline(e.target.value)}>
+          </FilterSelect>
+          <FilterSelect className="py-2 text-sm" value={fOnline} onChange={(e) => setFOnline(e.target.value)}>
             <option value="">מחובר ומנותק</option>
             <option value="on">מחוברים</option>
             <option value="off">מנותקים</option>
-          </Select>
+          </FilterSelect>
           {filtering && (
             <Button variant="ghost" onClick={() => { setFUser(''); setFDevice(''); setFOnline(''); setQ(''); }}>נקה סינון</Button>
           )}

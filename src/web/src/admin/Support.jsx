@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
-import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead, RangeFilter, rangeStamps, RANGE_LOG } from '../ui.jsx';
+import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead, RangeFilter, rangeStamps, RANGE_LOG , FilterSelect } from '../ui.jsx';
 import { MessageSquare, Send, Phone } from 'lucide-react';
 
 // פניות תמיכה: תיבת ההודעות שמשתמשים שולחים ממרכז העזרה. סטטוסים רכים והפיכים
@@ -158,15 +158,15 @@ export function SupportInbox() {
 
       {/* סינון */}
       <div className="flex gap-2 flex-wrap items-center">
-        <Select className="py-2 text-sm w-32" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+        <FilterSelect className="py-2 text-sm w-32" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
           <option value="">כל הסטטוסים</option>
           {Object.entries(STATUS).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
-        </Select>
-        <Select className="py-2 text-sm w-36" value={fSource} onChange={(e) => setFSource(e.target.value)}>
+        </FilterSelect>
+        <FilterSelect className="py-2 text-sm w-36" value={fSource} onChange={(e) => setFSource(e.target.value)}>
           <option value="">מהאתר ומהטלפון</option>
           <option value="web">מהאתר</option>
           <option value="phone">הודעות קוליות</option>
-        </Select>
+        </FilterSelect>
         <RangeFilter value={period} onChange={setPeriod} keys={RANGE_LOG} className="w-40" hours
           custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />
         <Input className="w-56 py-2 text-sm" placeholder="חיפוש: תוכן, שם או טלפון…"
