@@ -5,7 +5,7 @@
 // tooltips) as the validator requires.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, RangeFilter, rangeBounds, ymdLocal } from '../ui.jsx';
 
 const C_INCOME = '#006e00';
 const C_EXPENSE = '#e11d48';
@@ -19,29 +19,17 @@ const MONTH_HE = ['ינו׳', 'פבר׳', 'מרץ', 'אפר׳', 'מאי', 'יו�
 const fmtNis = (n, frac = 0) => '₪' + Number(n).toLocaleString('he-IL', { maximumFractionDigits: frac });
 const dstr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-const PERIODS = [
-  { key: '12m', label: '12 חודשים אחרונים' },
-  { key: '6m', label: '6 חודשים אחרונים' },
-  { key: '3m', label: '3 חודשים אחרונים' },
-  { key: 'month', label: 'החודש' },
-  { key: 'year', label: 'השנה' },
-  { key: 'all', label: 'הכל' },
-  { key: 'custom', label: 'טווח מותאם' },
-];
-
+// The ledger is dated by day (entry_date), so the shared presets minus the
+// hour ranges. A preset's open end closes at today — recurring entries must not
+// project into the future.
+const PERIOD_KEYS = ['today', 'yesterday', '7d', '30d', 'month', '3m', '6m', '12m', 'year', 'all', 'custom'];
 function periodBounds(period, fromDate, toDate) {
-  const now = new Date();
-  const monthsBack = { '12m': 11, '6m': 5, '3m': 2 }[period];
-  if (monthsBack != null) return { from: dstr(new Date(now.getFullYear(), now.getMonth() - monthsBack, 1)), to: dstr(now) };
-  if (period === 'month') return { from: dstr(new Date(now.getFullYear(), now.getMonth(), 1)), to: dstr(now) };
-  if (period === 'year') return { from: dstr(new Date(now.getFullYear(), 0, 1)), to: dstr(now) };
-  if (period === 'custom') {
-    const b = {};
-    if (fromDate) b.from = fromDate;
-    if (toDate) b.to = toDate;
-    return b;
-  }
-  return {};
+  const b = rangeBounds(period, { fromDate, toDate });
+  const out = {};
+  if (b.from) out.from = ymdLocal(b.from);
+  if (b.to) out.to = ymdLocal(b.to);
+  else if (period !== 'all' && period !== 'custom') out.to = ymdLocal(new Date());
+  return out;
 }
 
 // Clean axis ceiling: 1/2/2.5/5 × 10^k above the max.
@@ -206,19 +194,8 @@ export default function Finance() {
     <div className="space-y-4">
       <h2 className="font-bold text-xl">הכנסות והוצאות</h2>
       <div className="flex gap-2 items-center flex-wrap">
-        <Select className="py-2 text-sm w-44" value={period} onChange={(e) => setPeriod(e.target.value)}>
-          {PERIODS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-        </Select>
-        {period === 'custom' && (
-          <>
-            <label className="text-muted text-sm flex items-center gap-1">מ־
-              <Input type="date" className="w-auto" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-            </label>
-            <label className="text-muted text-sm flex items-center gap-1">עד
-              <Input type="date" className="w-auto" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-            </label>
-          </>
-        )}
+        <RangeFilter value={period} onChange={setPeriod} keys={PERIOD_KEYS}
+          custom={{ fromDate, toDate }} onCustom={(p) => { if ('fromDate' in p) setFromDate(p.fromDate); if ('toDate' in p) setToDate(p.toDate); }} />
         <Select className="py-2 text-sm w-36" value={fKind} onChange={(e) => setFKind(e.target.value)}>
           <option value="">הכנסות והוצאות</option>
           <option value="income">הכנסות בלבד</option>

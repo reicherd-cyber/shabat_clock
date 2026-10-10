@@ -119,7 +119,7 @@ export async function getAdminHistory(f = {}) {
 // User variant. Optional narrowing: relay_id (one channel) and kind — 'call'
 // (calls only) or a command source (ivr/web/schedule/admin). Either command
 // filter hides the calls, exactly like the admin variant does.
-export async function getHistory({ userId, limit = 50, cursor = null, relay_id = null, kind = null }) {
+export async function getHistory({ userId, limit = 50, cursor = null, relay_id = null, kind = null, from = null, to = null }) {
   limit = Math.min(Math.max(Number(limit) || 50, 1), 200);
   const c = cursor ? decodeCursor(cursor) : null;
 
@@ -135,6 +135,10 @@ export async function getHistory({ userId, limit = 50, cursor = null, relay_id =
   const wantCmds = kind !== 'call';
   if (relayId) { cmdWhere += ' AND c.relay_id = ?'; cmdParams.push(relayId); }
   if (source) { cmdWhere += ' AND c.source = ?'; cmdParams.push(source); }
+  // Time window (UTC 'YYYY-MM-DD HH:MM:SS', same convention as the admin history).
+  const stamp = (v) => (v && /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$/.test(String(v)) ? String(v) : null);
+  if (stamp(from)) { cmdWhere += ' AND c.requested_at >= ?'; cmdParams.push(stamp(from)); callWhere += ' AND cl.started_at >= ?'; callParams.push(stamp(from)); }
+  if (stamp(to)) { cmdWhere += ' AND c.requested_at <= ?'; cmdParams.push(stamp(to)); callWhere += ' AND cl.started_at <= ?'; callParams.push(stamp(to)); }
   if (c) {
     const cts = new Date(c.ts);
     if (c.type === 'call') {

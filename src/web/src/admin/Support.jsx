@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
-import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
+import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead, RangeFilter, rangeBounds, utcStamp, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
 import { MessageSquare, Send, Phone } from 'lucide-react';
 
 // פניות תמיכה: תיבת ההודעות שמשתמשים שולחים ממרכז העזרה. סטטוסים רכים והפיכים
@@ -20,9 +20,7 @@ const TOPIC_LABELS = {
   // הודעות קוליות מתפריט המכירות (מתקשר לא רשום): 1 = מתעניין בהזמנה, 2 = הזמנה בתהליך
   order: 'מתעניין בהזמנה', order_status: 'הזמנה בתהליך',
 };
-const PERIODS = [
-  { v: 'all', label: 'כל הזמן' }, { v: '7', label: '7 ימים' }, { v: '30', label: '30 יום' }, { v: '90', label: '90 יום' },
-];
+const PERIOD_KEYS = [...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom'];
 const fmtTs = (ts) => new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
 // פנייה טלפונית אין לה משתמש — מציגים את המספר (או "מספר חסוי") במקום שם.
 const isPhone = (m) => m?.source === 'phone';
@@ -75,6 +73,8 @@ export function SupportInbox() {
   const [fStatus, setFStatus] = useState('');
   const [fSource, setFSource] = useState(''); // '' | web | phone
   const [period, setPeriod] = useState('all');
+  const EMPTY_CUSTOM = { fromDate: '', fromHour: '', toDate: '', toHour: '' };
+  const [custom, setCustom] = useState(EMPTY_CUSTOM);
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(null); // the row shown in the modal
   const [thread, setThread] = useState(null); // replies of the open row (null = loading)
@@ -88,16 +88,15 @@ export function SupportInbox() {
     if (fStatus) p.set('status', fStatus);
     if (fSource) p.set('source', fSource);
     if (search.trim()) p.set('q', search.trim());
-    if (period !== 'all') {
-      const d = new Date(Date.now() - Number(period) * 86400e3);
-      p.set('from', d.toISOString().slice(0, 10));
-    }
+    const b = rangeBounds(period, custom);
+    if (b.from) p.set('from', utcStamp(b.from));
+    if (b.to) p.set('to', utcStamp(b.to));
     setData(await adminApi.get(`/support${p.toString() ? `?${p}` : ''}`));
   };
   useEffect(() => {
     const t = setTimeout(() => { refresh().catch(setError); }, search ? 400 : 0);
     return () => clearTimeout(t);
-  }, [fStatus, fSource, period, search]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fStatus, fSource, period, custom, search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setStatus = (row, status) => run(async () => {
     await adminApi.patch(`/support/${row.id}`, { status });
@@ -169,13 +168,12 @@ export function SupportInbox() {
           <option value="web">מהאתר</option>
           <option value="phone">הודעות קוליות</option>
         </Select>
-        <Select className="py-2 text-sm w-28" value={period} onChange={(e) => setPeriod(e.target.value)}>
-          {PERIODS.map((p) => <option key={p.v} value={p.v}>{p.label}</option>)}
-        </Select>
+        <RangeFilter value={period} onChange={setPeriod} keys={PERIOD_KEYS} className="w-40" hours
+          custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />
         <Input className="w-56 py-2 text-sm" placeholder="חיפוש: תוכן, שם או טלפון…"
           value={search} onChange={(e) => setSearch(e.target.value)} />
         {filtering && (
-          <Button variant="ghost" className="text-sm" onClick={() => { setFStatus(''); setFSource(''); setPeriod('all'); setSearch(''); }}>נקה סינון</Button>
+          <Button variant="ghost" className="text-sm" onClick={() => { setFStatus(''); setFSource(''); setPeriod('all'); setCustom(EMPTY_CUSTOM); setSearch(''); }}>נקה סינון</Button>
         )}
       </div>
       <ErrorNote error={error} />

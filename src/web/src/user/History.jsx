@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Select, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
+import { Card, Button, Select, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeBounds, utcStamp, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
+
+const RANGE_KEYS = [...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom'];
+const EMPTY_CUSTOM = { fromDate: '', fromHour: '', toDate: '', toHour: '' };
 import { Lightbulb, X, PhoneCall } from 'lucide-react';
 
 // Mockup .hist rows: icon square · sentence · time at the far edge.
@@ -64,7 +67,9 @@ export default function History() {
   // Both are server-side — the list is paged, so a client filter would show holes.
   const [relayId, setRelayId] = useState('');
   const [kind, setKind] = useState('');
-  const filtering = relayId !== '' || kind !== '';
+  const [range, setRange] = useState('all');
+  const [custom, setCustom] = useState(EMPTY_CUSTOM);
+  const filtering = relayId !== '' || kind !== '' || range !== 'all';
   const channels = devices.filter((d) => d.is_enabled)
     .flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => ({ ...r, device_name: d.name })));
   const multiDevice = devices.filter((d) => d.is_enabled).length > 1;
@@ -74,12 +79,15 @@ export default function History() {
     if (!reset && cursor) q.set('cursor', cursor);
     if (relayId) q.set('relay_id', relayId);
     if (kind) q.set('kind', kind);
+    const b = rangeBounds(range, custom); // local preset → UTC stamps (DB is UTC)
+    if (b.from) q.set('from', utcStamp(b.from));
+    if (b.to) q.set('to', utcStamp(b.to));
     const res = await api.get(`/history?${q}`);
     setItems((prev) => reset ? res.items : [...prev, ...res.items]);
     setCursor(res.next_cursor);
     setDone(!res.next_cursor);
   });
-  useEffect(() => { load(true); }, [relayId, kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(true); }, [relayId, kind, range, custom]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { api.get('/devices').then(setDevices).catch(() => {}); }, []);
 
   return (
@@ -98,7 +106,9 @@ export default function History() {
           {Object.entries(SOURCE_HE).map(([v, he]) => <option key={v} value={v}>{he}</option>)}
           <option value="call">שיחות טלפון בלבד</option>
         </Select>
-        {filtering && <Button variant="ghost" onClick={() => { setRelayId(''); setKind(''); }}>נקה סינון</Button>}
+        <RangeFilter value={range} onChange={setRange} keys={RANGE_KEYS} hours className="flex-1 min-w-[10rem]"
+          custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />
+        {filtering && <Button variant="ghost" onClick={() => { setRelayId(''); setKind(''); setRange('all'); setCustom(EMPTY_CUSTOM); }}>נקה סינון</Button>}
       </div>
       <ErrorNote error={error} />
       {items.length === 0 && !busy && <Card>{filtering ? 'אין פעילות שמתאימה לסינון.' : 'אין פעילות עדיין.'}</Card>}

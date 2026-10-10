@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Download } from 'lucide-react';
 import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync } from '../ui.jsx';
@@ -14,7 +15,10 @@ export default function Devices() {
   const [fUser, setFUser] = useState('');
   const [fDevice, setFDevice] = useState('');
   const [fOnline, setFOnline] = useState('');
-  const [q, setQ] = useState('');
+  // ?q= seeds the search box (deep links from the action log) and follows later URL changes.
+  const [params] = useSearchParams();
+  const [q, setQ] = useState(params.get('q') || '');
+  useEffect(() => { setQ(params.get('q') || ''); }, [params]);
   const [expanded, setExpanded] = useState(null); // device id with its details row open
   const [transferForm, setTransferForm] = useState(null); // {device, user_id}
   const [diagnosis, setDiagnosis] = useState(null);       // {device, loading} → {device, verdict, text, evidence} | {device, error}

@@ -309,3 +309,83 @@ export function useAsync() {
   };
   return { busy, error, run, setError };
 }
+
+// ── quick time ranges — every filtered list shares the same presets ──
+// Keys are stable (URL-safe): Nh = last N hours, Nd = last N calendar days
+// (today counts), Nm = last N calendar months (this month counts).
+export const RANGE_LABELS = {
+  '1h': 'השעה האחרונה', '3h': '3 שעות אחרונות', '6h': '6 שעות אחרונות', '12h': '12 שעות אחרונות', '24h': '24 שעות אחרונות',
+  today: 'היום', yesterday: 'אתמול', '7d': '7 ימים אחרונים', '30d': '30 ימים אחרונים', '90d': '90 ימים אחרונים',
+  month: 'החודש', '3m': '3 חודשים אחרונים', '6m': '6 חודשים אחרונים', '12m': '12 חודשים אחרונים', year: 'השנה',
+  all: 'הכל', custom: 'טווח מותאם',
+};
+export const RANGE_HOURS = ['1h', '3h', '6h', '12h', '24h'];
+export const RANGE_DAYS = ['today', 'yesterday', '7d', '30d', '90d'];
+export const RANGE_DEFAULT = [...RANGE_HOURS, ...RANGE_DAYS, 'month', 'year', 'all', 'custom'];
+
+// Preset (+ custom inputs) → { from: Date|null, to: Date|null } in LOCAL time;
+// a null side is open. Custom hours: none = whole day (00:00 → 23:59:59).
+export function rangeBounds(key, { fromDate = '', toDate = '', fromHour = '', toHour = '' } = {}) {
+  const now = new Date();
+  const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const m = /^(\d+)([hdm])$/.exec(key || '');
+  if (m) {
+    const n = Number(m[1]);
+    if (m[2] === 'h') return { from: new Date(now.getTime() - n * 3600e3), to: null };
+    if (m[2] === 'd') return { from: new Date(today0.getTime() - (n - 1) * 86400e3), to: null };
+    return { from: new Date(now.getFullYear(), now.getMonth() - (n - 1), 1), to: null };
+  }
+  switch (key) {
+    case 'today': return { from: today0, to: null };
+    case 'yesterday': return { from: new Date(today0.getTime() - 86400e3), to: new Date(today0.getTime() - 1000) };
+    case 'month': return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: null };
+    case 'year': return { from: new Date(now.getFullYear(), 0, 1), to: null };
+    case 'custom': {
+      const hh = (h, dflt) => String(h === '' || h == null ? dflt : h).padStart(2, '0');
+      return {
+        from: fromDate ? new Date(`${fromDate}T${hh(fromHour, 0)}:00:00`) : null,
+        to: toDate ? new Date(`${toDate}T${hh(toHour, 23)}:59:59`) : null,
+      };
+    }
+    default: return { from: null, to: null };
+  }
+}
+// DB and API speak UTC 'YYYY-MM-DD HH:MM:SS'; the ledger speaks local 'YYYY-MM-DD'.
+export const utcStamp = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
+export const ymdLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+export function HourSelect({ value, onChange }) {
+  return (
+    <Select className="py-2 text-sm" value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">כל היום</option>
+      {Array.from({ length: 24 }, (_, h) => (
+        <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+      ))}
+    </Select>
+  );
+}
+
+// The preset dropdown; on 'custom' the from/to date (and, with `hours`, hour)
+// inputs unfold beside it. `custom` = { fromDate, toDate, fromHour, toHour },
+// `onCustom(patch)` merges a change. Wraps on phones like any other filter row.
+export function RangeFilter({ value, onChange, keys = RANGE_DEFAULT, custom = {}, onCustom, hours = false, className = 'w-44' }) {
+  return (
+    <>
+      <Select className={`py-2 text-sm ${className}`} value={value} onChange={(e) => onChange(e.target.value)} aria-label="תקופה">
+        {keys.map((k) => <option key={k} value={k}>{RANGE_LABELS[k] || k}</option>)}
+      </Select>
+      {value === 'custom' && (
+        <>
+          <label className="text-muted text-sm flex items-center gap-1">מ־
+            <Input type="date" className="w-auto py-2 text-sm" value={custom.fromDate || ''} onChange={(e) => onCustom({ fromDate: e.target.value })} />
+            {hours && <HourSelect value={custom.fromHour ?? ''} onChange={(v) => onCustom({ fromHour: v })} />}
+          </label>
+          <label className="text-muted text-sm flex items-center gap-1">עד
+            <Input type="date" className="w-auto py-2 text-sm" value={custom.toDate || ''} onChange={(e) => onCustom({ toDate: e.target.value })} />
+            {hours && <HourSelect value={custom.toHour ?? ''} onChange={(v) => onCustom({ toHour: v })} />}
+          </label>
+        </>
+      )}
+    </>
+  );
+}

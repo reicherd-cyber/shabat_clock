@@ -2,41 +2,19 @@
 // Anthropic ($) side by side, filterable by period.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, Button, Input, Select, ErrorNote, useAsync, RangeFilter, rangeBounds, utcStamp, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
 
 const C_EXPENSE = '#e11d48'; // money-color convention: costs are red
 
-const PERIODS = [
-  { key: 'today', label: 'היום' },
-  { key: 'yesterday', label: 'אתמול' },
-  { key: '7d', label: '7 ימים אחרונים' },
-  { key: 'month', label: 'החודש' },
-  { key: 'all', label: 'הכל' },
-  { key: 'custom', label: 'טווח מותאם' },
-];
+const PERIOD_KEYS = [...RANGE_HOURS, ...RANGE_DAYS, 'month', 'all', 'custom'];
 
 // Local-time period → UTC 'YYYY-MM-DD HH:MM:SS' bounds (DB and API are UTC).
 function periodBounds(period, fromDate, toDate) {
-  const utc = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
-  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const now = new Date();
-  const today0 = startOfDay(now);
-  switch (period) {
-    case 'today': return { from: utc(today0) };
-    case 'yesterday': {
-      const y0 = new Date(today0.getTime() - 86400000);
-      return { from: utc(y0), to: utc(new Date(today0.getTime() - 1000)) };
-    }
-    case '7d': return { from: utc(new Date(today0.getTime() - 6 * 86400000)) };
-    case 'month': return { from: utc(new Date(now.getFullYear(), now.getMonth(), 1)) };
-    case 'custom': {
-      const b = {};
-      if (fromDate) b.from = utc(new Date(`${fromDate}T00:00:00`));
-      if (toDate) b.to = utc(new Date(`${toDate}T23:59:59`));
-      return b;
-    }
-    default: return {};
-  }
+  const b = rangeBounds(period, { fromDate, toDate });
+  const out = {};
+  if (b.from) out.from = utcStamp(b.from);
+  if (b.to) out.to = utcStamp(b.to);
+  return out;
 }
 
 export default function VoiceCosts() {
@@ -104,19 +82,8 @@ export default function VoiceCosts() {
       <div className="flex justify-between items-center gap-2 flex-wrap">
         <h2 className="font-bold text-xl">עלויות פקודות קוליות</h2>
         <div className="flex gap-2 items-center flex-wrap">
-          <Select className="py-2 text-sm w-40" value={period} onChange={(e) => setPeriod(e.target.value)}>
-            {PERIODS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-          </Select>
-          {period === 'custom' && (
-            <>
-              <label className="text-muted text-sm flex items-center gap-1">מ־
-                <Input type="date" className="w-auto" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-              </label>
-              <label className="text-muted text-sm flex items-center gap-1">עד
-                <Input type="date" className="w-auto" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-              </label>
-            </>
-          )}
+          <RangeFilter value={period} onChange={setPeriod} keys={PERIOD_KEYS} className="w-40"
+            custom={{ fromDate, toDate }} onCustom={(p) => { if ('fromDate' in p) setFromDate(p.fromDate); if ('toDate' in p) setToDate(p.toDate); }} />
           <Select className="py-2 text-sm w-40" value={userId} onChange={(e) => setUserId(e.target.value)}>
             <option value="">כל המשתמשים</option>
             {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
@@ -124,7 +91,7 @@ export default function VoiceCosts() {
           <Input dir="ltr" className="w-36 py-2 text-sm" placeholder="סינון לפי טלפון" value={phone} onChange={(e) => setPhone(e.target.value)} />
           <Input className="w-44 py-2 text-sm" placeholder="חיפוש בטקסט שנאמר" value={search} onChange={(e) => setSearch(e.target.value)} />
           {filtering && (
-            <Button variant="ghost" onClick={() => { setPeriod('today'); setFromDate(''); setToDate(''); setUserId(''); setPhone(''); setSearch(''); }}>נקה סינון</Button>
+            <Button variant="ghost" onClick={() => { setPeriod('month'); setFromDate(''); setToDate(''); setUserId(''); setPhone(''); setSearch(''); }}>נקה סינון</Button>
           )}
         </div>
       </div>

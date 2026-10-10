@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync } from '../ui.jsx';
 import { Pencil, Trash2 } from 'lucide-react';
@@ -7,7 +8,10 @@ export default function Users() {
   const [users, setUsers] = useState(null);
   const [createForm, setCreateForm] = useState(null);
   const [pinReset, setPinReset] = useState(null);
-  const [q, setQ] = useState('');
+  // ?q= seeds the search box (deep links from the action log) and follows later URL changes.
+  const [params] = useSearchParams();
+  const [q, setQ] = useState(params.get('q') || '');
+  useEffect(() => { setQ(params.get('q') || ''); }, [params]);
   const [fStatus, setFStatus] = useState('');
   const { busy, error, run, setError } = useAsync();
 

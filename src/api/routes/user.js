@@ -405,6 +405,7 @@ userRouter.get('/history', async (req, res, next) => {
     res.json(await getHistory({
       userId: req.auth.userId, limit: req.query.limit, cursor: req.query.cursor || null,
       relay_id: req.query.relay_id || null, kind: req.query.kind || null,
+      from: req.query.from || null, to: req.query.to || null,
     }));
   } catch (e) { next(e); }
 });

@@ -864,25 +864,149 @@ adminRouter.patch('/admins/:id', requireSuperadmin, async (req, res, next) => {
 });
 
 // System-wide action log: every change by any actor (admin / user / ivr / system).
+// Rows carry the actor's name and the touched entity's CURRENT name + context
+// (relay → its device, phone → its owner…) via LEFT JOINs, so the UI reads as
+// sentences instead of ids. A deleted entity simply has no name (UI shows #id).
+const AUDIT_FROM = `
+  FROM audit_log a
+  LEFT JOIN admins ad ON a.actor_type = 'admin' AND ad.id = a.actor_id
+  LEFT JOIN users u ON a.actor_type IN ('user','ivr') AND u.id = a.actor_id
+  LEFT JOIN users eu ON a.entity = 'user' AND eu.id = a.entity_id
+  LEFT JOIN user_phones up ON a.entity = 'user_phone' AND up.id = a.entity_id
+  LEFT JOIN users upu ON upu.id = up.user_id
+  LEFT JOIN user_emails ue ON a.entity = 'user_email' AND ue.id = a.entity_id
+  LEFT JOIN users ueu ON ueu.id = ue.user_id
+  LEFT JOIN devices d ON a.entity = 'device' AND d.id = a.entity_id
+  LEFT JOIN users du ON du.id = d.user_id
+  LEFT JOIN relays r ON a.entity = 'relay' AND r.id = a.entity_id
+  LEFT JOIN devices rd ON rd.id = r.device_id
+  LEFT JOIN schedules s ON a.entity = 'schedule' AND s.id = a.entity_id
+  LEFT JOIN relays sr ON sr.id = s.relay_id
+  LEFT JOIN devices sd ON sd.id = sr.device_id
+  LEFT JOIN admins ea ON a.entity = 'admin' AND ea.id = a.entity_id
+  LEFT JOIN support_messages sm ON a.entity = 'support_message' AND sm.id = a.entity_id
+  LEFT JOIN users su ON su.id = sm.user_id
+  LEFT JOIN admin_tasks t ON a.entity = 'admin_task' AND t.id = a.entity_id
+  LEFT JOIN crm_leads cl ON a.entity = 'crm_lead' AND cl.id = a.entity_id
+  LEFT JOIN crm_orders co ON a.entity = 'crm_order' AND co.id = a.entity_id
+  LEFT JOIN crm_leads col ON col.id = co.lead_id
+  LEFT JOIN crm_payments cp ON a.entity = 'crm_payment' AND cp.id = a.entity_id
+  LEFT JOIN finance_entries fe ON a.entity = 'finance_entry' AND fe.id = a.entity_id
+  LEFT JOIN installer_tokens it ON a.entity = 'installer_token' AND it.id = a.entity_id`;
+const AUDIT_ACTOR_NAME = `CASE WHEN a.actor_type = 'admin' THEN ad.name
+                               WHEN a.actor_type IN ('user','ivr') THEN u.full_name END`;
+const AUDIT_ENTITY_NAME = `CASE a.entity
+  WHEN 'user' THEN eu.full_name
+  WHEN 'user_phone' THEN up.phone
+  WHEN 'user_email' THEN ue.email
+  WHEN 'device' THEN d.name
+  WHEN 'relay' THEN r.name
+  WHEN 'schedule' THEN sr.name
+  WHEN 'admin' THEN ea.name
+  WHEN 'support_message' THEN su.full_name
+  WHEN 'admin_task' THEN t.title
+  WHEN 'crm_lead' THEN cl.name
+  WHEN 'crm_order' THEN co.description
+  WHEN 'crm_payment' THEN CONCAT('₪', FORMAT(cp.amount, 0))
+  WHEN 'finance_entry' THEN fe.title
+  WHEN 'installer_token' THEN it.label END`;
+// Second line of context: whose phone, which device the relay sits on…
+const AUDIT_ENTITY_CTX = `CASE a.entity
+  WHEN 'user_phone' THEN upu.full_name
+  WHEN 'user_email' THEN ueu.full_name
+  WHEN 'device' THEN du.full_name
+  WHEN 'relay' THEN rd.name
+  WHEN 'schedule' THEN sd.name
+  WHEN 'support_message' THEN sm.topic
+  WHEN 'crm_order' THEN col.name
+  WHEN 'installer_token' THEN it.audience END`;
+
+function auditWhere(q) {
+  const cond = [];
+  const params = [];
+  // Numeric filters: a hand-edited URL ("?entity_id=abc") must read as "no match",
+  // not as a NaN that breaks the SQL.
+  const num = (v) => (v === undefined || v === '' ? undefined : (Number.isFinite(Number(v)) ? Number(v) : -1));
+  if (q.actor_type) { cond.push('a.actor_type = ?'); params.push(q.actor_type); }
+  if (num(q.actor_id) !== undefined) { cond.push('a.actor_id = ?'); params.push(num(q.actor_id)); }
+  if (q.actor_null) cond.push('a.actor_id IS NULL'); // unidentified callers (ivr with no user)
+  if (num(q.admin_id) !== undefined) { cond.push("a.actor_type = 'admin' AND a.actor_id = ?"); params.push(num(q.admin_id)); }
+  if (q.entity) { cond.push('a.entity = ?'); params.push(q.entity); }
+  if (num(q.entity_id) !== undefined) { cond.push('a.entity_id = ?'); params.push(num(q.entity_id)); }
+  if (q.action) { cond.push('a.action = ?'); params.push(q.action); }
+  if (q.from) { cond.push('a.created_at >= ?'); params.push(String(q.from)); }
+  if (q.to) { cond.push('a.created_at <= ?'); params.push(String(q.to)); }
+  if (num(q.before_id) !== undefined) { cond.push('a.id < ?'); params.push(num(q.before_id)); }
+  const text = String(q.q || '').trim();
+  if (text) {
+    const like = `%${text.replace(/[\\%_]/g, '\\$&')}%`; // literal %, _ in the search text
+    cond.push(`(${AUDIT_ACTOR_NAME} LIKE ? OR ${AUDIT_ENTITY_NAME} LIKE ? OR ${AUDIT_ENTITY_CTX} LIKE ?
+               OR a.action LIKE ? OR a.entity LIKE ? OR CAST(a.entity_id AS CHAR) = ? OR CAST(a.diff AS CHAR) LIKE ?)`);
+    params.push(like, like, like, like, like, text, like);
+  }
+  // Only the text search reads the joined names; everything else is answerable
+  // from audit_log alone, so aggregates can skip the 25-way join.
+  return { where: cond.length ? 'WHERE ' + cond.join(' AND ') : '', params, needsJoins: Boolean(text) };
+}
+
 adminRouter.get('/audit-log', async (req, res, next) => {
   try {
-    const cond = [];
-    const params = [];
-    if (req.query.actor_type) { cond.push('a.actor_type = ?'); params.push(req.query.actor_type); }
-    if (req.query.actor_id) { cond.push('a.actor_id = ?'); params.push(Number(req.query.actor_id)); }
-    if (req.query.admin_id) { cond.push("a.actor_type = 'admin' AND a.actor_id = ?"); params.push(Number(req.query.admin_id)); }
-    if (req.query.entity) { cond.push('a.entity = ?'); params.push(req.query.entity); }
-    res.json(await query(
-      `SELECT a.*,
-              CASE WHEN a.actor_type = 'admin' THEN ad.name
-                   WHEN a.actor_type IN ('user','ivr') THEN u.full_name
-                   ELSE NULL END AS actor_name
+    const { where, params } = auditWhere(req.query);
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    const rows = await query(
+      `SELECT a.id, a.actor_type, a.actor_id, a.action, a.entity, a.entity_id, a.diff, a.created_at,
+              ${AUDIT_ACTOR_NAME} AS actor_name,
+              ${AUDIT_ENTITY_NAME} AS entity_name,
+              ${AUDIT_ENTITY_CTX} AS entity_ctx
+       ${AUDIT_FROM} ${where} ORDER BY a.id DESC LIMIT ${limit + 1}`,
+      params,
+    );
+    const more = rows.length > limit;
+    res.json({ rows: more ? rows.slice(0, limit) : rows, more });
+  } catch (e) { next(e); }
+});
+
+// Counts for the tiles + per-day activity for the chart, under the same filters
+// as the list (minus the cursor). Days are bucketed in the CLIENT's timezone —
+// created_at is UTC, tz_offset is the browser's minutes-from-UTC.
+adminRouter.get('/audit-log/stats', async (req, res, next) => {
+  try {
+    const { before_id: _skip, tz_offset, ...q } = req.query;
+    const { where, params, needsJoins } = auditWhere(q);
+    const from = needsJoins ? AUDIT_FROM : 'FROM audit_log a';
+    const tz = Math.max(-840, Math.min(840, Math.round(Number(tz_offset) || 0)));
+    const [[totals], byDay] = await Promise.all([
+      query(
+        `SELECT COUNT(*) AS total,
+                SUM(a.actor_type = 'admin') AS \`admin\`, SUM(a.actor_type = 'user') AS \`user\`,
+                SUM(a.actor_type = 'ivr') AS \`ivr\`, SUM(a.actor_type = 'system') AS \`system\`
+         ${from} ${where}`, params,
+      ),
+      query(
+        `SELECT DATE_FORMAT(a.created_at + INTERVAL ${tz} MINUTE, '%Y-%m-%d') AS d, a.actor_type, COUNT(*) AS n
+         ${from} ${where} GROUP BY 1, 2 ORDER BY 1`, params,
+      ),
+    ]);
+    res.json({
+      total: Number(totals.total), admin: Number(totals.admin || 0), user: Number(totals.user || 0),
+      ivr: Number(totals.ivr || 0), system: Number(totals.system || 0),
+      by_day: byDay.map((r) => ({ d: r.d, actor_type: r.actor_type, n: Number(r.n) })),
+    });
+  } catch (e) { next(e); }
+});
+
+// Dropdown feed: every actor that ever acted + every (entity, action) pair seen.
+adminRouter.get('/audit-log/facets', async (req, res, next) => {
+  try {
+    const actors = await query(
+      `SELECT a.actor_type, a.actor_id, ${AUDIT_ACTOR_NAME} AS name, COUNT(*) AS n
        FROM audit_log a
        LEFT JOIN admins ad ON a.actor_type = 'admin' AND ad.id = a.actor_id
        LEFT JOIN users u ON a.actor_type IN ('user','ivr') AND u.id = a.actor_id
-       ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''} ORDER BY a.id DESC LIMIT 500`,
-      params,
-    ));
+       GROUP BY 1, 2, 3 ORDER BY n DESC`,
+    );
+    const actions = await query('SELECT entity, action, COUNT(*) AS n FROM audit_log GROUP BY 1, 2 ORDER BY entity, n DESC');
+    res.json({ actors, actions });
   } catch (e) { next(e); }
 });
 
@@ -906,7 +1030,12 @@ adminRouter.get('/support', async (req, res, next) => {
     // left on the sales menu by an unregistered caller — no user row).
     if (['web', 'phone'].includes(String(req.query.source))) { cond.push('m.source = ?'); params.push(String(req.query.source)); }
     if (req.query.from) { cond.push('m.created_at >= ?'); params.push(String(req.query.from)); }
-    if (req.query.to) { cond.push('m.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(String(req.query.to)); }
+    if (req.query.to) {
+      // A bare date means "through that day"; a full timestamp is an exact bound.
+      const to = String(req.query.to);
+      if (to.length > 10) { cond.push('m.created_at <= ?'); params.push(to); }
+      else { cond.push('m.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(to); }
+    }
     if (req.query.q) {
       cond.push('(m.body LIKE ? OR m.phone LIKE ? OR u.full_name LIKE ? OR EXISTS (SELECT 1 FROM user_phones p WHERE p.user_id = u.id AND p.phone LIKE ?))');
       const like = `%${String(req.query.q)}%`;

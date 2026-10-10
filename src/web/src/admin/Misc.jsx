@@ -1,8 +1,8 @@
-// Compact admin pages: monitoring, call logs, commands, schedules, settings, admins, audit.
+// Compact admin pages: monitoring, call logs, commands, schedules, settings, admins.
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeBounds, utcStamp, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
 import { UserRound, House } from 'lucide-react';
 import { ProviderBalances } from './ProviderBalances.jsx';
 
@@ -218,17 +218,6 @@ const OUTCOME_LABELS = {
 };
 
 // Hour dropdown for the call-log filters: empty = the whole day.
-export function HourSelect({ value, onChange }) {
-  return (
-    <Select className="py-2 text-sm" value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">כל היום</option>
-      {Array.from({ length: 24 }, (_, h) => (
-        <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
-      ))}
-    </Select>
-  );
-}
-
 function stepChip(step) {
   if (step.startsWith('relay:')) return { label: `ממסר ${step.slice(6)}` };
   if (step.startsWith('fail:')) return { label: `נכשל: ${step.slice(5)}`, tone: 'bad' };
@@ -263,20 +252,18 @@ export function CallLogs() {
   const [users, setUsers] = useState([]);
   const [userId, setUserId] = useState('');
   const [phone, setPhone] = useState('');
-  const [fromDate, setFromDate] = useState('');
-  const [fromHour, setFromHour] = useState('');
-  const [toDate, setToDate] = useState('');
-  const [toHour, setToHour] = useState('');
+  const [range, setRange] = useState('all');
+  const [custom, setCustom] = useState({ fromDate: '', fromHour: '', toDate: '', toHour: '' });
   const { error, run, setError } = useAsync();
 
-  // Date + optional hour filter server-side. No hour → the whole day; with an hour →
-  // from the start of that hour (מ־) / to the end of that hour (עד). DB stores UTC —
-  // the local date+hour is converted before querying. The user dropdown is also
-  // server-side (user_id). Phone filters client-side so it reacts on every keystroke.
+  // Period preset (last hours / days) or a custom date+hour range, server-side.
+  // DB stores UTC — the local bounds are converted before querying. The user
+  // dropdown is also server-side (user_id). Phone filters client-side so it
+  // reacts on every keystroke.
   useEffect(() => { adminApi.get('/users').then(setUsers).catch(setError); }, []);
-  const utc = (local) => new Date(local).toISOString().slice(0, 19).replace('T', ' ');
-  const from = fromDate ? utc(`${fromDate}T${fromHour !== '' ? fromHour.padStart(2, '0') : '00'}:00:00`) : '';
-  const to = toDate ? utc(`${toDate}T${toHour !== '' ? toHour.padStart(2, '0') : '23'}:59:59`) : '';
+  const bounds = rangeBounds(range, custom);
+  const from = bounds.from ? utcStamp(bounds.from) : '';
+  const to = bounds.to ? utcStamp(bounds.to) : '';
   useEffect(() => {
     run(async () => {
       const q = new URLSearchParams();
@@ -290,7 +277,7 @@ export function CallLogs() {
 
   const digits = phone.replace(/\D/g, '');
   const shown = (logs || []).filter((l) => !digits || String(l.phone).replace(/\D/g, '').includes(digits));
-  const filtering = digits || userId || from || to;
+  const filtering = digits || userId || range !== 'all';
 
   return (
     <div className="space-y-4">
@@ -300,16 +287,10 @@ export function CallLogs() {
           <SearchSelect className="w-48" value={userId} onChange={setUserId} allLabel="כל המשתמשים" placeholder="חיפוש משתמש…"
             options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: u.ivr_code }))} />
           <Input dir="ltr" className="w-40" placeholder="סינון לפי טלפון" value={phone} onChange={(e) => setPhone(e.target.value)} />
-          <label className="text-muted text-sm flex items-center gap-1">מ־
-            <Input type="date" className="w-auto" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-            <HourSelect value={fromHour} onChange={setFromHour} />
-          </label>
-          <label className="text-muted text-sm flex items-center gap-1">עד
-            <Input type="date" className="w-auto" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-            <HourSelect value={toHour} onChange={setToHour} />
-          </label>
+          <RangeFilter value={range} onChange={setRange} keys={[...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom']} hours
+            custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />
           {filtering && (
-            <Button variant="ghost" onClick={() => { setUserId(''); setPhone(''); setFromDate(''); setFromHour(''); setToDate(''); setToHour(''); }}>נקה סינון</Button>
+            <Button variant="ghost" onClick={() => { setUserId(''); setPhone(''); setRange('all'); setCustom({ fromDate: '', fromHour: '', toDate: '', toHour: '' }); }}>נקה סינון</Button>
           )}
         </div>
       </div>
@@ -645,57 +626,3 @@ export function Admins() {
   );
 }
 
-const ACTOR_TYPES = { admin: 'מנהל', user: 'משתמש', ivr: 'טלפון', system: 'מערכת' };
-
-export function Audit() {
-  const [rows, setRows] = useState(null);
-  const [error, setError] = useState(null);
-  const [actorType, setActorType] = useState('');
-  const [entity, setEntity] = useState('');
-  useEffect(() => {
-    const qs = new URLSearchParams();
-    if (actorType) qs.set('actor_type', actorType);
-    if (entity) qs.set('entity', entity);
-    adminApi.get(`/audit-log${qs.toString() ? `?${qs}` : ''}`).then(setRows).catch(setError);
-  }, [actorType, entity]);
-  const entities = [...new Set((rows || []).map((r) => r.entity))];
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3 flex-wrap">
-        <h2 className="font-bold text-xl">יומן פעולות</h2>
-        <select className="border border-line rounded-lg px-2 py-1 text-sm bg-surface" value={actorType} onChange={(e) => setActorType(e.target.value)}>
-          <option value="">כל הגורמים</option>
-          {Object.entries(ACTOR_TYPES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
-        </select>
-        <select className="border border-line rounded-lg px-2 py-1 text-sm bg-surface" value={entity} onChange={(e) => setEntity(e.target.value)}>
-          <option value="">כל הישויות</option>
-          {entities.map((en) => <option key={en} value={en}>{en}</option>)}
-        </select>
-      </div>
-      <ErrorNote error={error} />
-      <Card flush className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-right text-muted border-b border-line">
-              <th className="p-2">מתי</th><th className="p-2">מי</th><th className="p-2">פעולה</th><th className="p-2">ישות</th><th className="p-2">שינוי</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(rows || []).map((r) => (
-              <tr key={r.id} className="border-b border-line last:border-0 align-top">
-                <td className="p-2 whitespace-nowrap">{new Date(r.created_at).toLocaleString('he-IL')}</td>
-                <td className="p-2 whitespace-nowrap">
-                  <span className="code-chip me-1">{ACTOR_TYPES[r.actor_type] || r.actor_type}</span>
-                  {r.actor_name || (r.actor_id ? `#${r.actor_id}` : '')}
-                </td>
-                <td className="p-2">{r.action}</td>
-                <td className="p-2">{r.entity}{r.entity_id ? ` #${r.entity_id}` : ''}</td>
-                <td className="p-2 text-xs" dir="ltr"><code>{r.diff ? JSON.stringify(r.diff).slice(0, 120) : ''}</code></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
-    </div>
-  );
-}

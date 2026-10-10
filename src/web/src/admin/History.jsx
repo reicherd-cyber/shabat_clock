@@ -1,14 +1,15 @@
 // Admin history: merged commands + call_logs for ALL users, every field filterable.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
-import { HourSelect, MenuPath } from './Misc.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeBounds, utcStamp, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
+import { MenuPath } from './Misc.jsx';
 
 const SOURCE_HE = { ivr: 'טלפון', web: 'אתר', schedule: 'תזמון', admin: 'מנהל' };
 const STATUS_HE = { pending: 'ממתינה', sent: 'נשלחה', acked: 'בוצעה', failed: 'נכשלה' };
 const OUTCOME_HE = { command: 'פקודה', schedule: 'תזמון', status: 'בירור מצב', auth_fail: 'כשל זיהוי', abandoned: 'נותקה באמצע' };
 
-const EMPTY = { user_id: '', device_id: '', relay_id: '', type: '', action: '', source: '', status: '', outcome: '', phone: '', fromDate: '', fromHour: '', toDate: '', toHour: '' };
+const EMPTY = { user_id: '', device_id: '', relay_id: '', type: '', action: '', source: '', status: '', outcome: '', phone: '', range: 'all', fromDate: '', fromHour: '', toDate: '', toHour: '' };
+const RANGE_KEYS = [...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom'];
 
 export default function AdminHistory() {
   const [f, setF] = useState(EMPTY);
@@ -43,13 +44,13 @@ export default function AdminHistory() {
     adminApi.get('/relays').then(setRelays).catch(setError);
   }, []);
 
-  // DB stores UTC — convert the local date+hour before querying (same as CallLogs).
-  const utc = (local) => new Date(local).toISOString().slice(0, 19).replace('T', ' ');
+  // DB stores UTC — the preset / custom local range is converted before querying.
   const buildQuery = () => {
     const q = new URLSearchParams();
     for (const k of ['user_id', 'device_id', 'relay_id', 'type', 'action', 'source', 'status', 'outcome', 'phone']) if (f[k]) q.set(k, f[k]);
-    if (f.fromDate) q.set('from', utc(`${f.fromDate}T${(f.fromHour || '0').padStart(2, '0')}:00:00`));
-    if (f.toDate) q.set('to', utc(`${f.toDate}T${(f.toHour !== '' ? f.toHour : '23').padStart(2, '0')}:59:59`));
+    const b = rangeBounds(f.range, f);
+    if (b.from) q.set('from', utcStamp(b.from));
+    if (b.to) q.set('to', utcStamp(b.to));
     return q;
   };
 
@@ -68,7 +69,7 @@ export default function AdminHistory() {
     return () => clearTimeout(t);
   }, [f]);
 
-  const filtering = Object.keys(EMPTY).some((k) => f[k] !== '');
+  const filtering = Object.keys(EMPTY).some((k) => f[k] !== EMPTY[k]);
   // Server-side narrowing mirror: a command filter hides calls and vice versa (grey out the other group).
   const cmdOnly = !!(f.device_id || f.relay_id || f.action || f.source || f.status) || f.type === 'cmd';
   const callOnly = !!(f.outcome || f.phone) || f.type === 'call';
@@ -86,14 +87,8 @@ export default function AdminHistory() {
             <option value="cmd">פקודות בלבד</option>
             <option value="call">שיחות בלבד</option>
           </Select>
-          <label className="text-muted text-sm flex items-center gap-1">מ־
-            <Input type="date" className="w-auto" value={f.fromDate} onChange={setEv('fromDate')} />
-            <HourSelect value={f.fromHour} onChange={set('fromHour')} />
-          </label>
-          <label className="text-muted text-sm flex items-center gap-1">עד
-            <Input type="date" className="w-auto" value={f.toDate} onChange={setEv('toDate')} />
-            <HourSelect value={f.toHour} onChange={set('toHour')} />
-          </label>
+          <RangeFilter value={f.range} onChange={set('range')} keys={RANGE_KEYS} hours
+            custom={f} onCustom={(p) => setF((x) => ({ ...x, ...p }))} />
           {filtering && <Button variant="ghost" onClick={() => setF(EMPTY)}>נקה סינון</Button>}
         </div>
         <div className={`flex gap-2 items-center flex-wrap ${callOnly ? 'opacity-40 pointer-events-none' : ''}`}>
