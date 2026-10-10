@@ -1,34 +1,11 @@
 // Compact admin pages: monitoring, call logs, commands, schedules, settings, admins.
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, Stat, fmtUptime } from '../ui.jsx';
 import { UserRound, House } from 'lucide-react';
 import { ProviderBalances } from './ProviderBalances.jsx';
 
-// `to` makes the tile a clickable drill-down into the underlying data.
-const Stat = ({ label, value, ok, to }) => {
-  const nav = useNavigate();
-  return (
-    <Card
-      className={`text-center ${to ? 'cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition' : ''}`}
-      onClick={to ? () => nav(to) : undefined}
-      role={to ? 'button' : undefined}
-    >
-      <div className={`text-3xl font-bold ${ok === false ? 'text-off' : ok ? 'text-on' : ''}`}>{value}</div>
-      <div className="text-muted text-sm">{label}</div>
-      {to && <div className="text-accent-dk text-xs mt-1 underline underline-offset-2">פרטים ›</div>}
-    </Card>
-  );
-};
-
-// Seconds → compact Hebrew duration ("3 ימים", "5 שע׳", "12 דק׳").
-const fmtUptime = (s) => {
-  if (s == null) return '—';
-  if (s >= 172800) return `${Math.floor(s / 86400)} ימים`;
-  if (s >= 3600) return `${Math.floor(s / 3600)} שע׳`;
-  return `${Math.floor(s / 60)} דק׳`;
-};
 
 const INCIDENT_LABELS = {
   unreachable: 'מכשיר לא מגיב', unexpected_reboot: 'אתחול לא צפוי', auto_reboot: 'אתחול יזום (זיכרון נמוך)',

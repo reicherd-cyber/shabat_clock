@@ -37,3 +37,17 @@ export async function withTransaction(fn) {
     conn.release();
   }
 }
+
+// Live pool figures for the admin DB page. mysql2 keeps these on private
+// fields — this is the ONE place that knows their names.
+export function poolStats() {
+  const p = pool.pool;
+  const open = p?._allConnections?.length;
+  const idle = p?._freeConnections?.length;
+  return {
+    limit: p?.config?.connectionLimit ?? null,
+    open: typeof open === 'number' ? open : null,
+    idle: typeof idle === 'number' ? idle : null,
+    waiting: p?._connectionQueue?.length ?? null,
+  };
+}

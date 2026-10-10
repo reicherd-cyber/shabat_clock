@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 // Command verification verdicts (services/commands.js verifyCommand) and
 // failure reasons — one wording for the dashboard notice, user/admin history
@@ -411,5 +412,41 @@ export function RangeFilter({ value, onChange, keys = RANGE_DEFAULT, custom = {}
         </>
       )}
     </>
+  );
+}
+
+// ── shared admin formatters + stat tile ──
+export const fmtInt = (n) => (n == null ? '—' : Number(n).toLocaleString('he-IL'));
+export const fmtBytes = (b) => {
+  if (b == null) return '—';
+  if (b >= 1073741824) return `${(b / 1073741824).toFixed(2)} GB`;
+  if (b >= 1048576) return `${(b / 1048576).toFixed(1)} MB`;
+  if (b >= 1024) return `${Math.round(b / 1024)} KB`;
+  return `${b} B`;
+};
+// Seconds → compact Hebrew duration ("3 ימים", "5 שע׳", "12 דק׳").
+export const fmtUptime = (s) => {
+  if (s == null) return '—';
+  if (s >= 172800) return `${Math.floor(s / 86400)} ימים`;
+  if (s >= 3600) return `${Math.floor(s / 3600)} שע׳`;
+  return `${Math.floor(s / 60)} דק׳`;
+};
+export const fmtWhen = (ts) => (ts ? new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+
+// Stat tile: big number + label (+ optional sub line). `ok` colors the number,
+// `to` makes it a clickable drill-down into the underlying data.
+export function Stat({ label, value, sub, ok, to }) {
+  const nav = useNavigate();
+  return (
+    <Card
+      className={`text-center ${to ? 'cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition' : ''}`}
+      onClick={to ? () => nav(to) : undefined}
+      role={to ? 'button' : undefined}
+    >
+      <div className={`text-3xl font-bold tabular-nums ${ok === false ? 'text-off' : ok ? 'text-on' : ''}`}>{value}</div>
+      <div className="text-muted text-sm">{label}</div>
+      {sub && <div className="text-muted text-xs mt-0.5">{sub}</div>}
+      {to && <div className="text-accent-dk text-xs mt-1 underline underline-offset-2">פרטים ›</div>}
+    </Card>
   );
 }

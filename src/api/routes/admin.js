@@ -1,6 +1,6 @@
 // §3.3 admin panel. support = read-only [D15]; every write audit-logged.
 import { Router, raw } from 'express';
-import { query, withTransaction, pool } from '../../db/pool.js';
+import { query, withTransaction, pool, poolStats } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireAdmin, requireWrite, requireSuperadmin, signUserToken, invalidateSession } from '../middleware.js';
 import { isIP } from 'node:net';
@@ -1022,16 +1022,29 @@ adminRouter.get('/audit-log/facets', async (req, res, next) => {
 // Row counts come from information_schema (InnoDB keeps an estimate — instant);
 // ?exact=1 runs COUNT(*) per table instead (a full index scan each, so only on
 // request). Everything else is one information_schema pass plus SHOW STATUS.
-adminRouter.get('/db', async (req, res, next) => {
+// MySQL 8 caches TABLES statistics for information_schema_stats_expiry seconds
+// (a day by default) — the figures are read on one connection with that cache
+// switched off for the session, so rows/sizes/AUTO_INCREMENT/UPDATE_TIME are
+// current. Superadmin only, like the other מערכת pages.
+async function freshTableStats() {
+  const conn = await pool.getConnection();
+  try {
+    await conn.query('SET SESSION information_schema_stats_expiry = 0').catch(() => {}); // pre-8.0: no such variable, no cache either
+    const [rows] = await conn.query(
+      `SELECT TABLE_NAME AS name, ENGINE AS engine, TABLE_ROWS AS rows_est, DATA_LENGTH AS data_bytes,
+              INDEX_LENGTH AS index_bytes, DATA_FREE AS free_bytes, AUTO_INCREMENT AS auto_increment,
+              CREATE_TIME AS created_at, UPDATE_TIME AS updated_at, TABLE_COLLATION AS collation, TABLE_COMMENT AS comment
+       FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'
+       ORDER BY TABLE_NAME`,
+    );
+    return rows;
+  } finally { conn.release(); }
+}
+
+adminRouter.get('/db', requireSuperadmin, async (req, res, next) => {
   try {
     const [tables, columns, indexes, status, vars, [ver]] = await Promise.all([
-      query(
-        `SELECT TABLE_NAME AS name, ENGINE AS engine, TABLE_ROWS AS rows_est, DATA_LENGTH AS data_bytes,
-                INDEX_LENGTH AS index_bytes, DATA_FREE AS free_bytes, AUTO_INCREMENT AS auto_increment,
-                CREATE_TIME AS created_at, UPDATE_TIME AS updated_at, TABLE_COLLATION AS collation, TABLE_COMMENT AS comment
-         FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'
-         ORDER BY TABLE_NAME`,
-      ),
+      freshTableStats(),
       query('SELECT TABLE_NAME AS name, COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() GROUP BY TABLE_NAME'),
       query('SELECT TABLE_NAME AS name, COUNT(DISTINCT INDEX_NAME) AS n FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() GROUP BY TABLE_NAME'),
       query(`SHOW GLOBAL STATUS WHERE Variable_name IN ('Uptime','Threads_connected','Threads_running','Max_used_connections','Questions',
@@ -1044,16 +1057,22 @@ adminRouter.get('/db', async (req, res, next) => {
     const st = Object.fromEntries(status.map((r) => [r.Variable_name, r.Value]));
     const vr = Object.fromEntries(vars.map((r) => [r.Variable_name, r.Value]));
 
-    let exact = null;
+    // Exact counts: sequential (one scan at a time keeps the pool free for real
+    // traffic), each capped at 5 s and the whole pass at 25 s so the request
+    // never outlives the proxy timeout — a table that misses its cap keeps the
+    // estimate and says so.
+    const exact = {};
     if (req.query.exact === '1') {
-      // Sequential on purpose — one scan at a time keeps the pool free for real traffic.
-      exact = {};
+      const deadline = Date.now() + 25_000;
       for (const t of tables) {
-        const [row] = await query(`SELECT COUNT(*) AS n FROM \`${t.name.replace(/`/g, '')}\``);
-        exact[t.name] = Number(row.n);
+        if (Date.now() > deadline) break;
+        try {
+          const [row] = await query(`SELECT /*+ MAX_EXECUTION_TIME(5000) */ COUNT(*) AS n FROM \`${t.name.replace(/`/g, '')}\``);
+          exact[t.name] = Number(row.n);
+        } catch { /* timed out — estimate stands */ }
       }
     }
-    const p = pool.pool; // mysql2 pool internals: live / idle / waiting
+    const mem = process.memoryUsage();
     res.json({
       db: ver.db,
       server: {
@@ -1068,16 +1087,11 @@ adminRouter.get('/db', async (req, res, next) => {
         buffer_pool_data_bytes: Number(st.Innodb_buffer_pool_bytes_data || 0),
         buffer_pool_dirty_bytes: Number(st.Innodb_buffer_pool_bytes_dirty || 0),
       },
-      pool: {
-        limit: 10,
-        open: p?._allConnections?.length ?? null,
-        idle: p?._freeConnections?.length ?? null,
-        waiting: p?._connectionQueue?.length ?? null,
-      },
-      app: { heap_used: process.memoryUsage().heapUsed, rss: process.memoryUsage().rss, uptime_s: Math.round(process.uptime()) },
+      pool: poolStats(),
+      app: { heap_used: mem.heapUsed, rss: mem.rss, uptime_s: Math.round(process.uptime()) },
       tables: tables.map((t) => ({
         name: t.name, engine: t.engine, collation: t.collation, comment: t.comment || null,
-        rows: exact ? exact[t.name] : Number(t.rows_est || 0), rows_exact: Boolean(exact),
+        rows: t.name in exact ? exact[t.name] : Number(t.rows_est || 0), rows_exact: t.name in exact,
         data_bytes: Number(t.data_bytes || 0), index_bytes: Number(t.index_bytes || 0), free_bytes: Number(t.free_bytes || 0),
         auto_increment: t.auto_increment == null ? null : Number(t.auto_increment),
         columns: colCount[t.name] || 0, indexes: idxCount[t.name] || 0,

@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, ErrorNote, useAsync, niceCeil } from '../ui.jsx';
+import { Card, Button, Input, Select, ErrorNote, useAsync, niceCeil, Stat, fmtBytes, fmtInt, fmtUptime, fmtWhen } from '../ui.jsx';
 
 // What each table holds, in Hebrew, and where its data is browsed in the admin.
 const TABLES_HE = {
@@ -38,22 +38,6 @@ const TABLES_HE = {
   schema_migrations: { he: 'גרסאות סכמה' },
 };
 
-const fmtBytes = (b) => {
-  if (b == null) return '—';
-  if (b >= 1073741824) return `${(b / 1073741824).toFixed(2)} GB`;
-  if (b >= 1048576) return `${(b / 1048576).toFixed(1)} MB`;
-  if (b >= 1024) return `${Math.round(b / 1024)} KB`;
-  return `${b} B`;
-};
-const fmtInt = (n) => (n == null ? '—' : Number(n).toLocaleString('he-IL'));
-const fmtUptime = (s) => {
-  if (s == null) return '—';
-  if (s >= 172800) return `${Math.floor(s / 86400)} ימים`;
-  if (s >= 3600) return `${Math.floor(s / 3600)} שע׳`;
-  return `${Math.floor(s / 60)} דק׳`;
-};
-const fmtWhen = (ts) => (ts ? new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
-
 const SORTS = {
   size: { label: 'לפי גודל', key: (t) => t.data_bytes + t.index_bytes },
   rows: { label: 'לפי שורות', key: (t) => t.rows },
@@ -61,19 +45,6 @@ const SORTS = {
   updated: { label: 'לפי עדכון אחרון', key: (t) => (t.updated_at ? new Date(t.updated_at).getTime() : 0) },
   index: { label: 'לפי אינדקסים', key: (t) => t.index_bytes },
 };
-
-function Tile({ label, value, sub, ok, to }) {
-  const inner = (
-    <>
-      <div className={`text-2xl font-bold tabular-nums ${ok === false ? 'text-off' : ok ? 'text-on' : ''}`}>{value}</div>
-      <div className="text-muted text-sm">{label}</div>
-      {sub && <div className="text-muted text-xs mt-0.5">{sub}</div>}
-    </>
-  );
-  return to
-    ? <Link to={to}><Card className="text-center cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition">{inner}</Card></Link>
-    : <Card className="text-center">{inner}</Card>;
-}
 
 // Horizontal size bars, single hue; data + index stacked with a 2px gap so the
 // index share reads without a second color (index is the lighter tint).
@@ -117,7 +88,10 @@ export default function Database() {
   const { busy, error, run } = useAsync();
 
   useEffect(() => {
-    run(async () => setD(await adminApi.get(`/db${exact ? '?exact=1' : ''}`))).catch(() => {});
+    // A slow exact-count response must not land over a newer estimate request.
+    let live = true;
+    run(async () => { const res = await adminApi.get(`/db${exact ? '?exact=1' : ''}`); if (live) setD(res); }).catch(() => {});
+    return () => { live = false; };
   }, [exact, tick]);
 
   const engines = useMemo(() => [...new Set((d?.tables || []).map((t) => t.engine).filter(Boolean))], [d]);
@@ -139,7 +113,10 @@ export default function Database() {
   const sum = (k) => shown.reduce((n, t) => n + (t[k] || 0), 0);
   const rows = sum('rows'), data = sum('data_bytes'), index = sum('index_bytes'), free = sum('free_bytes');
   const sv = d?.server;
-  const poolUse = d?.pool && d.pool.open != null ? `${d.pool.open - d.pool.idle}/${d.pool.limit}` : '—';
+  const pl = d?.pool;
+  const poolUse = pl && pl.open != null && pl.idle != null ? `${pl.open - pl.idle}/${pl.limit ?? '?'}` : '—';
+  const exactAll = d?.tables.length > 0 && d.tables.every((t) => t.rows_exact);
+  const exactSome = d?.tables.some((t) => t.rows_exact);
 
   return (
     <div className="space-y-4">
@@ -164,14 +141,16 @@ export default function Database() {
       {/* server + app vitals */}
       {sv && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-          <Tile label="חיבורים פתוחים" value={`${sv.threads_connected}/${sv.max_connections}`} sub={`שיא ${sv.max_used_connections} · פעילים ${sv.threads_running}`}
-            ok={sv.threads_connected < sv.max_connections * 0.8} />
-          <Tile label="מאגר חיבורים (שרת)" value={poolUse} sub={d.pool.waiting ? `${d.pool.waiting} ממתינים` : 'אין המתנה'} ok={!d.pool.waiting} />
-          <Tile label="זיכרון InnoDB" value={fmtBytes(sv.buffer_pool_data_bytes)} sub={`מתוך ${fmtBytes(sv.buffer_pool_bytes)} · ${fmtBytes(sv.buffer_pool_dirty_bytes)} ממתין לכתיבה`}
+          {/* Counters since server start (questions, slow, aborted) are history, not state — no color on them. */}
+          <Stat label="חיבורים פתוחים" value={sv.max_connections > 0 ? `${sv.threads_connected}/${sv.max_connections}` : fmtInt(sv.threads_connected)}
+            sub={`שיא ${sv.max_used_connections} · פעילים ${sv.threads_running}`}
+            ok={sv.max_connections > 0 ? sv.threads_connected < sv.max_connections * 0.8 : undefined} />
+          <Stat label="מאגר חיבורים (אפליקציה)" value={poolUse} sub={pl?.waiting ? `${pl.waiting} ממתינים` : 'אין המתנה'} ok={pl?.waiting ? false : undefined} />
+          <Stat label="זיכרון InnoDB" value={fmtBytes(sv.buffer_pool_data_bytes)} sub={`מתוך ${fmtBytes(sv.buffer_pool_bytes)} · ${fmtBytes(sv.buffer_pool_dirty_bytes)} ממתין לכתיבה`}
             ok={sv.buffer_pool_bytes ? sv.buffer_pool_data_bytes < sv.buffer_pool_bytes * 0.9 : undefined} />
-          <Tile label="שאילתות" value={fmtInt(sv.questions)} sub={`${fmtInt(sv.slow_queries)} איטיות · ${fmtInt(sv.aborted_connects)} חיבורים שנכשלו`} ok={sv.slow_queries === 0} />
-          <Tile label="תעבורה" value={fmtBytes(sv.bytes_sent)} sub={`נשלח · התקבל ${fmtBytes(sv.bytes_received)}`} />
-          <Tile label="זמן פעילות DB" value={fmtUptime(sv.uptime_s)} sub={`אפליקציה ${fmtUptime(d.app.uptime_s)} · ${fmtBytes(d.app.heap_used)} heap`} ok />
+          <Stat label="שאילתות מאז העלייה" value={fmtInt(sv.questions)} sub={`${fmtInt(sv.slow_queries)} איטיות · ${fmtInt(sv.aborted_connects)} חיבורים שנכשלו`} />
+          <Stat label="תעבורה" value={fmtBytes(sv.bytes_sent)} sub={`נשלח · התקבל ${fmtBytes(sv.bytes_received)}`} />
+          <Stat label="זמן פעילות DB" value={fmtUptime(sv.uptime_s)} sub={`אפליקציה ${fmtUptime(d.app.uptime_s)} · ${fmtBytes(d.app.heap_used)} heap`} />
         </div>
       )}
 
@@ -196,11 +175,12 @@ export default function Database() {
       {/* table totals (follow the filter) */}
       {d && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-          <Tile label="טבלאות" value={fmtInt(shown.length)} sub={filtering ? `מתוך ${d.tables.length}` : undefined} />
-          <Tile label={d.tables[0]?.rows_exact ? 'שורות (מדויק)' : 'שורות (הערכה)'} value={fmtInt(rows)} />
-          <Tile label="נתונים" value={fmtBytes(data)} />
-          <Tile label="אינדקסים" value={fmtBytes(index)} sub={data ? `${Math.round((index / (data + index)) * 100)}% מהנפח` : undefined} />
-          <Tile label="סה״כ נפח" value={fmtBytes(data + index)} sub={free ? `${fmtBytes(free)} פנוי בקבצים` : undefined} />
+          <Stat label="טבלאות" value={fmtInt(shown.length)} sub={filtering ? `מתוך ${d.tables.length}` : undefined} />
+          <Stat label={exactAll ? 'שורות (מדויק)' : exactSome ? 'שורות (מדויק חלקית)' : 'שורות (הערכה)'} value={fmtInt(rows)}
+            sub={exact && !exactAll ? 'טבלאות שחרגו מהזמן נשארו בהערכה (≈)' : undefined} />
+          <Stat label="נתונים" value={fmtBytes(data)} />
+          <Stat label="אינדקסים" value={fmtBytes(index)} sub={data ? `${Math.round((index / (data + index)) * 100)}% מהנפח` : undefined} />
+          <Stat label="סה״כ נפח" value={fmtBytes(data + index)} sub={free ? `${fmtBytes(free)} פנוי בקבצים` : undefined} />
         </div>
       )}
 
