@@ -2,20 +2,12 @@
 // Anthropic ($) side by side, filterable by period.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, ErrorNote, useAsync, RangeFilter, rangeBounds, utcStamp, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
+import { Card, Button, Input, Select, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
 
 const C_EXPENSE = '#e11d48'; // money-color convention: costs are red
 
 const PERIOD_KEYS = [...RANGE_HOURS, ...RANGE_DAYS, 'month', 'all', 'custom'];
 
-// Local-time period → UTC 'YYYY-MM-DD HH:MM:SS' bounds (DB and API are UTC).
-function periodBounds(period, fromDate, toDate) {
-  const b = rangeBounds(period, { fromDate, toDate });
-  const out = {};
-  if (b.from) out.from = utcStamp(b.from);
-  if (b.to) out.to = utcStamp(b.to);
-  return out;
-}
 
 export default function VoiceCosts() {
   const [period, setPeriod] = useState('month');
@@ -38,7 +30,7 @@ export default function VoiceCosts() {
     // Debounce the keystroke filters (phone/search); selects fire immediately.
     const t = setTimeout(() => {
       run(async () => {
-        const b = periodBounds(period, fromDate, toDate);
+        const b = rangeStamps(period, { fromDate, toDate });
         const q = new URLSearchParams();
         if (b.from) q.set('from', b.from);
         if (b.to) q.set('to', b.to);

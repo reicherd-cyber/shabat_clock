@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ShieldCheck, UserRound, Phone, Cog, ChevronDown, ChevronUp } from 'lucide-react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, DAY_NAMES, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeBounds, utcStamp, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, DAY_NAMES, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, ymdLocal, RANGE_LOG } from '../ui.jsx';
 
 // ── vocabulary ──
 // Actor kinds: label, icon, chart hue. Palette validated (dataviz validator, light
@@ -107,10 +107,11 @@ function fmtValue(key, v) {
   if (key === 'fail_reason') return FAIL_HE[v] || v;
   if (Array.isArray(v)) return v.length ? v.map((x) => (typeof x === 'object' ? JSON.stringify(x) : fmtValue(key, x))).join(', ') : '—';
   if (typeof v === 'object') return JSON.stringify(v);
+  // Money keys first — they arrive as numbers (rates) or DECIMAL strings (payments).
+  if (key === 'usd') return `$${v}`;
+  if (key === 'amount' || key === 'ils') return `₪${Number(v).toLocaleString('he-IL')}`;
   if (typeof v === 'number') return v.toLocaleString('he-IL');
   const s = String(v);
-  if (key === 'usd') return `$${s}`;
-  if (key === 'amount' || key === 'ils') return `₪${Number(s).toLocaleString('he-IL')}`;
   return VALUES[s] || s;
 }
 
@@ -170,24 +171,17 @@ function entityName(r) {
 
 // ── time helpers ──
 const pad = (n) => String(n).padStart(2, '0');
-const localDay = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const dayTitle = (key) => {
-  const today = localDay(new Date());
+  const today = ymdLocal(new Date());
   const y = new Date(); y.setDate(y.getDate() - 1);
   const [yy, mm, dd] = key.split('-').map(Number);
   const d = new Date(yy, mm - 1, dd);
   const full = `יום ${DAY_NAMES[d.getDay() + 1]}, ${dd}.${mm}.${yy}`;
   if (key === today) return `היום · ${full}`;
-  if (key === localDay(y)) return `אתמול · ${full}`;
+  if (key === ymdLocal(y)) return `אתמול · ${full}`;
   return full;
 };
 
-const PERIOD_KEYS = [...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom'];
-// Shared presets → the UTC stamps the API takes (undefined = open side).
-function periodRange(period, fromDate, toDate) {
-  const b = rangeBounds(period, { fromDate, toDate });
-  return { from: b.from ? utcStamp(b.from) : undefined, to: b.to ? utcStamp(b.to) : undefined };
-}
 
 function useDebounced(value, ms) {
   const [v, setV] = useState(value);
@@ -225,6 +219,7 @@ function Chip({ c }) {
 
 function Details({ r, changes }) {
   const [raw, setRaw] = useState(false);
+  const hasChange = changes.some((c) => c.kind === 'change');
   return (
     <div className="mt-2 rounded-[10px] border border-line bg-surface2/60 p-3 text-sm" onClick={(e) => e.stopPropagation()}>
       {changes.length > 0 ? (
@@ -232,15 +227,15 @@ function Details({ r, changes }) {
           <thead>
             <tr className="text-right text-muted text-xs">
               <th className="pb-1 font-medium">שדה</th>
-              {changes.some((c) => c.kind === 'change') && <th className="pb-1 font-medium">לפני</th>}
-              <th className="pb-1 font-medium">{changes.some((c) => c.kind === 'change') ? 'אחרי' : 'ערך'}</th>
+              {hasChange && <th className="pb-1 font-medium">לפני</th>}
+              <th className="pb-1 font-medium">{hasChange ? 'אחרי' : 'ערך'}</th>
             </tr>
           </thead>
           <tbody>
             {changes.map((c) => (
               <tr key={`${c.kind}:${c.key}`} className="border-t border-line/70 align-top">
                 <td className="py-1 pe-3 text-muted whitespace-nowrap">{c.label}</td>
-                {changes.some((x) => x.kind === 'change') && (
+                {hasChange && (
                   <td className="py-1 pe-3 break-all">{c.kind === 'change' ? <span className="line-through text-muted">{fmtValue(c.key, c.before)}</span> : <span className="text-muted">—</span>}</td>
                 )}
                 <td className="py-1 break-all font-medium">{fmtValue(c.key, c.after)}</td>
@@ -293,7 +288,7 @@ function Row({ r, open, onToggle }) {
                   ) : <b>{name}</b>}
                 </>
               )}
-              {r.entity_ctx && r.entity !== 'support_message' && r.entity !== 'installer_token' && <span className="text-muted"> ({r.entity_ctx})</span>}
+              {r.entity_ctx && r.entity !== 'support_message' && <span className="text-muted"> ({VALUES[r.entity_ctx] || r.entity_ctx})</span>}
               {r.entity === 'support_message' && r.entity_ctx && <span className="text-muted"> · {r.entity_ctx}</span>}
             </span>
             {isCommand && commandVerdict(r)}
@@ -353,8 +348,8 @@ function ActivityChart({ byDay, range }) {
   const buckets = useMemo(() => {
     if (!byDay.length) return [];
     const days = [...new Set(byDay.map((r) => r.d))].sort();
-    const first = range.from ? localDay(new Date(range.from.replace(' ', 'T') + 'Z')) : days[0];
-    const last = range.to ? localDay(new Date(range.to.replace(' ', 'T') + 'Z')) : localDay(new Date());
+    const first = range.from ? ymdLocal(new Date(range.from.replace(' ', 'T') + 'Z')) : days[0];
+    const last = range.to ? ymdLocal(new Date(range.to.replace(' ', 'T') + 'Z')) : ymdLocal(new Date());
     const list = [];
     const [fy, fm, fd] = first.split('-').map(Number);
     const cur = new Date(fy, fm - 1, fd);
@@ -366,8 +361,8 @@ function ActivityChart({ byDay, range }) {
       k[r.actor_type] = (k[r.actor_type] || 0) + r.n;
       map.set(r.d, k);
     }
-    while (localDay(cur) <= last && list.length < 400) {
-      const key = localDay(cur);
+    while (ymdLocal(cur) <= last && list.length < 400) {
+      const key = ymdLocal(cur);
       const row = map.get(key) || { admin: 0, user: 0, ivr: 0, system: 0 };
       if (weekly && list.length && cur.getDay() !== 0) {
         const tgt = list[list.length - 1];
@@ -468,7 +463,7 @@ export default function Audit() {
 
   useEffect(() => { adminApi.get('/audit-log/facets').then(setFacets).catch(setError); }, []);
 
-  const range = useMemo(() => periodRange(period, fromDate, toDate), [period, fromDate, toDate]);
+  const range = useMemo(() => rangeStamps(period, { fromDate, toDate }), [period, fromDate, toDate]);
   const baseQuery = useMemo(() => {
     const p = new URLSearchParams();
     if (range.from) p.set('from', range.from);
@@ -525,6 +520,7 @@ export default function Audit() {
       const sp = new URLSearchParams(baseQuery);
       if (!actor) sp.delete('actor_type');
       sp.set('tz_offset', String(-new Date().getTimezoneOffset()));
+      try { sp.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || ''); } catch { /* offset fallback */ }
       const [list, st] = await Promise.all([adminApi.get(`/audit-log?${baseQuery}`), adminApi.get(`/audit-log/stats?${sp}`)]);
       if (currentQuery.current !== key) return;
       setData(list);
@@ -571,7 +567,7 @@ export default function Audit() {
   const groups = useMemo(() => {
     const out = [];
     for (const r of data?.rows || []) {
-      const key = localDay(new Date(r.created_at));
+      const key = ymdLocal(new Date(r.created_at));
       if (!out.length || out[out.length - 1].key !== key) out.push({ key, rows: [] });
       out[out.length - 1].rows.push(r);
     }
@@ -590,7 +586,7 @@ export default function Audit() {
 
       {/* filters — one row, wraps on phones */}
       <Card className="flex flex-wrap items-center gap-2 !py-3">
-        <RangeFilter value={period} onChange={setPeriod} keys={PERIOD_KEYS} className="w-auto"
+        <RangeFilter value={period} onChange={setPeriod} keys={RANGE_LOG} className="w-auto"
           custom={{ fromDate, toDate }} onCustom={(p) => { if ('fromDate' in p) setFromDate(p.fromDate); if ('toDate' in p) setToDate(p.toDate); }} />
         <Select className="text-sm !py-2" value={actorType} onChange={(e) => { setActorType(e.target.value); setActor(''); }} aria-label="סוג גורם">
           <option value="">כל הגורמים</option>

@@ -1,7 +1,7 @@
 // Admin history: merged commands + call_logs for ALL users, every field filterable.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeBounds, utcStamp, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG } from '../ui.jsx';
 import { MenuPath } from './Misc.jsx';
 
 const SOURCE_HE = { ivr: 'טלפון', web: 'אתר', schedule: 'תזמון', admin: 'מנהל' };
@@ -9,7 +9,6 @@ const STATUS_HE = { pending: 'ממתינה', sent: 'נשלחה', acked: 'בוצ�
 const OUTCOME_HE = { command: 'פקודה', schedule: 'תזמון', status: 'בירור מצב', auth_fail: 'כשל זיהוי', abandoned: 'נותקה באמצע' };
 
 const EMPTY = { user_id: '', device_id: '', relay_id: '', type: '', action: '', source: '', status: '', outcome: '', phone: '', range: 'all', fromDate: '', fromHour: '', toDate: '', toHour: '' };
-const RANGE_KEYS = [...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom'];
 
 export default function AdminHistory() {
   const [f, setF] = useState(EMPTY);
@@ -48,9 +47,9 @@ export default function AdminHistory() {
   const buildQuery = () => {
     const q = new URLSearchParams();
     for (const k of ['user_id', 'device_id', 'relay_id', 'type', 'action', 'source', 'status', 'outcome', 'phone']) if (f[k]) q.set(k, f[k]);
-    const b = rangeBounds(f.range, f);
-    if (b.from) q.set('from', utcStamp(b.from));
-    if (b.to) q.set('to', utcStamp(b.to));
+    const b = rangeStamps(f.range, f);
+    if (b.from) q.set('from', b.from);
+    if (b.to) q.set('to', b.to);
     return q;
   };
 
@@ -87,7 +86,7 @@ export default function AdminHistory() {
             <option value="cmd">פקודות בלבד</option>
             <option value="call">שיחות בלבד</option>
           </Select>
-          <RangeFilter value={f.range} onChange={set('range')} keys={RANGE_KEYS} hours
+          <RangeFilter value={f.range} onChange={set('range')} keys={RANGE_LOG} hours
             custom={f} onCustom={(p) => setF((x) => ({ ...x, ...p }))} />
           {filtering && <Button variant="ghost" onClick={() => setF(EMPTY)}>נקה סינון</Button>}
         </div>

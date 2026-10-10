@@ -328,19 +328,21 @@ export const RANGE_DEFAULT = [...RANGE_HOURS, ...RANGE_DAYS, 'month', 'year', 'a
 // a null side is open. Custom hours: none = whole day (00:00 → 23:59:59).
 export function rangeBounds(key, { fromDate = '', toDate = '', fromHour = '', toHour = '' } = {}) {
   const now = new Date();
-  const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const [y, mo, d] = [now.getFullYear(), now.getMonth(), now.getDate()];
+  // Day presets use calendar arithmetic (Date rolls the day field), never
+  // 86400e3 ms — a DST day is 23 or 25 hours and ms math lands an hour off.
   const m = /^(\d+)([hdm])$/.exec(key || '');
   if (m) {
     const n = Number(m[1]);
     if (m[2] === 'h') return { from: new Date(now.getTime() - n * 3600e3), to: null };
-    if (m[2] === 'd') return { from: new Date(today0.getTime() - (n - 1) * 86400e3), to: null };
-    return { from: new Date(now.getFullYear(), now.getMonth() - (n - 1), 1), to: null };
+    if (m[2] === 'd') return { from: new Date(y, mo, d - (n - 1)), to: null };
+    return { from: new Date(y, mo - (n - 1), 1), to: null };
   }
   switch (key) {
-    case 'today': return { from: today0, to: null };
-    case 'yesterday': return { from: new Date(today0.getTime() - 86400e3), to: new Date(today0.getTime() - 1000) };
-    case 'month': return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: null };
-    case 'year': return { from: new Date(now.getFullYear(), 0, 1), to: null };
+    case 'today': return { from: new Date(y, mo, d), to: null };
+    case 'yesterday': return { from: new Date(y, mo, d - 1), to: new Date(y, mo, d - 1, 23, 59, 59) };
+    case 'month': return { from: new Date(y, mo, 1), to: null };
+    case 'year': return { from: new Date(y, 0, 1), to: null };
     case 'custom': {
       const hh = (h, dflt) => String(h === '' || h == null ? dflt : h).padStart(2, '0');
       return {
@@ -354,6 +356,16 @@ export function rangeBounds(key, { fromDate = '', toDate = '', fromHour = '', to
 // DB and API speak UTC 'YYYY-MM-DD HH:MM:SS'; the ledger speaks local 'YYYY-MM-DD'.
 export const utcStamp = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
 export const ymdLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+// Preset → the UTC stamps a log endpoint takes ({ from?, to? }, open sides omitted).
+export function rangeStamps(key, custom) {
+  const b = rangeBounds(key, custom);
+  const out = {};
+  if (b.from) out.from = utcStamp(b.from);
+  if (b.to) out.to = utcStamp(b.to);
+  return out;
+}
+// The preset list for event logs (hours + days + all + custom).
+export const RANGE_LOG = [...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom'];
 
 export function HourSelect({ value, onChange }) {
   return (

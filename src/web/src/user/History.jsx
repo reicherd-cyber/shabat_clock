@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Select, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeBounds, utcStamp, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
+import { Card, Button, Select, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG } from '../ui.jsx';
 
-const RANGE_KEYS = [...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom'];
 const EMPTY_CUSTOM = { fromDate: '', fromHour: '', toDate: '', toHour: '' };
 import { Lightbulb, X, PhoneCall } from 'lucide-react';
 
@@ -79,9 +78,9 @@ export default function History() {
     if (!reset && cursor) q.set('cursor', cursor);
     if (relayId) q.set('relay_id', relayId);
     if (kind) q.set('kind', kind);
-    const b = rangeBounds(range, custom); // local preset → UTC stamps (DB is UTC)
-    if (b.from) q.set('from', utcStamp(b.from));
-    if (b.to) q.set('to', utcStamp(b.to));
+    const b = rangeStamps(range, custom); // local preset → UTC stamps (DB is UTC)
+    if (b.from) q.set('from', b.from);
+    if (b.to) q.set('to', b.to);
     const res = await api.get(`/history?${q}`);
     setItems((prev) => reset ? res.items : [...prev, ...res.items]);
     setCursor(res.next_cursor);
@@ -106,7 +105,7 @@ export default function History() {
           {Object.entries(SOURCE_HE).map(([v, he]) => <option key={v} value={v}>{he}</option>)}
           <option value="call">שיחות טלפון בלבד</option>
         </Select>
-        <RangeFilter value={range} onChange={setRange} keys={RANGE_KEYS} hours className="flex-1 min-w-[10rem]"
+        <RangeFilter value={range} onChange={setRange} keys={RANGE_LOG} hours className="flex-1 min-w-[10rem]"
           custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />
         {filtering && <Button variant="ghost" onClick={() => { setRelayId(''); setKind(''); setRange('all'); setCustom(EMPTY_CUSTOM); }}>נקה סינון</Button>}
       </div>

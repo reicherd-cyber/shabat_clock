@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
-import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead, RangeFilter, rangeBounds, utcStamp, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
+import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead, RangeFilter, rangeStamps, RANGE_LOG } from '../ui.jsx';
 import { MessageSquare, Send, Phone } from 'lucide-react';
 
 // פניות תמיכה: תיבת ההודעות שמשתמשים שולחים ממרכז העזרה. סטטוסים רכים והפיכים
@@ -20,7 +20,6 @@ const TOPIC_LABELS = {
   // הודעות קוליות מתפריט המכירות (מתקשר לא רשום): 1 = מתעניין בהזמנה, 2 = הזמנה בתהליך
   order: 'מתעניין בהזמנה', order_status: 'הזמנה בתהליך',
 };
-const PERIOD_KEYS = [...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom'];
 const fmtTs = (ts) => new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
 // פנייה טלפונית אין לה משתמש — מציגים את המספר (או "מספר חסוי") במקום שם.
 const isPhone = (m) => m?.source === 'phone';
@@ -88,9 +87,9 @@ export function SupportInbox() {
     if (fStatus) p.set('status', fStatus);
     if (fSource) p.set('source', fSource);
     if (search.trim()) p.set('q', search.trim());
-    const b = rangeBounds(period, custom);
-    if (b.from) p.set('from', utcStamp(b.from));
-    if (b.to) p.set('to', utcStamp(b.to));
+    const b = rangeStamps(period, custom);
+    if (b.from) p.set('from', b.from);
+    if (b.to) p.set('to', b.to);
     setData(await adminApi.get(`/support${p.toString() ? `?${p}` : ''}`));
   };
   useEffect(() => {
@@ -168,7 +167,7 @@ export function SupportInbox() {
           <option value="web">מהאתר</option>
           <option value="phone">הודעות קוליות</option>
         </Select>
-        <RangeFilter value={period} onChange={setPeriod} keys={PERIOD_KEYS} className="w-40" hours
+        <RangeFilter value={period} onChange={setPeriod} keys={RANGE_LOG} className="w-40" hours
           custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />
         <Input className="w-56 py-2 text-sm" placeholder="חיפוש: תוכן, שם או טלפון…"
           value={search} onChange={(e) => setSearch(e.target.value)} />

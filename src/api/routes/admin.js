@@ -903,7 +903,7 @@ const AUDIT_ENTITY_NAME = `CASE a.entity
   WHEN 'relay' THEN r.name
   WHEN 'schedule' THEN sr.name
   WHEN 'admin' THEN ea.name
-  WHEN 'support_message' THEN su.full_name
+  WHEN 'support_message' THEN COALESCE(su.full_name, sm.phone, 'מספר חסוי')
   WHEN 'admin_task' THEN t.title
   WHEN 'crm_lead' THEN cl.name
   WHEN 'crm_order' THEN co.description
@@ -967,14 +967,20 @@ adminRouter.get('/audit-log', async (req, res, next) => {
 });
 
 // Counts for the tiles + per-day activity for the chart, under the same filters
-// as the list (minus the cursor). Days are bucketed in the CLIENT's timezone —
-// created_at is UTC, tz_offset is the browser's minutes-from-UTC.
+// as the list (minus the cursor). Days are bucketed in the CLIENT's timezone:
+// created_at is UTC; `tz` is the browser's IANA zone (DST-correct per row via
+// CONVERT_TZ) with `tz_offset` (minutes from UTC right now) as the fallback
+// should the server lack timezone tables.
 adminRouter.get('/audit-log/stats', async (req, res, next) => {
   try {
-    const { before_id: _skip, tz_offset, ...q } = req.query;
+    const { before_id: _skip, tz_offset, tz: tzName, ...q } = req.query;
     const { where, params, needsJoins } = auditWhere(q);
     const from = needsJoins ? AUDIT_FROM : 'FROM audit_log a';
     const tz = Math.max(-840, Math.min(840, Math.round(Number(tz_offset) || 0)));
+    const zone = /^[A-Za-z_]+(\/[A-Za-z0-9_+\-]+){0,2}$/.test(String(tzName || '')) ? String(tzName) : null;
+    const localDay = zone
+      ? `COALESCE(CONVERT_TZ(a.created_at, '+00:00', ?), a.created_at + INTERVAL ${tz} MINUTE)`
+      : `a.created_at + INTERVAL ${tz} MINUTE`;
     const [[totals], byDay] = await Promise.all([
       query(
         `SELECT COUNT(*) AS total,
@@ -983,8 +989,8 @@ adminRouter.get('/audit-log/stats', async (req, res, next) => {
          ${from} ${where}`, params,
       ),
       query(
-        `SELECT DATE_FORMAT(a.created_at + INTERVAL ${tz} MINUTE, '%Y-%m-%d') AS d, a.actor_type, COUNT(*) AS n
-         ${from} ${where} GROUP BY 1, 2 ORDER BY 1`, params,
+        `SELECT DATE_FORMAT(${localDay}, '%Y-%m-%d') AS d, a.actor_type, COUNT(*) AS n
+         ${from} ${where} GROUP BY 1, 2 ORDER BY 1`, zone ? [zone, ...params] : params,
       ),
     ]);
     res.json({
@@ -1031,10 +1037,11 @@ adminRouter.get('/support', async (req, res, next) => {
     if (['web', 'phone'].includes(String(req.query.source))) { cond.push('m.source = ?'); params.push(String(req.query.source)); }
     if (req.query.from) { cond.push('m.created_at >= ?'); params.push(String(req.query.from)); }
     if (req.query.to) {
-      // A bare date means "through that day"; a full timestamp is an exact bound.
+      // One convention with the other logs: an inclusive UTC stamp; a bare date
+      // (older links) means through the end of that day.
       const to = String(req.query.to);
-      if (to.length > 10) { cond.push('m.created_at <= ?'); params.push(to); }
-      else { cond.push('m.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); params.push(to); }
+      cond.push('m.created_at <= ?');
+      params.push(/^\d{4}-\d{2}-\d{2}$/.test(to) ? `${to} 23:59:59` : to);
     }
     if (req.query.q) {
       cond.push('(m.body LIKE ? OR m.phone LIKE ? OR u.full_name LIKE ? OR EXISTS (SELECT 1 FROM user_phones p WHERE p.user_id = u.id AND p.phone LIKE ?))');

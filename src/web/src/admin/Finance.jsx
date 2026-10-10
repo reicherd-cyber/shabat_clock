@@ -17,7 +17,6 @@ const REC_HE = { once: 'חד־פעמי', monthly: 'חודשי', yearly: 'שנת�
 const MONTH_HE = ['ינו׳', 'פבר׳', 'מרץ', 'אפר׳', 'מאי', 'יוני', 'יולי', 'אוג׳', 'ספט׳', 'אוק׳', 'נוב׳', 'דצמ׳'];
 
 const fmtNis = (n, frac = 0) => '₪' + Number(n).toLocaleString('he-IL', { maximumFractionDigits: frac });
-const dstr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 // The ledger is dated by day (entry_date), so the shared presets minus the
 // hour ranges. A preset's open end closes at today — recurring entries must not
@@ -134,7 +133,7 @@ const PRESET_CATEGORIES = {
   income: ['מנוי חודשי', 'התקנה חד־פעמית', 'מכירת חומרה', 'אחר'],
 };
 
-const EMPTY_FORM = { kind: 'expense', title: '', category: '', amount: '', recurrence: 'once', entry_date: dstr(new Date()), end_date: '', note: '', admin_id: '' };
+const EMPTY_FORM = { kind: 'expense', title: '', category: '', amount: '', recurrence: 'once', entry_date: ymdLocal(new Date()), end_date: '', note: '', admin_id: '' };
 
 export default function Finance() {
   const [period, setPeriod] = useState('12m');

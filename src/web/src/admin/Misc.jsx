@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeBounds, utcStamp, RANGE_HOURS, RANGE_DAYS } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG } from '../ui.jsx';
 import { UserRound, House } from 'lucide-react';
 import { ProviderBalances } from './ProviderBalances.jsx';
 
@@ -261,9 +261,7 @@ export function CallLogs() {
   // dropdown is also server-side (user_id). Phone filters client-side so it
   // reacts on every keystroke.
   useEffect(() => { adminApi.get('/users').then(setUsers).catch(setError); }, []);
-  const bounds = rangeBounds(range, custom);
-  const from = bounds.from ? utcStamp(bounds.from) : '';
-  const to = bounds.to ? utcStamp(bounds.to) : '';
+  const { from = '', to = '' } = rangeStamps(range, custom);
   useEffect(() => {
     run(async () => {
       const q = new URLSearchParams();
@@ -287,7 +285,7 @@ export function CallLogs() {
           <SearchSelect className="w-48" value={userId} onChange={setUserId} allLabel="כל המשתמשים" placeholder="חיפוש משתמש…"
             options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: `#${u.id}`, search: u.ivr_code }))} />
           <Input dir="ltr" className="w-40" placeholder="סינון לפי טלפון" value={phone} onChange={(e) => setPhone(e.target.value)} />
-          <RangeFilter value={range} onChange={setRange} keys={[...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom']} hours
+          <RangeFilter value={range} onChange={setRange} keys={RANGE_LOG} hours
             custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />
           {filtering && (
             <Button variant="ghost" onClick={() => { setUserId(''); setPhone(''); setRange('all'); setCustom({ fromDate: '', fromHour: '', toDate: '', toHour: '' }); }}>נקה סינון</Button>
