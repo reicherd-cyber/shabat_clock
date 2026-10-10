@@ -1,5 +1,5 @@
 // Compact admin pages: monitoring, call logs, commands, schedules, settings, admins.
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG } from '../ui.jsx';
@@ -261,7 +261,9 @@ export function CallLogs() {
   // dropdown is also server-side (user_id). Phone filters client-side so it
   // reacts on every keystroke.
   useEffect(() => { adminApi.get('/users').then(setUsers).catch(setError); }, []);
-  const { from = '', to = '' } = rangeStamps(range, custom);
+  // Memoized per selection: a relative preset would otherwise yield a new stamp
+  // on every render and re-fetch endlessly.
+  const { from = '', to = '' } = useMemo(() => rangeStamps(range, custom), [range, custom]);
   useEffect(() => {
     run(async () => {
       const q = new URLSearchParams();

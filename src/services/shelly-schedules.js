@@ -30,7 +30,7 @@
 import { query } from '../db/pool.js';
 import { isPrimary } from '../config/role.js';
 import { shellyCall } from './shelly.js';
-import { timeToMinutes, localParts, dowOfDate, isNextAnniversary } from './time.js';
+import { timeToMinutes, localParts, dowOfDate, isNextAnniversary, ymdOf } from './time.js';
 import { inExclusionRange } from './holidays.js';
 
 const MAX_SHELLY_JOBS = 20;      // Gen2 firmware: "limit of 20 schedule instances per device"
@@ -42,7 +42,6 @@ const MAX_CALLS_PER_JOB = 5;     // Gen2 firmware: "limit of 5 calls per schedul
 export const shellySyncFromHere = (d) =>
   d.transport !== 'mqtt' || isPrimary();
 
-const pad = (n) => String(n).padStart(2, '0');
 
 // Schedule rows → Shelly Schedule jobs, pure (exported for tests). `today` is
 // the device-local date used for date-range/holiday exclusion decisions.
@@ -157,7 +156,7 @@ async function desiredJobs(device) {
     [device.id],
   );
   const p = localParts(new Date(), device.timezone || 'Asia/Jerusalem');
-  return buildShellyJobs(rows, `${p.y}-${pad(p.mo)}-${pad(p.d)}`);
+  return buildShellyJobs(rows, ymdOf(p));
 }
 
 // Rolling-horizon fit for the 20-job cap: keep the 20 jobs whose NEXT firing is
@@ -206,7 +205,7 @@ const canonical = (j) => JSON.stringify({
 export async function syncShellyLocalSchedules(device) {
   const tz = device.timezone || 'Asia/Jerusalem';
   const p = localParts(new Date(), tz);
-  const fit = fitShellyJobs(await desiredJobs(device), `${p.y}-${pad(p.mo)}-${pad(p.d)}`);
+  const fit = fitShellyJobs(await desiredJobs(device), ymdOf(p));
   const desired = fit.jobs;
   // Cron runs on the device's local clock — pin its timezone to the device row's
   // (a wrong auto-detected tz would silently shift every local firing).

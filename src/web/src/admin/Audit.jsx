@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ShieldCheck, UserRound, Phone, Cog, ChevronDown, ChevronUp } from 'lucide-react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, DAY_NAMES, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, ymdLocal, RANGE_LOG } from '../ui.jsx';
+import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, DAY_NAMES, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, ymdLocal, RANGE_LOG, niceCeil } from '../ui.jsx';
 
 // ── vocabulary ──
 // Actor kinds: label, icon, chart hue. Palette validated (dataviz validator, light
@@ -161,6 +161,10 @@ function commandVerdict(r) {
 function entityName(r) {
   if (r.entity_name) return r.entity_name;
   const a = r.diff?.after || {};
+  const b = r.diff?.before || {};
+  // A deleted phone/email row no longer resolves — the diff still carries the value.
+  if (r.entity === 'user_phone' && (b.phone || a.phone)) return b.phone || a.phone;
+  if (r.entity === 'user_email' && (b.email || a.email)) return b.email || a.email;
   if (r.entity === 'device' && a.mac) return a.mac;
   if (r.entity === 'ivr_recording' && (r.diff?.key)) return r.diff.key;
   if (r.entity === 'user' && (a.full_name)) return a.full_name;
@@ -335,13 +339,6 @@ function Tiles({ stats, actorType, onPick }) {
 // ── per-day stacked columns by actor kind (hand-rolled SVG to the mark specs) ──
 const C_GRID = '#DFE6F2';
 const C_MUTED = '#64708D';
-function niceCeil(v) {
-  if (v <= 5) return 5;
-  const p = 10 ** Math.floor(Math.log10(v));
-  const n = v / p;
-  const m = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
-  return m * p;
-}
 function ActivityChart({ byDay, range }) {
   const [tip, setTip] = useState(null);
   // Fill every day of the range (gaps are data too); bucket by week beyond ~70 days.
@@ -450,7 +447,9 @@ export default function Audit() {
   const [actor, setActor] = useState(params.get('actor') || ''); // "type:id" ("ivr:" = unidentified caller)
   const [entity, setEntity] = useState(params.get('entity') || '');
   const [entityId, setEntityId] = useState(params.get('entity_id') || '');
-  const [action, setAction] = useState(params.get('action') || '');
+  // An action filter only makes sense under an entity (the dropdown without an
+  // entity lists entity+action pairs), so a bare ?action= deep link is ignored.
+  const [action, setAction] = useState(params.get('entity') ? params.get('action') || '' : '');
   const [q, setQ] = useState(params.get('q') || '');
   const qd = useDebounced(q.trim(), 300);
 
@@ -459,7 +458,7 @@ export default function Audit() {
   const [stats, setStats] = useState(null);
   const [open, setOpen] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const { error, run, setError } = useAsync();
+  const { error, setError } = useAsync();
 
   useEffect(() => { adminApi.get('/audit-log/facets').then(setFacets).catch(setError); }, []);
 
@@ -504,7 +503,7 @@ export default function Audit() {
     setActor(params.get('actor') || '');
     setEntity(params.get('entity') || '');
     setEntityId(params.get('entity_id') || '');
-    setAction(params.get('action') || '');
+    setAction(params.get('entity') ? params.get('action') || '' : '');
     setQ(params.get('q') || '');
   }, [params]);
 
@@ -515,17 +514,24 @@ export default function Audit() {
     const key = baseQuery.toString();
     currentQuery.current = key;
     setOpen(null);
-    run(async () => {
+    // Fetched outside run() on purpose: run() records every failure, and a
+    // superseded request's failure must not paint an error over fresh data.
+    (async () => {
       // Tiles always show the full actor-kind breakdown → stats ignore the kind filter.
       const sp = new URLSearchParams(baseQuery);
       if (!actor) sp.delete('actor_type');
       sp.set('tz_offset', String(-new Date().getTimezoneOffset()));
       try { sp.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || ''); } catch { /* offset fallback */ }
-      const [list, st] = await Promise.all([adminApi.get(`/audit-log?${baseQuery}`), adminApi.get(`/audit-log/stats?${sp}`)]);
-      if (currentQuery.current !== key) return;
-      setData(list);
-      setStats(st);
-    }).catch((e) => { if (currentQuery.current === key) setError(e); }); // a stale request's failure is not news
+      try {
+        const [list, st] = await Promise.all([adminApi.get(`/audit-log?${baseQuery}`), adminApi.get(`/audit-log/stats?${sp}`)]);
+        if (currentQuery.current !== key) return;
+        setError(null);
+        setData(list);
+        setStats(st);
+      } catch (e) {
+        if (currentQuery.current === key) setError(e);
+      }
+    })();
   }, [baseQuery]);
 
   const loadMore = async () => {

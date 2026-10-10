@@ -357,12 +357,23 @@ export function rangeBounds(key, { fromDate = '', toDate = '', fromHour = '', to
 export const utcStamp = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
 export const ymdLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 // Preset → the UTC stamps a log endpoint takes ({ from?, to? }, open sides omitted).
+// An unparsable custom date (hand-edited link) is treated as an open side rather
+// than thrown. Relative presets ("last 3 hours") move every time this runs —
+// callers memoize the result per filter selection so paging reuses one window.
 export function rangeStamps(key, custom) {
   const b = rangeBounds(key, custom);
   const out = {};
-  if (b.from) out.from = utcStamp(b.from);
-  if (b.to) out.to = utcStamp(b.to);
+  if (b.from && !Number.isNaN(b.from.getTime())) out.from = utcStamp(b.from);
+  if (b.to && !Number.isNaN(b.to.getTime())) out.to = utcStamp(b.to);
   return out;
+}
+
+// Clean axis ceiling for charts: 1/2/2.5/5 × 10^k at or above the max.
+export function niceCeil(v, floor = 5) {
+  if (!(v > 0)) return floor;
+  const pow = 10 ** Math.floor(Math.log10(v));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * pow >= v) return Math.max(floor, m * pow);
+  return Math.max(floor, 10 * pow);
 }
 // The preset list for event logs (hours + days + all + custom).
 export const RANGE_LOG = [...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom'];

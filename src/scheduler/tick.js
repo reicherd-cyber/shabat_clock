@@ -1,7 +1,7 @@
 // §5.4 server backup scheduler — fires ONLY when the device is online yet silent.
 // The DEVICE is authoritative; occurrences are keyed by UTC instant [D33].
 import { query } from '../db/pool.js';
-import { localParts, wallToUtc, isoLocal, shiftDate, dowOfDate, timeToMinutes, minutesToHHMM, isNextAnniversary } from '../services/time.js';
+import { localParts, wallToUtc, isoLocal, shiftDate, dowOfDate, timeToMinutes, minutesToHHMM, isNextAnniversary, ymdOf } from '../services/time.js';
 import { insertOccurrenceRow, repointCommand } from '../services/executions.js';
 import { createCommand } from '../services/commands.js';
 import { bumpDevices } from '../services/schedules.js';
@@ -375,7 +375,7 @@ async function refreshAnchoredTimes(now = new Date()) {
             OR s.excl_type IS NOT NULL OR s.excl_list IS NOT NULL)`,
   );
   const deviceIds = new Set();
-  const fmt = (dt) => `${dt.y}-${String(dt.mo).padStart(2, '0')}-${String(dt.d).padStart(2, '0')}`;
+  const fmt = ymdOf;
   const dayPair = new Map(); // tz → { today, yesterday }, resolved once per timezone
   for (const row of rows) {
     const tz = row.timezone || 'Asia/Jerusalem';

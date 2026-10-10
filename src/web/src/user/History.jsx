@@ -69,6 +69,9 @@ export default function History() {
   const [range, setRange] = useState('all');
   const [custom, setCustom] = useState(EMPTY_CUSTOM);
   const filtering = relayId !== '' || kind !== '' || range !== 'all';
+  // Fixed per selection (local preset → UTC stamps, DB is UTC) so "טען עוד"
+  // pages the same window a relative preset opened with.
+  const stamps = useMemo(() => rangeStamps(range, custom), [range, custom]);
   const channels = devices.filter((d) => d.is_enabled)
     .flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => ({ ...r, device_name: d.name })));
   const multiDevice = devices.filter((d) => d.is_enabled).length > 1;
@@ -78,9 +81,8 @@ export default function History() {
     if (!reset && cursor) q.set('cursor', cursor);
     if (relayId) q.set('relay_id', relayId);
     if (kind) q.set('kind', kind);
-    const b = rangeStamps(range, custom); // local preset → UTC stamps (DB is UTC)
-    if (b.from) q.set('from', b.from);
-    if (b.to) q.set('to', b.to);
+    if (stamps.from) q.set('from', stamps.from);
+    if (stamps.to) q.set('to', stamps.to);
     const res = await api.get(`/history?${q}`);
     setItems((prev) => reset ? res.items : [...prev, ...res.items]);
     setCursor(res.next_cursor);

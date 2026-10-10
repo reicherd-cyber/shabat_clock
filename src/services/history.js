@@ -136,9 +136,18 @@ export async function getHistory({ userId, limit = 50, cursor = null, relay_id =
   if (relayId) { cmdWhere += ' AND c.relay_id = ?'; cmdParams.push(relayId); }
   if (source) { cmdWhere += ' AND c.source = ?'; cmdParams.push(source); }
   // Time window (UTC 'YYYY-MM-DD HH:MM:SS', same convention as the admin history).
-  const stamp = (v) => (v && /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$/.test(String(v)) ? String(v) : null);
-  if (stamp(from)) { cmdWhere += ' AND c.requested_at >= ?'; cmdParams.push(stamp(from)); callWhere += ' AND cl.started_at >= ?'; callParams.push(stamp(from)); }
-  if (stamp(to)) { cmdWhere += ' AND c.requested_at <= ?'; cmdParams.push(stamp(to)); callWhere += ' AND cl.started_at <= ?'; callParams.push(stamp(to)); }
+  // A bare date means the whole day: from its 00:00:00 up to its 23:59:59 (same
+  // convention as the admin support filter).
+  const stamp = (v, end) => {
+    const s = v == null ? '' : String(v);
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) return s;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s} ${end ? '23:59:59' : '00:00:00'}`;
+    return null;
+  };
+  const fromS = stamp(from, false);
+  const toS = stamp(to, true);
+  if (fromS) { cmdWhere += ' AND c.requested_at >= ?'; cmdParams.push(fromS); callWhere += ' AND cl.started_at >= ?'; callParams.push(fromS); }
+  if (toS) { cmdWhere += ' AND c.requested_at <= ?'; cmdParams.push(toS); callWhere += ' AND cl.started_at <= ?'; callParams.push(toS); }
   if (c) {
     const cts = new Date(c.ts);
     if (c.type === 'call') {

@@ -903,7 +903,9 @@ const AUDIT_ENTITY_NAME = `CASE a.entity
   WHEN 'relay' THEN r.name
   WHEN 'schedule' THEN sr.name
   WHEN 'admin' THEN ea.name
-  WHEN 'support_message' THEN COALESCE(su.full_name, sm.phone, 'מספר חסוי')
+  WHEN 'support_message' THEN CASE WHEN sm.id IS NULL THEN NULL
+                                   WHEN sm.source = 'phone' THEN COALESCE(sm.phone, 'מספר חסוי')
+                                   ELSE su.full_name END
   WHEN 'admin_task' THEN t.title
   WHEN 'crm_lead' THEN cl.name
   WHEN 'crm_order' THEN co.description

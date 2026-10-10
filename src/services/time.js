@@ -119,3 +119,10 @@ export function isNextAnniversary(date, today) {
   const limit = `${Number(today.slice(0, 4)) + 1}${today.slice(4)}`;
   return date >= today && date < limit;
 }
+
+// Local calendar parts { y, mo, d } → 'YYYY-MM-DD' (zero-padded). The ONE
+// formatter for day keys compared as strings (isNextAnniversary, exclusion
+// ranges, Shelly job windows) — every producer must agree on the padding.
+export function ymdOf({ y, mo, d }) {
+  return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}

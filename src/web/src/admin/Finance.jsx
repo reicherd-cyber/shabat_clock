@@ -5,7 +5,7 @@
 // tooltips) as the validator requires.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, RangeFilter, rangeBounds, ymdLocal } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, RangeFilter, rangeBounds, ymdLocal, niceCeil } from '../ui.jsx';
 
 const C_INCOME = '#006e00';
 const C_EXPENSE = '#e11d48';
@@ -31,20 +31,13 @@ function periodBounds(period, fromDate, toDate) {
   return out;
 }
 
-// Clean axis ceiling: 1/2/2.5/5 × 10^k above the max.
-function niceCeil(v) {
-  if (v <= 0) return 100;
-  const pow = 10 ** Math.floor(Math.log10(v));
-  for (const m of [1, 2, 2.5, 5, 10]) if (m * pow >= v) return m * pow;
-  return 10 * pow;
-}
 
 // ── grouped monthly column chart (SVG, hand-rolled to the mark specs) ──
 function MonthlyChart({ monthly }) {
   const [tip, setTip] = useState(null);
   const W = 720, H = 240, padL = 8, padR = 52, padT = 12, padB = 26;
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const max = niceCeil(Math.max(1, ...monthly.map((m) => Math.max(m.income, m.expense))));
+  const max = niceCeil(Math.max(1, ...monthly.map((m) => Math.max(m.income, m.expense))), 100);
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * max);
   const band = plotW / Math.max(monthly.length, 1);
   const barW = Math.min(24, Math.max(6, band / 2 - 6));

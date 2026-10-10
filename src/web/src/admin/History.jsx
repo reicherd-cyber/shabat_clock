@@ -1,5 +1,5 @@
 // Admin history: merged commands + call_logs for ALL users, every field filterable.
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG } from '../ui.jsx';
 import { MenuPath } from './Misc.jsx';
@@ -44,12 +44,14 @@ export default function AdminHistory() {
   }, []);
 
   // DB stores UTC — the preset / custom local range is converted before querying.
+  // Stamps are fixed per selection so "load more" pages the same window a
+  // relative preset opened with, instead of a window that slid meanwhile.
+  const stamps = useMemo(() => rangeStamps(f.range, f), [f.range, f.fromDate, f.fromHour, f.toDate, f.toHour]);
   const buildQuery = () => {
     const q = new URLSearchParams();
     for (const k of ['user_id', 'device_id', 'relay_id', 'type', 'action', 'source', 'status', 'outcome', 'phone']) if (f[k]) q.set(k, f[k]);
-    const b = rangeStamps(f.range, f);
-    if (b.from) q.set('from', b.from);
-    if (b.to) q.set('to', b.to);
+    if (stamps.from) q.set('from', stamps.from);
+    if (stamps.to) q.set('to', stamps.to);
     return q;
   };
 
