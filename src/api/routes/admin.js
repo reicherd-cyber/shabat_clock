@@ -1,6 +1,6 @@
 // §3.3 admin panel. support = read-only [D15]; every write audit-logged.
 import { Router, raw } from 'express';
-import { query, withTransaction } from '../../db/pool.js';
+import { query, withTransaction, pool } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireAdmin, requireWrite, requireSuperadmin, signUserToken, invalidateSession } from '../middleware.js';
 import { isIP } from 'node:net';
@@ -1015,6 +1015,76 @@ adminRouter.get('/audit-log/facets', async (req, res, next) => {
     );
     const actions = await query('SELECT entity, action, COUNT(*) AS n FROM audit_log GROUP BY 1, 2 ORDER BY entity, n DESC');
     res.json({ actors, actions });
+  } catch (e) { next(e); }
+});
+
+// ── מסד נתונים: every table's rows + footprint, server + pool vitals ──
+// Row counts come from information_schema (InnoDB keeps an estimate — instant);
+// ?exact=1 runs COUNT(*) per table instead (a full index scan each, so only on
+// request). Everything else is one information_schema pass plus SHOW STATUS.
+adminRouter.get('/db', async (req, res, next) => {
+  try {
+    const [tables, columns, indexes, status, vars, [ver]] = await Promise.all([
+      query(
+        `SELECT TABLE_NAME AS name, ENGINE AS engine, TABLE_ROWS AS rows_est, DATA_LENGTH AS data_bytes,
+                INDEX_LENGTH AS index_bytes, DATA_FREE AS free_bytes, AUTO_INCREMENT AS auto_increment,
+                CREATE_TIME AS created_at, UPDATE_TIME AS updated_at, TABLE_COLLATION AS collation, TABLE_COMMENT AS comment
+         FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'
+         ORDER BY TABLE_NAME`,
+      ),
+      query('SELECT TABLE_NAME AS name, COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() GROUP BY TABLE_NAME'),
+      query('SELECT TABLE_NAME AS name, COUNT(DISTINCT INDEX_NAME) AS n FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() GROUP BY TABLE_NAME'),
+      query(`SHOW GLOBAL STATUS WHERE Variable_name IN ('Uptime','Threads_connected','Threads_running','Max_used_connections','Questions',
+             'Slow_queries','Innodb_buffer_pool_bytes_data','Innodb_buffer_pool_bytes_dirty','Bytes_received','Bytes_sent','Connections','Aborted_connects')`),
+      query("SHOW GLOBAL VARIABLES WHERE Variable_name IN ('max_connections','innodb_buffer_pool_size','version','version_comment')"),
+      query('SELECT VERSION() AS v, DATABASE() AS db'),
+    ]);
+    const colCount = Object.fromEntries(columns.map((c) => [c.name, Number(c.n)]));
+    const idxCount = Object.fromEntries(indexes.map((c) => [c.name, Number(c.n)]));
+    const st = Object.fromEntries(status.map((r) => [r.Variable_name, r.Value]));
+    const vr = Object.fromEntries(vars.map((r) => [r.Variable_name, r.Value]));
+
+    let exact = null;
+    if (req.query.exact === '1') {
+      // Sequential on purpose — one scan at a time keeps the pool free for real traffic.
+      exact = {};
+      for (const t of tables) {
+        const [row] = await query(`SELECT COUNT(*) AS n FROM \`${t.name.replace(/`/g, '')}\``);
+        exact[t.name] = Number(row.n);
+      }
+    }
+    const p = pool.pool; // mysql2 pool internals: live / idle / waiting
+    res.json({
+      db: ver.db,
+      server: {
+        version: vr.version || ver.v, version_comment: vr.version_comment || null,
+        uptime_s: Number(st.Uptime || 0),
+        threads_connected: Number(st.Threads_connected || 0), threads_running: Number(st.Threads_running || 0),
+        max_used_connections: Number(st.Max_used_connections || 0), max_connections: Number(vr.max_connections || 0),
+        connections_total: Number(st.Connections || 0), aborted_connects: Number(st.Aborted_connects || 0),
+        questions: Number(st.Questions || 0), slow_queries: Number(st.Slow_queries || 0),
+        bytes_received: Number(st.Bytes_received || 0), bytes_sent: Number(st.Bytes_sent || 0),
+        buffer_pool_bytes: Number(vr.innodb_buffer_pool_size || 0),
+        buffer_pool_data_bytes: Number(st.Innodb_buffer_pool_bytes_data || 0),
+        buffer_pool_dirty_bytes: Number(st.Innodb_buffer_pool_bytes_dirty || 0),
+      },
+      pool: {
+        limit: 10,
+        open: p?._allConnections?.length ?? null,
+        idle: p?._freeConnections?.length ?? null,
+        waiting: p?._connectionQueue?.length ?? null,
+      },
+      app: { heap_used: process.memoryUsage().heapUsed, rss: process.memoryUsage().rss, uptime_s: Math.round(process.uptime()) },
+      tables: tables.map((t) => ({
+        name: t.name, engine: t.engine, collation: t.collation, comment: t.comment || null,
+        rows: exact ? exact[t.name] : Number(t.rows_est || 0), rows_exact: Boolean(exact),
+        data_bytes: Number(t.data_bytes || 0), index_bytes: Number(t.index_bytes || 0), free_bytes: Number(t.free_bytes || 0),
+        auto_increment: t.auto_increment == null ? null : Number(t.auto_increment),
+        columns: colCount[t.name] || 0, indexes: idxCount[t.name] || 0,
+        created_at: t.created_at, updated_at: t.updated_at,
+      })),
+      at: new Date().toISOString(),
+    });
   } catch (e) { next(e); }
 });
 

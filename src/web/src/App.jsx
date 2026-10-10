@@ -15,6 +15,7 @@ import Users from './admin/Users.jsx';
 import Devices from './admin/Devices.jsx';
 import { Monitoring, DeviceHealth, CallLogs, Commands, AdminSchedules, SystemSettings, Admins } from './admin/Misc.jsx';
 import Audit from './admin/Audit.jsx';
+import Database from './admin/Database.jsx';
 import { CallFlow } from './admin/CallFlow.jsx';
 import { Recordings } from './admin/Recordings.jsx';
 import AdminHistory from './admin/History.jsx';
@@ -27,7 +28,7 @@ import { Logo, Wordmark, useInterval, Modal, Button } from './ui.jsx';
 import {
   LayoutGrid, CalendarClock, CalendarDays, History as HistoryIcon, Settings as SettingsIcon,
   Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
-  ShieldCheck, ScrollText, ChevronDown, AudioLines, LifeBuoy, Inbox, Handshake, ListChecks,
+  ShieldCheck, ScrollText, Database as DatabaseIcon, ChevronDown, AudioLines, LifeBuoy, Inbox, Handshake, ListChecks,
 } from 'lucide-react';
 
 // While impersonating, api.js blocks every mutation until this modal approves it
@@ -196,6 +197,7 @@ const ADMIN_NAV = [
       { to: '/admin/settings', label: 'הגדרות', Icon: SettingsIcon },
       { to: '/admin/admins', label: 'מנהלים', Icon: ShieldCheck },
       { to: '/admin/audit', label: 'ביקורת', Icon: ScrollText },
+      { to: '/admin/db', label: 'מסד נתונים', Icon: DatabaseIcon },
     ],
   },
 ];
@@ -381,6 +383,7 @@ export default function App() {
           <Route path="settings" element={<SystemSettings />} />
           <Route path="admins" element={<Admins />} />
           <Route path="audit" element={<Audit />} />
+          <Route path="db" element={<Database />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
