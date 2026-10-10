@@ -5,7 +5,7 @@
 // tooltips) as the validator requires.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, RangeFilter, rangeBounds, ymdLocal, niceCeil , FilterSelect } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, RangeFilter, rangeBounds, ymdLocal, niceCeil, FilterSelect } from '../ui.jsx';
 
 const C_INCOME = '#006e00';
 const C_EXPENSE = '#e11d48';

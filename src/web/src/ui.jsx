@@ -233,14 +233,19 @@ export function Modal({ open, onClose, title, children, closable = true }) {
 
 // Type-to-filter dropdown for long lists (users…). `options` = [{ value, label, hint?, search? }]
 // — `search` is extra text matched by the filter but never shown (e.g. an IVR code);
-// `value` is the selected option's value ('' = nothing / the `allLabel` choice).
+// `value` is the selected option's value ('' = nothing / the `allLabel` choice;
+// allLabel null = no "all" row and no clearing — sort/period pickers).
 // Closed: shows the selected label. Open: the same box becomes a search field and
-// the list under it narrows on every keystroke (label or hint substring).
-// Enter picks the first match, Escape/outside click closes without changing.
-export function SearchSelect({ value, onChange, options, allLabel = 'הכל', placeholder = 'חיפוש…', className = '' }) {
+// the list under it narrows on every keystroke (label, hint or search substring).
+// Keyboard: ↑/↓ move the highlight (the "all" row included), Enter picks it,
+// Escape closes; Tab/blur closes too. On phones a short list (≤ 6 choices)
+// opens without the soft keyboard — tapping is faster than typing there.
+export function SearchSelect({ value, onChange, options, allLabel = 'הכל', placeholder = 'חיפוש…', className = '', ariaLabel, title }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
+  const [hi, setHi] = useState(-1); // index into `rows` (−1 = nothing highlighted)
   const box = useRef(null);
+  const listRef = useRef(null);
   useEffect(() => {
     if (!open) return undefined;
     const away = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
@@ -252,20 +257,41 @@ export function SearchSelect({ value, onChange, options, allLabel = 'הכל', pl
   const shown = s
     ? options.filter((o) => o.label.toLowerCase().includes(s) || (o.hint || '').toLowerCase().includes(s) || String(o.search || '').toLowerCase().includes(s))
     : options;
-  const pick = (v) => { onChange(v); setOpen(false); setQ(''); };
+  // The navigable rows: the "all" choice first (when offered and not searching), then the matches.
+  const rows = (!s && allLabel != null ? [{ value: '', label: allLabel, all: true }] : []).concat(shown);
+  const pick = (v) => { onChange(v); setOpen(false); setQ(''); setHi(-1); };
+  const openUp = () => { setOpen(true); setQ(''); setHi(-1); };
+  useEffect(() => { // keep the highlighted row in view while arrowing
+    if (hi < 0 || !listRef.current) return;
+    listRef.current.children[hi]?.scrollIntoView({ block: 'nearest' });
+  }, [hi]);
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') { setOpen(false); setQ(''); setHi(-1); e.currentTarget.blur(); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (!open) openUp(); setHi((h) => Math.min(rows.length - 1, h + 1)); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(-1, h - 1)); return; }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const row = hi >= 0 ? rows[hi] : (s ? shown[0] : null);
+      if (row) { pick(row.value); e.currentTarget.blur(); }
+    }
+  };
+  const short = options.length <= 6;
   return (
     <div ref={box} className={`relative ${className}`}>
       <input
         className={`border border-line rounded-[10px] px-3 py-2 pl-7 bg-surface w-full text-sm focus:outline-none focus:border-accent ${selected ? 'font-medium' : ''}`}
         value={open ? q : (selected ? selected.label : (allLabel ?? ''))}
         placeholder={open ? placeholder : (allLabel ?? placeholder)}
-        onFocus={() => { setOpen(true); setQ(''); }}
-        onClick={() => setOpen(true)}
-        onChange={(e) => { setQ(e.target.value); setOpen(true); }}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') { setOpen(false); setQ(''); e.currentTarget.blur(); }
-          if (e.key === 'Enter' && s && shown[0]) { pick(shown[0].value); e.currentTarget.blur(); }
-        }}
+        aria-label={ariaLabel}
+        title={title}
+        role="combobox"
+        aria-expanded={open}
+        inputMode={short ? 'none' : 'text'}
+        onFocus={openUp}
+        onClick={() => { if (!open) openUp(); }}
+        onBlur={() => { setOpen(false); setQ(''); setHi(-1); }}
+        onChange={(e) => { setQ(e.target.value); setHi(-1); if (!open) setOpen(true); }}
+        onKeyDown={onKeyDown}
       />
       {selected && !open && allLabel != null ? (
         <button type="button" className="absolute left-2 top-1/2 -translate-y-1/2 text-muted hover:text-ink leading-none cursor-pointer" title="נקה"
@@ -274,15 +300,12 @@ export function SearchSelect({ value, onChange, options, allLabel = 'הכל', pl
         <span className="absolute left-2 top-1/2 -translate-y-1/2 text-muted text-xs pointer-events-none">▾</span>
       )}
       {open && (
-        <div className="absolute z-30 mt-1 w-full min-w-48 max-h-64 overflow-y-auto bg-surface border border-line rounded-[10px] shadow-card">
-          {!s && allLabel != null && (
-            <button type="button" className={`w-full text-right px-3 py-2 text-sm hover:bg-surface2 cursor-pointer ${!selected ? 'text-muted' : ''}`}
-              onMouseDown={(e) => e.preventDefault()} onClick={() => pick('')}>{allLabel}</button>
-          )}
-          {shown.map((o) => (
-            <button key={o.value} type="button"
-              className={`w-full text-right px-3 py-2 text-sm hover:bg-surface2 cursor-pointer flex justify-between gap-2 ${selected && String(o.value) === String(selected.value) ? 'bg-surface2 font-medium' : ''}`}
-              onMouseDown={(e) => e.preventDefault()} onClick={() => pick(o.value)}>
+        <div ref={listRef} role="listbox" className="absolute z-30 mt-1 w-full min-w-48 max-h-64 overflow-y-auto bg-surface border border-line rounded-[10px] shadow-card"
+          onMouseDown={(e) => e.preventDefault()} /* keep the input focused — a click (or scrollbar drag) must not blur-close the list */>
+          {rows.map((o, i) => (
+            <button key={o.all ? '__all' : o.value} type="button" role="option" aria-selected={!o.all && selected && String(o.value) === String(selected.value)}
+              className={`w-full text-right px-3 py-2 text-sm cursor-pointer flex justify-between gap-2 ${i === hi ? 'bg-accent/10' : 'hover:bg-surface2'} ${o.all && !selected ? 'text-muted' : ''} ${!o.all && selected && String(o.value) === String(selected.value) ? 'bg-surface2 font-medium' : ''}`}
+              onMouseEnter={() => setHi(i)} onClick={() => pick(o.value)}>
               <span>{o.label}</span>
               {o.hint && <span className="text-muted text-xs" dir="ltr">{o.hint}</span>}
             </button>
@@ -297,7 +320,9 @@ export function SearchSelect({ value, onChange, options, allLabel = 'הכל', pl
 // Type-to-search drop-in for a filter <Select>: keeps the <option> children
 // (the ''-valued one, if any, is the "all" choice; none → no clearing) and the
 // event-shaped onChange, renders SearchSelect so every filter can be typed into.
-export function FilterSelect({ value, onChange, children, className = '', placeholder = 'חיפוש…' }) {
+// Only layout classes travel to the wrapper (the input has its own padding/text
+// size); a wrapper with no real width gets w-44.
+export function FilterSelect({ value, onChange, children, className = '', placeholder = 'חיפוש…', 'aria-label': ariaLabel, title }) {
   const options = [];
   let allLabel = null;
   for (const c of Children.toArray(children)) {
@@ -305,12 +330,13 @@ export function FilterSelect({ value, onChange, children, className = '', placeh
     const label = Children.toArray(c.props.children).map((x) => (typeof x === 'string' || typeof x === 'number' ? String(x) : '')).join('').trim();
     const v = c.props.value ?? label;
     if (String(v) === '') { allLabel = label || 'הכל'; continue; }
-    options.push({ value: String(v), label, hint: c.props['data-hint'] });
+    options.push({ value: String(v), label });
   }
-  const cls = /\bw-|\bflex-1\b|\bmin-w-/.test(className) ? className : `${className} w-44`;
+  const layout = className.split(/\s+/).filter((t) => t && !/^!?(p[xy]?-|text-)/.test(t));
+  if (!layout.some((t) => /^(w-(?!auto)|min-w-|flex-1$|flex-\[|basis-)/.test(t))) layout.push('w-44');
   return (
-    <SearchSelect className={cls} value={value == null ? '' : String(value)} onChange={(v) => onChange({ target: { value: v } })}
-      options={options} allLabel={allLabel} placeholder={placeholder} />
+    <SearchSelect className={layout.join(' ')} value={value == null ? '' : String(value)} onChange={(v) => onChange({ target: { value: v } })}
+      options={options} allLabel={allLabel} placeholder={placeholder} ariaLabel={ariaLabel} title={title} />
   );
 }
 
@@ -416,7 +442,7 @@ export function HourSelect({ value, onChange }) {
 export function RangeFilter({ value, onChange, keys = RANGE_DEFAULT, custom = {}, onCustom, hours = false, className = 'w-44' }) {
   return (
     <>
-      <FilterSelect className={className} value={value} onChange={(e) => onChange(e.target.value)} placeholder="תקופה…">
+      <FilterSelect className={className} value={value} onChange={(e) => onChange(e.target.value)} placeholder="תקופה…" aria-label="תקופה">
         {keys.map((k) => <option key={k} value={k}>{RANGE_LABELS[k] || k}</option>)}
       </FilterSelect>
       {value === 'custom' && (

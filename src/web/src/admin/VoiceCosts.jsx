@@ -2,7 +2,7 @@
 // Anthropic ($) side by side, filterable by period.
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_HOURS, RANGE_DAYS , FilterSelect } from '../ui.jsx';
+import { Card, Button, Input, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_HOURS, RANGE_DAYS, FilterSelect } from '../ui.jsx';
 
 const C_EXPENSE = '#e11d48'; // money-color convention: costs are red
 

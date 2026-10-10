@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ShieldCheck, UserRound, Phone, Cog, ChevronDown, ChevronUp } from 'lucide-react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, SearchSelect, Badge, ErrorNote, useAsync, DAY_NAMES, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, ymdLocal, RANGE_LOG, niceCeil , FilterSelect } from '../ui.jsx';
+import { Card, Button, Input, SearchSelect, Badge, ErrorNote, useAsync, DAY_NAMES, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, ymdLocal, RANGE_LOG, niceCeil, FilterSelect } from '../ui.jsx';
 
 // ── vocabulary ──
 // Actor kinds: label, icon, chart hue. Palette validated (dataviz validator, light

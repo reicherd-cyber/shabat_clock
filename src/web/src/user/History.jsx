@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Select, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG , FilterSelect } from '../ui.jsx';
+import { Card, Button, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect } from '../ui.jsx';
 
 const EMPTY_CUSTOM = { fromDate: '', fromHour: '', toDate: '', toHour: '' };
 import { Lightbulb, X, PhoneCall } from 'lucide-react';

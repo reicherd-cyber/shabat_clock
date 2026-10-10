@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, ErrorNote, useAsync, niceCeil, Stat, fmtBytes, fmtInt, fmtUptime, fmtWhen , FilterSelect } from '../ui.jsx';
+import { Card, Button, Input, ErrorNote, useAsync, niceCeil, Stat, fmtBytes, fmtInt, fmtUptime, fmtWhen, FilterSelect } from '../ui.jsx';
 
 // What each table holds, in Hebrew, and where its data is browsed in the admin.
 const TABLES_HE = {

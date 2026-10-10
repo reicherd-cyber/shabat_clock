@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi, tokens } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync , FilterSelect } from '../ui.jsx';
+import { Card, Button, Input, Badge, Modal, ErrorNote, useAsync, FilterSelect } from '../ui.jsx';
 import { Pencil, Trash2 } from 'lucide-react';
 
 export default function Users() {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead , FilterSelect } from '../ui.jsx';
+import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead, FilterSelect } from '../ui.jsx';
 import { Plus, Trash2, Pencil, Check, CalendarClock, GripVertical, ChevronDown, ListChecks, X, ArrowUp, ArrowDown } from 'lucide-react';
 
 // משימות — לוח מטלות פנימי לצוות: "להתקשר ללקוח", "להתקין מכשיר ל…". כל משימה
