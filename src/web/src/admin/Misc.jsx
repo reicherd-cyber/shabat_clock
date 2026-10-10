@@ -285,7 +285,7 @@ export function CallLogs() {
         <h2 className="font-bold text-xl">יומני שיחות</h2>
         <div className="flex gap-2 items-center flex-wrap">
           <SearchSelect className="w-48" value={userId} onChange={setUserId} allLabel="כל המשתמשים" placeholder="חיפוש משתמש…"
-            options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: u.ivr_code }))} />
+            options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: `#${u.id}`, search: u.ivr_code }))} />
           <Input dir="ltr" className="w-40" placeholder="סינון לפי טלפון" value={phone} onChange={(e) => setPhone(e.target.value)} />
           <RangeFilter value={range} onChange={setRange} keys={[...RANGE_HOURS, ...RANGE_DAYS, 'all', 'custom']} hours
             custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />

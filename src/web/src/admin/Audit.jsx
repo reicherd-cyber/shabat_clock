@@ -550,7 +550,7 @@ export default function Audit() {
     .map((a) => ({
       value: `${a.actor_type}:${a.actor_id ?? ''}`,
       label: a.name || (a.actor_type === 'ivr' && !a.actor_id ? 'מתקשר לא מזוהה' : `#${a.actor_id}`),
-      hint: `${ACTORS[a.actor_type]?.label || a.actor_type} · ${a.n}`,
+      hint: `${a.actor_id ? `#${a.actor_id} · ` : ''}${ACTORS[a.actor_type]?.label || a.actor_type}`,
     })), [facets, actorType]);
   const entityOptions = useMemo(() => {
     const seen = new Map();

@@ -230,7 +230,8 @@ export function Modal({ open, onClose, title, children, closable = true }) {
   );
 }
 
-// Type-to-filter dropdown for long lists (users…). `options` = [{ value, label, hint? }];
+// Type-to-filter dropdown for long lists (users…). `options` = [{ value, label, hint?, search? }]
+// — `search` is extra text matched by the filter but never shown (e.g. an IVR code);
 // `value` is the selected option's value ('' = nothing / the `allLabel` choice).
 // Closed: shows the selected label. Open: the same box becomes a search field and
 // the list under it narrows on every keystroke (label or hint substring).
@@ -248,7 +249,7 @@ export function SearchSelect({ value, onChange, options, allLabel = 'הכל', pl
   const selected = options.find((o) => String(o.value) === String(value));
   const s = q.trim().toLowerCase();
   const shown = s
-    ? options.filter((o) => o.label.toLowerCase().includes(s) || (o.hint || '').toLowerCase().includes(s))
+    ? options.filter((o) => o.label.toLowerCase().includes(s) || (o.hint || '').toLowerCase().includes(s) || String(o.search || '').toLowerCase().includes(s))
     : options;
   const pick = (v) => { onChange(v); setOpen(false); setQ(''); };
   return (

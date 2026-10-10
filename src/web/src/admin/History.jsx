@@ -81,7 +81,7 @@ export default function AdminHistory() {
       <Card className="space-y-3">
         <div className="flex gap-2 items-center flex-wrap">
           <SearchSelect className="w-48" value={f.user_id} onChange={setUser} allLabel="כל המשתמשים" placeholder="חיפוש משתמש…"
-            options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: u.ivr_code }))} />
+            options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: `#${u.id}`, search: u.ivr_code }))} />
           <Select className="py-2 text-sm w-36" value={f.type} onChange={setEv('type')}>
             <option value="">פקודות ושיחות</option>
             <option value="cmd">פקודות בלבד</option>
