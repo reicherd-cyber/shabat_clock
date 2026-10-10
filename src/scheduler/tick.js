@@ -1,7 +1,7 @@
 // §5.4 server backup scheduler — fires ONLY when the device is online yet silent.
 // The DEVICE is authoritative; occurrences are keyed by UTC instant [D33].
 import { query } from '../db/pool.js';
-import { localParts, wallToUtc, isoLocal, shiftDate, dowOfDate, timeToMinutes, minutesToHHMM } from '../services/time.js';
+import { localParts, wallToUtc, isoLocal, shiftDate, dowOfDate, timeToMinutes, minutesToHHMM, isNextAnniversary } from '../services/time.js';
 import { insertOccurrenceRow, repointCommand } from '../services/executions.js';
 import { createCommand } from '../services/commands.js';
 import { bumpDevices } from '../services/schedules.js';
@@ -371,19 +371,31 @@ async function refreshAnchoredTimes(now = new Date()) {
      LEFT JOIN users u ON u.id = s.user_id
      WHERE s.is_enabled = TRUE AND s.deleted_at IS NULL
        AND (s.on_anchor <> 'clock' OR s.off_anchor <> 'clock' OR s.repeat_type IN ('holiday','yearly')
+            OR s.on_date IS NOT NULL OR s.off_date IS NOT NULL
             OR s.excl_type IS NOT NULL OR s.excl_list IS NOT NULL)`,
   );
   const deviceIds = new Set();
+  const fmt = (dt) => `${dt.y}-${String(dt.mo).padStart(2, '0')}-${String(dt.d).padStart(2, '0')}`;
+  const dayPair = new Map(); // tz → { today, yesterday }, resolved once per timezone
   for (const row of rows) {
+    const tz = row.timezone || 'Asia/Jerusalem';
+    if (!dayPair.has(tz)) {
+      const p = localParts(now, tz);
+      dayPair.set(tz, { today: fmt(p), yesterday: fmt(shiftDate({ y: p.y, mo: p.mo, d: p.d }, -1)) });
+    }
+    const { today, yesterday } = dayPair.get(tz);
     // Per-schedule החרגה boundary: the payload's contents flip the day the
     // schedule's window opens or closes — re-push its device even when the
     // row's resolved times didn't move.
     if (row.excl_type || row.excl_list) {
-      const p = localParts(now, row.timezone || 'Asia/Jerusalem');
-      const fmt = (dt) => `${dt.y}-${String(dt.mo).padStart(2, '0')}-${String(dt.d).padStart(2, '0')}`;
-      const today = fmt(p);
-      const yesterday = fmt(shiftDate({ y: p.y, mo: p.mo, d: p.d }, -1));
       if (inExclusionRange(row, today) !== inExclusionRange(row, yesterday)) deviceIds.add(Number(row.device_id));
+    }
+    // Dated sides ride the Shelly as year-less crons only inside the coming
+    // year (shelly-schedules.js) — the day a date enters that window its job
+    // must be added, the day it passes its job must go.
+    for (const side of ['on', 'off']) {
+      const date = row[`${side}_date`];
+      if (date && isNextAnniversary(date, today) !== isNextAnniversary(date, yesterday)) deviceIds.add(Number(row.device_id));
     }
     try {
       if (row.repeat_type === 'holiday' || row.repeat_type === 'yearly') {
@@ -397,7 +409,7 @@ async function refreshAnchoredTimes(now = new Date()) {
         if ((fresh.on_time ?? null) === (row.on_time ?? null) && (fresh.off_time ?? null) === (row.off_time ?? null)) continue;
         await query('UPDATE schedules SET on_time = ?, off_time = ? WHERE id = ?', [fresh.on_time, fresh.off_time, row.id]);
       } else {
-        continue; // clock-only weekly row selected for its החרגה alone — nothing to refresh
+        continue; // clock-only weekly/once row selected for its החרגה or date window alone — nothing to refresh
       }
       deviceIds.add(Number(row.device_id));
     } catch (e) {

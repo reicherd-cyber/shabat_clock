@@ -17,6 +17,12 @@
 //    day, restoring them the morning the exclusion ends. Unreachable that
 //    morning = jobs stay out until the next successful sync (retried per tick).
 //
+// Cron jobs carry day/month but NO YEAR, so a dated side is mirrored only while
+// its date is the next anniversary as seen from the device-local today
+// (isNextAnniversary); a date ≥ 1 year out is left to the server tick until the
+// daily refresh re-pushes the device on the day it enters the window. Learned
+// 2026-10-10: a יום כיפור schedule resolved to 10.10.2027 right after 5787's
+// passed, was mirrored as "every 10 October", and fired a year early.
 // Known best-effort gap: a 'once' schedule's date job would re-fire a year
 // later if the device can't be reached between completion (which deletes the
 // job) and that anniversary — accepted; the retry loop closes it on the first
@@ -24,7 +30,7 @@
 import { query } from '../db/pool.js';
 import { isPrimary } from '../config/role.js';
 import { shellyCall } from './shelly.js';
-import { timeToMinutes, localParts, dowOfDate } from './time.js';
+import { timeToMinutes, localParts, dowOfDate, isNextAnniversary } from './time.js';
 import { inExclusionRange } from './holidays.js';
 
 const MAX_SHELLY_JOBS = 20;      // Gen2 firmware: "limit of 20 schedule instances per device"
@@ -66,9 +72,15 @@ export function buildShellyJobs(rows, today) {
         jobs.push({ enable: true, timespec: `0 ${mm} ${hh} * * ${dow}`, calls: [call] });
       } else {
         // once / yearly / holiday: the row holds the resolved next-occurrence
-        // date (refreshed daily), so a concrete day-of-month/month cron fits.
+        // date (refreshed daily), so a concrete day-of-month/month cron fits —
+        // but ONLY while that date is the next anniversary of its day/month.
+        // The cron has no year: a date a year or more out (Yom Kippur 5788 is
+        // 385 days after 5787) would fire on THIS year's anniversary first.
+        // Skipped here, the job is added by the daily refresh (tick.js
+        // refreshAnchoredTimes re-pushes the device the day it enters the window).
         const date = s[`${side}_date`];
         if (!date) continue;
+        if (!isNextAnniversary(date, today)) continue;
         if ((s.excl_type || s.excl_list) && inExclusionRange(s, date)) continue;
         const [, mo, d] = date.split('-').map(Number);
         jobs.push({ enable: true, timespec: `0 ${mm} ${hh} ${d} ${mo} *`, calls: [call] });

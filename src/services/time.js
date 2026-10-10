@@ -108,3 +108,14 @@ export function shiftDate({ y, mo, d }, days) {
 export function dowOfDate({ y, mo, d }) {
   return new Date(Date.UTC(y, mo - 1, d)).getUTCDay() + 1;
 }
+
+// Is a 'YYYY-MM-DD' date the NEXT anniversary of its day/month as seen from
+// `today` — i.e. today ≤ date < today + 1 year? A Shelly cron carries only
+// day/month, so a dated job may be mirrored onto the device only while this
+// holds; outside the window the cron would fire on the wrong year's anniversary
+// (a Yom Kippur stored for next year fired on this year's 10.10 — 2026-10-10).
+export function isNextAnniversary(date, today) {
+  if (!date || !today) return false;
+  const limit = `${Number(today.slice(0, 4)) + 1}${today.slice(4)}`;
+  return date >= today && date < limit;
+}

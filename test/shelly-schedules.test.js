@@ -141,3 +141,14 @@ test('merge dedupes identical calls and orders an exact ON/OFF tie to end OFF', 
   assert.equal(jobs.length, 1);
   assert.deepEqual(jobs[0].calls.map((c) => c.params.on), [true, false]); // ON runs first → ends OFF
 });
+
+// Shelly crons carry day/month only — a date a year or more out must NOT be
+// mirrored (it would fire on this year's anniversary: יום כיפור 2026-10-10).
+test('a dated side is mirrored only while its date is the next anniversary', () => {
+  const kippur = weekly({ repeat_type: 'holiday', on_time: null, off_time: '23:00', off_date: '2027-10-10' });
+  assert.equal(buildShellyJobs([kippur], '2026-10-10').length, 0); // exactly a year out → would fire today
+  assert.equal(buildShellyJobs([kippur], '2026-09-22').length, 0); // 383 days out
+  assert.equal(buildShellyJobs([kippur], '2026-10-11').length, 1); // now inside the coming year
+  assert.equal(buildShellyJobs([kippur], '2027-10-10').length, 1); // the day itself
+  assert.equal(buildShellyJobs([kippur], '2027-10-11').length, 0); // passed — never re-arm next year
+});

@@ -74,7 +74,9 @@ export default function Schedules() {
     if (days === 0) return `היום ${fmtHM(d)}`;
     if (days === 1) return `מחר ${fmtHM(d)}`;
     if (days < 7) return `${DAY_NAMES[d.getDay() + 1]} ${fmtHM(d)}`;
-    return `${d.getDate()}.${d.getMonth() + 1} ${fmtHM(d)}`;
+    // Another year gets its year spelled out — "10.10" a year ahead read as today.
+    const year = d.getFullYear() !== now.getFullYear() ? `.${d.getFullYear()}` : '';
+    return `${d.getDate()}.${d.getMonth() + 1}${year} ${fmtHM(d)}`;
   };
   // The compact "next action" chip — the plan's soonest member decides.
   const nextChip = (members) => {
