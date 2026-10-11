@@ -412,48 +412,70 @@ async function ping(ip){try{await fetch('http://'+ip+'/rpc/Shelly.GetDeviceInfo'
 function wsRpc(ip,method,timeoutMs){return new Promise((res)=>{
  let ws,done=false;const fin=(v)=>{if(done)return;done=true;try{ws&&ws.close()}catch(e){}res(v)};
  try{ws=new WebSocket('ws://'+ip+'/rpc')}catch(e){return res(null)}
+ const id=Math.floor(Math.random()*1e9)+1; // the device also pushes NotifyStatus frames on this socket — only OUR reply counts
  const t=setTimeout(()=>fin(null),timeoutMs||5000);
- ws.onopen=()=>{try{ws.send(JSON.stringify({id:1,src:'installer',method:method}))}catch(e){clearTimeout(t);fin(null)}};
- ws.onmessage=(e)=>{clearTimeout(t);try{fin(JSON.parse(e.data).result||null)}catch(err){fin(null)}};
+ ws.onopen=()=>{try{ws.send(JSON.stringify({id:id,src:'installer',method:method}))}catch(e){clearTimeout(t);fin(null)}};
+ ws.onmessage=(e)=>{let m=null;try{m=JSON.parse(e.data)}catch(err){return}
+  if(!m||m.id!==id)return; // a notification or someone else's reply — keep waiting
+  clearTimeout(t);fin(m.error?null:(m.result||null))};
  ws.onerror=()=>{clearTimeout(t);fin(null)};
 })}
 async function wsMac(ip){const r=await wsRpc(ip,'Shelly.GetDeviceInfo');if(!r)return null;const m=String(r.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');return m.length===12?m:null}
+// ── Wi-Fi scan, shared: one in-flight scan at a time, result reused for 90 s ──
+// (the picker and the send step would otherwise scan twice back to back, and the
+// device rejects a scan while one runs). Returns the deduped networks, strongest
+// first, with the device's OWN hotspot removed (matched by its MAC suffix), or
+// null when the device could not be asked. Hidden networks (empty SSID) are
+// dropped — nothing to show or match; the "send anyway" path covers them.
+let SCAN={ip:'',at:0,nets:null,inflight:null};
+async function scanSsids(ip){
+ if(SCAN.inflight&&SCAN.ip===ip)return SCAN.inflight;
+ if(SCAN.nets&&SCAN.ip===ip&&Date.now()-SCAN.at<90000)return SCAN.nets;
+ SCAN.ip=ip;
+ SCAN.inflight=(async()=>{
+  const scan=await wsRpc(ip,'Wifi.Scan',15000);
+  const mine=(parseMac($('mac').value)||UID||'').toLowerCase();
+  const best=new Map();
+  for(const r of (scan&&Array.isArray(scan.results))?scan.results:[]){
+   const ssid=String(r.ssid||'');if(!ssid)continue;
+   if(mine&&ssid.toLowerCase().replace(/[^0-9a-z]/g,'').endsWith(mine))continue; // the device's own hotspot
+   const cur=best.get(ssid);if(!cur||Number(r.rssi)>Number(cur.rssi))best.set(ssid,r);
+  }
+  const nets=scan?[...best.values()].sort((a,b)=>Number(b.rssi)-Number(a.rssi)):null;
+  SCAN={ip:ip,at:Date.now(),nets:nets,inflight:null};
+  return nets;
+ })();
+ return SCAN.inflight;
+}
+const squash=(x)=>String(x).split(' ').join('').toLowerCase();
 // The device's own scan settles the EXACT network name. SSIDs may carry spaces
 // the installer can't see — a real "david 2.4 " ended in a space, the trimmed
 // name matched nothing, and the device sat on "connecting" forever (2026-10-12).
 // Returns { ssid, seen: true|false|null (scan unavailable), list }.
 async function resolveSsid(ip,typed){
  const want=String(typed||'').trim();
- const scan=await wsRpc(ip,'Wifi.Scan',12000);
- const seen=(scan&&Array.isArray(scan.results))?[...new Set(scan.results.map(r=>String(r.ssid||'')).filter(Boolean))]:null;
- if(!seen)return {ssid:want,seen:null,list:[]};
+ const nets=await scanSsids(ip);
+ if(!nets)return {ssid:want,seen:null,list:[]};
+ const seen=nets.map(n=>n.ssid);
  if(seen.includes(typed))return {ssid:typed,seen:true,list:seen};
  if(seen.includes(want))return {ssid:want,seen:true,list:seen};
  // Loosest last: ignore every space and the case ("david2.4" ↔ "david 2.4 ").
- const squash=(x)=>x.split(' ').join('').toLowerCase();
  const loose=seen.find(x=>x.trim()===want)||seen.find(x=>x.trim().toLowerCase()===want.toLowerCase())||seen.find(x=>squash(x)===squash(want));
  if(loose){log('שם הרשת המדויק לפי סריקת המכשיר הוא "'+loose+'" (כולל רווחים ואותיות) — משתמש בו.','warn');return {ssid:loose,seen:true,list:seen}}
  return {ssid:want,seen:false,list:seen};
 }
-// Network picker: the device's own scan, strongest first, tapped into the SSID
-// field EXACTLY as broadcast (spaces and all). Built with DOM calls, never
-// innerHTML — an SSID is untrusted text.
-let SCANNING=false;
+// Network picker: the shared scan, tapped into the SSID field EXACTLY as
+// broadcast (spaces and all). Built with DOM calls, never innerHTML — an SSID
+// is untrusted text.
 function signalWord(rssi){return rssi>=-60?'חזק':rssi>=-75?'בינוני':'חלש'}
-async function scanNetworks(ip){
- if(SCANNING)return;SCANNING=true;
+async function scanNetworks(ip,force){
  const pick=$('wifiPick'),list=$('wifiList'),note=$('wifiListNote'),btn=$('wifiScan');
  pick.classList.remove('hidden');btn.disabled=true;note.textContent='סורק רשתות מהמכשיר...';
- const scan=await wsRpc(ip,'Wifi.Scan',12000);
- btn.disabled=false;SCANNING=false;
- const best=new Map();
- for(const r of (scan&&Array.isArray(scan.results))?scan.results:[]){
-  const ssid=String(r.ssid||'');if(!ssid||/^shelly/i.test(ssid))continue; // the device's own hotspot is not a home network
-  const cur=best.get(ssid);if(!cur||Number(r.rssi)>Number(cur.rssi))best.set(ssid,r);
- }
- const nets=[...best.values()].sort((a,b)=>Number(b.rssi)-Number(a.rssi));
+ if(force)SCAN.at=0;
+ const nets=await scanSsids(ip);
+ btn.disabled=false;
  while(list.firstChild)list.removeChild(list.firstChild);
- if(!nets.length){note.textContent=scan?'המכשיר לא רואה רשתות כרגע — נסו לסרוק שוב או הקלידו את השם ידנית.':'לא ניתן לסרוק מהמכשיר — הקלידו את שם הרשת ידנית.';return}
+ if(!nets||!nets.length){note.textContent=nets?'המכשיר לא רואה רשתות כרגע — נסו לסרוק שוב או הקלידו את השם ידנית.':'לא ניתן לסרוק מהמכשיר — הקלידו את שם הרשת ידנית.';return}
  note.textContent='רשתות שהמכשיר רואה — הקישו על הרשת הביתית:';
  const typed=$('wifiSsid').value;
  for(const n of nets){
@@ -461,17 +483,29 @@ async function scanNetworks(ip){
   const name=document.createElement('span');name.textContent=n.ssid;name.dir='auto';
   const meta=document.createElement('small');meta.textContent=(Number(n.auth)===0?'פתוחה · ':'')+signalWord(Number(n.rssi))+' ('+n.rssi+' dBm)';
   b.appendChild(name);b.appendChild(meta);
-  if(n.ssid===typed||n.ssid.split(' ').join('').toLowerCase()===typed.split(' ').join('').toLowerCase())b.classList.add('sel');
+  if(n.ssid===typed||squash(n.ssid)===squash(typed))b.classList.add('sel');
   b.onclick=()=>{$('wifiSsid').value=n.ssid;for(const x of list.children)x.classList.remove('sel');b.classList.add('sel');$('wifiPass').focus()};
   list.appendChild(b);
  }
 }
-$('wifiScan').onclick=()=>{if(DEVIP)scanNetworks(DEVIP)};
+$('wifiScan').onclick=()=>{if(DEVIP)scanNetworks(DEVIP,true)};
 function wifiFailText(ssid,r,st){
- if(r&&r.seen===false)return 'המכשיר לא רואה רשת בשם "'+esc(ssid)+'". רשתות שהמכשיר כן רואה: '+r.list.map(esc).join(', ')+'. בדקו את השם (המכשיר קולט רק 2.4GHz) ולחצו שוב — אתם עדיין על רשת המכשיר.';
+ if(r&&r.seen===false)return 'המכשיר לא רואה רשת בשם "'+esc(ssid)+'". רשתות שהמכשיר כן רואה: '+(r.list.length?r.list.map(esc).join(', '):'אין')+'. בדקו את השם (המכשיר קולט רק 2.4GHz) — או, אם זו רשת מוסתרת, שלחו בכל זאת.';
  if(r&&r.seen===true)return 'המכשיר רואה את הרשת "'+esc(ssid)+'" אבל לא הצליח להתחבר אליה (מצב: '+esc((st&&st.status)||'לא ידוע')+') — כנראה סיסמה שגויה. תקנו ולחצו שוב — אתם עדיין על רשת המכשיר.';
  return 'המכשיר לא הצליח להתחבר לרשת "'+esc(ssid)+'" — כנראה שם רשת או סיסמה שגויים. תקנו את הפרטים ולחצו שוב (אתם עדיין על רשת המכשיר — אפשר לתקן מיד).';
 }
+// The server-side config every path writes: certificate, broker, time server.
+// Callers add Wi-Fi (optional) and the reboot.
+async function sendServerConfig(){
+ log('מתקין תעודת שרת...');await rpc(B.putCa);
+ log('מגדיר חיבור לשרת...');await rpc(B.mqtt);
+ log('מגדיר שרת זמן...');await rpc(B.sntp[0]);
+}
+const SKIP_LABEL='דלג על ה-Wi-Fi לעת עתה — שלח רק הגדרות שרת';
+// The skip offer lives in #actions, which every go-press clears — re-offer it
+// after any verdict that leaves the user on the Wi-Fi step.
+function offerSkip(){if(STAGE==='wifi'&&!PROVISIONED&&DEVIP)actionBtn(SKIP_LABEL,skipWifi,true)}
+const isHotspot=(ip)=>ip&&(ip===DEVIP||ip==='192.168.33.1');
 async function rpc(body){await fetch('http://'+IP+'/rpc',{method:'POST',mode:'no-cors',cache:'no-store',body,signal:AbortSignal.timeout(10000)})}
 async function waitBack(){log('ממתין שהמכשיר יופעל מחדש...');await sleep(6000);for(let i=0;i<30;i++){if(await ping(IP))return true;await sleep(2000)}return false}
 async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok)return 'ok';if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
@@ -573,71 +607,45 @@ async function stageDetect(){
    ?'המכשיר מוגדר מראש לשרת ✓ — מלאו את פרטי ה-Wi-Fi הביתי ולחצו. זה השלב היחיד.'
    :'שלב 1 מתוך 3 הושלם — המכשיר זוהה ✓. מלאו את פרטי ה-Wi-Fi הביתי ולחצו "חבר לרשת הביתית" (מקומי, בלי אינטרנט).','ok');
   STAGE='wifi';
-  if(!PROVISIONED)actionBtn('דלג על ה-Wi-Fi לעת עתה — שלח רק הגדרות שרת',skipWifi,true);
+  offerSkip();
   return}
  // Typed-MAC path (phone is NOT on the device's network): mint now, then a
  // single hop to the device network sends everything at once.
  await tryMint();
 }
-// Skip Wi-Fi (on the device's hotspot): mint the server credentials and write
-// them, the certificate and the time server to the device NOW, without any
-// network. The device keeps working as a plain Shelly and connects to the
-// server by itself the moment it gets a network — by cable, from its own page
-// (192.168.33.1), the Shelly app, or this installer again. Nothing on the
-// device expires; only the installer file does.
+// Skip Wi-Fi (on the device's hotspot): write the server credentials, the
+// certificate and the time server to the device NOW, without any network. The
+// device keeps working as a plain Shelly and connects to the server by itself
+// the moment it gets a network — by cable, from its own page (192.168.33.1),
+// the Shelly app, or this installer again. Nothing on the device expires; only
+// the installer file does.
+// Credentials are minted over the internet, which the phone usually does NOT
+// have while on the hotspot: the first press tries anyway (some phones route
+// through mobile data), and otherwise walks the user through one hop — mint on
+// a network with internet, come back, press again.
 async function skipWifi(){
  $('go').disabled=true;$('progress').classList.remove('hidden');
  try{
-  // Minting needs the internet; on the hotspot that means the phone's mobile data.
-  if(!(await mintCreds())){
-   verdict('ליצירת פרטי החיבור צריך אינטרנט. הפעילו נתונים סלולריים בטלפון (אפשר להישאר על רשת המכשיר) ולחצו שוב על "דלג" — או סגרו וחזרו לקובץ הזה אחר כך.','warn');
-   actionBtn('דלג על ה-Wi-Fi לעת עתה — שלח רק הגדרות שרת',skipWifi,true);return}
+  const mac=parseMac($('mac').value);
+  if(!(B&&mac===UID)){
+   if(!(await mintCreds())){
+    verdict('ליצירת פרטי החיבור צריך אינטרנט. חברו את הטלפון לרשת עם אינטרנט (Wi-Fi ביתי או נתונים סלולריים), לחצו "צור פרטי חיבור", ואז חזרו לרשת המכשיר (Shelly...) ולחצו שוב "דלג".','warn');
+    actionBtn('צור פרטי חיבור (כשיש אינטרנט)',async()=>{
+     if(await mintCreds()){verdict('פרטי החיבור מוכנים ✓. חזרו לרשת המכשיר (Shelly...) ולחצו "דלג על ה-Wi-Fi".','ok')}
+     actionBtn('צור פרטי חיבור (כשיש אינטרנט)',async()=>{await skipWifi()},true);offerSkip()},true);
+    offerSkip();return}
+  }
   IP=DEVIP;
-  if(!(await ping(IP))){verdict('המכשיר לא נמצא — ודאו שהטלפון עדיין על רשת המכשיר (Shelly...) ולחצו שוב.','warn');actionBtn('דלג על ה-Wi-Fi לעת עתה — שלח רק הגדרות שרת',skipWifi,true);return}
-  log('מתקין תעודת שרת...');await rpc(B.putCa);
-  log('מגדיר חיבור לשרת...');await rpc(B.mqtt);
-  log('מגדיר שרת זמן...');await rpc(B.sntp[0]);
+  if(!(await ping(IP))){verdict('המכשיר לא נמצא — ודאו שהטלפון על רשת המכשיר (Shelly...) ולחצו שוב "דלג".','warn');offerSkip();return}
+  await sendServerConfig();
   log('מאתחל את המכשיר...');await rpc(B.reboot).catch(()=>{});
-  STAGE='done';$('go').textContent='סיום';
-  verdict('הגדרות השרת נשמרו במכשיר ✓ (בלי Wi-Fi). ההתקנה תושלם מעצמה ברגע שלמכשיר תהיה רשת: חברו כבל רשת, או הגדירו Wi-Fi מדף המכשיר (http://192.168.33.1 כשהטלפון על הרשת שלו) או מאפליקציית Shelly, או הפעילו שוב קובץ התקנה. עד אז הוא פועל כ-Shelly רגיל, והחיבור לשרת לא פג תוקף.','warn');
- }catch(e){verdict('שגיאה בשליחה: '+e.message+' — ודאו שנשארתם על רשת המכשיר ונסו שוב.','bad');actionBtn('דלג על ה-Wi-Fi לעת עתה — שלח רק הגדרות שרת',skipWifi,true)}
+  // Stay on the Wi-Fi step: the fields keep working, so a password that turns
+  // up a minute later can still be sent from here.
+  $('go').textContent='חבר לרשת הביתית (אופציונלי) ›';
+  verdict('הגדרות השרת נשמרו במכשיר ✓ (בלי Wi-Fi). ההתקנה תושלם מעצמה ברגע שלמכשיר תהיה רשת: חברו כבל רשת, או הגדירו Wi-Fi כאן למטה (אפשר גם עכשיו), או מדף המכשיר (http://192.168.33.1 כשהטלפון על הרשת שלו) או מאפליקציית Shelly. עד אז הוא פועל כ-Shelly רגיל, והחיבור לשרת לא פג תוקף. אפשר לסגור.','ok');
+ }catch(e){verdict('שגיאה בשליחה: '+e.message+' — ודאו שנשארתם על רשת המכשיר ונסו שוב.','bad');offerSkip()}
  finally{$('go').disabled=false}
 }
-// Mint broker credentials for the current MAC. Returns true when creds are in
-// hand; on failure prints a stage-appropriate message and returns false.
-async function mintCreds(){
- const mac=parseMac($('mac').value);
- if(B&&mac===UID)return true;
- log('יוצר פרטי חיבור בשרת (דרך האינטרנט)...');
- // Right after hopping back from the device hotspot the phone needs a few
- // seconds to re-establish routes — retry quietly before complaining.
- let r=null;
- for(let i=0;i<4&&!r;i++){
-  if(i)await sleep(3000);
-  try{r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'})}catch(e){r=null}
- }
- if(!r){verdict('אין חיבור לשרת. אם הרגע עברתם רשת — המתינו כמה שניות ולחצו שוב; אחרת ודאו שהטלפון על Wi-Fi עם אינטרנט (או הפעילו גלישה).','warn');return false}
- if(!r.ok){
-  const e=await r.json().catch(()=>null);
-  verdict('השרת לא אישר את הבקשה: '+((e&&e.error&&e.error.message)||('שגיאה '+r.status))+'. אם הקובץ ישן, בוטל, או שהמכשיר כבר רשום ללקוח — פנו למנהל המערכת לקובץ חדש.','bad');
-  return false}
- const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
- log('פרטי חיבור נוצרו ✓','ok');
- return true;
-}
-// Typed-MAC path only (phone not on the device network): mint, then one hop.
-async function tryMint(){
- const mac=parseMac($('mac').value);
- if(mac.length!==12){STAGE='detect';$('go').textContent='התחל התקנה';verdict('קוד המכשיר התרוקן — לחצו שוב לזיהוי מחדש.','warn');return}
- STAGE='mint';$('go').textContent='צור פרטי חיבור ›';
- if(!(await mintCreds()))return;
- $('wifiBlock').classList.remove('hidden');
- $('go').textContent='שלח הגדרות למכשיר ›';
- STAGE='install';
- verdict('פרטי החיבור מוכנים ✓. מלאו את פרטי ה-Wi-Fi הביתי, עברו לרשת שהמכשיר משדר (Shelly...) ולחצו "שלח הגדרות למכשיר" — מעבר אחד ויחיד.','ok');
-}
-// Stage 'wifi' (on the device network): send home Wi-Fi and VERIFY it connected —
-// a wrong password surfaces here, while fixing it is a keystroke away.
 async function stageWifi(){
  const typed=$('wifiSsid').value, wifiPass=$('wifiPass').value;
  if(!typed.trim()){
@@ -646,20 +654,29 @@ async function stageWifi(){
   // Pro models take a network cable — a cabled device needs no Wi-Fi at all.
   const eth=await wsRpc(DEVIP,'Eth.GetStatus');
   if(eth&&eth.ip){STA_IP=eth.ip;log('המכשיר מחובר בכבל רשת ✓ (כתובת '+eth.ip+')','ok');afterWifi('');return}
-  verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה — או חברו למכשיר כבל רשת מהנתב, המתינו רגע ולחצו שוב בלי למלא כלום.','warn');return}
+  verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה (או בחרו מהרשימה) — או חברו למכשיר כבל רשת מהנתב, המתינו רגע ולחצו שוב בלי למלא כלום.','warn');offerSkip();return}
  IP=DEVIP;
- log('סורק רשתות מהמכשיר...');
+ log('בודק את שם הרשת מול סריקת המכשיר...');
  const r=await resolveSsid(DEVIP,typed);
- const ssid=r.ssid;
- if(r.seen===false){verdict(wifiFailText(ssid,r,null),'warn');return}
- log('שולח את פרטי הרשת "'+esc(ssid)+'" למכשיר...');
+ if(r.seen===false){
+  // Not a hard stop: a hidden network never shows in a scan, and a single scan
+  // can miss a busy channel. The typed name goes verbatim on request.
+  verdict(wifiFailText(r.ssid,r,null),'warn');
+  actionBtn('שלח בכל זאת את "'+typed+'"',async()=>{$('go').disabled=true;try{await sendWifi(typed,wifiPass,{ssid:typed,seen:null,list:[]})}finally{$('go').disabled=false}},true);
+  offerSkip();return}
+ await sendWifi(r.ssid,wifiPass,r);
+}
+// Send the station config and VERIFY the join — a wrong password surfaces here,
+// while fixing it is a keystroke away.
+async function sendWifi(ssid,wifiPass,r){
+ log('שולח את פרטי הרשת "'+ssid+'" למכשיר...');
  try{await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}))}
- catch(e){verdict('שגיאה בשליחה — ודאו שהטלפון עדיין על רשת המכשיר (Shelly...) ונסו שוב.','bad');return}
+ catch(e){verdict('שגיאה בשליחה — ודאו שהטלפון עדיין על רשת המכשיר (Shelly...) ונסו שוב.','bad');offerSkip();return}
  log('ממתין שהמכשיר יתחבר לרשת...');
  let st=null;
  for(let i=0;i<15;i++){await sleep(2000);st=await wsRpc(DEVIP,'Wifi.GetStatus');if(st&&st.status==='got ip'&&st.sta_ip)break}
  if(!(st&&st.status==='got ip'&&st.sta_ip)){
-  verdict(wifiFailText(ssid,r,st),'warn');
+  verdict(wifiFailText(ssid,r,st),'warn');offerSkip();
   return}
  STA_IP=st.sta_ip;
  afterWifi(ssid);
@@ -707,9 +724,7 @@ async function stageComplete(){
   return}
  log('המכשיר נמצא ('+IP+'). שולח הגדרות שרת...','ok');
  try{
-  log('מתקין תעודת שרת...');await rpc(B.putCa);
-  log('מגדיר חיבור לשרת...');await rpc(B.mqtt);
-  log('מגדיר שרת זמן...');await rpc(B.sntp[0]);
+  await sendServerConfig();
   log('מאתחל את המכשיר...');await rpc(B.reboot).catch(()=>{});
  }catch(e){verdict('שגיאה בשליחת ההגדרות: '+e.message+' — ודאו שנשארתם על אותו Wi-Fi ונסו שוב.','bad');return}
  if(!(await waitBack())){verdict('המכשיר לא חזר אחרי האתחול — המתינו חצי דקה ולחצו "בדוק מול השרת".','warn');actionBtn('בדוק מול השרת',async()=>{await finish()});return}
@@ -724,7 +739,7 @@ async function stageInstall(){
   if(!typed.trim()){verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה ולחצו שוב.','warn');return}
   IP=(DEVIP&&await ping(DEVIP))?DEVIP:(await ping('192.168.33.1')?'192.168.33.1':'');
   if(!IP){verdict('המכשיר לא נמצא — ודאו שהטלפון על הרשת שהמכשיר משדר (Shelly...) ולחצו שוב.','warn');return}
-  const ssid=(await resolveSsid(IP,typed)).ssid;
+  const ssid=isHotspot(IP)?(await resolveSsid(IP,typed)).ssid:typed.trim();
   try{
    log('שולח את פרטי ה-Wi-Fi למכשיר...');
    await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}));
@@ -753,11 +768,9 @@ async function stageInstall(){
   $('go').disabled=false;return}
  log('המכשיר נמצא ('+IP+'). שולח הגדרות...','ok');
  const typed=$('wifiSsid').value, wifiPass=$('wifiPass').value;
- const ssid=typed.trim()?(await resolveSsid(IP,typed)).ssid:'';
+ const ssid=typed.trim()?(isHotspot(IP)?(await resolveSsid(IP,typed)).ssid:typed.trim()):'';
  try{
-  log('מתקין תעודת שרת...');await rpc(B.putCa);
-  log('מגדיר חיבור לשרת...');await rpc(B.mqtt);
-  log('מגדיר שרת זמן...');await rpc(B.sntp[0]);
+  await sendServerConfig();
   // Wi-Fi last, so the server config already sits on the device even if the
   // network switch cuts this session short.
   if(ssid){log('מגדיר חיבור לרשת '+esc(ssid)+'...');await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}))}
