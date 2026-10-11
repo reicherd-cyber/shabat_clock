@@ -401,15 +401,35 @@ async function ping(ip){try{await fetch('http://'+ip+'/rpc/Shelly.GetDeviceInfo'
 // browser can send but never read them — the reason the MAC is typed by hand),
 // but ws://<ip>/rpc has no such restriction, so the page can interrogate the
 // device: its MAC, and whether it is already provisioned for our broker.
-function wsRpc(ip,method){return new Promise((res)=>{
+function wsRpc(ip,method,timeoutMs){return new Promise((res)=>{
  let ws,done=false;const fin=(v)=>{if(done)return;done=true;try{ws&&ws.close()}catch(e){}res(v)};
  try{ws=new WebSocket('ws://'+ip+'/rpc')}catch(e){return res(null)}
- const t=setTimeout(()=>fin(null),5000);
+ const t=setTimeout(()=>fin(null),timeoutMs||5000);
  ws.onopen=()=>{try{ws.send(JSON.stringify({id:1,src:'installer',method:method}))}catch(e){clearTimeout(t);fin(null)}};
  ws.onmessage=(e)=>{clearTimeout(t);try{fin(JSON.parse(e.data).result||null)}catch(err){fin(null)}};
  ws.onerror=()=>{clearTimeout(t);fin(null)};
 })}
 async function wsMac(ip){const r=await wsRpc(ip,'Shelly.GetDeviceInfo');if(!r)return null;const m=String(r.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');return m.length===12?m:null}
+// The device's own scan settles the EXACT network name. SSIDs may carry spaces
+// the installer can't see — a real "david 2.4 " ended in a space, the trimmed
+// name matched nothing, and the device sat on "connecting" forever (2026-10-12).
+// Returns { ssid, seen: true|false|null (scan unavailable), list }.
+async function resolveSsid(ip,typed){
+ const want=String(typed||'').trim();
+ const scan=await wsRpc(ip,'Wifi.Scan',12000);
+ const seen=(scan&&Array.isArray(scan.results))?[...new Set(scan.results.map(r=>String(r.ssid||'')).filter(Boolean))]:null;
+ if(!seen)return {ssid:want,seen:null,list:[]};
+ if(seen.includes(typed))return {ssid:typed,seen:true,list:seen};
+ if(seen.includes(want))return {ssid:want,seen:true,list:seen};
+ const loose=seen.find(x=>x.trim()===want)||seen.find(x=>x.trim().toLowerCase()===want.toLowerCase());
+ if(loose){log('שם הרשת המדויק לפי סריקת המכשיר הוא "'+loose+'" (כולל רווחים ואותיות) — משתמש בו.','warn');return {ssid:loose,seen:true,list:seen}}
+ return {ssid:want,seen:false,list:seen};
+}
+function wifiFailText(ssid,r,st){
+ if(r&&r.seen===false)return 'המכשיר לא רואה רשת בשם "'+esc(ssid)+'". רשתות שהמכשיר כן רואה: '+r.list.map(esc).join(', ')+'. בדקו את השם (המכשיר קולט רק 2.4GHz) ולחצו שוב — אתם עדיין על רשת המכשיר.';
+ if(r&&r.seen===true)return 'המכשיר רואה את הרשת "'+esc(ssid)+'" אבל לא הצליח להתחבר אליה (מצב: '+esc((st&&st.status)||'לא ידוע')+') — כנראה סיסמה שגויה. תקנו ולחצו שוב — אתם עדיין על רשת המכשיר.';
+ return 'המכשיר לא הצליח להתחבר לרשת "'+esc(ssid)+'" — כנראה שם רשת או סיסמה שגויים. תקנו את הפרטים ולחצו שוב (אתם עדיין על רשת המכשיר — אפשר לתקן מיד).';
+}
 async function rpc(body){await fetch('http://'+IP+'/rpc',{method:'POST',mode:'no-cors',cache:'no-store',body,signal:AbortSignal.timeout(10000)})}
 async function waitBack(){log('ממתין שהמכשיר יופעל מחדש...');await sleep(6000);for(let i=0;i<30;i++){if(await ping(IP))return true;await sleep(2000)}return false}
 async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok)return 'ok';if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
@@ -551,8 +571,8 @@ async function tryMint(){
 // Stage 'wifi' (on the device network): send home Wi-Fi and VERIFY it connected —
 // a wrong password surfaces here, while fixing it is a keystroke away.
 async function stageWifi(){
- const ssid=$('wifiSsid').value.trim(), wifiPass=$('wifiPass').value;
- if(!ssid){
+ const typed=$('wifiSsid').value, wifiPass=$('wifiPass').value;
+ if(!typed.trim()){
   const st=await wsRpc(DEVIP,'Wifi.GetStatus');
   if(st&&st.status==='got ip'&&st.sta_ip){STA_IP=st.sta_ip;afterWifi('');return}
   // Pro models take a network cable — a cabled device needs no Wi-Fi at all.
@@ -560,6 +580,10 @@ async function stageWifi(){
   if(eth&&eth.ip){STA_IP=eth.ip;log('המכשיר מחובר בכבל רשת ✓ (כתובת '+eth.ip+')','ok');afterWifi('');return}
   verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה — או חברו למכשיר כבל רשת מהנתב, המתינו רגע ולחצו שוב בלי למלא כלום.','warn');return}
  IP=DEVIP;
+ log('סורק רשתות מהמכשיר...');
+ const r=await resolveSsid(DEVIP,typed);
+ const ssid=r.ssid;
+ if(r.seen===false){verdict(wifiFailText(ssid,r,null),'warn');return}
  log('שולח את פרטי הרשת "'+esc(ssid)+'" למכשיר...');
  try{await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}))}
  catch(e){verdict('שגיאה בשליחה — ודאו שהטלפון עדיין על רשת המכשיר (Shelly...) ונסו שוב.','bad');return}
@@ -567,7 +591,7 @@ async function stageWifi(){
  let st=null;
  for(let i=0;i<15;i++){await sleep(2000);st=await wsRpc(DEVIP,'Wifi.GetStatus');if(st&&st.status==='got ip'&&st.sta_ip)break}
  if(!(st&&st.status==='got ip'&&st.sta_ip)){
-  verdict('המכשיר לא הצליח להתחבר לרשת "'+esc(ssid)+'" — כנראה שם רשת או סיסמה שגויים. תקנו את הפרטים ולחצו שוב (אתם עדיין על רשת המכשיר — אפשר לתקן מיד).','warn');
+  verdict(wifiFailText(ssid,r,st),'warn');
   return}
  STA_IP=st.sta_ip;
  afterWifi(ssid);
@@ -628,10 +652,11 @@ async function stageComplete(){
 async function stageInstall(){
  // Wi-Fi-only path for a pre-provisioned unit: everything is local, offline.
  if(PROVISIONED){
-  const ssid=$('wifiSsid').value.trim(), wifiPass=$('wifiPass').value;
-  if(!ssid){verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה ולחצו שוב.','warn');return}
+  const typed=$('wifiSsid').value, wifiPass=$('wifiPass').value;
+  if(!typed.trim()){verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה ולחצו שוב.','warn');return}
   IP=(DEVIP&&await ping(DEVIP))?DEVIP:(await ping('192.168.33.1')?'192.168.33.1':'');
   if(!IP){verdict('המכשיר לא נמצא — ודאו שהטלפון על הרשת שהמכשיר משדר (Shelly...) ולחצו שוב.','warn');return}
+  const ssid=(await resolveSsid(IP,typed)).ssid;
   try{
    log('שולח את פרטי ה-Wi-Fi למכשיר...');
    await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}));
@@ -659,7 +684,8 @@ async function stageInstall(){
   verdict('המכשיר לא נמצא. התחברו לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הזינו את כתובת ה-IP שלו (מאפליקציית Shelly או מהנתב) בשדה שנפתח למעלה.','warn');
   $('go').disabled=false;return}
  log('המכשיר נמצא ('+IP+'). שולח הגדרות...','ok');
- const ssid=$('wifiSsid').value.trim(), wifiPass=$('wifiPass').value;
+ const typed=$('wifiSsid').value, wifiPass=$('wifiPass').value;
+ const ssid=typed.trim()?(await resolveSsid(IP,typed)).ssid:'';
  try{
   log('מתקין תעודת שרת...');await rpc(B.putCa);
   log('מגדיר חיבור לשרת...');await rpc(B.mqtt);
