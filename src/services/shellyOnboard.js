@@ -573,10 +573,35 @@ async function stageDetect(){
    ?'המכשיר מוגדר מראש לשרת ✓ — מלאו את פרטי ה-Wi-Fi הביתי ולחצו. זה השלב היחיד.'
    :'שלב 1 מתוך 3 הושלם — המכשיר זוהה ✓. מלאו את פרטי ה-Wi-Fi הביתי ולחצו "חבר לרשת הביתית" (מקומי, בלי אינטרנט).','ok');
   STAGE='wifi';
+  if(!PROVISIONED)actionBtn('דלג על ה-Wi-Fi לעת עתה — שלח רק הגדרות שרת',skipWifi,true);
   return}
  // Typed-MAC path (phone is NOT on the device's network): mint now, then a
  // single hop to the device network sends everything at once.
  await tryMint();
+}
+// Skip Wi-Fi (on the device's hotspot): mint the server credentials and write
+// them, the certificate and the time server to the device NOW, without any
+// network. The device keeps working as a plain Shelly and connects to the
+// server by itself the moment it gets a network — by cable, from its own page
+// (192.168.33.1), the Shelly app, or this installer again. Nothing on the
+// device expires; only the installer file does.
+async function skipWifi(){
+ $('go').disabled=true;$('progress').classList.remove('hidden');
+ try{
+  // Minting needs the internet; on the hotspot that means the phone's mobile data.
+  if(!(await mintCreds())){
+   verdict('ליצירת פרטי החיבור צריך אינטרנט. הפעילו נתונים סלולריים בטלפון (אפשר להישאר על רשת המכשיר) ולחצו שוב על "דלג" — או סגרו וחזרו לקובץ הזה אחר כך.','warn');
+   actionBtn('דלג על ה-Wi-Fi לעת עתה — שלח רק הגדרות שרת',skipWifi,true);return}
+  IP=DEVIP;
+  if(!(await ping(IP))){verdict('המכשיר לא נמצא — ודאו שהטלפון עדיין על רשת המכשיר (Shelly...) ולחצו שוב.','warn');actionBtn('דלג על ה-Wi-Fi לעת עתה — שלח רק הגדרות שרת',skipWifi,true);return}
+  log('מתקין תעודת שרת...');await rpc(B.putCa);
+  log('מגדיר חיבור לשרת...');await rpc(B.mqtt);
+  log('מגדיר שרת זמן...');await rpc(B.sntp[0]);
+  log('מאתחל את המכשיר...');await rpc(B.reboot).catch(()=>{});
+  STAGE='done';$('go').textContent='סיום';
+  verdict('הגדרות השרת נשמרו במכשיר ✓ (בלי Wi-Fi). ההתקנה תושלם מעצמה ברגע שלמכשיר תהיה רשת: חברו כבל רשת, או הגדירו Wi-Fi מדף המכשיר (http://192.168.33.1 כשהטלפון על הרשת שלו) או מאפליקציית Shelly, או הפעילו שוב קובץ התקנה. עד אז הוא פועל כ-Shelly רגיל, והחיבור לשרת לא פג תוקף.','warn');
+ }catch(e){verdict('שגיאה בשליחה: '+e.message+' — ודאו שנשארתם על רשת המכשיר ונסו שוב.','bad');actionBtn('דלג על ה-Wi-Fi לעת עתה — שלח רק הגדרות שרת',skipWifi,true)}
+ finally{$('go').disabled=false}
 }
 // Mint broker credentials for the current MAC. Returns true when creds are in
 // hand; on failure prints a stage-appropriate message and returns false.
