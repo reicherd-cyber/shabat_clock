@@ -646,6 +646,40 @@ async function skipWifi(){
  }catch(e){verdict('שגיאה בשליחה: '+e.message+' — ודאו שנשארתם על רשת המכשיר ונסו שוב.','bad');offerSkip()}
  finally{$('go').disabled=false}
 }
+// Mint broker credentials for the current MAC. Returns true when creds are in
+// hand; on failure prints a stage-appropriate message and returns false.
+async function mintCreds(){
+ const mac=parseMac($('mac').value);
+ if(B&&mac===UID)return true;
+ log('יוצר פרטי חיבור בשרת (דרך האינטרנט)...');
+ // Right after hopping back from the device hotspot the phone needs a few
+ // seconds to re-establish routes — retry quietly before complaining.
+ let r=null;
+ for(let i=0;i<4&&!r;i++){
+  if(i)await sleep(3000);
+  try{r=await fetch(PREPARE_URL+'&mac='+mac,{cache:'no-store'})}catch(e){r=null}
+ }
+ if(!r){verdict('אין חיבור לשרת. אם הרגע עברתם רשת — המתינו כמה שניות ולחצו שוב; אחרת ודאו שהטלפון על Wi-Fi עם אינטרנט (או הפעילו גלישה).','warn');return false}
+ if(!r.ok){
+  const e=await r.json().catch(()=>null);
+  verdict('השרת לא אישר את הבקשה: '+((e&&e.error&&e.error.message)||('שגיאה '+r.status))+'. אם הקובץ ישן, בוטל, או שהמכשיר כבר רשום ללקוח — פנו למנהל המערכת לקובץ חדש.','bad');
+  return false}
+ const j=await r.json();UID=j.mac;B=j.bodies;STATUS_URL=j.status_url;$('uid').textContent=UID;
+ log('פרטי חיבור נוצרו ✓','ok');
+ return true;
+}
+// Typed-MAC path only (phone not on the device network): mint, then one hop.
+async function tryMint(){
+ const mac=parseMac($('mac').value);
+ if(mac.length!==12){STAGE='detect';$('go').textContent='התחל התקנה';verdict('קוד המכשיר התרוקן — לחצו שוב לזיהוי מחדש.','warn');return}
+ STAGE='mint';$('go').textContent='צור פרטי חיבור ›';
+ if(!(await mintCreds()))return;
+ $('wifiBlock').classList.remove('hidden');
+ $('go').textContent='שלח הגדרות למכשיר ›';
+ STAGE='install';
+ verdict('פרטי החיבור מוכנים ✓. מלאו את פרטי ה-Wi-Fi הביתי, עברו לרשת שהמכשיר משדר (Shelly...) ולחצו "שלח הגדרות למכשיר" — מעבר אחד ויחיד.','ok');
+}
+// Stage 'wifi' (on the device network): the Wi-Fi join, verified.
 async function stageWifi(){
  const typed=$('wifiSsid').value, wifiPass=$('wifiPass').value;
  if(!typed.trim()){
