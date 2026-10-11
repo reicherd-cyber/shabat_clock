@@ -312,6 +312,9 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
  input{width:100%;box-sizing:border-box;font-size:18px;direction:ltr;text-align:center;padding:10px;border:1px solid #cfc9bb;border-radius:10px}
  button{width:100%;font-size:18px;padding:12px;border:0;border-radius:10px;background:#b3654a;color:#fff;margin-top:10px}
  button.alt{background:#fff;color:#2b2620;border:1px solid #cfc9bb}
+ .net{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;margin-top:6px;padding:10px 12px;font-size:16px;text-align:right;background:#fff;color:#2b2620;border:1px solid #cfc9bb;border-radius:10px}
+ .net.sel{border-color:#3a7d44;background:#e5f2e7}
+ .net small{color:#8a8377;font-size:13px;white-space:nowrap}
  button:disabled{opacity:.5}
  #log div{padding:3px 0;font-size:15px}
  .ok{color:#3a7d44}.bad{color:#b3372f}.warn{color:#a06a00}
@@ -363,7 +366,12 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
   </div>
   <div id="wifiBlock" class="hidden" style="margin-top:8px;font-size:14px">
    <b>פרטי ה-Wi-Fi הביתי</b> — יישלחו למכשיר עם שאר ההגדרות והוא יתחבר לרשת לבד.
-   <input id="wifiSsid" placeholder="שם רשת ה-Wi-Fi הביתית" style="margin-top:6px">
+   <div id="wifiPick" class="hidden" style="margin-top:6px">
+    <div id="wifiListNote" style="color:#8a8377">רשתות שהמכשיר רואה — הקישו על הרשת הביתית:</div>
+    <div id="wifiList"></div>
+    <button id="wifiScan" type="button" class="alt" style="font-size:15px;padding:8px">סרוק שוב</button>
+   </div>
+   <input id="wifiSsid" placeholder="שם רשת ה-Wi-Fi הביתית (או בחרו מהרשימה)" style="margin-top:6px">
    <input id="wifiPass" placeholder="סיסמת ה-Wi-Fi" style="margin-top:6px">
    <div style="margin-top:4px;color:#8a8377">המכשיר כבר מחובר ל-Wi-Fi הביתי או בכבל רשת? השאירו ריק.</div>
   </div>
@@ -422,11 +430,43 @@ async function resolveSsid(ip,typed){
  if(seen.includes(typed))return {ssid:typed,seen:true,list:seen};
  if(seen.includes(want))return {ssid:want,seen:true,list:seen};
  // Loosest last: ignore every space and the case ("david2.4" ↔ "david 2.4 ").
- const squash=(x)=>x.replace(/s+/g,'').toLowerCase();
+ const squash=(x)=>x.split(' ').join('').toLowerCase();
  const loose=seen.find(x=>x.trim()===want)||seen.find(x=>x.trim().toLowerCase()===want.toLowerCase())||seen.find(x=>squash(x)===squash(want));
  if(loose){log('שם הרשת המדויק לפי סריקת המכשיר הוא "'+loose+'" (כולל רווחים ואותיות) — משתמש בו.','warn');return {ssid:loose,seen:true,list:seen}}
  return {ssid:want,seen:false,list:seen};
 }
+// Network picker: the device's own scan, strongest first, tapped into the SSID
+// field EXACTLY as broadcast (spaces and all). Built with DOM calls, never
+// innerHTML — an SSID is untrusted text.
+let SCANNING=false;
+function signalWord(rssi){return rssi>=-60?'חזק':rssi>=-75?'בינוני':'חלש'}
+async function scanNetworks(ip){
+ if(SCANNING)return;SCANNING=true;
+ const pick=$('wifiPick'),list=$('wifiList'),note=$('wifiListNote'),btn=$('wifiScan');
+ pick.classList.remove('hidden');btn.disabled=true;note.textContent='סורק רשתות מהמכשיר...';
+ const scan=await wsRpc(ip,'Wifi.Scan',12000);
+ btn.disabled=false;SCANNING=false;
+ const best=new Map();
+ for(const r of (scan&&Array.isArray(scan.results))?scan.results:[]){
+  const ssid=String(r.ssid||'');if(!ssid||/^shelly/i.test(ssid))continue; // the device's own hotspot is not a home network
+  const cur=best.get(ssid);if(!cur||Number(r.rssi)>Number(cur.rssi))best.set(ssid,r);
+ }
+ const nets=[...best.values()].sort((a,b)=>Number(b.rssi)-Number(a.rssi));
+ while(list.firstChild)list.removeChild(list.firstChild);
+ if(!nets.length){note.textContent=scan?'המכשיר לא רואה רשתות כרגע — נסו לסרוק שוב או הקלידו את השם ידנית.':'לא ניתן לסרוק מהמכשיר — הקלידו את שם הרשת ידנית.';return}
+ note.textContent='רשתות שהמכשיר רואה — הקישו על הרשת הביתית:';
+ const typed=$('wifiSsid').value;
+ for(const n of nets){
+  const b=document.createElement('button');b.type='button';b.className='net';
+  const name=document.createElement('span');name.textContent=n.ssid;name.dir='auto';
+  const meta=document.createElement('small');meta.textContent=(Number(n.auth)===0?'פתוחה · ':'')+signalWord(Number(n.rssi))+' ('+n.rssi+' dBm)';
+  b.appendChild(name);b.appendChild(meta);
+  if(n.ssid===typed||n.ssid.split(' ').join('').toLowerCase()===typed.split(' ').join('').toLowerCase())b.classList.add('sel');
+  b.onclick=()=>{$('wifiSsid').value=n.ssid;for(const x of list.children)x.classList.remove('sel');b.classList.add('sel');$('wifiPass').focus()};
+  list.appendChild(b);
+ }
+}
+$('wifiScan').onclick=()=>{if(DEVIP)scanNetworks(DEVIP)};
 function wifiFailText(ssid,r,st){
  if(r&&r.seen===false)return 'המכשיר לא רואה רשת בשם "'+esc(ssid)+'". רשתות שהמכשיר כן רואה: '+r.list.map(esc).join(', ')+'. בדקו את השם (המכשיר קולט רק 2.4GHz) ולחצו שוב — אתם עדיין על רשת המכשיר.';
  if(r&&r.seen===true)return 'המכשיר רואה את הרשת "'+esc(ssid)+'" אבל לא הצליח להתחבר אליה (מצב: '+esc((st&&st.status)||'לא ידוע')+') — כנראה סיסמה שגויה. תקנו ולחצו שוב — אתם עדיין על רשת המכשיר.';
@@ -527,6 +567,7 @@ async function stageDetect(){
  // on the user's own network — no coming back to the hotspot.
  if(DEVIP){
   $('wifiBlock').classList.remove('hidden');
+  scanNetworks(DEVIP); // fills the picker while the user reads the verdict
   $('go').textContent=PROVISIONED?'חבר ל-Wi-Fi ›':'חבר לרשת הביתית (שלב 2 מתוך 3) ›';
   verdict(PROVISIONED
    ?'המכשיר מוגדר מראש לשרת ✓ — מלאו את פרטי ה-Wi-Fi הביתי ולחצו. זה השלב היחיד.'
