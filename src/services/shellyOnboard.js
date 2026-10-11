@@ -421,7 +421,9 @@ async function resolveSsid(ip,typed){
  if(!seen)return {ssid:want,seen:null,list:[]};
  if(seen.includes(typed))return {ssid:typed,seen:true,list:seen};
  if(seen.includes(want))return {ssid:want,seen:true,list:seen};
- const loose=seen.find(x=>x.trim()===want)||seen.find(x=>x.trim().toLowerCase()===want.toLowerCase());
+ // Loosest last: ignore every space and the case ("david2.4" ↔ "david 2.4 ").
+ const squash=(x)=>x.replace(/s+/g,'').toLowerCase();
+ const loose=seen.find(x=>x.trim()===want)||seen.find(x=>x.trim().toLowerCase()===want.toLowerCase())||seen.find(x=>squash(x)===squash(want));
  if(loose){log('שם הרשת המדויק לפי סריקת המכשיר הוא "'+loose+'" (כולל רווחים ואותיות) — משתמש בו.','warn');return {ssid:loose,seen:true,list:seen}}
  return {ssid:want,seen:false,list:seen};
 }
