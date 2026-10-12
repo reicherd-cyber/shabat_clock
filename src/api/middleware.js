@@ -124,6 +124,10 @@ export const ivrLimiter = limited({
   windowMs: 60_000, limit: 30,
   keyGenerator: (req) => String(req.query.ApiPhone || req.ip),
 });
+// Meta's webhook: a handful of shared source IPs, bursts on busy days. The
+// per-sender guard lives in whatsapp/bot.js; this only stops a flood from a
+// stranger who found the URL.
+export const whatsappLimiter = limited({ windowMs: 60_000, limit: 600 });
 // Keyed on the NORMALIZED number: "050-123-4567", "+972501234567" and
 // "0501234567" are one bucket, not three (each request is a billed call).
 export const otpRequestLimiter = limited({

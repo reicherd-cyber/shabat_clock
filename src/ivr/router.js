@@ -9,7 +9,7 @@ import { isLockedOut, recordFailure } from '../services/authFailures.js';
 import { pendingPhoneAddCode } from '../services/otp.js';
 import { enabledRelaysForUser } from '../services/relays.js';
 import { sendImmediateCommand } from '../services/commands.js';
-import { createSchedule, deleteSchedule, updateSchedule, listSchedules, describeScheduleHe, validateScheduleRules } from '../services/schedules.js';
+import { createSchedule, deleteSchedule, listSchedules, describeScheduleHe, validateScheduleRules } from '../services/schedules.js';
 import { logAction } from '../services/audit.js';
 import { startCall, setCallUser, appendPath, finishCall } from '../services/callLogs.js';
 import { getText, getSetting } from '../services/settings.js';
@@ -18,77 +18,14 @@ import { ask, askVoice, askRecord, say, sayAndHangup } from './responses.js';
 import { voicemailFolder, voicemailFileName, createPhoneTicket, fetchVoicemailInBackground } from '../services/voicemail.js';
 import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
-import { localParts, shiftDate } from '../services/time.js';
-
-// today/tomorrow (device-local) → YYYY-MM-DD, for once-schedules created by voice.
-function ymdForDay(day, tz) {
-  const p = localParts(new Date(), tz || 'Asia/Jerusalem');
-  const t = day === 'tomorrow' ? shiftDate({ y: p.y, mo: p.mo, d: p.d }, 1) : { y: p.y, mo: p.mo, d: p.d };
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${t.y}-${pad(t.mo)}-${pad(t.d)}`;
-}
+import { runNluActions, ymdForDay } from '../services/nluExec.js';
+import { shiftDate } from '../services/time.js';
 
 function nextYmd(ymd) {
   const [y, mo, d] = ymd.split('-').map(Number);
   const t = shiftDate({ y, mo, d }, 1);
   const pad = (n) => String(n).padStart(2, '0');
   return `${t.y}-${pad(t.mo)}-${pad(t.d)}`;
-}
-
-// Execute the interpreted actions (relay ids already scoped to the user by the
-// interpreter — this runs the same service calls as the digit menu / web).
-// Returns the number of immediate actions the device did NOT acknowledge, so the
-// caller can report honestly — schedules are just DB rows and can't fail this way.
-async function runNluActions(session) {
-  const tz = session.data.nluTz;
-  // Immediate orders go out together: each one blocks ~2s on its meter
-  // read-back (services/commands.js verifyCommand), and "כבה הכל" on a
-  // 4-channel unit run serially would leave the caller in dead air.
-  const immediate = [];
-  for (const a of session.data.nluActions) {
-    if (a.kind === 'immediate') {
-      immediate.push(sendImmediateCommand({ relayId: a.relay_id, action: a.action, source: 'ivr', callId: session.callLogId })
-        .then(async (result) => {
-          await logAction({ type: 'ivr', id: session.userId }, 'command', 'relay', a.relay_id, { after: { action: a.action, status: result.status, verify: result.verify, via: 'nlu' } });
-          return result;
-        }));
-    } else if (a.kind === 'recurring') {
-      const fields = {
-        on_day_of_week: a.on_day, on_time: a.on_time,
-        off_day_of_week: a.off_day, off_time: a.off_time,
-      };
-      const created = await createSchedule({
-        userId: session.userId, actingUserId: session.userId, actor: `ivr:${session.userId}`,
-        relayId: a.relay_id, createdVia: 'ivr', repeat_type: 'weekly', ...fields,
-      });
-      await logAction({ type: 'ivr', id: session.userId }, 'create', 'schedule', created.id, { after: { relay_id: a.relay_id, ...fields, via: 'nlu' } });
-    } else if (a.kind === 'delete_schedule') {
-      // Soft delete (restorable) — same service the web app uses.
-      await deleteSchedule({ userId: session.userId, scheduleId: a.schedule_id, actor: `ivr:${session.userId}` });
-      await logAction({ type: 'ivr', id: session.userId }, 'delete', 'schedule', a.schedule_id, { after: { via: 'nlu' } });
-    } else if (a.kind === 'plan_toggle') {
-      // Stop/start a תוכנית = flip is_enabled on each member row — the same
-      // per-row PATCH the web plan toggle issues (nothing deleted, restorable).
-      const is_enabled = a.action === 'on';
-      for (const id of a.schedule_ids) {
-        await updateSchedule({ userId: session.userId, scheduleId: id, patch: { is_enabled }, actor: `ivr:${session.userId}` });
-        await logAction({ type: 'ivr', id: session.userId }, 'update', 'schedule', id, { after: { is_enabled, plan_key: a.plan_key, via: 'nlu' } });
-      }
-    } else {
-      const date = ymdForDay(a.day, tz);
-      const fields = a.action === 'off'
-        ? { off_time: a.time, off_date: date }
-        : { on_time: a.time, on_date: date };
-      const created = await createSchedule({
-        userId: session.userId, actingUserId: session.userId, actor: `ivr:${session.userId}`,
-        relayId: a.relay_id, createdVia: 'ivr', repeat_type: 'once', ...fields,
-      });
-      await logAction({ type: 'ivr', id: session.userId }, 'create', 'schedule', created.id, { after: { relay_id: a.relay_id, ...fields, via: 'nlu' } });
-    }
-  }
-  const results = await Promise.all(immediate);
-  const unacked = results.filter((x) => x.status !== 'acked').length;
-  return { unacked, results };
 }
 
 // Confirmation readback for voice commands, composed from neural-voice fragments
@@ -713,7 +650,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         if (input !== '1') return res.send(await invalidInput(session));
         let unacked; let results;
         try {
-          ({ unacked, results } = await runNluActions(session));
+          ({ unacked, results } = await runNluActions({ userId: session.userId, actions: session.data.nluActions, tz: session.data.nluTz, source: 'ivr', callId: session.callLogId }));
         } catch (e) {
           console.error('IVR NLU execute error:', e);
           return res.send(await mainMenu(session, await speak('ivr.nlu_exec_error', {}, 'אירעה שגיאה בביצוע הבקשה')));

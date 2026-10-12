@@ -30,6 +30,7 @@ import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEn
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
 import { listReplies, markRepliesSeen, insertReply, cleanReplyBody, notifyUserOfReply } from '../../services/supportThread.js';
+import { notifyWhatsappReply } from '../../whatsapp/bot.js';
 import { readVoicemail, fetchVoicemail } from '../../services/voicemail.js';
 import { brokerConnected } from '../../mqtt/client.js';
 import { healthSnapshot } from '../../monitor/health.js';
@@ -870,7 +871,7 @@ adminRouter.patch('/admins/:id', requireSuperadmin, async (req, res, next) => {
 const AUDIT_FROM = `
   FROM audit_log a
   LEFT JOIN admins ad ON a.actor_type = 'admin' AND ad.id = a.actor_id
-  LEFT JOIN users u ON a.actor_type IN ('user','ivr') AND u.id = a.actor_id
+  LEFT JOIN users u ON a.actor_type IN ('user','ivr','whatsapp') AND u.id = a.actor_id
   LEFT JOIN users eu ON a.entity = 'user' AND eu.id = a.entity_id
   LEFT JOIN user_phones up ON a.entity = 'user_phone' AND up.id = a.entity_id
   LEFT JOIN users upu ON upu.id = up.user_id
@@ -894,7 +895,7 @@ const AUDIT_FROM = `
   LEFT JOIN finance_entries fe ON a.entity = 'finance_entry' AND fe.id = a.entity_id
   LEFT JOIN installer_tokens it ON a.entity = 'installer_token' AND it.id = a.entity_id`;
 const AUDIT_ACTOR_NAME = `CASE WHEN a.actor_type = 'admin' THEN ad.name
-                               WHEN a.actor_type IN ('user','ivr') THEN u.full_name END`;
+                               WHEN a.actor_type IN ('user','ivr','whatsapp') THEN u.full_name END`;
 const AUDIT_ENTITY_NAME = `CASE a.entity
   WHEN 'user' THEN eu.full_name
   WHEN 'user_phone' THEN up.phone
@@ -987,7 +988,7 @@ adminRouter.get('/audit-log/stats', async (req, res, next) => {
       query(
         `SELECT COUNT(*) AS total,
                 SUM(a.actor_type = 'admin') AS \`admin\`, SUM(a.actor_type = 'user') AS \`user\`,
-                SUM(a.actor_type = 'ivr') AS \`ivr\`, SUM(a.actor_type = 'system') AS \`system\`
+                SUM(a.actor_type = 'ivr') AS \`ivr\`, SUM(a.actor_type = 'whatsapp') AS \`whatsapp\`, SUM(a.actor_type = 'system') AS \`system\`
          ${from} ${where}`, params,
       ),
       query(
@@ -1010,7 +1011,7 @@ adminRouter.get('/audit-log/facets', async (req, res, next) => {
       `SELECT a.actor_type, a.actor_id, ${AUDIT_ACTOR_NAME} AS name, COUNT(*) AS n
        FROM audit_log a
        LEFT JOIN admins ad ON a.actor_type = 'admin' AND ad.id = a.actor_id
-       LEFT JOIN users u ON a.actor_type IN ('user','ivr') AND u.id = a.actor_id
+       LEFT JOIN users u ON a.actor_type IN ('user','ivr','whatsapp') AND u.id = a.actor_id
        GROUP BY 1, 2, 3 ORDER BY n DESC`,
     );
     const actions = await query('SELECT entity, action, COUNT(*) AS n FROM audit_log GROUP BY 1, 2 ORDER BY entity, n DESC');
@@ -1120,7 +1121,7 @@ adminRouter.get('/support', async (req, res, next) => {
     if (req.query.user_id) { cond.push('m.user_id = ?'); params.push(Number(req.query.user_id)); }
     // source: 'web' (a registered user, from /help) or 'phone' (voice message
     // left on the sales menu by an unregistered caller — no user row).
-    if (['web', 'phone'].includes(String(req.query.source))) { cond.push('m.source = ?'); params.push(String(req.query.source)); }
+    if (['web', 'phone', 'whatsapp'].includes(String(req.query.source))) { cond.push('m.source = ?'); params.push(String(req.query.source)); }
     if (req.query.from) { cond.push('m.created_at >= ?'); params.push(String(req.query.from)); }
     if (req.query.to) {
       // One convention with the other logs: an inclusive UTC stamp; a bare date
@@ -1212,7 +1213,7 @@ adminRouter.post('/support/:id/replies', requireWrite, async (req, res, next) =>
     const id = Number(req.params.id);
     const body = cleanReplyBody(req.body?.body);
     if (!body) throw errors.validation('תגובה באורך 1–4000 תווים', { body: '1-4000' });
-    const [m] = await query('SELECT id, user_id, status FROM support_messages WHERE id = ? AND deleted_at IS NULL', [id]);
+    const [m] = await query('SELECT id, user_id, status, source, phone FROM support_messages WHERE id = ? AND deleted_at IS NULL', [id]);
     if (!m) throw errors.notFound();
     const replyId = await insertReply({ messageId: id, sender: 'admin', authorId: req.auth.adminId, body, createdBy: adminActor(req) });
     const status = m.status === 'new' ? 'read' : m.status;
@@ -1221,6 +1222,8 @@ adminRouter.post('/support/:id/replies', requireWrite, async (req, res, next) =>
     }
     audit(req, 'support_reply', 'support_message', id, { reply_id: replyId });
     if (m.user_id) notifyUserOfReply({ userId: m.user_id, messageId: id, body });
+    // A WhatsApp ticket gets the answer in the same chat (24h window — see whatsapp/bot.js).
+    if (m.source === 'whatsapp') notifyWhatsappReply({ phone: m.phone, userId: m.user_id, messageId: id, body }).catch((e) => console.error('whatsapp reply push failed:', e.message));
     res.status(201).json({ id: replyId, status });
   } catch (e) { next(e); }
 });
