@@ -677,6 +677,48 @@ adminRouter.get('/call-logs', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ── WhatsApp: every message in and out (whatsapp_messages), for the
+// conversations page. Filters: time window, user, phone/text search,
+// direction, status. Counts + per-day in/out feed the tiles and the chart.
+adminRouter.get('/whatsapp', async (req, res, next) => {
+  try {
+    const cond = ['1=1'];
+    const params = [];
+    if (req.query.from) { cond.push('m.created_at >= ?'); params.push(String(req.query.from)); }
+    if (req.query.to) { cond.push('m.created_at <= ?'); params.push(String(req.query.to)); }
+    if (req.query.user_id) { cond.push('m.user_id = ?'); params.push(Number(req.query.user_id)); }
+    if (['in', 'out'].includes(String(req.query.direction))) { cond.push('m.direction = ?'); params.push(String(req.query.direction)); }
+    if (req.query.status) { cond.push('m.status = ?'); params.push(String(req.query.status).slice(0, 20)); }
+    if (req.query.phone) { cond.push('m.phone = ?'); params.push(normalizePhone(req.query.phone)); }
+    if (req.query.q) {
+      const raw = String(req.query.q);
+      const like = `%${raw}%`;
+      cond.push('(m.body LIKE ? OR m.phone LIKE ? OR u.full_name LIKE ?)');
+      params.push(like, `%${normalizePhone(raw) || raw}%`, like);
+    }
+    const where = cond.join(' AND ');
+    const from = 'FROM whatsapp_messages m LEFT JOIN users u ON u.id = m.user_id';
+    const [rows, [counts], byDay, [tickets]] = await Promise.all([
+      query(`SELECT m.id, m.wa_message_id, m.phone, m.user_id, m.direction, m.kind, m.body, m.status, m.error, m.created_at,
+                    u.full_name AS user_name
+               ${from} WHERE ${where} ORDER BY m.id DESC LIMIT 1000`, params),
+      query(`SELECT COUNT(DISTINCT m.phone) AS phones, SUM(m.direction = 'in') AS \`in\`, SUM(m.direction = 'out') AS \`out\`,
+                    SUM(m.status = 'failed') AS failed
+               ${from} WHERE ${where}`, params),
+      query(`SELECT DATE(m.created_at) AS d, m.direction, COUNT(*) AS n ${from} WHERE ${where} GROUP BY 1, 2 ORDER BY 1`, params),
+      query(`SELECT COUNT(*) AS n FROM support_messages s WHERE s.source = 'whatsapp' AND s.deleted_at IS NULL
+               ${req.query.from ? 'AND s.created_at >= ?' : ''} ${req.query.to ? 'AND s.created_at <= ?' : ''}`,
+      [req.query.from, req.query.to].filter(Boolean).map(String)),
+    ]);
+    res.json({
+      rows,
+      counts: { phones: Number(counts.phones || 0), in: Number(counts.in || 0), out: Number(counts.out || 0), failed: Number(counts.failed || 0), tickets: Number(tickets.n || 0) },
+      byDay: byDay.map((r) => ({ d: typeof r.d === 'string' ? r.d.slice(0, 10) : new Date(r.d).toISOString().slice(0, 10), direction: r.direction, n: Number(r.n) })),
+    });
+  } catch (e) { next(e); }
+});
+
+
 // ── schedules (any user's; same soft-delete path [D37]) ──
 adminRouter.get('/schedules', async (req, res, next) => {
   try {
