@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api } from '../api.js';
+import { api, isImpersonating } from '../api.js';
 import { Card, Button, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect } from '../ui.jsx';
 
 const EMPTY_CUSTOM = { fromDate: '', fromHour: '', toDate: '', toHour: '' };
@@ -38,7 +38,7 @@ function Row({ item, first, colorOf }) {
             {d.relay_id != null && <ChannelDot color={colorOf(d.relay_id)} size={9} className="me-1.5 -mb-px" />}
             <b>{d.relay_name}</b> {d.action === 'on' ? 'הודלק' : 'כובה'} {SOURCE_HE[d.source] || ''}
             {d.status === 'failed' && <span className="text-off"> — נכשל{FAIL_HE[d.fail_reason] ? ` (${FAIL_HE[d.fail_reason]})` : ''}</span>}
-            {d.status === 'acked' && VERIFY_HE[d.verify] && <span className={VERIFY_WARN.has(d.verify) ? 'text-off' : 'text-muted'}> — {VERIFY_HE[d.verify]}</span>}
+            {d.status === 'acked' && VERIFY_HE[d.verify] && (!VERIFY_WARN.has(d.verify) || isImpersonating()) && <span className={VERIFY_WARN.has(d.verify) ? 'text-off' : 'text-muted'}> — {VERIFY_HE[d.verify]}</span>}
           </>
         ) : (
           <>
