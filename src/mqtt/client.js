@@ -99,6 +99,7 @@ async function handleShellyMessage(topic, buf) {
       return;
     }
     waiter.resolve(payload);
+    touchDeviceSeen(waiter.uid);
     return;
   }
 
@@ -175,6 +176,7 @@ async function handleShellyMessage(topic, buf) {
     let st;
     try { st = JSON.parse(text); } catch { return; }
     if (typeof st?.output !== 'boolean') return;
+    touchDeviceSeen(device.device_uid);
     await query(
       `UPDATE relays SET current_state = ?, state_updated_at = UTC_TIMESTAMP()
        WHERE device_id = ? AND relay_no = ? AND deleted_at IS NULL`,
@@ -405,6 +407,18 @@ async function handleScheduleAck(uid, ack) {
     clearTimeout(scheduleAckTimers.get(device.id));
     scheduleAckTimers.delete(device.id);
   }
+}
+
+// Heartbeat for tick.js reachableForBackup: any sign of life from a unit
+// (status message, RPC reply) refreshes devices.last_seen_at, at most once a
+// minute per unit. Primary only — the diary has one writer.
+const seenAt = new Map();
+export function touchDeviceSeen(uid) {
+  if (!uid || !isPrimary()) return;
+  const now = Date.now();
+  if (now - (seenAt.get(uid) || 0) < 60_000) return;
+  seenAt.set(uid, now);
+  query('UPDATE devices SET last_seen_at = UTC_TIMESTAMP() WHERE device_uid = ?', [uid]).catch(() => {});
 }
 
 export function brokerConnected() {

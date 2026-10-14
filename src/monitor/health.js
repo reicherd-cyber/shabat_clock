@@ -28,7 +28,8 @@ import { learnOnPower, worthSaving, idleCandidates, judgeLoads, trackDeadOnsets,
 // The reboot safety net trusts the pre-reboot output snapshot only if it is
 // this fresh — a snapshot from before a blind window (filtered line, broker
 // hiccup) may predate a schedule that switched the channel off on purpose.
-const SNAPSHOT_FRESH_MS = 2 * 60_000;
+const SNAPSHOT_FRESH_MS = 3 * 60_000; // ≥ one skipped pass + a slow pass
+const PROBE_CONCURRENCY = 4;          // ten unreachable units at 5 s each must not serialise into a minute
 // Low-RAM self-heal needs a streak, not one sample: TLS reconnect bursts on a
 // flapping line and OTA checks are realistic one-minute dips.
 const LOW_RAM_STREAK = 3;
@@ -534,6 +535,7 @@ export async function healthTick() {
        AND d.first_contact_pending = FALSE`,
   );
   const deviceHealth = [];
+  const toProbe = [];
   for (const d of devices) {
     if (!brokerOk && d.transport === 'mqtt') continue;
     // Dev servers connect to a LOCAL broker the devices never dial — an mqtt
@@ -542,7 +544,19 @@ export async function healthTick() {
       deviceHealth.push({ id: d.id, name: d.name, prod_only: true });
       continue;
     }
-    deviceHealth.push(await checkShelly(d));
+    toProbe.push(d);
+  }
+  // Bounded concurrency: each unit has its own state (deviceState) so probes of
+  // different units never share counters; a pass with many offline units now
+  // takes ~15 s instead of a minute (which skipped the next pass and starved
+  // the heartbeat every live unit's backups depend on).
+  for (let i = 0; i < toProbe.length; i += PROBE_CONCURRENCY) {
+    const chunk = toProbe.slice(i, i + PROBE_CONCURRENCY);
+    const results = await Promise.allSettled(chunk.map((d) => checkShelly(d)));
+    results.forEach((r, k) => {
+      if (r.status === 'fulfilled') deviceHealth.push(r.value);
+      else { console.error('[health] probe', chunk[k].id, r.reason?.message); deviceHealth.push({ id: chunk[k].id, name: chunk[k].name, reachable: false, error: r.reason?.message }); }
+    });
   }
 
   const server = serverHealth();
