@@ -20,19 +20,19 @@ const SCHEMA = {
 };
 
 // Same pricing/logging as nlu.js — rows land in nlu_usage (the voice-costs page)
-// with a [תמיכה] prefix so support traffic is distinguishable from IVR commands.
+// tagged kind='support' + source (web/whatsapp) so the page can label and filter them.
 const PRICE_PER_MTOK = {
   'claude-opus-4-8': [5, 25],
   'claude-sonnet-5': [3, 15],
   'claude-haiku-4-5': [1, 5],
 };
 
-async function logUsage({ userId, text, model, usage }) {
+async function logUsage({ userId, source, text, model, usage }) {
   const [inP, outP] = PRICE_PER_MTOK[model] || [5, 25];
   const cost = (usage.input_tokens * inP + usage.output_tokens * outP) / 1e6;
   await query(
-    'INSERT INTO nlu_usage (user_id, phone, text, model, input_tokens, output_tokens, cost_usd) VALUES (?,?,?,?,?,?,?)',
-    [userId ?? null, null, `[תמיכה] ${text}`, model, usage.input_tokens, usage.output_tokens, cost],
+    "INSERT INTO nlu_usage (user_id, phone, source, kind, text, model, input_tokens, output_tokens, cost_usd) VALUES (?,NULL,?,'support',?,?,?,?,?)",
+    [userId ?? null, source ?? null, text, model, usage.input_tokens, usage.output_tokens, cost],
   );
 }
 
@@ -57,7 +57,8 @@ const SYSTEM = `אתה נציג תמיכה של TelTech — "בית כשר חכ�
 
 // Returns { can_answer, answer }. Missing API key degrades to can_answer=false —
 // the UI then goes straight to "send us a message" instead of erroring.
-export async function answerSupportQuestion({ userId, text }) {
+// source: 'web' (site help wizard) or 'whatsapp' (bot) — labels the usage row only.
+export async function answerSupportQuestion({ userId, text, source = 'web' }) {
   const clean = String(text || '').trim();
   if (!clean) throw errors.validation('לא הוזן טקסט');
   if (clean.length > 1000) throw errors.validation('השאלה ארוכה מדי (עד 1000 תווים)');
@@ -75,7 +76,7 @@ export async function answerSupportQuestion({ userId, text }) {
     messages: [{ role: 'user', content: clean }],
   });
 
-  logUsage({ userId, text: clean, model: env.anthropic.model, usage: response.usage })
+  logUsage({ userId, source, text: clean, model: env.anthropic.model, usage: response.usage })
     .catch((e) => console.error('nlu_usage log failed:', e.message));
 
   if (response.stop_reason === 'refusal') return { can_answer: false, answer: null };

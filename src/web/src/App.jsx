@@ -190,7 +190,7 @@ const ADMIN_NAV = [
     title: 'כספים',
     items: [
       { to: '/admin/finance', label: 'הכנסות והוצאות', Icon: Wallet },
-      { to: '/admin/voice-costs', label: 'עלויות קול', Icon: Mic },
+      { to: '/admin/voice-costs', label: 'עלויות AI וקול', Icon: Mic },
     ],
   },
   {

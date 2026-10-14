@@ -417,7 +417,7 @@ userRouter.post('/support/ask', supportAskLimiter, async (req, res, next) => {
   try {
     const text = String(req.body?.text || '').trim();
     if (text.length < 4) throw errors.validation('כתבו שאלה של לפחות 4 תווים');
-    res.json(await answerSupportQuestion({ userId: req.auth.userId, text }));
+    res.json(await answerSupportQuestion({ userId: req.auth.userId, text, source: 'web' }));
   } catch (e) { next(e); }
 });
 

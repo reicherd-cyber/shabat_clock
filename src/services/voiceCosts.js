@@ -112,23 +112,30 @@ async function fetchYemotSttTransactions() {
 }
 
 // All filters optional: from/to (UTC 'YYYY-MM-DD HH:MM:SS', same convention as
-// /call-logs), userId, phone (partial digits), q (substring of the spoken text).
-export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
+// /call-logs), userId, phone (partial digits), q (substring of the text),
+// source ('phone' | 'web' | 'whatsapp' | 'unknown'), kind ('command' | 'support').
+export const USAGE_SOURCES = ['phone', 'web', 'whatsapp', 'unknown'];
+export const USAGE_KINDS = ['command', 'support'];
+export async function getVoiceCosts({ from, to, userId, phone, q, source, kind } = {}) {
   const rates = await loadRates();
   const [stt, usage, users] = await Promise.all([
     fetchYemotSttTransactions(),
-    query('SELECT id, user_id, phone, text, model, input_tokens, output_tokens, cost_usd, created_at FROM nlu_usage ORDER BY id DESC LIMIT 2000'),
+    query('SELECT id, user_id, phone, source, kind, text, model, input_tokens, output_tokens, cost_usd, created_at FROM nlu_usage ORDER BY id DESC LIMIT 2000'),
     query('SELECT up.phone, up.user_id, u.full_name FROM user_phones up JOIN users u ON u.id = up.user_id'),
   ]);
   const nameByPhone = new Map(users.map((u) => [String(u.phone), u.full_name]));
   const userIdByPhone = new Map(users.map((u) => [String(u.phone), u.user_id]));
 
-  // Match each STT charge to the closest unclaimed usage row with the same phone.
+  // Match each STT charge to the closest unclaimed PHONE usage row with the same
+  // number — a WhatsApp order from the same customer minutes apart must not
+  // swallow the phone call's Anthropic cost.
   const freeUsage = usage.map((u) => ({ ...u, at: new Date(u.created_at).getTime(), claimed: false }));
   const rows = stt.map((s) => {
     let best = null;
     for (const u of freeUsage) {
       if (u.claimed || String(u.phone) !== s.phone) continue;
+      if (u.source && u.source !== 'phone') continue;
+      if (u.kind !== 'command') continue;
       const dist = Math.abs(u.at - s.when.getTime());
       if (dist <= MATCH_WINDOW_MS && (!best || dist < Math.abs(best.at - s.when.getTime()))) best = u;
     }
@@ -138,6 +145,8 @@ export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
       phone: s.phone,
       user_id: best?.user_id ?? userIdByPhone.get(s.phone) ?? null,
       user_name: nameByPhone.get(s.phone) || null,
+      source: 'phone',
+      kind: 'command',
       text: s.text || best?.text || '',
       seconds: s.seconds,
       yemot_units: s.yemot_units,
@@ -148,14 +157,18 @@ export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
     };
   });
 
-  // Usage rows Yemot has no charge for (e.g. future non-phone sources) still count.
+  // Usage rows Yemot has no charge for (site help questions, the WhatsApp bot,
+  // phone orders whose STT line hasn't shown up in Yemot's ledger yet) still count.
+  const nameById = new Map(users.map((u) => [Number(u.user_id), u.full_name]));
   for (const u of freeUsage) {
     if (u.claimed) continue;
     rows.push({
       when: new Date(u.created_at).toISOString(),
       phone: u.phone || '',
       user_id: u.user_id ?? userIdByPhone.get(String(u.phone)) ?? null,
-      user_name: nameByPhone.get(String(u.phone)) || null,
+      user_name: nameByPhone.get(String(u.phone)) || nameById.get(Number(u.user_id)) || null,
+      source: u.source || 'unknown',
+      kind: u.kind || 'command',
       text: u.text || '',
       seconds: null,
       yemot_units: 0,
@@ -178,6 +191,8 @@ export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
     if (userId && Number(r.user_id) !== Number(userId)) return false;
     if (phoneDigits && !String(r.phone).replace(/\D/g, '').includes(phoneDigits)) return false;
     if (needle && !String(r.text).includes(needle)) return false;
+    if (source && USAGE_SOURCES.includes(source) && r.source !== source) return false;
+    if (kind && USAGE_KINDS.includes(kind) && r.kind !== kind) return false;
     return true;
   });
 
@@ -191,14 +206,17 @@ export async function getVoiceCosts({ from, to, userId, phone, q } = {}) {
     r.anthropic_ils = (r.anthropic_usd * ru.ils) / ru.units;
   }
   const totals = filtered.reduce(
-    (acc, r) => ({
-      orders: acc.orders + 1,
-      yemot_units: acc.yemot_units + r.yemot_units,
-      yemot_ils: acc.yemot_ils + r.yemot_ils,
-      anthropic_usd: acc.anthropic_usd + r.anthropic_usd,
-      anthropic_ils: acc.anthropic_ils + r.anthropic_ils,
-    }),
-    { orders: 0, yemot_units: 0, yemot_ils: 0, anthropic_usd: 0, anthropic_ils: 0 },
+    (acc, r) => {
+      acc.orders += 1;
+      acc.yemot_units += r.yemot_units;
+      acc.yemot_ils += r.yemot_ils;
+      acc.anthropic_usd += r.anthropic_usd;
+      acc.anthropic_ils += r.anthropic_ils;
+      acc.by_source[r.source] = (acc.by_source[r.source] || 0) + 1;
+      acc.by_kind[r.kind] = (acc.by_kind[r.kind] || 0) + 1;
+      return acc;
+    },
+    { orders: 0, yemot_units: 0, yemot_ils: 0, anthropic_usd: 0, anthropic_ils: 0, by_source: {}, by_kind: {} },
   );
   const curY = rates.yemot_units[rates.yemot_units.length - 1];
   const curU = rates.usd[rates.usd.length - 1];

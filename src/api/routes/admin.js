@@ -637,6 +637,7 @@ adminRouter.get('/voice-costs', async (req, res, next) => {
     res.json(await getVoiceCosts({
       from: req.query.from, to: req.query.to,
       userId: req.query.user_id, phone: req.query.phone, q: req.query.q,
+      source: req.query.source, kind: req.query.kind,
     }));
   } catch (e) { next(e); }
 });

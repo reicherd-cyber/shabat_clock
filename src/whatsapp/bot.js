@@ -17,7 +17,7 @@ import { interpretCommand } from '../services/nlu.js';
 import { runNluActions } from '../services/nluExec.js';
 import { answerSupportQuestion } from '../services/support.js';
 import { logAction } from '../services/audit.js';
-import { getText } from '../services/settings.js';
+import { getText, getSetting } from '../services/settings.js';
 import { getSession, saveSession, resetSession } from './session.js';
 import { sendText, sendButtons, markRead } from './client.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion } from './parse.js';
@@ -69,7 +69,7 @@ async function supportReply({ phone, user, text }) {
   const userId = user?.id ?? null;
   let r;
   try {
-    r = await answerSupportQuestion({ userId, text });
+    r = await answerSupportQuestion({ userId, text, source: 'whatsapp' });
   } catch (e) {
     console.error('[whatsapp] support answer failed:', e.message);
     r = { can_answer: false, answer: null };
@@ -89,7 +89,7 @@ async function supportReply({ phone, user, text }) {
 async function commandReply({ phone, user, text }) {
   let interp;
   try {
-    interp = await interpretCommand({ userId: user.id, text, phone });
+    interp = await interpretCommand({ userId: user.id, text, phone, source: 'whatsapp' });
   } catch (e) {
     if (e?.code === 'VALIDATION' && /ממסרים פעילים/.test(e.message)) {
       await sendText({ phone, userId: user.id, text: await getText('whatsapp.no_relays') });
@@ -128,12 +128,28 @@ async function executePending({ phone, user, session }) {
   await sendText({ phone, userId: user.id, text: [head, ...lines, ...scheduled].join('\n'), kind: 'result' });
 }
 
+// Meta's own notifications (setup nudges, policy notices) come in as regular
+// messages from a WhatsApp-owned number and would otherwise be "answered" by
+// the support bot — a paid model call and a bogus ticket. Numbers listed in the
+// whatsapp.ignore_senders setting, or a sender whose profile name is simply
+// "WhatsApp", are recorded but never answered.
+async function isIgnoredSender(phone, msg) {
+  if (/^(whatsapp|meta)$/i.test(String(msg.name || '').trim())) return true;
+  const list = String(await getSetting('whatsapp.ignore_senders', '')).split(/[,\s]+/).map(normalizePhone).filter(Boolean);
+  return list.includes(phone);
+}
+
 export async function handleInbound(msg) {
   const phone = normalizePhone(msg.from);
   if (!phone) return;
   const body = msg.text ?? `[${msg.type}]`;
   if (overQuota(phone)) {
     console.warn(`[whatsapp] ${phone} over per-minute quota — dropped`);
+    return;
+  }
+  if (await isIgnoredSender(phone, msg)) {
+    await recordInbound({ waId: msg.waId, phone, userId: null, kind: msg.buttonId ? 'button' : msg.type, body });
+    console.log(`[whatsapp] system notification from ${phone} recorded, not answered`);
     return;
   }
   // Suspended accounts are treated like unknown numbers (same as the IVR).
