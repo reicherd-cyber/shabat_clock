@@ -28,6 +28,8 @@ const TABLES_HE = {
   otp_codes: { he: 'קודי כניסה חד־פעמיים' },
   support_messages: { he: 'פניות תמיכה', to: '/admin/support' },
   support_replies: { he: 'תגובות לפניות', to: '/admin/support' },
+  whatsapp_messages: { he: 'הודעות וואטסאפ', to: '/admin/whatsapp' },
+  whatsapp_sessions: { he: 'שיחות וואטסאפ (מצב)', to: '/admin/whatsapp' },
   admins: { he: 'מנהלים', to: '/admin/admins' },
   admin_tasks: { he: 'משימות', to: '/admin/tasks' },
   settings: { he: 'הגדרות מערכת', to: '/admin/settings' },

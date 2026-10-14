@@ -30,6 +30,7 @@ import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEn
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
 import { listReplies, markRepliesSeen, insertReply, cleanReplyBody, notifyUserOfReply } from '../../services/supportThread.js';
+import { notifyWhatsappReply } from '../../whatsapp/bot.js';
 import { readVoicemail, fetchVoicemail } from '../../services/voicemail.js';
 import { brokerConnected } from '../../mqtt/client.js';
 import { healthSnapshot } from '../../monitor/health.js';
@@ -676,6 +677,48 @@ adminRouter.get('/call-logs', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ── WhatsApp: every message in and out (whatsapp_messages), for the
+// conversations page. Filters: time window, user, phone/text search,
+// direction, status. Counts + per-day in/out feed the tiles and the chart.
+adminRouter.get('/whatsapp', async (req, res, next) => {
+  try {
+    const cond = ['1=1'];
+    const params = [];
+    if (req.query.from) { cond.push('m.created_at >= ?'); params.push(String(req.query.from)); }
+    if (req.query.to) { cond.push('m.created_at <= ?'); params.push(String(req.query.to)); }
+    if (req.query.user_id) { cond.push('m.user_id = ?'); params.push(Number(req.query.user_id)); }
+    if (['in', 'out'].includes(String(req.query.direction))) { cond.push('m.direction = ?'); params.push(String(req.query.direction)); }
+    if (req.query.status) { cond.push('m.status = ?'); params.push(String(req.query.status).slice(0, 20)); }
+    if (req.query.phone) { cond.push('m.phone = ?'); params.push(normalizePhone(req.query.phone)); }
+    if (req.query.q) {
+      const raw = String(req.query.q);
+      const like = `%${raw}%`;
+      cond.push('(m.body LIKE ? OR m.phone LIKE ? OR u.full_name LIKE ?)');
+      params.push(like, `%${normalizePhone(raw) || raw}%`, like);
+    }
+    const where = cond.join(' AND ');
+    const from = 'FROM whatsapp_messages m LEFT JOIN users u ON u.id = m.user_id';
+    const [rows, [counts], byDay, [tickets]] = await Promise.all([
+      query(`SELECT m.id, m.wa_message_id, m.phone, m.user_id, m.direction, m.kind, m.body, m.status, m.error, m.created_at,
+                    u.full_name AS user_name
+               ${from} WHERE ${where} ORDER BY m.id DESC LIMIT 1000`, params),
+      query(`SELECT COUNT(DISTINCT m.phone) AS phones, SUM(m.direction = 'in') AS \`in\`, SUM(m.direction = 'out') AS \`out\`,
+                    SUM(m.status = 'failed') AS failed
+               ${from} WHERE ${where}`, params),
+      query(`SELECT DATE(m.created_at) AS d, m.direction, COUNT(*) AS n ${from} WHERE ${where} GROUP BY 1, 2 ORDER BY 1`, params),
+      query(`SELECT COUNT(*) AS n FROM support_messages s WHERE s.source = 'whatsapp' AND s.deleted_at IS NULL
+               ${req.query.from ? 'AND s.created_at >= ?' : ''} ${req.query.to ? 'AND s.created_at <= ?' : ''}`,
+      [req.query.from, req.query.to].filter(Boolean).map(String)),
+    ]);
+    res.json({
+      rows,
+      counts: { phones: Number(counts.phones || 0), in: Number(counts.in || 0), out: Number(counts.out || 0), failed: Number(counts.failed || 0), tickets: Number(tickets.n || 0) },
+      byDay: byDay.map((r) => ({ d: typeof r.d === 'string' ? r.d.slice(0, 10) : new Date(r.d).toISOString().slice(0, 10), direction: r.direction, n: Number(r.n) })),
+    });
+  } catch (e) { next(e); }
+});
+
+
 // ── schedules (any user's; same soft-delete path [D37]) ──
 adminRouter.get('/schedules', async (req, res, next) => {
   try {
@@ -870,7 +913,7 @@ adminRouter.patch('/admins/:id', requireSuperadmin, async (req, res, next) => {
 const AUDIT_FROM = `
   FROM audit_log a
   LEFT JOIN admins ad ON a.actor_type = 'admin' AND ad.id = a.actor_id
-  LEFT JOIN users u ON a.actor_type IN ('user','ivr') AND u.id = a.actor_id
+  LEFT JOIN users u ON a.actor_type IN ('user','ivr','whatsapp') AND u.id = a.actor_id
   LEFT JOIN users eu ON a.entity = 'user' AND eu.id = a.entity_id
   LEFT JOIN user_phones up ON a.entity = 'user_phone' AND up.id = a.entity_id
   LEFT JOIN users upu ON upu.id = up.user_id
@@ -894,7 +937,7 @@ const AUDIT_FROM = `
   LEFT JOIN finance_entries fe ON a.entity = 'finance_entry' AND fe.id = a.entity_id
   LEFT JOIN installer_tokens it ON a.entity = 'installer_token' AND it.id = a.entity_id`;
 const AUDIT_ACTOR_NAME = `CASE WHEN a.actor_type = 'admin' THEN ad.name
-                               WHEN a.actor_type IN ('user','ivr') THEN u.full_name END`;
+                               WHEN a.actor_type IN ('user','ivr','whatsapp') THEN u.full_name END`;
 const AUDIT_ENTITY_NAME = `CASE a.entity
   WHEN 'user' THEN eu.full_name
   WHEN 'user_phone' THEN up.phone
@@ -987,7 +1030,7 @@ adminRouter.get('/audit-log/stats', async (req, res, next) => {
       query(
         `SELECT COUNT(*) AS total,
                 SUM(a.actor_type = 'admin') AS \`admin\`, SUM(a.actor_type = 'user') AS \`user\`,
-                SUM(a.actor_type = 'ivr') AS \`ivr\`, SUM(a.actor_type = 'system') AS \`system\`
+                SUM(a.actor_type = 'ivr') AS \`ivr\`, SUM(a.actor_type = 'whatsapp') AS \`whatsapp\`, SUM(a.actor_type = 'system') AS \`system\`
          ${from} ${where}`, params,
       ),
       query(
@@ -1010,7 +1053,7 @@ adminRouter.get('/audit-log/facets', async (req, res, next) => {
       `SELECT a.actor_type, a.actor_id, ${AUDIT_ACTOR_NAME} AS name, COUNT(*) AS n
        FROM audit_log a
        LEFT JOIN admins ad ON a.actor_type = 'admin' AND ad.id = a.actor_id
-       LEFT JOIN users u ON a.actor_type IN ('user','ivr') AND u.id = a.actor_id
+       LEFT JOIN users u ON a.actor_type IN ('user','ivr','whatsapp') AND u.id = a.actor_id
        GROUP BY 1, 2, 3 ORDER BY n DESC`,
     );
     const actions = await query('SELECT entity, action, COUNT(*) AS n FROM audit_log GROUP BY 1, 2 ORDER BY entity, n DESC');
@@ -1120,7 +1163,7 @@ adminRouter.get('/support', async (req, res, next) => {
     if (req.query.user_id) { cond.push('m.user_id = ?'); params.push(Number(req.query.user_id)); }
     // source: 'web' (a registered user, from /help) or 'phone' (voice message
     // left on the sales menu by an unregistered caller — no user row).
-    if (['web', 'phone'].includes(String(req.query.source))) { cond.push('m.source = ?'); params.push(String(req.query.source)); }
+    if (['web', 'phone', 'whatsapp'].includes(String(req.query.source))) { cond.push('m.source = ?'); params.push(String(req.query.source)); }
     if (req.query.from) { cond.push('m.created_at >= ?'); params.push(String(req.query.from)); }
     if (req.query.to) {
       // One convention with the other logs: an inclusive UTC stamp; a bare date
@@ -1212,7 +1255,7 @@ adminRouter.post('/support/:id/replies', requireWrite, async (req, res, next) =>
     const id = Number(req.params.id);
     const body = cleanReplyBody(req.body?.body);
     if (!body) throw errors.validation('תגובה באורך 1–4000 תווים', { body: '1-4000' });
-    const [m] = await query('SELECT id, user_id, status FROM support_messages WHERE id = ? AND deleted_at IS NULL', [id]);
+    const [m] = await query('SELECT id, user_id, status, source, phone FROM support_messages WHERE id = ? AND deleted_at IS NULL', [id]);
     if (!m) throw errors.notFound();
     const replyId = await insertReply({ messageId: id, sender: 'admin', authorId: req.auth.adminId, body, createdBy: adminActor(req) });
     const status = m.status === 'new' ? 'read' : m.status;
@@ -1221,6 +1264,8 @@ adminRouter.post('/support/:id/replies', requireWrite, async (req, res, next) =>
     }
     audit(req, 'support_reply', 'support_message', id, { reply_id: replyId });
     if (m.user_id) notifyUserOfReply({ userId: m.user_id, messageId: id, body });
+    // A WhatsApp ticket gets the answer in the same chat (24h window — see whatsapp/bot.js).
+    if (m.source === 'whatsapp') notifyWhatsappReply({ phone: m.phone, userId: m.user_id, messageId: id, body }).catch((e) => console.error('whatsapp reply push failed:', e.message));
     res.status(201).json({ id: replyId, status });
   } catch (e) { next(e); }
 });

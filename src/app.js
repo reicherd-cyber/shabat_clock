@@ -4,7 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { errorHandler } from './config/errors.js';
 import { ivrRouter } from './ivr/router.js';
-import { ivrLimiter } from './api/middleware.js';
+import { ivrLimiter, whatsappLimiter } from './api/middleware.js';
+import { whatsappRouter } from './whatsapp/router.js';
 import { authRouter } from './api/routes/auth.js';
 import { userRouter } from './api/routes/user.js';
 import { adminRouter } from './api/routes/admin.js';
@@ -20,6 +21,9 @@ export function createApp() {
     contentSecurityPolicy: false,
     crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
   }));
+  // WhatsApp webhook first: it verifies Meta's HMAC over the RAW body, so it
+  // must see the bytes before the global JSON parser consumes them.
+  app.use('/whatsapp', whatsappLimiter, whatsappRouter);
   app.use(express.json({ limit: '100kb' }));
 
   // Request log — never the query string, never bodies, and the /ivr PATH is
@@ -75,7 +79,7 @@ export function createApp() {
   // (express.static would serve .ps1 as octet-stream).
   app.get('/linecheck.ps1', (req, res) => res.type('text/plain; charset=utf-8').sendFile(path.join(dist, 'linecheck.ps1')));
   app.use(express.static(dist));
-  app.get(/^\/(?!api|ivr).*/, (req, res) => {
+  app.get(/^\/(?!api|ivr|whatsapp).*/, (req, res) => {
     res.sendFile(path.join(dist, 'index.html'), (err) => {
       if (err) res.status(404).send('web panel not built — run npm run build:web');
     });

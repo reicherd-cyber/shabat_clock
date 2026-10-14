@@ -8,7 +8,7 @@
 // categorical palette, 2px gaps, legend + tooltip).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ShieldCheck, UserRound, Phone, Cog, ChevronDown, ChevronUp } from 'lucide-react';
+import { ShieldCheck, UserRound, Phone, MessageCircle, Cog, ChevronDown, ChevronUp } from 'lucide-react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, SearchSelect, Badge, ErrorNote, useAsync, DAY_NAMES, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, ymdLocal, RANGE_LOG, niceCeil, FilterSelect } from '../ui.jsx';
 
@@ -19,9 +19,10 @@ const ACTORS = {
   admin: { label: 'מנהל', plural: 'מנהלים', Icon: ShieldCheck, color: '#2a78d6' },
   user: { label: 'משתמש', plural: 'משתמשים', Icon: UserRound, color: '#eb6834' },
   ivr: { label: 'טלפון', plural: 'מהטלפון', Icon: Phone, color: '#4a3aa7' },
+  whatsapp: { label: 'וואטסאפ', plural: 'מוואטסאפ', Icon: MessageCircle, color: '#1f9d55' },
   system: { label: 'מערכת', plural: 'מערכת', Icon: Cog, color: '#008300' },
 };
-const ACTOR_ORDER = ['admin', 'user', 'ivr', 'system'];
+const ACTOR_ORDER = ['admin', 'user', 'ivr', 'whatsapp', 'system'];
 
 // entity → Hebrew label + the admin page that lists it (q = type-to-filter seed).
 const ENTITIES = {
@@ -202,9 +203,10 @@ function ActorChip({ r }) {
       <a.Icon size={13} style={{ color: a.color }} aria-hidden />
       <span>{name}</span>
       {r.actor_type === 'ivr' && r.actor_name && <span className="text-muted">· בטלפון</span>}
+      {r.actor_type === 'whatsapp' && r.actor_name && <span className="text-muted">· בוואטסאפ</span>}
     </span>
   );
-  if ((r.actor_type === 'user' || r.actor_type === 'ivr') && r.actor_name) {
+  if ((r.actor_type === 'user' || r.actor_type === 'ivr' || r.actor_type === 'whatsapp') && r.actor_name) {
     return <Link to={`/admin/users?q=${enc(r.actor_name)}`} className="hover:opacity-80" onClick={(e) => e.stopPropagation()}>{inner}</Link>;
   }
   return inner;

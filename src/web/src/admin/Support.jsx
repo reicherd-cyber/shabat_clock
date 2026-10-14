@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Modal, ErrorNote, useAsync, SectionHead, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect } from '../ui.jsx';
-import { MessageSquare, Send, Phone } from 'lucide-react';
+import { MessageSquare, MessageCircle, Send, Phone } from 'lucide-react';
 
 // פניות תמיכה: תיבת ההודעות שמשתמשים שולחים ממרכז העזרה. סטטוסים רכים והפיכים
 // (חדשה ↔ נקראה ↔ טופלה) — לעולם לא מחיקה. פתיחת פנייה חדשה מסמנת אותה כנקראה
@@ -23,7 +23,8 @@ const TOPIC_LABELS = {
 const fmtTs = (ts) => new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
 // פנייה טלפונית אין לה משתמש — מציגים את המספר (או "מספר חסוי") במקום שם.
 const isPhone = (m) => m?.source === 'phone';
-const nameOf = (m) => (isPhone(m) ? (m.phone || 'מספר חסוי') : (m?.user_name || '—'));
+const isWa = (m) => m?.source === 'whatsapp';
+const nameOf = (m) => (isPhone(m) || (isWa(m) && !m.user_name) ? (m.phone || 'מספר חסוי') : (m?.user_name || '—'));
 
 // נגן להודעה קולית: הקובץ נשלף דרך השרת עם כותרת ההרשאה (לא <audio src> ישיר),
 // כמו בדף ההקלטות. עד שההעתקה מימות הסתיימה השרת מחזיר 404 — מציעים לנסות שוב.
@@ -163,9 +164,10 @@ export function SupportInbox() {
           {Object.entries(STATUS).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
         </FilterSelect>
         <FilterSelect className="py-2 text-sm w-36" value={fSource} onChange={(e) => setFSource(e.target.value)}>
-          <option value="">מהאתר ומהטלפון</option>
+          <option value="">מכל הערוצים</option>
           <option value="web">מהאתר</option>
           <option value="phone">הודעות קוליות</option>
+          <option value="whatsapp">וואטסאפ</option>
         </FilterSelect>
         <RangeFilter value={period} onChange={setPeriod} keys={RANGE_LOG} className="w-40" hours
           custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />
@@ -191,6 +193,7 @@ export function SupportInbox() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-2">
                   {isPhone(m) && <Phone size={13} className="shrink-0 self-center text-accent" aria-label="הודעה קולית" />}
+                  {isWa(m) && <MessageCircle size={13} className="shrink-0 self-center text-[#25d366]" aria-label="וואטסאפ" />}
                   <span className={`truncate ${m.status === 'new' ? 'font-bold' : 'font-medium'}`} dir={isPhone(m) ? 'ltr' : undefined}>{nameOf(m)}</span>
                   {m.topic && <span className="text-xs text-muted shrink-0">{TOPIC_LABELS[m.topic] || m.topic}</span>}
                 </div>
@@ -225,6 +228,7 @@ export function SupportInbox() {
               )}
               {open.topic && <span>נושא: {TOPIC_LABELS[open.topic] || open.topic}</span>}
               {isPhone(open) && <span>הודעה קולית מתפריט המכירות</span>}
+              {isWa(open) && <span className="flex items-center gap-1"><MessageCircle size={13} className="text-[#25d366]" />פנייה מוואטסאפ{open.phone ? <> · <a dir="ltr" className="text-accent hover:underline" href={`https://wa.me/972${String(open.phone).replace(/^0/, '')}`} target="_blank" rel="noreferrer">{open.phone}</a></> : null}</span>}
             </div>
 
             {/* הודעה קולית — הנגן מעל השיחה */}
@@ -258,7 +262,7 @@ export function SupportInbox() {
               />
               <div className="flex items-center justify-between gap-2 px-2 pb-2">
                 <span className="text-xs text-muted">
-                  {isPhone(open) ? 'המתקשר אינו רשום באתר — ההערה נשמרת לצוות בלבד, יש לחזור אליו בטלפון' : 'המשתמש יראה את התשובה במרכז העזרה ויקבל מייל'}
+                  {isPhone(open) ? 'המתקשר אינו רשום באתר — ההערה נשמרת לצוות בלבד, יש לחזור אליו בטלפון' : isWa(open) ? 'התשובה תישלח ללקוח בוואטסאפ (עד 24 שעות מההודעה האחרונה שלו)' : 'המשתמש יראה את התשובה במרכז העזרה ויקבל מייל'}
                 </span>
                 <Button className="text-sm py-1.5 shrink-0 whitespace-nowrap" onClick={sendReply} disabled={busy || !reply.trim()}>
                   <span className="flex items-center gap-1.5"><Send size={14} />{busy ? 'שומר…' : (isPhone(open) ? 'שמור הערה' : 'שלח תשובה')}</span>

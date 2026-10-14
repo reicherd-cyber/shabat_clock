@@ -24,11 +24,12 @@ import Finance from './admin/Finance.jsx';
 import { SupportInbox } from './admin/Support.jsx';
 import { Crm } from './admin/Crm.jsx';
 import { Tasks } from './admin/Tasks.jsx';
+import { WhatsappAdmin } from './admin/Whatsapp.jsx';
 import { Logo, Wordmark, useInterval, Modal, Button } from './ui.jsx';
 import {
   LayoutGrid, CalendarClock, CalendarDays, History as HistoryIcon, Settings as SettingsIcon,
   Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
-  ShieldCheck, ScrollText, Database as DatabaseIcon, ChevronDown, AudioLines, LifeBuoy, Inbox, Handshake, ListChecks,
+  ShieldCheck, ScrollText, Database as DatabaseIcon, ChevronDown, AudioLines, LifeBuoy, Inbox, Handshake, ListChecks, MessageCircle,
 } from 'lucide-react';
 
 // While impersonating, api.js blocks every mutation until this modal approves it
@@ -180,6 +181,7 @@ const ADMIN_NAV = [
     items: [
       { to: '/admin/history', label: 'היסטוריה', Icon: HistoryIcon },
       { to: '/admin/call-logs', label: 'שיחות', Icon: PhoneCall },
+      { to: '/admin/whatsapp', label: 'וואטסאפ', Icon: MessageCircle },
       { to: '/admin/call-flow', label: 'תרשים שיחה', Icon: GitBranch },
       { to: '/admin/recordings', label: 'הקלטות מענה', Icon: AudioLines },
     ],
@@ -373,6 +375,7 @@ export default function App() {
           <Route path="devices" element={<Devices />} />
           <Route path="schedules" element={<AdminSchedules />} />
           <Route path="call-logs" element={<CallLogs />} />
+          <Route path="whatsapp" element={<WhatsappAdmin />} />
           <Route path="history" element={<AdminHistory />} />
           <Route path="voice-costs" element={<VoiceCosts />} />
           <Route path="finance" element={<Finance />} />

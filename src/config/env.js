@@ -95,4 +95,16 @@ export const env = {
     // Empty = the live-spend tile in the admin panel shows a setup hint.
     adminKey: process.env.ANTHROPIC_ADMIN_KEY || '',
   },
+
+  // WhatsApp bot on the business number (Meta Cloud API). Empty token = outbound
+  // messages are logged to the console instead of sent (dev). appSecret signs
+  // every webhook body; verifyToken is the string pasted into the Meta app's
+  // webhook form. See deploy/WHATSAPP-SETUP.md.
+  whatsapp: {
+    token: process.env.WHATSAPP_TOKEN || '',
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
+    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || '',
+    appSecret: process.env.WHATSAPP_APP_SECRET || '',
+    apiVersion: process.env.WHATSAPP_API_VERSION || 'v21.0',
+  },
 };
