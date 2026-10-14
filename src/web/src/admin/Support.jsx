@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Modal, ErrorNote, useAsync, SectionHead, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect } from '../ui.jsx';
-import { MessageSquare, MessageCircle, Send, Phone } from 'lucide-react';
+import { MessageSquare, MessageCircle, Send, Phone, Inbox, Bot } from 'lucide-react';
+import HelpChats from './HelpChats.jsx';
 
 // פניות תמיכה: תיבת ההודעות שמשתמשים שולחים ממרכז העזרה. סטטוסים רכים והפיכים
 // (חדשה ↔ נקראה ↔ טופלה) — לעולם לא מחיקה. פתיחת פנייה חדשה מסמנת אותה כנקראה
@@ -68,7 +69,17 @@ function ChatBubble({ who, name, ts, seen, children }) {
   );
 }
 
+// Two tabs on one page: the inbox (tickets a person must answer) and the
+// bot's own conversations (questions it answered or declined on the site /
+// WhatsApp — read-only, nothing to do there, but it is where "what did the bot
+// tell this customer?" is answered). ?tab=bot deep-links the second one.
+const TABS = [
+  { key: 'inbox', label: 'פניות', Icon: Inbox },
+  { key: 'bot', label: 'שיחות עם הבוט', Icon: Bot },
+];
+
 export function SupportInbox() {
+  const [tab, setTab] = useState(() => (new URLSearchParams(window.location.search).get('tab') === 'bot' ? 'bot' : 'inbox'));
   const [data, setData] = useState(null); // { rows, counts }
   const [fStatus, setFStatus] = useState('');
   const [fSource, setFSource] = useState(''); // '' | web | phone
@@ -145,6 +156,17 @@ export function SupportInbox() {
   return (
     <div className="space-y-4">
       <SectionHead title="פניות תמיכה" />
+      <div className="flex gap-1 border-b border-line" role="tablist">
+        {TABS.map((t) => (
+          <button key={t.key} type="button" role="tab" aria-selected={tab === t.key}
+            className={`inline-flex items-center gap-1 px-3 py-2 text-sm -mb-px border-b-2 ${tab === t.key ? 'border-accent font-bold' : 'border-transparent text-muted hover:text-ink'}`}
+            onClick={() => setTab(t.key)}>
+            <t.Icon size={15} />{t.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'bot' && <HelpChats />}
+      {tab === 'inbox' && <>
 
       {/* מונים — לחיצים, מסננים את הרשימה */}
       <div className="grid grid-cols-3 gap-3">
@@ -304,6 +326,7 @@ export function SupportInbox() {
           </div>
         )}
       </Modal>
+      </>}
     </div>
   );
 }

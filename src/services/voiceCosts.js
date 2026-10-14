@@ -230,6 +230,14 @@ export async function getVoiceCosts({ from, to, userId, phone, q, source, kind }
   };
 }
 
+// Current USD→ILS rate (the manually/automatically maintained one on the costs
+// page) — for pages that show a ₪ figure next to a dollar cost.
+export async function currentUsdRate() {
+  const rates = await loadRates();
+  const cur = rates.usd[rates.usd.length - 1];
+  return cur.ils / cur.units;
+}
+
 // Monthly ₪ usage buckets (Israel-local months) for the finance ledger —
 // Yemot units and Anthropic separately, both priced by their dated rates.
 export async function getVoiceMonthlyExpenses(fromDate = '2000-01-01', toDate = '2999-12-31') {
