@@ -20,10 +20,19 @@ import { query } from '../db/pool.js';
 import { brokerConnected } from '../mqtt/client.js';
 import { shellyCall, shellySetBootSafe } from '../services/shelly.js';
 import { sendImmediateCommand } from '../services/commands.js';
-import { scheduleDueForRelay } from '../scheduler/tick.js';
+import { scheduleDueBetween, catchUpDevice } from '../scheduler/tick.js';
 import { sendEmail } from '../services/email.js';
 import { describeReset, RESET_HEADLINE } from './reset-reason.js';
-import { learnOnPower, worthSaving, idleCandidates, judgeLoads, trackDeadOnsets, DEAD_RELAY_PROBES, IDLE_PROBES_TO_LEARN } from './dead-relay.js';
+import { learnOnPower, worthSaving, idleCandidates, judgeLoads, trackDeadOnsets, DEAD_RELAY_PROBES, IDLE_PROBES_TO_LEARN, REBOOT_MIN_WATCHED } from './dead-relay.js';
+
+// The reboot safety net trusts the pre-reboot output snapshot only if it is
+// this fresh — a snapshot from before a blind window (filtered line, broker
+// hiccup) may predate a schedule that switched the channel off on purpose.
+const SNAPSHOT_FRESH_MS = 2 * 60_000;
+// Low-RAM self-heal needs a streak, not one sample: TLS reconnect bursts on a
+// flapping line and OTA checks are realistic one-minute dips.
+const LOW_RAM_STREAK = 3;
+const LOW_RAM_MIN_UPTIME_S = 300;
 
 const CHECK_INTERVAL_MS = 60_000;
 const RAM_CRITICAL_BYTES = 30_000;      // healthy Pro 2 idles ~120k free; panics start near zero
@@ -98,7 +107,10 @@ const onOff = (b) => (b ? 'פועל' : 'כבוי');
 // was due in the reboot minute (then the OFF is the schedule's, not the cut's).
 // The re-apply goes through the normal command path (source 'system'), so it
 // shows in history and is meter-verified like any other order.
-async function verifyRebootOutputs(device, before, after) {
+async function verifyRebootOutputs(device, before, after, { lastProbeAt = null } = {}) {
+  const now = Date.now();
+  const blindMs = lastProbeAt ? now - lastProbeAt : Infinity;
+  const snapshotFresh = blindMs <= SNAPSHOT_FRESH_MS;
   const relays = await query(
     'SELECT id, relay_no, name FROM relays WHERE device_id = ? AND deleted_at IS NULL ORDER BY relay_no', [device.id],
   ).catch(() => []);
@@ -119,14 +131,16 @@ async function verifyRebootOutputs(device, before, after) {
     if (typeof b === 'boolean' && b !== a) {
       changed.push({ channel: ch + 1, name: nameOf(ch), before: onOff(b), after: onOff(a) });
       const relay = relayAt(ch);
-      if (b && !a && relay && active()) {
-        // Two reasons NOT to re-apply: a schedule was due in the reboot minute, or
-        // someone switched this channel off on purpose after our last probe (the
-        // probe is up to a minute stale) — an explicit OFF must win over the net.
-        const due = await scheduleDueForRelay(relay.id).catch(() => true); // unsure → don't touch
+      // Re-apply ON only when the "before" is fresh (a snapshot older than
+      // SNAPSHOT_FRESH_MS may predate a legitimate schedule OFF), no schedule
+      // switched this channel anywhere in the blind window, and nobody turned
+      // it off by hand since the snapshot — an explicit OFF must win over the net.
+      if (b && !a && relay && active() && snapshotFresh) {
+        const since = new Date(lastProbeAt - 60_000);
+        const due = await scheduleDueBetween(relay.id, since, new Date(now + 60_000)).catch(() => true); // unsure → don't touch
         const manualOff = await query(
           `SELECT 1 FROM commands WHERE relay_id = ? AND action = 'off' AND source <> 'system' AND status = 'acked'
-             AND requested_at > UTC_TIMESTAMP() - INTERVAL 5 MINUTE LIMIT 1`, [relay.id],
+             AND requested_at > ? LIMIT 1`, [relay.id, new Date(Math.min(since.getTime(), now - 5 * 60_000)).toISOString().slice(0, 19).replace('T', ' ')],
         ).then((r) => r.length > 0).catch(() => true);
         if (!due && !manualOff) {
           const r = await sendImmediateCommand({ relayId: relay.id, action: 'on', source: 'system' }).catch((e) => ({ status: 'failed', fail_reason: e.message }));
@@ -149,6 +163,8 @@ async function verifyRebootOutputs(device, before, after) {
   }
   if (restored.length) {
     text += `\n\nהשרת הדליק מחדש את הערוצים שכבו באתחול (לא היה תזמון באותה דקה): ${restored.map((r) => `${r.name} — ${r.ok ? 'הודלק' : 'נכשל'}`).join('; ')}.`;
+  } else if (changed.some((c) => c.before === 'פועל' && c.after === 'כבוי') && !snapshotFresh) {
+    text += `\n\nלא בוצע שחזור אוטומטי: המצב "לפני" נקרא לפני ${fmtDuration(Math.round(blindMs / 1000))} (המכשיר לא ענה בינתיים), ולכן ייתכן שתזמון כיבה את הערוץ בצדק. ההשלמה לפי התזמונים (catch-up) תטפל בזה.`;
   }
   if (fixedChannels.length) {
     text += `\n\nהגדרות האתחול (restore_last / ניתוק הכניסה) היו חסרות בערוצים ${fixedChannels.join(', ')} והוחזרו כעת.`;
@@ -255,7 +271,8 @@ async function verifyLoads(device, st, health, channels, alert) {
   const recurrence = st.deadRebootProbe == null && st.lastDeadRebootAt != null
     && Date.now() - st.lastDeadRebootAt < REBOOT_COOLDOWN_MS;
   let rebootedNow = false;
-  if (st.deadRebootProbe == null && !recurrence && await tryReboot(device, st)) {
+  const rebootAllowed = watched.length >= REBOOT_MIN_WATCHED;
+  if (st.deadRebootProbe == null && !recurrence && rebootAllowed && await tryReboot(device, st)) {
     st.deadRebootProbe = st.deadProbes;
     st.lastDeadRebootAt = Date.now();
     rebootedNow = true;
@@ -268,7 +285,9 @@ async function verifyLoads(device, st, health, channels, alert) {
     await deviceEvent(device.id, 'error', { kind: 'relay_not_switching', channels: chList, detail: names });
     const healed = rebootedNow
       ? '\n\nבוצע אתחול יזום למכשיר (המצב של הממסרים נשמר ומשוחזר אוטומטית). אם הצריכה לא חוזרת אחרי האתחול — תישלח התראה נוספת: תקלת חומרה.'
-      : '\n\nאתחול יזום יבוצע אוטומטית ברגע שתקופת הצינון מאתחול קודם תסתיים.';
+      : !rebootAllowed
+        ? `\n\nלא בוצע אתחול אוטומטי: רק ${watched.length} ערוצים עם עומס היו דולקים — זה יכול להיות גם שני מתגי קיר שכובו יחד. אם זו באמת יחידה "מתה", נתקו וחברו חשמל ליחידה.`
+        : '\n\nאתחול יזום יבוצע אוטומטית ברגע שתקופת הצינון מאתחול קודם תסתיים.';
     await alert(`deadrelay:${device.id}`, `המכשיר "${device.name}" — ממסרים דולקים אך לא מעבירים חשמל`,
       `במכשיר "${device.name}" (${device.device_uid}) הקושחה מדווחת שהממסרים הבאים דולקים, אבל כבר ${st.deadProbes} דקות לא זורם דרכם חשמל:\n${bullets}\n\nזה הדפוס של ממסר שלא נסגר פיזית (למשל נפילת מתח פנימית ביחידה) — המכשיר "עונה" אבל הצרכנים כבויים.${healed}`);
   }
@@ -292,7 +311,19 @@ async function verifyLoads(device, st, health, channels, alert) {
 // nor swallow the next genuine crash as expected. restore_last on every
 // channel is what makes a reboot safe: the outputs come back as they were.
 async function tryReboot(device, st) {
-  if (!active() || Date.now() - st.lastRebootAt <= REBOOT_COOLDOWN_MS) return false;
+  if (!active()) return false;
+  // The cooldown used to live only in memory — every deploy reset it, and a
+  // unit in a dead streak got rebooted again after each restart. Seed it once
+  // from the last automatic reboot the diary recorded.
+  if (!st.rebootSeeded) {
+    st.rebootSeeded = true;
+    const [last] = await query(
+      `SELECT created_at FROM device_events WHERE device_id = ? AND event = 'error'
+         AND JSON_EXTRACT(payload, '$.kind') IN ('auto_reboot_low_ram', 'auto_reboot_dead_relay') ORDER BY id DESC LIMIT 1`, [device.id],
+    ).catch(() => []);
+    if (last) st.lastRebootAt = Math.max(st.lastRebootAt || 0, new Date(last.created_at).getTime());
+  }
+  if (Date.now() - st.lastRebootAt <= REBOOT_COOLDOWN_MS) return false;
   const ok = await shellyCall(device, 'Shelly.Reboot').then(() => true)
     .catch((e) => { console.error('[health] reboot failed:', e.message); return false; });
   if (ok) {
@@ -391,7 +422,7 @@ async function checkShelly(device) {
       // a power cut and a firmware panic no longer read the same.
       const reset = describeReset(sys.reset_reason);
       recordIncident('unexpected_reboot', device.name, `uptime ${st.lastUptime}s → ${sys.uptime}s, reset_reason ${sys.reset_reason ?? '?'} (${reset.cat})`);
-      const verdict = await verifyRebootOutputs(device, st.lastOutputs, outputs);
+      const verdict = await verifyRebootOutputs(device, st.lastOutputs, outputs, { lastProbeAt: st.lastProbeAt ?? null });
       await deviceEvent(device.id, 'boot', {
         kind: 'unexpected_reboot', uptime: sys.uptime, prev_uptime: st.lastUptime,
         reset_reason: sys.reset_reason ?? null, reset_category: reset.cat,
@@ -413,6 +444,12 @@ async function checkShelly(device) {
   }
   st.lastUptime = sys.uptime;
   if (outputs.length) st.lastOutputs = outputs;
+  st.lastProbeAt = Date.now();
+  // Heartbeat: the scheduler fires backups only for units the probe touched in
+  // the last few minutes (tick.js reachableForBackup) — is_online alone lies.
+  if (active()) {
+    await query('UPDATE devices SET last_seen_at = UTC_TIMESTAMP() WHERE id = ?', [device.id]).catch(() => {});
+  }
 
   await verifyLoads(device, st, health, channels, alert);
 
@@ -426,7 +463,9 @@ async function checkShelly(device) {
 
   // Self-heal 1: heap exhaustion precedes the panics that bit us — reboot on OUR
   // terms while it still answers. restore_last guarantees the outputs survive.
-  if (sys.ram_free != null && sys.ram_free < RAM_CRITICAL_BYTES && await tryReboot(device, st)) {
+  st.lowRam = sys.ram_free != null && sys.ram_free < RAM_CRITICAL_BYTES ? (st.lowRam ?? 0) + 1 : 0;
+  if (st.lowRam >= LOW_RAM_STREAK && sys.uptime >= LOW_RAM_MIN_UPTIME_S && await tryReboot(device, st)) {
+    st.lowRam = 0;
     recordIncident('auto_reboot', device.name, `ram_free ${sys.ram_free}B < ${RAM_CRITICAL_BYTES}B`);
     await deviceEvent(device.id, 'error', { kind: 'auto_reboot_low_ram', ram_free: sys.ram_free });
     await alert(`autoreboot:${device.id}`, `אתחול יזום למכשיר "${device.name}"`,
@@ -444,6 +483,7 @@ async function checkShelly(device) {
     recordIncident('online_flag_healed', device.name, 'reachable while flagged offline');
     const { reconcileShellyDevice } = await import('../services/shelly-schedules.js');
     await reconcileShellyDevice(device).catch((e) => console.error('[health] reconcile:', e.message));
+    await catchUpDevice(device.id, { reason: 'online_flag_healed' }).catch((e) => console.error('[health] catch-up:', e.message));
   }
 
   return health;
@@ -528,10 +568,17 @@ function serverHealth() {
 
 export const healthSnapshot = () => snapshot;
 
+let healthRunning = false;
 export function startHealthMonitor() {
   if (timer) return;
   loopDelay.enable();
-  const run = () => healthTick().catch((e) => console.error('[health] tick:', e.message));
+  // Overlap guard: ten unreachable units cost 50 s of RPC timeouts per pass;
+  // a second pass on top double-counted failures and flipped units offline early.
+  const run = async () => {
+    if (healthRunning) { console.warn('[health] pass overrun — previous pass still running, skipping'); return; }
+    healthRunning = true;
+    try { await healthTick(); } catch (e) { console.error('[health] tick:', e.message); } finally { healthRunning = false; }
+  };
   run();
   timer = setInterval(run, CHECK_INTERVAL_MS);
 }

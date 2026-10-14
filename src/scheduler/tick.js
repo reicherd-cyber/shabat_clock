@@ -10,6 +10,21 @@ import { publishCommand, waitForAck, pushScheduleToDevice } from '../mqtt/client
 import { ACK_TIMEOUT_MS, BACKUP_GRACE_MIN, RETRY_WINDOW_MIN, RECONCILE_WINDOW_H } from '../config/constants.js';
 import { freshTimesFor } from '../services/zmanim.js';
 import { freshHolidayFor, freshYearlyFor, inExclusionRange } from '../services/holidays.js';
+import { isPrimary } from '../config/role.js';
+import { sendImmediateCommand } from '../services/commands.js';
+
+// A unit counts as reachable for BACKUP purposes only if the primary's health
+// probe (or an MQTT presence message) touched it in the last REACHABLE_MIN
+// minutes. is_online alone lied for up to 15 minutes on filtered lines
+// (2026-09/10: 369 failed backups on one unit, retried every minute), and the
+// tick paid two 5 s timeouts per occurrence for the privilege.
+export const REACHABLE_MIN = 3;
+export const reachableForBackup = (s, now = Date.now()) => {
+  if (!s.is_online || !s.device_uid) return false;
+  if (s.device_type !== 'shelly') return true; // legacy ESP path: flag only
+  const seen = s.last_seen_at ? new Date(s.last_seen_at).getTime() : 0;
+  return now - seen <= REACHABLE_MIN * 60000;
+};
 
 const floorMinute = (d) => new Date(Math.floor(d.getTime() / 60000) * 60000);
 
@@ -21,7 +36,7 @@ async function loadActiveSchedules() {
             s.excl_type, DATE_FORMAT(s.excl_date,'%Y-%m-%d') AS excl_date, DATE_FORMAT(s.excl_end_date,'%Y-%m-%d') AS excl_end_date,
             s.excl_calendar, s.excl_holidays, s.excl_days, s.excl_list,
             r.id AS relay_id, r.relay_no,
-            d.id AS device_id, d.device_uid, d.is_online, d.timezone,
+            d.id AS device_id, d.device_uid, d.is_online, d.last_seen_at, d.timezone,
             d.device_type, d.transport, d.ip_address
      FROM schedules s
      JOIN relays r ON r.id = s.relay_id
@@ -221,9 +236,10 @@ export async function tick(now = new Date()) {
       continue;
     }
 
-    if (!s.is_online || !s.device_uid) {
-      // Offline: cannot command it either — record honestly, local execution is
-      // what the device is for; reconciled on reconnect [D21].
+    if (!reachableForBackup(s)) {
+      // Offline (or not seen for REACHABLE_MIN minutes): cannot command it —
+      // record honestly, local execution is what the device is for; reconciled
+      // and caught up on reconnect [D21] (catchUpDevice).
       await insertOccurrenceRow({
         scheduleId: s.id, occurrenceUtc: occ.occurrenceUtc, occurrenceLocal: occ.occurrenceLocal,
         action: occ.action, executedBy: null, status: 'unverified_offline',
@@ -274,7 +290,7 @@ async function retryFailed(schedules) {
   );
   for (const row of failed) {
     const s = byId.get(Number(row.schedule_id));
-    if (!s || !s.is_online || !s.device_uid) continue;
+    if (!s || !reachableForBackup(s)) continue;
     // Shelly: the failure may have been blindness, not a miss — if the channel
     // state already matches (local job fired during the blackout), settle the
     // row instead of re-commanding.
@@ -329,19 +345,103 @@ async function autoCompleteOnce() {
   for (const id of deviceIds) pushScheduleToDevice(id).catch(() => {});
 }
 
-// True when any enabled schedule of this relay has an occurrence within
-// ±slackMin of `now` (exclusion ranges honoured). Used by the health monitor's
-// reboot safety net to tell "lost on reboot" from "switched by schedule".
-export async function scheduleDueForRelay(relayId, now = new Date(), slackMin = 3) {
-  const schedules = (await loadActiveSchedules()).filter((s) => Number(s.relay_id) === Number(relayId));
-  const winStart = new Date(now.getTime() - slackMin * 60000);
-  const winEnd = new Date(now.getTime() + slackMin * 60000);
-  for (const s of schedules) {
+// Due occurrences of ONE relay's enabled schedules inside [from, to)
+// (exclusion ranges honoured), newest last.
+async function relayOccurrences(relayId, from, to, schedules = null) {
+  const rows = (schedules ?? await loadActiveSchedules()).filter((s) => Number(s.relay_id) === Number(relayId));
+  const out = [];
+  for (const s of rows) {
     let occs;
-    try { occs = occurrencesInWindow(s, winStart, winEnd); } catch { continue; }
-    if (occs.some((occ) => !inExclusionRange(s, occ.localKey.slice(0, 10)))) return true;
+    try { occs = occurrencesInWindow(s, from, to); } catch { continue; }
+    for (const occ of occs) if (!inExclusionRange(s, occ.localKey.slice(0, 10))) out.push(occ);
   }
-  return false;
+  return sortDue(out);
+}
+
+// True when any enabled schedule of this relay has an occurrence inside
+// [from, to) — the health monitor's reboot safety net asks "did a schedule
+// switch this channel while we weren't looking?" over the exact blind window.
+export async function scheduleDueBetween(relayId, from, to) {
+  return (await relayOccurrences(relayId, from, to)).length > 0;
+}
+// ±slackMin around `now` (older call shape).
+export async function scheduleDueForRelay(relayId, now = new Date(), slackMin = 3) {
+  return scheduleDueBetween(relayId, new Date(now.getTime() - slackMin * 60000), new Date(now.getTime() + slackMin * 60000));
+}
+
+// The state each relay SHOULD be in right now according to its schedules: the
+// action of its latest due occurrence in the look-back window. A same-minute
+// ON+OFF tie is a user-data conflict — returns null for that relay (nothing
+// is applied; the plan editor is where it gets fixed). Pure, exported for tests.
+export function latestDueByRelay(occurrences) {
+  const byRelay = new Map();
+  for (const occ of occurrences) {
+    const rid = Number(occ.schedule.relay_id);
+    const cur = byRelay.get(rid);
+    const t = occ.occurrenceUtc.getTime();
+    if (!cur || t > cur.t) byRelay.set(rid, { t, action: occ.action, occ, conflict: false });
+    else if (t === cur.t && occ.action !== cur.action) cur.conflict = true;
+  }
+  const out = new Map();
+  for (const [rid, v] of byRelay) out.set(rid, v.conflict ? null : v);
+  return out;
+}
+
+// Catch-up after an outage [D21 extension, 2026-10-15]. restore_last brings a
+// channel back to its state at the moment power was lost, and the device does
+// not replay the cron jobs it missed — so a Shabbat ON due during a cut stayed
+// OFF forever (972 unverified occurrences in 30 days were never retried). On
+// every reconnect (hello / online_flag_healed) and once at startup: for each
+// relay of the unit, the latest due occurrence of the last 24 h is compared
+// with the live state the reconcile just wrote; when they differ and nobody
+// switched the channel by hand since that occurrence, the schedule's state is
+// re-applied through the normal command path (source 'system' — "שחזור
+// אוטומטי" in history, meter-verified like any order). Primary only.
+export async function catchUpDevice(deviceId, { now = new Date(), reason = 'reconnect' } = {}) {
+  if (!isPrimary()) return { applied: [] };
+  const schedules = (await loadActiveSchedules()).filter((s) => Number(s.device_id) === Number(deviceId) && s.device_type === 'shelly');
+  if (!schedules.length) return { applied: [] };
+  const to = new Date(floorMinute(now).getTime() - BACKUP_GRACE_MIN * 60000);
+  const from = new Date(to.getTime() - RECONCILE_WINDOW_H * 3600000);
+  const relayIds = [...new Set(schedules.map((s) => Number(s.relay_id)))];
+  const applied = [];
+  for (const relayId of relayIds) {
+    const occs = await relayOccurrences(relayId, from, to, schedules);
+    const latest = latestDueByRelay(occs).get(relayId);
+    if (!latest) continue; // nothing due in the window, or a same-minute conflict
+    const [relay] = await query('SELECT id, name, current_state FROM relays WHERE id = ? AND deleted_at IS NULL AND is_enabled = TRUE', [relayId]);
+    if (!relay || relay.current_state === 'unknown' || relay.current_state === latest.action) continue;
+    // A hand-made switch after the occurrence is the customer's word — keep it.
+    const manual = await query(
+      `SELECT 1 FROM commands WHERE relay_id = ? AND source <> 'schedule' AND status = 'acked' AND requested_at > ? LIMIT 1`,
+      [relayId, latest.occ.occurrenceUtc.toISOString().slice(0, 19).replace('T', ' ')],
+    );
+    if (manual.length) continue;
+    const r = await sendImmediateCommand({ relayId, action: latest.action, source: 'system' }).catch((e) => ({ status: 'failed', fail_reason: e.message }));
+    // Settle the occurrence row the server could not verify at the time.
+    await query(
+      `UPDATE schedule_executions SET status = 'executed', executed_by = 'server_backup', command_id = COALESCE(?, command_id)
+        WHERE schedule_id = ? AND occurrence_utc = ? AND action = ? AND status IN ('unverified_offline','failed')`,
+      [r.command_id ?? null, latest.occ.schedule.id, latest.occ.occurrenceUtc.toISOString().slice(0, 19).replace('T', ' '), latest.action],
+    ).catch(() => {});
+    applied.push({ relay_id: relayId, name: relay.name, action: latest.action, ok: r.status === 'acked', verify: r.verify ?? null, due: latest.occ.occurrenceLocal });
+  }
+  if (applied.length) {
+    console.log(`[catch-up] device ${deviceId} (${reason}):`, applied.map((a) => `${a.name} → ${a.action} ${a.ok ? 'ok' : 'FAILED'}`).join(', '));
+    await query('INSERT INTO device_events (device_id, event, payload) VALUES (?,?,?)', [deviceId, 'config', JSON.stringify({ kind: 'catch_up', reason, applied })]).catch(() => {});
+  }
+  return { applied };
+}
+
+// Every reachable Shelly, once (server start): the reconnect path only fires
+// for units that come back WHILE we watch; units that stayed online across a
+// server outage are caught here.
+export async function catchUpAll(reason = 'startup') {
+  if (!isPrimary()) return;
+  const devs = await query(
+    "SELECT id FROM devices WHERE device_type = 'shelly' AND device_uid IS NOT NULL AND is_enabled = TRUE AND is_online = TRUE",
+  );
+  for (const d of devs) await catchUpDevice(d.id, { reason }).catch((e) => console.error('[catch-up] device', d.id, e.message));
 }
 
 // [D24] Startup: scan the last 24h once and record gaps honestly — no back-fill
@@ -440,29 +540,56 @@ async function refreshAnchoredTimes(now = new Date()) {
   for (const id of ids) pushScheduleToDevice(id).catch(() => {});
 }
 
+// Route every live Shelly through the resync loop. A no-change sync is
+// read-only on the device, so this is cheap; what it buys is a re-ranked
+// 20-job window (shelly-schedules.js fitShellyJobs) — without it a unit with
+// only clock schedules kept Sunday's 20 moments all week and the Friday ones
+// were never mirrored (2026-10-15 audit).
+async function kickAllShellySync(reason) {
+  await query(
+    "UPDATE devices SET sync_status = 'pending' WHERE device_type = 'shelly' AND device_uid IS NOT NULL AND is_enabled = TRUE",
+  ).catch((e) => console.error(`shelly sync kick (${reason}):`, e.message));
+}
+
 let timer = null;
 let lastZmanimDay = null;
+let running = false;
 export function startScheduler() {
   if (timer) return;
-  // Shellys registered before local-job mirroring existed sit on 'synced' without
-  // ever having been written — one boot-time nudge routes every live Shelly
-  // through the resync loop (a no-change sync is read-only on the device).
-  query(
-    "UPDATE devices SET sync_status = 'pending' WHERE device_type = 'shelly' AND device_uid IS NOT NULL AND is_enabled = TRUE",
-  ).catch((e) => console.error('shelly sync kick:', e.message));
-  startupScan().catch((e) => console.error('startup scan:', e));
+  // Only the primary (production) commands devices: backups, retries, once-
+  // auto-complete, local-job pushes. Staging and local dev share the DB and
+  // the broker — before this gate both fired every backup (201 duplicated
+  // minutes in 30 days). Passive = nothing scheduled here at all.
+  if (!isPrimary()) {
+    console.log('[scheduler] passive instance (NODE_ENV not production, HEALTH_ACTIVE unset) — scheduler not started');
+    return;
+  }
+  kickAllShellySync('boot');
+  startupScan()
+    .then(() => catchUpAll('startup'))
+    .catch((e) => console.error('startup scan:', e));
   const loop = async () => {
-    try { await tick(); } catch (e) { console.error('scheduler tick:', e); }
+    // Overlap guard: a tick that waits on unreachable units (5 s per RPC) can
+    // outlast its minute; a second tick on the same rows meant duplicate
+    // commands. Skip and say so — the overrun itself is a signal.
+    if (running) { console.warn('[scheduler] tick overrun — previous tick still running, skipping this minute'); return; }
+    running = true;
     try {
-      const p = localParts(new Date(), 'Asia/Jerusalem');
-      const day = `${p.y}-${p.mo}-${p.d}`;
-      // Wait out the first minutes after midnight so the pre-midnight backup
-      // windows close against the old times before we move them.
-      if (day !== lastZmanimDay && !(p.hh === 0 && p.mm < 5)) {
-        await refreshAnchoredTimes();
-        lastZmanimDay = day;
-      }
-    } catch (e) { console.error('zmanim refresh:', e); }
+      try { await tick(); } catch (e) { console.error('scheduler tick:', e); }
+      try {
+        const p = localParts(new Date(), 'Asia/Jerusalem');
+        const day = `${p.y}-${p.mo}-${p.d}`;
+        // Wait out the first minutes after midnight so the pre-midnight backup
+        // windows close against the old times before we move them.
+        if (day !== lastZmanimDay && !(p.hh === 0 && p.mm < 5)) {
+          await refreshAnchoredTimes();
+          await kickAllShellySync('daily');
+          lastZmanimDay = day;
+        }
+      } catch (e) { console.error('zmanim refresh:', e); }
+    } finally {
+      running = false;
+    }
   };
   // Align to the minute boundary, then every 60s.
   const msToMinute = 60000 - (Date.now() % 60000);

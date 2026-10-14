@@ -155,7 +155,12 @@ async function handleShellyMessage(topic, buf) {
         await firstContactShelly(device).catch((e) => console.error(`shelly first contact ${device.device_uid}:`, e.message));
       }
       const { reconcileShellyDevice } = await import('../services/shelly-schedules.js');
-      reconcileShellyDevice(device).catch((e) => console.error('shelly reconcile:', e.message));
+      // Reconcile (read the true states), then catch up: a Shabbat ON missed
+      // during the outage is re-applied now, unless a hand switched it since.
+      reconcileShellyDevice(device)
+        .then(() => import('../scheduler/tick.js'))
+        .then(({ catchUpDevice }) => catchUpDevice(device.id, { reason: 'hello' }))
+        .catch((e) => console.error('shelly reconcile/catch-up:', e.message));
       if (device.sync_status !== 'synced') {
         pushScheduleToDevice(device.id).catch((e) => console.error('shelly hello sync:', e.message));
       }
