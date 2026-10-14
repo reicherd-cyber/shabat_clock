@@ -541,7 +541,7 @@ export async function setPlanEnabled({ userId, planId, isEnabled, actor = null }
   let info;
   await withTransaction(async (conn) => {
     const [rows] = await conn.query(
-      `SELECT s.id, s.name, s.is_enabled, r.device_id FROM schedules s JOIN relays r ON r.id = s.relay_id
+      `SELECT s.id, s.name, s.is_enabled, s.relay_id, r.device_id FROM schedules s JOIN relays r ON r.id = s.relay_id
        WHERE s.plan_id = ? AND s.user_id = ? AND s.deleted_at IS NULL FOR UPDATE`,
       [String(planId), userId],
     );
@@ -554,6 +554,7 @@ export async function setPlanEnabled({ userId, planId, isEnabled, actor = null }
     await bumpDevices(conn, [...deviceIds]);
     info = {
       plan_id: String(planId), name: rows[0].name, members: rows.length, first_id: rows[0].id,
+      relay_ids: [...new Set(rows.map((r) => Number(r.relay_id)))],
       before: { is_enabled: rows.some((r) => r.is_enabled) }, after: { is_enabled: Boolean(isEnabled) },
     };
   });
@@ -569,7 +570,7 @@ export async function deletePlan({ userId, planId, actor = null }) {
   let info;
   await withTransaction(async (conn) => {
     const [rows] = await conn.query(
-      `SELECT s.id, s.name, r.device_id FROM schedules s JOIN relays r ON r.id = s.relay_id
+      `SELECT s.id, s.name, s.relay_id, r.device_id FROM schedules s JOIN relays r ON r.id = s.relay_id
        WHERE s.plan_id = ? AND s.user_id = ? AND s.deleted_at IS NULL FOR UPDATE`,
       [String(planId), userId],
     );
@@ -581,7 +582,7 @@ export async function deletePlan({ userId, planId, actor = null }) {
     );
     for (const r of rows) deviceIds.add(Number(r.device_id));
     await bumpDevices(conn, [...deviceIds]);
-    info = { plan_id: String(planId), name: rows[0].name, members: rows.length, first_id: rows[0].id, member_ids: rows.map((r) => r.id) };
+    info = { plan_id: String(planId), name: rows[0].name, members: rows.length, first_id: rows[0].id, member_ids: rows.map((r) => r.id), relay_ids: [...new Set(rows.map((r) => Number(r.relay_id)))] };
   });
   await pushAfterCommit([...deviceIds]);
   return info;

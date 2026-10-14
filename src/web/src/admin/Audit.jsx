@@ -352,13 +352,14 @@ function foldPlanToggles(rows) {
         && last.diff.after.is_enabled === on && Math.abs(new Date(last.created_at) - new Date(r.created_at)) < 120000) {
         last.diff.members += 1;
         last._ids.push(r.id);
+        if (r.sched_relay_id && !last.diff.relay_ids.includes(Number(r.sched_relay_id))) last.diff.relay_ids.push(Number(r.sched_relay_id));
         if (r.diff.before?.is_enabled !== undefined) last.diff.before = { is_enabled: last.diff.before?.is_enabled || Boolean(r.diff.before.is_enabled) };
         continue;
       }
       out.push({
         ...r, action: 'plan_toggle', _ids: [r.id],
         diff: {
-          plan_id: r.sched_plan_id, name: r.sched_plan_name, members: 1,
+          plan_id: r.sched_plan_id, name: r.sched_plan_name, members: 1, relay_ids: r.sched_relay_id ? [Number(r.sched_relay_id)] : [],
           ...(r.diff.before?.is_enabled !== undefined ? { before: { is_enabled: Boolean(r.diff.before.is_enabled) } } : {}),
           after: { is_enabled: on }, ...(r.diff.after.via ? { via: r.diff.after.via } : {}),
         },
@@ -375,7 +376,13 @@ function foldPlanToggles(rows) {
 function planHeadline(r) {
   const d = r.diff || {};
   const pname = d.name || d.after?.name || d.before?.name || '';
-  const suffix = pname ? ` «${pname}»` : '';
+  // Channels for EVERY plan action, from one place: toggle/delete carry relay_ids;
+  // create/update carry the body (relay_ids inside). Resolved by id at render
+  // (RELAY_NAMES, removed channels included), so a rename shows the same name everywhere.
+  const ids = Array.isArray(d.relay_ids) ? d.relay_ids : (d.after?.relay_ids || d.before?.relay_ids || []);
+  const names = [...new Set(ids.map(Number))].map(relayName);
+  const chans = names.length ? ` — ${names.slice(0, 3).join(', ')}${names.length > 3 ? ` ועוד ${names.length - 3}` : ''}` : '';
+  const suffix = pname ? ` «${pname}»${chans}` : chans;
   if (r.action === 'plan_toggle') return `${d.after?.is_enabled ? 'הפעלת' : 'השבתת'} תוכנית${suffix}${d.members ? ` (${d.members} תזמונים)` : ''}`;
   if (r.action === 'plan_delete') return `מחיקת תוכנית${suffix}${d.members ? ` (${d.members} תזמונים)` : ''}`;
   if (r.action === 'create') return `יצירת תוכנית${suffix}`;

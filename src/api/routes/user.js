@@ -392,7 +392,7 @@ userRouter.patch('/plans/:planId', async (req, res, next) => {
   try {
     if (typeof req.body?.is_enabled !== 'boolean') throw errors.validation('is_enabled required', { is_enabled: 'boolean' });
     const r = await setPlanEnabled({ userId: req.auth.userId, planId: String(req.params.planId), isEnabled: req.body.is_enabled, actor: actorStr(actorOf(req)) });
-    await act(req, 'plan_toggle', 'schedule', r.first_id, { plan_id: r.plan_id, name: r.name, members: r.members, before: r.before, after: r.after });
+    await act(req, 'plan_toggle', 'schedule', r.first_id, { plan_id: r.plan_id, name: r.name, members: r.members, relay_ids: r.relay_ids, before: r.before, after: r.after });
     res.json({ ok: true, members: r.members });
   } catch (e) { next(e); }
 });
@@ -404,7 +404,7 @@ userRouter.delete('/plans/:planId', async (req, res, next) => {
     const planId = String(req.params.planId);
     const before = await lastLoggedPlanBody(planId, await planMemberIds(req.auth.userId, planId));
     const r = await deletePlan({ userId: req.auth.userId, planId, actor: actorStr(actorOf(req)) });
-    await act(req, 'plan_delete', 'schedule', r.first_id, { plan_id: planId, name: r.name, members: r.members, before });
+    await act(req, 'plan_delete', 'schedule', r.first_id, { plan_id: planId, name: r.name, members: r.members, relay_ids: r.relay_ids, before });
     res.json({ ok: true, members: r.members });
   } catch (e) { next(e); }
 });
