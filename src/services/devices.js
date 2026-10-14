@@ -9,7 +9,7 @@ import { query, withTransaction } from '../db/pool.js';
 import { errors } from '../config/errors.js';
 import { env } from '../config/env.js';
 import { bcryptHash } from './users.js';
-import { shellyInfo, shellyGetState, shellySetRestoreLast } from './shelly.js';
+import { shellyInfo, shellyGetState, shellySetBootSafe } from './shelly.js';
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -416,13 +416,14 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     }
     return { id: d.insertId, relays: wanted.length };
   }).then(async (result) => {
-    // Every channel (selected or not) gets restore_last so a reboot/power cut
-    // never silently flips outputs. Best-effort — the device answered the probe
-    // moments ago; a failure logs but doesn't undo the registration. An offline
-    // registration defers this to firstContactShelly().
+    // Every channel (selected or not) is made boot-safe (restore_last +
+    // detached input) so a reboot/power cut never silently flips outputs.
+    // Best-effort — the device answered the probe moments ago; a failure logs
+    // but doesn't undo the registration. An offline registration defers this
+    // to firstContactShelly().
     for (const c of offline ? [] : probe.channels) {
-      await shellySetRestoreLast({ transport, ip_address: ip, device_uid: probe.mac }, c.relay_no)
-        .catch((e) => console.error(`restore_last relay ${c.relay_no} of shelly ${probe.mac}:`, e.message));
+      await shellySetBootSafe({ transport, ip_address: ip, device_uid: probe.mac }, c.relay_no)
+        .catch((e) => console.error(`boot-safe relay ${c.relay_no} of shelly ${probe.mac}:`, e.message));
     }
     // Inventory: registration is the activation moment for a prepared unit.
     await query(
@@ -465,8 +466,8 @@ export async function firstContactShelly(device) {
     [fw, real || device.relay_count, model, model, device.id],
   );
   for (let relayNo = 1; relayNo <= (real || device.relay_count); relayNo++) {
-    await shellySetRestoreLast({ transport: 'mqtt', device_uid: uid }, relayNo)
-      .catch((e) => console.error(`restore_last relay ${relayNo} of shelly ${uid} (first contact):`, e.message));
+    await shellySetBootSafe({ transport: 'mqtt', device_uid: uid }, relayNo)
+      .catch((e) => console.error(`boot-safe relay ${relayNo} of shelly ${uid} (first contact):`, e.message));
   }
   await query(
     'UPDATE prepared_devices SET model = COALESCE(model, ?), fw_version = COALESCE(fw_version, ?) WHERE mac = ?',

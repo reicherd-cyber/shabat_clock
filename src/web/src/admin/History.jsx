@@ -4,7 +4,7 @@ import { adminApi } from '../api.js';
 import { Card, Button, Input, SearchSelect, Badge, ErrorNote, useAsync, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect } from '../ui.jsx';
 import { MenuPath } from './Misc.jsx';
 
-const SOURCE_HE = { ivr: 'טלפון', web: 'אתר', schedule: 'תזמון', admin: 'מנהל', whatsapp: 'וואטסאפ' };
+const SOURCE_HE = { ivr: 'טלפון', web: 'אתר', schedule: 'תזמון', admin: 'מנהל', whatsapp: 'וואטסאפ', system: 'שחזור אחרי אתחול' };
 const STATUS_HE = { pending: 'ממתינה', sent: 'נשלחה', acked: 'בוצעה', failed: 'נכשלה' };
 const OUTCOME_HE = { command: 'פקודה', schedule: 'תזמון', status: 'בירור מצב', auth_fail: 'כשל זיהוי', abandoned: 'נותקה באמצע' };
 
