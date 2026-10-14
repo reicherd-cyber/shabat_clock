@@ -59,7 +59,7 @@ export async function runNluActions({ userId, actions, tz, source, callId = null
       const via = source === 'whatsapp' ? 'whatsapp' : 'nlu';
       if (!/^s\d+$/.test(String(a.plan_key))) {
         const r = await setPlanEnabled({ userId, planId: String(a.plan_key), isEnabled: is_enabled, actor: actorStamp });
-        await logAction(actor, 'plan_toggle', 'schedule', r.first_id, { plan_id: r.plan_id, name: r.name, members: r.members, relays: r.relays, before: r.before, after: r.after, via });
+        await logAction(actor, 'plan_toggle', 'schedule', r.first_id, { plan_id: r.plan_id, name: r.name, members: r.members, relay_ids: r.relay_ids, before: r.before, after: r.after, via });
       } else for (const id of a.schedule_ids) {
         const changed = await updateSchedule({ userId, scheduleId: id, patch: { is_enabled }, actor: actorStamp });
         await logAction(actor, 'update', 'schedule', id, { before: changed.before, after: { ...changed.after, plan_key: a.plan_key, via } });

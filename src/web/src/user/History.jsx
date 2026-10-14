@@ -40,7 +40,7 @@ function Row({ item, first, colorOf }) {
             {d.status === 'failed' && <span className="text-off"> — נכשל{FAIL_HE[d.fail_reason] ? ` (${FAIL_HE[d.fail_reason]})` : ''}</span>}
             {d.status === 'acked' && VERIFY_HE[d.verify] && (!VERIFY_WARN.has(d.verify) || isImpersonating()) && (
               <span className={VERIFY_WARN.has(d.verify) ? 'text-off' : 'text-muted'}> — {VERIFY_HE[d.verify]}
-                {VERIFY_WARN.has(d.verify) && <span className="ms-1 text-[11px] font-medium rounded-full px-1.5 py-px bg-surface2 text-muted align-middle" title="אבחון המד מוצג רק למנהל שנכנס בשם המשתמש — הלקוח עצמו לא רואה שורה זו">למנהל בלבד</span>}
+                {VERIFY_WARN.has(d.verify) && <span className="ms-1 text-[11px] font-medium rounded-full px-1.5 py-px bg-surface2 text-muted align-middle whitespace-nowrap" aria-label="מוצג למנהל בלבד">למנהל בלבד</span>}
               </span>
             )}
           </>
@@ -98,6 +98,9 @@ export default function History() {
   return (
     <>
       <SectionHead title="פעילות אחרונה" />
+      {isImpersonating() && (
+        <p className="text-xs text-muted -mt-2 mb-2">שורות באדום הן אבחון המד אחרי הפקודה (הממסר נסגר אך המכשיר לא צורך) — הן מוצגות רק למנהל שנכנס בשם הלקוח; הלקוח עצמו לא רואה אותן.</p>
+      )}
       <div className="flex gap-2 items-center flex-wrap mb-3">
         <FilterSelect className="py-2 text-sm flex-1 min-w-[10rem]" value={relayId} onChange={(e) => setRelayId(e.target.value)}>
           <option value="">כל הערוצים</option>
