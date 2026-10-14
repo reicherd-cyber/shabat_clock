@@ -365,7 +365,7 @@ export const RANGE_LABELS = {
   '1h': 'השעה האחרונה', '3h': '3 שעות אחרונות', '6h': '6 שעות אחרונות', '12h': '12 שעות אחרונות', '24h': '24 שעות אחרונות',
   today: 'היום', yesterday: 'אתמול', '7d': '7 ימים אחרונים', '30d': '30 ימים אחרונים', '90d': '90 ימים אחרונים',
   month: 'החודש', '3m': '3 חודשים אחרונים', '6m': '6 חודשים אחרונים', '12m': '12 חודשים אחרונים', year: 'השנה',
-  all: 'הכל', custom: 'טווח מותאם',
+  all: 'הכל', custom: 'בין תאריכים…',
 };
 export const RANGE_HOURS = ['1h', '3h', '6h', '12h', '24h'];
 export const RANGE_DAYS = ['today', 'yesterday', '7d', '30d', '90d'];
@@ -440,10 +440,12 @@ export function HourSelect({ value, onChange }) {
 // inputs unfold beside it. `custom` = { fromDate, toDate, fromHour, toHour },
 // `onCustom(patch)` merges a change. Wraps on phones like any other filter row.
 export function RangeFilter({ value, onChange, keys = RANGE_DEFAULT, custom = {}, onCustom, hours = false, className = 'w-44' }) {
+  // "בין תאריכים…" sits first in every list — at the bottom it went unnoticed.
+  const ordered = keys.includes('custom') ? ['custom', ...keys.filter((k) => k !== 'custom')] : keys;
   return (
     <>
       <FilterSelect className={className} value={value} onChange={(e) => onChange(e.target.value)} placeholder="תקופה…" aria-label="תקופה">
-        {keys.map((k) => <option key={k} value={k}>{RANGE_LABELS[k] || k}</option>)}
+        {ordered.map((k) => <option key={k} value={k}>{RANGE_LABELS[k] || k}</option>)}
       </FilterSelect>
       {value === 'custom' && (
         <>
