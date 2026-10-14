@@ -5,7 +5,7 @@
 // Nothing here is called before the user confirmed (1 on the phone, the button
 // on WhatsApp) [see D-remove-disable-confirm].
 import { sendImmediateCommand } from './commands.js';
-import { createSchedule, deleteSchedule, updateSchedule } from './schedules.js';
+import { createSchedule, deleteSchedule, updateSchedule, setPlanEnabled } from './schedules.js';
 import { logAction } from './audit.js';
 import { localParts, shiftDate } from './time.js';
 
@@ -53,9 +53,14 @@ export async function runNluActions({ userId, actions, tz, source, callId = null
       // Stop/start a תוכנית = flip is_enabled on each member row — the same
       // per-row PATCH the web plan toggle issues (nothing deleted, restorable).
       const is_enabled = a.action === 'on';
-      for (const id of a.schedule_ids) {
-        await updateSchedule({ userId, scheduleId: id, patch: { is_enabled }, actor: actorStamp });
-        await logAction(actor, 'update', 'schedule', id, { after: { is_enabled, plan_key: a.plan_key, via: 'nlu' } });
+      // Whole plan in one go when it has a plan_id (the 'p…' keys); the legacy
+      // single-row plans ('s<id>') keep the per-row path.
+      if (String(a.plan_key).startsWith('p')) {
+        const r = await setPlanEnabled({ userId, planId: String(a.plan_key), isEnabled: is_enabled, actor: actorStamp });
+        await logAction(actor, 'plan_toggle', 'schedule', r.first_id, { plan_id: r.plan_id, name: r.name, members: r.members, before: r.before, after: r.after, via: source === 'whatsapp' ? 'whatsapp' : 'nlu' });
+      } else for (const id of a.schedule_ids) {
+        const changed = await updateSchedule({ userId, scheduleId: id, patch: { is_enabled }, actor: actorStamp });
+        await logAction(actor, 'update', 'schedule', id, { before: changed.before, after: { ...changed.after, plan_key: a.plan_key, via: 'nlu' } });
       }
     } else {
       const date = ymdForDay(a.day, tz);

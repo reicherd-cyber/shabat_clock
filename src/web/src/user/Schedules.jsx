@@ -27,12 +27,18 @@ export default function Schedules() {
   useEffect(() => { refresh().catch(setError); }, []);
 
   // Every action runs on ALL of a plan's member rows.
+  // A real plan (shared plan_id) is one server call — one history entry;
+  // legacy standalone rows still go one by one.
   const toggleEnabled = (members, on) => run(async () => {
-    for (const m of members) await api.patch(`/schedules/${m.id}`, { is_enabled: on });
+    const planId = members[0]?.plan_id;
+    if (planId && members.every((m) => m.plan_id === planId)) await api.patch(`/plans/${planId}`, { is_enabled: on });
+    else for (const m of members) await api.patch(`/schedules/${m.id}`, { is_enabled: on });
     await refresh();
   });
   const remove = (members) => run(async () => {
-    for (const m of members) await api.del(`/schedules/${m.id}`);
+    const planId = members[0]?.plan_id;
+    if (planId && members.every((m) => m.plan_id === planId)) await api.del(`/plans/${planId}`);
+    else for (const m of members) await api.del(`/schedules/${m.id}`);
     await refresh();
   });
 
