@@ -51,16 +51,40 @@ export async function shellyDispatch(device, relayNo, on) {
   return shellySet(device.ip_address, relayNo, on);
 }
 
-// Power-on behavior: restore the last output state after any reboot/power cut.
-// The factory default (match_input + follow, with the wall switch sitting off)
-// turned relays off after a firmware crash with no trace in the log — every
-// registered channel gets restore_last (2026-07-18).
-export async function shellySetRestoreLast(device, relayNo) {
-  return shellyCall(device, 'Switch.SetConfig', {
-    id: channelFor(relayNo),
-    config: { initial_state: 'restore_last' },
-  });
+// Power-on behavior. Two settings decide what a channel does after a reboot or
+// power cut, and BOTH must be right:
+//   initial_state 'restore_last' — come back the way you were (set fleet-wide
+//     since 2026-07-18, after a firmware crash turned relays off);
+//   in_mode 'detached' — the SW input terminal has no say over the output. The
+//     factory 'follow' mode let a reboot take the (off, unwired) input instead
+//     of the restored state: on 2026-10-10 a power cut at a site brought one
+//     Pro 4PM back with all four channels off while restore_last was verified.
+// A channel whose input currently reads ON is someone's real wall switch —
+// its mode is left alone (detaching it would kill that switch); pure decision
+// in bootSafeConfigFor so the rule is testable.
+export function bootSafeConfigFor(cfg, inputOn) {
+  const want = {};
+  if (cfg?.initial_state !== 'restore_last') want.initial_state = 'restore_last';
+  if (cfg?.in_mode !== 'detached' && !inputOn) want.in_mode = 'detached';
+  return want;
 }
+
+// Reads the channel's config + input and applies only what's missing. Returns
+// the keys it changed ([] = already boot-safe, or input in use). Best-effort
+// readers: a failed GetConfig/Input read falls back to setting restore_last only.
+export async function shellySetBootSafe(device, relayNo) {
+  const id = channelFor(relayNo);
+  const cfg = await shellyCall(device, 'Switch.GetConfig', { id }).catch(() => null);
+  const input = await shellyCall(device, 'Input.GetStatus', { id }).catch(() => null);
+  const want = bootSafeConfigFor(cfg, input?.state === true || input == null);
+  if (!cfg) want.initial_state = 'restore_last';
+  if (!Object.keys(want).length) return [];
+  await shellyCall(device, 'Switch.SetConfig', { id, config: want });
+  return Object.keys(want);
+}
+
+// Kept for callers that only ever wanted restore_last.
+export const shellySetRestoreLast = shellySetBootSafe;
 
 // Current output state of one channel → boolean.
 export async function shellyGetState(ip, relayNo) {

@@ -5,6 +5,7 @@
 // disable-confirm: nothing acts without an explicit confirm]. Claude only maps
 // intent → relay id + action/time; all validation stays server-side.
 import Anthropic from '@anthropic-ai/sdk';
+import { costUsd, totalInputTokens } from './aiPricing.js';
 import { query } from '../db/pool.js';
 import { errors } from '../config/errors.js';
 import { env } from '../config/env.js';
@@ -62,20 +63,12 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // $/MTok [input, output] per model — used to stamp each interpretation's cost at
 // the price in effect when it ran (price changes never rewrite history).
-const PRICE_PER_MTOK = {
-  'claude-opus-4-8': [5, 25],
-  'claude-sonnet-5': [3, 15],
-  'claude-haiku-4-5': [1, 5],
-};
-
-async function logUsage({ userId, phone, text, model, usage }) {
-  let [inP, outP] = PRICE_PER_MTOK[model] || [5, 25];
+async function logUsage({ userId, phone, source, text, model, usage }) {
   // Fast mode (research preview) bills at ~2× — stamp the real price it ran at.
-  if (usage.speed === 'fast') { inP *= 2; outP *= 2; }
-  const cost = (usage.input_tokens * inP + usage.output_tokens * outP) / 1e6;
+  const cost = costUsd(model, usage, usage.speed === 'fast' ? 2 : 1);
   await query(
-    'INSERT INTO nlu_usage (user_id, phone, text, model, input_tokens, output_tokens, cost_usd) VALUES (?,?,?,?,?,?,?)',
-    [userId ?? null, phone ?? null, text, model, usage.input_tokens, usage.output_tokens, cost],
+    "INSERT INTO nlu_usage (user_id, phone, source, kind, text, model, input_tokens, output_tokens, cost_usd) VALUES (?,?,?,'command',?,?,?,?,?)",
+    [userId ?? null, phone ?? null, source ?? null, text, model, totalInputTokens(usage), usage.output_tokens, cost],
   );
 }
 
@@ -108,6 +101,29 @@ export function groupPlans(schedules) {
   ];
 }
 
+// The instruction block is identical on every call, so it goes FIRST and is
+// marked for prompt caching; the per-user data (time, relays, schedules, plans,
+// previous attempt) follows as a second, uncached block. Order matters: one
+// changed byte invalidates everything after it, so nothing volatile may
+// precede the cache breakpoint. Returns the two blocks for the system array.
+const STATIC_RULES = `אתה מפרש פקודות בעברית עבור מערכת "שעון שבת" ששולטת בממסרים (relays) של משתמש. בהמשך ההנחיות תקבל את הנתונים של המשתמש: השעה המקומית, רשימת הממסרים, התזמונים והתוכניות שלו.
+
+הטקסט מגיע מזיהוי דיבור טלפוני באיכות ירודה — מילים עשויות להגיע משובשות אך דומות פונטית לבקשה האמיתית (למשל "אבל זה כלום עכשיו" הוא שיבוש של "כבה את הסלון עכשיו"). לפני שאתה מוותר, נסה לשחזר את הבקשה הסבירה ביותר לפי דמיון צלילי לשמות הממסרים ולפעולות הדלקה/כיבוי/תזמון. אם השחזור ברור מספיק — פרש אותו כרגיל.
+
+המר את בקשת המשתמש לפעולות מובנות:
+- "immediate" = הדלקה/כיבוי מיד (action: on/off).
+- "timed" = הדלקה/כיבוי חד פעמי בשעה עתידית. חשב את השעה בפורמט HH:MM (24 שעות) ואת היום (today/tomorrow) לפי השעה הנוכחית. "בעוד N דקות/שעות" = הוסף לשעה הנוכחית; אם התוצאה אחרי חצות, day=tomorrow.
+- "recurring" = תזמון קבוע שחוזר: "כל יום ב..." → on_day/off_day = null; "כל יום שלישי" → יום בשבוע (1=ראשון, 2=שני, 3=שלישי, 4=רביעי, 5=חמישי, 6=שישי, 7=שבת). מלא on_time/off_time בפורמט HH:MM. מותר צד אחד בלבד (רק הדלקה או רק כיבוי) — השאר את הצד השני null. ההבחנה: "מחר בשמונה" = timed; "כל יום בשמונה" / "בכל שבת" = recurring.
+- "delete_schedule" = מחיקת תזמון קיים: בחר schedule_id מרשימת התזמונים של המשתמש לפי ההתאמה הטובה ביותר לתיאור המשתמש (ממסר, סוג, שעות). אם הבקשה מכוונת לכמה תזמונים ("תמחק את כל התזמונים של הדוד") — החזר פעולת מחיקה לכל אחד מהם.
+- "plan_toggle" = עצירה או הפעלה של תוכנית קיימת, בלי למחוק אותה: בחר plan_key מרשימת התוכניות של המשתמש לפי שם התוכנית או הממסרים שבה; action off = עצירה/השבתה ("עצור", "תפסיק", "השבת", "בטל זמנית", "כבה את התוכנית"), action on = הפעלה/חידוש ("הפעל", "תתחיל", "החזר", "הדלק את התוכנית"). ההבחנה מממסר: המילים תוכנית/תזמונים ("עצור את התוכנית של הסלון", "תפסיק את תוכנית שבת") = plan_toggle; "כבה את הסלון" בלי המילה תוכנית = immediate. "עצור את כל התוכניות" = פעולת plan_toggle לכל תוכנית ברשימה. גם תוכנית שכבר במצב המבוקש — החזר אותה (המערכת תציין זאת).
+- בחר relay_id רק מרשימת הממסרים של המשתמש. התאם לפי שם הממסר (למשל "סלון", "מטבח") גם אם הניסוח חלקי.
+- שעה עמומה בלי ציון בוקר/ערב — בחר את הפירוש הסביר בבית: "בשעה שלוש" לתזמון של פלטה או דוד לשבת = 15:00 ולא 03:00 בלילה; "בשמונה" בערב שישי = 20:00. שעות לילה קטנות (00:00–05:00) רק כשהמשתמש אמר במפורש לילה או לפנות בוקר.
+- בקשה אחת יכולה להכיל כמה פעולות — פרק משפט מורכב לכל חלקיו והחזר פעולה נפרדת לכל חלק. למשל "תדליק את הדוד בשש ותכבה את הסלון בעוד עשר דקות" = שתי פעולות; "תדליק את הדוד מעכשיו עד שמונה" = הדלקה מיידית + כיבוי timed בשעה 20:00; "כל יום שישי תדליק את הפלטה בארבע ותכבה במוצאי שבת בעשר" = recurring אחד עם שני צדדים.
+- אל תוותר על חלק מהבקשה: אם הבנת רק חלק — החזר את הפעולות שהבנת עם understood=true, וב-clarification ציין בקצרה ובלי לשאול מה מהבקשה לא הובן או לא נמצא (למשל, שים לב, לא מצאתי ממסר בשם דוד). המשפט הזה יוקרא לפני הקראת הפעולות לאישור. אם הכל הובן — clarification=null.
+- המשתמש תמיד מאשר את הפעולה לפני ביצוע, לכן עדיף ניחוש סביר שיוצג לאישור מאשר שאלה. אם יש פירוש סביר אחד — החזר אותו כפעולה עם understood=true. לעולם אל תשאל "האם התכוונת ל..." ב-clarification.
+- קבע understood=false רק כשאין שום פירוש סביר. במקרה כזה ה-clarification חייב להדריך את המשתמש לאפשרות הקרובה ביותר, לא רק לבקש לנסות שוב: ציין מה כן נקלט אם נקלט משהו, הזכר את שם הממסר הקרוב ביותר למה שנשמע, ותן דוגמת ניסוח קצרה ומלאה עם שם ממסר אמיתי מהרשימה, למשל, אפשר לומר, הדלק את הדוד בשש בערב. המשפט יוקרא בטלפון והמערכת תקשיב שוב מיד — בלי סימני שאלה, בלי גרשיים, בלי נקודתיים ובלי נקודות (פסיקים במקום).
+- שדות שאינם רלוונטיים לסוג הפעולה — השאר null.`;
+
 function buildSystemPrompt(relays, schedules, plans, tz, nowParts, prevText) {
   const list = relays
     .map((r) => `- relay_id ${r.id}: "${r.name}" (מכשיר: "${r.device_name}", מצב נוכחי: ${r.current_state === 'on' ? 'דולק' : 'כבוי'})`)
@@ -119,7 +135,7 @@ function buildSystemPrompt(relays, schedules, plans, tz, nowParts, prevText) {
     ? plans.map((p) => `- plan_key ${p.key}: "${p.name}" (${p.enabled ? 'פעילה' : 'מושבתת'}; ממסרים: ${p.channels.join(', ')}; ${p.schedule_ids.length} תזמונים)`).join('\n')
     : '(אין תוכניות)';
   const hhmm = `${String(nowParts.hh).padStart(2, '0')}:${String(nowParts.mm).padStart(2, '0')}`;
-  return `אתה מפרש פקודות בעברית עבור מערכת "שעון שבת" ששולטת בממסרים (relays) של משתמש.
+  const userData = `הנתונים של המשתמש:
 השעה המקומית הנוכחית של המשתמש: ${hhmm} (אזור זמן ${tz}).
 
 הממסרים הזמינים למשתמש זה:
@@ -130,31 +146,22 @@ ${schedList}
 
 התוכניות של המשתמש (תוכנית = קבוצת תזמונים בשם, שאפשר להפעיל או לעצור כיחידה):
 ${planList}
-
-הטקסט מגיע מזיהוי דיבור טלפוני באיכות ירודה — מילים עשויות להגיע משובשות אך דומות פונטית לבקשה האמיתית (למשל "אבל זה כלום עכשיו" הוא שיבוש של "כבה את הסלון עכשיו"). לפני שאתה מוותר, נסה לשחזר את הבקשה הסבירה ביותר לפי דמיון צלילי לשמות הממסרים ולפעולות הדלקה/כיבוי/תזמון. אם השחזור ברור מספיק — פרש אותו כרגיל.
 ${prevText ? `
 בניסיון קודם באותה שיחה המשתמש אמר (תמלול משובש שלא הובן): «${prevText}». הבקשה הנוכחית היא ניסוח מחדש של אותה כוונה — השתמש בשני התמלולים יחד כדי לשחזר אותה.
-` : ''}
-
-המר את בקשת המשתמש לפעולות מובנות:
-- "immediate" = הדלקה/כיבוי מיד (action: on/off).
-- "timed" = הדלקה/כיבוי חד פעמי בשעה עתידית. חשב את השעה בפורמט HH:MM (24 שעות) ואת היום (today/tomorrow) לפי השעה הנוכחית. "בעוד N דקות/שעות" = הוסף לשעה הנוכחית; אם התוצאה אחרי חצות, day=tomorrow.
-- "recurring" = תזמון קבוע שחוזר: "כל יום ב..." → on_day/off_day = null; "כל יום שלישי" → יום בשבוע (1=ראשון, 2=שני, 3=שלישי, 4=רביעי, 5=חמישי, 6=שישי, 7=שבת). מלא on_time/off_time בפורמט HH:MM. מותר צד אחד בלבד (רק הדלקה או רק כיבוי) — השאר את הצד השני null. ההבחנה: "מחר בשמונה" = timed; "כל יום בשמונה" / "בכל שבת" = recurring.
-- "delete_schedule" = מחיקת תזמון קיים: בחר schedule_id מרשימת התזמונים למעלה לפי ההתאמה הטובה ביותר לתיאור המשתמש (ממסר, סוג, שעות). אם הבקשה מכוונת לכמה תזמונים ("תמחק את כל התזמונים של הדוד") — החזר פעולת מחיקה לכל אחד מהם.
-- "plan_toggle" = עצירה או הפעלה של תוכנית קיימת, בלי למחוק אותה: בחר plan_key מרשימת התוכניות למעלה לפי שם התוכנית או הממסרים שבה; action off = עצירה/השבתה ("עצור", "תפסיק", "השבת", "בטל זמנית", "כבה את התוכנית"), action on = הפעלה/חידוש ("הפעל", "תתחיל", "החזר", "הדלק את התוכנית"). ההבחנה מממסר: המילים תוכנית/תזמונים ("עצור את התוכנית של הסלון", "תפסיק את תוכנית שבת") = plan_toggle; "כבה את הסלון" בלי המילה תוכנית = immediate. "עצור את כל התוכניות" = פעולת plan_toggle לכל תוכנית ברשימה. גם תוכנית שכבר במצב המבוקש — החזר אותה (המערכת תציין זאת).
-- בחר relay_id רק מהרשימה למעלה. התאם לפי שם הממסר (למשל "סלון", "מטבח") גם אם הניסוח חלקי.
-- שעה עמומה בלי ציון בוקר/ערב — בחר את הפירוש הסביר בבית: "בשעה שלוש" לתזמון של פלטה או דוד לשבת = 15:00 ולא 03:00 בלילה; "בשמונה" בערב שישי = 20:00. שעות לילה קטנות (00:00–05:00) רק כשהמשתמש אמר במפורש לילה או לפנות בוקר.
-- בקשה אחת יכולה להכיל כמה פעולות — פרק משפט מורכב לכל חלקיו והחזר פעולה נפרדת לכל חלק. למשל "תדליק את הדוד בשש ותכבה את הסלון בעוד עשר דקות" = שתי פעולות; "תדליק את הדוד מעכשיו עד שמונה" = הדלקה מיידית + כיבוי timed בשעה 20:00; "כל יום שישי תדליק את הפלטה בארבע ותכבה במוצאי שבת בעשר" = recurring אחד עם שני צדדים.
-- אל תוותר על חלק מהבקשה: אם הבנת רק חלק — החזר את הפעולות שהבנת עם understood=true, וב-clarification ציין בקצרה ובלי לשאול מה מהבקשה לא הובן או לא נמצא (למשל, שים לב, לא מצאתי ממסר בשם דוד). המשפט הזה יוקרא לפני הקראת הפעולות לאישור. אם הכל הובן — clarification=null.
-- המשתמש תמיד מאשר את הפעולה לפני ביצוע, לכן עדיף ניחוש סביר שיוצג לאישור מאשר שאלה. אם יש פירוש סביר אחד — החזר אותו כפעולה עם understood=true. לעולם אל תשאל "האם התכוונת ל..." ב-clarification.
-- קבע understood=false רק כשאין שום פירוש סביר. במקרה כזה ה-clarification חייב להדריך את המשתמש לאפשרות הקרובה ביותר, לא רק לבקש לנסות שוב: ציין מה כן נקלט אם נקלט משהו, הזכר את שם הממסר הקרוב ביותר למה שנשמע, ותן דוגמת ניסוח קצרה ומלאה עם שם ממסר אמיתי מהרשימה, למשל, אפשר לומר, הדלק את הדוד בשש בערב. המשפט יוקרא בטלפון והמערכת תקשיב שוב מיד — בלי סימני שאלה, בלי גרשיים, בלי נקודתיים ובלי נקודות (פסיקים במקום).
-- שדות שאינם רלוונטיים לסוג הפעולה — השאר null.`;
+` : ''}`;
+  return [
+    { type: 'text', text: STATIC_RULES, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: userData },
+  ];
 }
+
 
 // Returns { understood, clarification, actions: [{ relay_id, relay_name, kind,
 // action, time, day, summary }] } — enriched with the relay name and a Hebrew
 // summary line for the confirmation UI. Throws if the feature isn't configured.
-export async function interpretCommand({ userId, text, phone = null, prevText = null }) {
+// source: where the order came from — 'phone' (IVR), 'whatsapp' (bot) — for the
+// admin costs page; it never changes how the text is interpreted.
+export async function interpretCommand({ userId, text, phone = null, prevText = null, source = 'phone' }) {
   if (!env.anthropic.apiKey) {
     throw errors.validation('פירוש פקודות קוליות אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
   }
@@ -217,7 +224,7 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
   }
 
   // Cost log for the admin voice-costs table; a logging hiccup must never fail the call.
-  logUsage({ userId, phone, text: clean, model: env.anthropic.model, usage: response.usage })
+  logUsage({ userId, phone, source, text: clean, model: env.anthropic.model, usage: response.usage })
     .catch((e) => console.error('nlu_usage log failed:', e.message));
 
   // The API's refusal classifier sometimes fires on garbled speech-to-text noise;

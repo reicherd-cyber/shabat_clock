@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api } from '../api.js';
+import { api, isImpersonating } from '../api.js';
 import { Card, Button, SectionHead, ErrorNote, useAsync, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect } from '../ui.jsx';
 
 const EMPTY_CUSTOM = { fromDate: '', fromHour: '', toDate: '', toHour: '' };
 import { Lightbulb, X, PhoneCall } from 'lucide-react';
 
 // Mockup .hist rows: icon square · sentence · time at the far edge.
-const SOURCE_HE = { ivr: 'דרך הטלפון', web: 'דרך האתר', schedule: 'לפי תזמון', admin: 'על ידי מנהל', whatsapp: 'דרך וואטסאפ' };
+const SOURCE_HE = { ivr: 'דרך הטלפון', web: 'דרך האתר', schedule: 'לפי תזמון', admin: 'על ידי מנהל', whatsapp: 'דרך וואטסאפ', system: 'שחזור אחרי הפסקת חשמל' };
 const OUTCOME_HE = { command: 'פקודה', schedule: 'תזמון חדש נשמר', status: 'בירור מצב', auth_fail: 'כשל זיהוי', abandoned: 'שיחה נותקה' };
 
 function fmtTime(ts) {
@@ -38,7 +38,7 @@ function Row({ item, first, colorOf }) {
             {d.relay_id != null && <ChannelDot color={colorOf(d.relay_id)} size={9} className="me-1.5 -mb-px" />}
             <b>{d.relay_name}</b> {d.action === 'on' ? 'הודלק' : 'כובה'} {SOURCE_HE[d.source] || ''}
             {d.status === 'failed' && <span className="text-off"> — נכשל{FAIL_HE[d.fail_reason] ? ` (${FAIL_HE[d.fail_reason]})` : ''}</span>}
-            {d.status === 'acked' && VERIFY_HE[d.verify] && <span className={VERIFY_WARN.has(d.verify) ? 'text-off' : 'text-muted'}> — {VERIFY_HE[d.verify]}</span>}
+            {d.status === 'acked' && VERIFY_HE[d.verify] && (!VERIFY_WARN.has(d.verify) || isImpersonating()) && <span className={VERIFY_WARN.has(d.verify) ? 'text-off' : 'text-muted'}> — {VERIFY_HE[d.verify]}</span>}
           </>
         ) : (
           <>

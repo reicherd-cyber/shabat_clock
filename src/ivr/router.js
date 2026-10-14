@@ -624,7 +624,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         session.data.nluSpoken = spoken;
         const pending = interpretCommand({
           userId: session.userId, text: spoken, phone: session.phone,
-          prevText: session.data.nluPrev || null,
+          prevText: session.data.nluPrev || null, source: 'phone',
         }).then((r) => ({ ok: true, r }), (e) => ({ ok: false, e }));
         let ackTimer;
         const first = await Promise.race([

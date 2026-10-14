@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef } from 'react';
-import { api } from '../api.js';
+import { api, isImpersonating } from '../api.js';
 import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, Input, TimeInput, useInterval, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
 import { House, Timer, TriangleAlert } from 'lucide-react';
 
@@ -65,8 +65,12 @@ export default function Dashboard() {
         setError(new Error(FAIL_HE[res.fail_reason] || 'המכשיר לא הגיב — נסו שוב'));
       } else if (VERIFY_HE[res.verify]) {
         // What the channel meter saw after the command — not just "accepted".
+        // The warning verdicts are diagnostics for admins (impersonating);
+        // a customer whose A/C is simply in standby would read them as a fault.
         const warn = VERIFY_WARN.has(res.verify);
-        flash(relay.id, `${warn ? '⚠' : '✓'} ${VERIFY_HE[res.verify]}${res.verify === 'flow' && res.verify_ma != null ? ` (${res.verify_ma}mA)` : ''}`);
+        if (!warn || isImpersonating()) {
+          flash(relay.id, `${warn ? '⚠' : '✓'} ${VERIFY_HE[res.verify]}${res.verify === 'flow' && res.verify_ma != null ? ` (${res.verify_ma}mA)` : ''}`);
+        }
       }
       setDevices(await api.get('/devices')); // true state, not the optimistic one
     } catch (e) {

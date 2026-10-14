@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getTimes } from 'suncalc';
 import { HDate, HebrewCalendar, flags, gematriya } from '@hebcal/core';
-import { api } from '../api.js';
+import { api, isImpersonating } from '../api.js';
 import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf, Logo, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
 import { ChevronRight, ChevronLeft, ChevronDown, House, Check, Plus } from 'lucide-react';
 import { ScheduleFormModal, emptyForm, plusMinutes, rowToForm } from './ScheduleForm.jsx';
@@ -485,7 +485,9 @@ export default function Calendar() {
         setError(new Error(FAIL_HE[res.fail_reason] || 'המכשיר לא הגיב — נסו שוב'));
       } else if (VERIFY_HE[res.verify]) {
         const warn = VERIFY_WARN.has(res.verify);
-        flash(`${warn ? '⚠' : '✓'} ${relay.name}: ${VERIFY_HE[res.verify]}${res.verify === 'flow' && res.verify_ma != null ? ` (${res.verify_ma}mA)` : ''}`, warn);
+        if (!warn || isImpersonating()) { // warning verdicts are admin-only diagnostics (see Dashboard)
+          flash(`${warn ? '⚠' : '✓'} ${relay.name}: ${VERIFY_HE[res.verify]}${res.verify === 'flow' && res.verify_ma != null ? ` (${res.verify_ma}mA)` : ''}`, warn);
+        }
       }
       setReload((n) => n + 1); // refetches timeline + relays: the switch is in it, `now` moves with it
     } catch (e) {

@@ -329,6 +329,21 @@ async function autoCompleteOnce() {
   for (const id of deviceIds) pushScheduleToDevice(id).catch(() => {});
 }
 
+// True when any enabled schedule of this relay has an occurrence within
+// ±slackMin of `now` (exclusion ranges honoured). Used by the health monitor's
+// reboot safety net to tell "lost on reboot" from "switched by schedule".
+export async function scheduleDueForRelay(relayId, now = new Date(), slackMin = 3) {
+  const schedules = (await loadActiveSchedules()).filter((s) => Number(s.relay_id) === Number(relayId));
+  const winStart = new Date(now.getTime() - slackMin * 60000);
+  const winEnd = new Date(now.getTime() + slackMin * 60000);
+  for (const s of schedules) {
+    let occs;
+    try { occs = occurrencesInWindow(s, winStart, winEnd); } catch { continue; }
+    if (occs.some((occ) => !inExclusionRange(s, occ.localKey.slice(0, 10)))) return true;
+  }
+  return false;
+}
+
 // [D24] Startup: scan the last 24h once and record gaps honestly — no back-fill
 // commands; reconcile [D21] may upgrade matching rows later.
 export async function startupScan(now = new Date()) {

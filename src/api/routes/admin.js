@@ -26,6 +26,7 @@ import {
 } from '../../services/ivrAudio.js';
 import { getAdminHistory } from '../../services/history.js';
 import { getVoiceCosts, addRate, RATE_KINDS } from '../../services/voiceCosts.js';
+import { listHelpChats } from '../../services/helpChats.js';
 import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEntry, restoreFinanceEntry } from '../../services/finance.js';
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
@@ -632,11 +633,24 @@ adminRouter.put('/billing/anthropic-balance', requireWrite, async (req, res, nex
 
 // Per-voice-order cost table: Yemot STT charges (live from their API) matched to
 // Anthropic usage rows. from/to are optional UTC bounds, same as /call-logs.
+// Every question a customer asked the support bot (site help wizard or
+// WhatsApp), with the answer it gave, whether it declined, whether a ticket
+// followed, and what the call cost. Read-only.
+adminRouter.get('/help-chats', async (req, res, next) => {
+  try {
+    res.json(await listHelpChats({
+      from: req.query.from, to: req.query.to, userId: req.query.user_id,
+      source: req.query.source, answered: req.query.answered, q: req.query.q,
+    }));
+  } catch (e) { next(e); }
+});
+
 adminRouter.get('/voice-costs', async (req, res, next) => {
   try {
     res.json(await getVoiceCosts({
       from: req.query.from, to: req.query.to,
       userId: req.query.user_id, phone: req.query.phone, q: req.query.q,
+      source: req.query.source, kind: req.query.kind,
     }));
   } catch (e) { next(e); }
 });

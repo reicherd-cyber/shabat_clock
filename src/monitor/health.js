@@ -18,7 +18,9 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { isPrimary } from '../config/role.js';
 import { query } from '../db/pool.js';
 import { brokerConnected } from '../mqtt/client.js';
-import { shellyCall, shellySetRestoreLast } from '../services/shelly.js';
+import { shellyCall, shellySetBootSafe } from '../services/shelly.js';
+import { sendImmediateCommand } from '../services/commands.js';
+import { scheduleDueForRelay } from '../scheduler/tick.js';
 import { sendEmail } from '../services/email.js';
 import { describeReset, RESET_HEADLINE } from './reset-reason.js';
 import { learnOnPower, worthSaving, idleCandidates, judgeLoads, trackDeadOnsets, DEAD_RELAY_PROBES, IDLE_PROBES_TO_LEARN } from './dead-relay.js';
@@ -89,28 +91,42 @@ const onOff = (b) => (b ? 'פועל' : 'כבוי');
 // After an unexpected reboot: did every relay come back the way it was? The
 // email used to assert "restored (restore_last)" as fixed text — device-side
 // state changes are never logged, so nobody could tell. Now the outputs seen a
-// probe earlier are compared with the ones seen now, and each channel's
-// initial_state is re-checked (and re-set) so the next reboot restores too.
+// probe earlier are compared with the ones seen now, each channel's boot
+// config (restore_last + detached input) is re-checked and re-set, and — the
+// safety net added after the 2026-10-10 power cut — a channel that was ON and
+// came back OFF is switched back on by the server, unless one of its schedules
+// was due in the reboot minute (then the OFF is the schedule's, not the cut's).
+// The re-apply goes through the normal command path (source 'system'), so it
+// shows in history and is meter-verified like any other order.
 async function verifyRebootOutputs(device, before, after) {
   const relays = await query(
-    'SELECT relay_no, name FROM relays WHERE device_id = ? AND deleted_at IS NULL ORDER BY relay_no', [device.id],
+    'SELECT id, relay_no, name FROM relays WHERE device_id = ? AND deleted_at IS NULL ORDER BY relay_no', [device.id],
   ).catch(() => []);
-  const nameOf = (ch) => relays.find((r) => r.relay_no === ch + 1)?.name ?? `ערוץ ${ch + 1}`;
+  const relayAt = (ch) => relays.find((r) => r.relay_no === ch + 1);
+  const nameOf = (ch) => relayAt(ch)?.name ?? `ערוץ ${ch + 1}`;
 
   const fixedChannels = [];
   for (let ch = 0; ch < after.length; ch++) {
-    const cfg = await shellyCall(device, 'Switch.GetConfig', { id: ch }).catch(() => null);
-    if (cfg && cfg.initial_state !== 'restore_last') {
-      await shellySetRestoreLast(device, ch + 1).catch((e) => console.error('[health] restore_last set failed:', e.message));
-      fixedChannels.push(ch + 1);
-    }
+    const fixed = await shellySetBootSafe(device, ch + 1).catch((e) => { console.error('[health] boot-safe set failed:', e.message); return []; });
+    if (fixed.length) fixedChannels.push(ch + 1);
   }
 
   const changed = [];
+  const restored = [];
   const lines = [];
   for (let ch = 0; ch < after.length; ch++) {
     const b = before?.[ch], a = after[ch];
-    if (typeof b === 'boolean' && b !== a) changed.push({ channel: ch + 1, name: nameOf(ch), before: onOff(b), after: onOff(a) });
+    if (typeof b === 'boolean' && b !== a) {
+      changed.push({ channel: ch + 1, name: nameOf(ch), before: onOff(b), after: onOff(a) });
+      const relay = relayAt(ch);
+      if (b && !a && relay && active()) {
+        const due = await scheduleDueForRelay(relay.id).catch(() => true); // unsure → don't touch
+        if (!due) {
+          const r = await sendImmediateCommand({ relayId: relay.id, action: 'on', source: 'system' }).catch((e) => ({ status: 'failed', fail_reason: e.message }));
+          restored.push({ channel: ch + 1, name: relay.name, ok: r.status === 'acked', verify: r.verify ?? null });
+        }
+      }
+    }
     lines.push(`• ${nameOf(ch)}: ${onOff(a)}${typeof b === 'boolean' ? (b === a ? ' (כמו לפני האתחול)' : ` (לפני האתחול: ${onOff(b)})`) : ''}`);
   }
 
@@ -124,10 +140,13 @@ async function verifyRebootOutputs(device, before, after) {
   } else {
     text = `כל הממסרים חזרו למצבם שלפני האתחול:\n${lines.join('\n')}`;
   }
-  if (fixedChannels.length) {
-    text += `\n\nהגדרת restore_last הייתה חסרה בערוצים ${fixedChannels.join(', ')} והוחזרה כעת.`;
+  if (restored.length) {
+    text += `\n\nהשרת הדליק מחדש את הערוצים שכבו באתחול (לא היה תזמון באותה דקה): ${restored.map((r) => `${r.name} — ${r.ok ? 'הודלק' : 'נכשל'}`).join('; ')}.`;
   }
-  return { changed, fixedChannels, text };
+  if (fixedChannels.length) {
+    text += `\n\nהגדרות האתחול (restore_last / ניתוק הכניסה) היו חסרות בערוצים ${fixedChannels.join(', ')} והוחזרו כעת.`;
+  }
+  return { changed, restored, fixedChannels, text };
 }
 
 // Is the relay REALLY switched? (dead-relay.js has the why and the rules.)
@@ -318,6 +337,19 @@ async function checkShelly(device) {
   const wasOffline = !device.is_online;
   st.failures = 0;
   health.reachable = true;
+  // Once per unit per server lifetime: make every channel boot-safe. Units
+  // that were offline when the fleet was fixed get it on their first probe.
+  if (!st.bootSafeChecked && active()) {
+    st.bootSafeChecked = true;
+    (async () => {
+      const fixed = [];
+      for (let ch = 0; ch < (device.relay_count || 2); ch++) {
+        const keys = await shellySetBootSafe(device, ch + 1).catch(() => []);
+        if (keys.length) fixed.push({ channel: ch + 1, set: keys });
+      }
+      if (fixed.length) await deviceEvent(device.id, 'config', { kind: 'boot_safe_fixed', channels: fixed });
+    })().catch((e) => console.error('[health] boot-safe audit:', e.message));
+  }
   health.uptime_s = sys.uptime;
   health.ram_free = sys.ram_free;
   health.fw_update = sys.available_updates?.stable?.version ?? null;
@@ -358,7 +390,7 @@ async function checkShelly(device) {
         reset_reason: sys.reset_reason ?? null, reset_category: reset.cat,
         fw_update: health.fw_update,
         outputs_before: st.lastOutputs, outputs_after: outputs,
-        changed: verdict.changed, restore_last_fixed: verdict.fixedChannels,
+        changed: verdict.changed, restored: verdict.restored, restore_last_fixed: verdict.fixedChannels,
       });
       if (verdict.changed.length) {
         recordIncident('reboot_changed_outputs', device.name, verdict.changed.map((c) => `${c.name}: ${c.before}→${c.after}`).join(', '));
