@@ -716,7 +716,7 @@ export default function Audit() {
       </div>
 
       {/* filters — one row, wraps on phones */}
-      <Card className="flex flex-wrap items-center gap-2 !py-3">
+      <Card className="flex flex-wrap items-center gap-2 !py-3 !overflow-visible">
         <RangeFilter value={period} onChange={setPeriod} keys={RANGE_LOG} className="w-auto"
           custom={{ fromDate, toDate }} onCustom={(p) => { if ('fromDate' in p) setFromDate(p.fromDate); if ('toDate' in p) setToDate(p.toDate); }} />
         <FilterSelect className="text-sm !py-2" value={actorType} onChange={(e) => { setActorType(e.target.value); setActor(''); }} aria-label="סוג גורם">
