@@ -276,6 +276,9 @@ function Details({ r, changes }) {
   const hasChange = changes.some((c) => c.kind === 'change');
   return (
     <div className="mt-2 rounded-[10px] border border-line bg-surface2/60 p-3 text-sm" onClick={(e) => e.stopPropagation()}>
+      {r.action === 'update' && r.diff?.plan_id && changes.some((c) => c.kind === 'list' && c.fresh) && (
+        <p className="text-xs text-muted mb-2">עדכון תוכנית — ברשומה זו לא נשמר המצב שלפני השינוי, לכן מוצג התוכן המלא של התוכנית אחרי השמירה (רשומות מ־14.10.2026 ואילך מציגות מה השתנה).</p>
+      )}
       {changes.length > 0 ? (
         <table className="w-full text-sm">
           <thead>
@@ -291,11 +294,15 @@ function Details({ r, changes }) {
                 <td className="py-1 pe-3 text-muted whitespace-nowrap">{c.label}</td>
                 <td className="py-1 break-words" colSpan={hasChange ? 2 : 1}>
                   {!c.added.length && !c.removed.length && !c.kept.length && <span className="text-muted">—</span>}
-                  <ul className="space-y-0.5">
-                    {c.removed.map((l, i) => <li key={`r${i}`} className="text-off"><span className="font-mono me-1" dir="ltr">−</span><span className="line-through">{l}</span></li>)}
-                    {c.added.map((l, i) => <li key={`a${i}`} className="text-on font-medium"><span className="font-mono me-1" dir="ltr">+</span>{l}</li>)}
-                    {c.kept.map((l, i) => <li key={`k${i}`} className="text-muted"><span className="font-mono me-1 opacity-0" dir="ltr">=</span>{l}</li>)}
-                  </ul>
+                  {c.fresh ? (
+                    <ul className="space-y-0.5">{c.added.map((l, i) => <li key={`f${i}`}>{l}</li>)}</ul>
+                  ) : (
+                    <ul className="space-y-0.5">
+                      {c.removed.map((l, i) => <li key={`r${i}`} className="text-off"><span className="font-mono me-1" dir="ltr">−</span><span className="line-through">{l}</span></li>)}
+                      {c.added.map((l, i) => <li key={`a${i}`} className="text-on font-medium"><span className="font-mono me-1" dir="ltr">+</span>{l}</li>)}
+                      {c.kept.map((l, i) => <li key={`k${i}`} className="text-muted"><span className="font-mono me-1 opacity-0" dir="ltr">=</span>{l}</li>)}
+                    </ul>
+                  )}
                 </td>
               </tr>
             ) : (
