@@ -1016,7 +1016,8 @@ adminRouter.get('/audit-log', async (req, res, next) => {
       `SELECT a.id, a.actor_type, a.actor_id, a.action, a.entity, a.entity_id, a.diff, a.created_at,
               ${AUDIT_ACTOR_NAME} AS actor_name,
               ${AUDIT_ENTITY_NAME} AS entity_name,
-              ${AUDIT_ENTITY_CTX} AS entity_ctx
+              ${AUDIT_ENTITY_CTX} AS entity_ctx,
+              s.plan_id AS sched_plan_id, s.name AS sched_plan_name
        ${AUDIT_FROM} ${where} ORDER BY a.id DESC LIMIT ${limit + 1}`,
       params,
     );

@@ -130,7 +130,8 @@ function fmtValue(key, v) {
 function planChanges(diff, action) {
   const out = [];
   if (action === 'plan_toggle') {
-    out.push({ key: 'is_enabled', label: 'פעיל', before: diff.before?.is_enabled, after: diff.after?.is_enabled, kind: 'change' });
+    const hasBefore = diff.before && diff.before.is_enabled !== undefined;
+    out.push({ key: 'is_enabled', label: 'פעיל', before: diff.before?.is_enabled, after: diff.after?.is_enabled, kind: hasBefore ? 'change' : 'set' });
     if (diff.members != null) out.push({ key: 'members', label: FIELDS.members, after: diff.members, kind: 'info' });
     return out;
   }
@@ -320,7 +321,7 @@ function Details({ r, changes }) {
         <p className="text-muted">לא נשמרו פרטים נוספים לפעולה זו.</p>
       )}
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-        <span>מזהה רשומה: {r.id}</span>
+        <span>{r._ids ? `${r._ids.length} רשומות (${r._ids[r._ids.length - 1]}–${r._ids[0]})` : `מזהה רשומה: ${r.id}`}</span>
         {r.entity_id && <span>{ENTITIES[r.entity]?.label || r.entity} #{r.entity_id}</span>}
         {r.actor_id && <span>{ACTORS[r.actor_type]?.label || r.actor_type} #{r.actor_id}</span>}
         <span dir="ltr">{r.action} · {r.entity}</span>
@@ -330,6 +331,42 @@ function Details({ r, changes }) {
       {raw && <pre dir="ltr" className="mt-2 text-xs bg-surface border border-line rounded-md p-2 overflow-x-auto">{JSON.stringify(r.diff, null, 2)}</pre>}
     </div>
   );
+}
+
+// Before 2026-10-14 a plan enable/disable was logged as one row per member
+// schedule. Consecutive rows by the same actor on the same plan, same
+// direction, within two minutes, fold into one synthetic plan_toggle entry so
+// old and new history read alike. Rows arrive newest-first; folding works on
+// any consecutive run.
+const isLegacyToggleRow = (r) => r.entity === 'schedule' && r.action === 'update' && !r.diff?.plan_id && r.sched_plan_id
+  && r.diff?.after && r.diff.after.is_enabled !== undefined
+  && Object.keys(r.diff.after).every((k) => ['is_enabled', 'via', 'plan_key'].includes(k));
+function foldPlanToggles(rows) {
+  const out = [];
+  for (const r of rows) {
+    const last = out[out.length - 1];
+    if (isLegacyToggleRow(r)) {
+      const on = Boolean(r.diff.after.is_enabled);
+      if (last && last._ids && last.sched_plan_id === r.sched_plan_id && last.actor_type === r.actor_type && last.actor_id === r.actor_id
+        && last.diff.after.is_enabled === on && Math.abs(new Date(last.created_at) - new Date(r.created_at)) < 120000) {
+        last.diff.members += 1;
+        last._ids.push(r.id);
+        if (r.diff.before?.is_enabled !== undefined) last.diff.before = { is_enabled: last.diff.before?.is_enabled || Boolean(r.diff.before.is_enabled) };
+        continue;
+      }
+      out.push({
+        ...r, action: 'plan_toggle', _ids: [r.id],
+        diff: {
+          plan_id: r.sched_plan_id, name: r.sched_plan_name, members: 1,
+          ...(r.diff.before?.is_enabled !== undefined ? { before: { is_enabled: Boolean(r.diff.before.is_enabled) } } : {}),
+          after: { is_enabled: on }, ...(r.diff.after.via ? { via: r.diff.after.via } : {}),
+        },
+      });
+      continue;
+    }
+    out.push(r);
+  }
+  return out;
 }
 
 // Plan entries read as a plan, not as "תזמון לערוץ X": the headline names the
@@ -660,7 +697,7 @@ export default function Audit() {
   // Group the loaded rows by local day.
   const groups = useMemo(() => {
     const out = [];
-    for (const r of data?.rows || []) {
+    for (const r of foldPlanToggles(data?.rows || [])) {
       const key = ymdLocal(new Date(r.created_at));
       if (!out.length || out[out.length - 1].key !== key) out.push({ key, rows: [] });
       out[out.length - 1].rows.push(r);
