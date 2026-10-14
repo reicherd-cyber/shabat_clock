@@ -21,6 +21,7 @@ import { getText, getSetting } from '../services/settings.js';
 import { getSession, saveSession, resetSession } from './session.js';
 import { sendText, sendButtons, markRead } from './client.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion } from './parse.js';
+import { smallTalkAnswer } from '../services/supportRules.js';
 
 const BTN_YES = 'confirm_yes';
 const BTN_NO = 'confirm_no';
@@ -69,7 +70,7 @@ async function supportReply({ phone, user, text }) {
   const userId = user?.id ?? null;
   let r;
   try {
-    r = await answerSupportQuestion({ userId, text, source: 'whatsapp' });
+    r = await answerSupportQuestion({ userId, text, source: 'whatsapp', phone });
   } catch (e) {
     console.error('[whatsapp] support answer failed:', e.message);
     r = { can_answer: false, answer: null };
@@ -175,6 +176,15 @@ export async function handleInbound(msg) {
       await resetSession(phone, user.id);
     }
 
+    // A confirm button (or a typed כן/לא) with nothing pending: the order expired
+    // (10-min TTL), the server restarted, or it's a second tap. Say so — never
+    // feed "אישור ✅" to the interpreter and the support bot (two paid calls and
+    // a bogus ticket).
+    if (user && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || (msg.text != null && confirmWord(msg.text)))) {
+      await sendText({ phone, userId, text: await getText('whatsapp.confirm_expired') });
+      return;
+    }
+
     if (msg.text == null) {
       // Media / location / sticker — we only read text.
       await sendText({ phone, userId, text: 'קיבלתי, אבל אני יודע לקרוא רק הודעות טקסט. כתבו לי במילים מה תרצו לעשות.' });
@@ -201,7 +211,10 @@ export async function handleInbound(msg) {
       await sendText({ phone, userId, text: await statusText(user.id), kind: 'status' });
       return;
     }
-    if (looksLikeQuestion(text)) {
+    // "תודה" / "בסדר" from a registered user is small talk, not an order — the
+    // rule answer costs nothing; the interpreter would have billed a model call
+    // only to fail and hand it to support.
+    if (looksLikeQuestion(text) || smallTalkAnswer(text)) {
       await supportReply({ phone, user, text });
       return;
     }

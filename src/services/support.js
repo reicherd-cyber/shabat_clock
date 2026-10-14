@@ -34,10 +34,10 @@ const SCHEMA = {
 // Rows land in nlu_usage (the admin costs page and the bot-chats tab) tagged
 // kind='support' + source (web/whatsapp). model is the Claude model, or
 // 'rules' / 'cache' for the two no-model shortcuts (cost 0).
-async function logUsage({ userId, source, text, answer, answered, model, usage, cost }) {
+async function logUsage({ userId, phone, source, text, answer, answered, model, usage, cost }) {
   await query(
-    "INSERT INTO nlu_usage (user_id, phone, source, kind, text, answer, answered, model, input_tokens, output_tokens, cost_usd) VALUES (?,NULL,?,'support',?,?,?,?,?,?,?)",
-    [userId ?? null, source ?? null, text, answer ?? null, answered == null ? null : (answered ? 1 : 0), model,
+    "INSERT INTO nlu_usage (user_id, phone, source, kind, text, answer, answered, model, input_tokens, output_tokens, cost_usd) VALUES (?,?,?,'support',?,?,?,?,?,?,?)",
+    [userId ?? null, phone ?? null, source ?? null, text, answer ?? null, answered == null ? null : (answered ? 1 : 0), model,
       usage ? totalInputTokens(usage) : 0, usage?.output_tokens ?? 0, cost ?? 0],
   );
 }
@@ -86,13 +86,15 @@ async function reusableAnswer(clean) {
 
 // Returns { can_answer, answer }. Missing API key degrades to can_answer=false —
 // the UI then goes straight to "send us a message" instead of erroring.
-// source: 'web' (site help wizard) or 'whatsapp' (bot) — labels the usage row only.
-export async function answerSupportQuestion({ userId, text, source = 'web' }) {
+// source: 'web' (site help wizard) or 'whatsapp' (bot) — labels the usage row;
+// phone: the WhatsApp sender (unknown numbers have no userId — the admin
+// bot-chats tab links their ticket by phone).
+export async function answerSupportQuestion({ userId, text, source = 'web', phone = null }) {
   const clean = String(text || '').trim();
   if (!clean) throw errors.validation('לא הוזן טקסט');
   if (clean.length > 1000) throw errors.validation('השאלה ארוכה מדי (עד 1000 תווים)');
 
-  const log = (fields) => logUsage({ userId, source, text: clean, ...fields })
+  const log = (fields) => logUsage({ userId, phone, source, text: clean, ...fields })
     .catch((e) => console.error('nlu_usage log failed:', e.message));
 
   // 1. Small talk — a fixed line, no model.

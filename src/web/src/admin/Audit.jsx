@@ -476,13 +476,13 @@ function ActivityChart({ byDay, range }) {
     const weekly = span > 70;
     const map = new Map();
     for (const r of byDay) {
-      const k = map.get(r.d) || { admin: 0, user: 0, ivr: 0, system: 0 };
+      const k = map.get(r.d) || Object.fromEntries(ACTOR_ORDER.map((a) => [a, 0]));
       k[r.actor_type] = (k[r.actor_type] || 0) + r.n;
       map.set(r.d, k);
     }
     while (ymdLocal(cur) <= last && list.length < 400) {
       const key = ymdLocal(cur);
-      const row = map.get(key) || { admin: 0, user: 0, ivr: 0, system: 0 };
+      const row = map.get(key) || Object.fromEntries(ACTOR_ORDER.map((a) => [a, 0]));
       if (weekly && list.length && cur.getDay() !== 0) {
         const tgt = list[list.length - 1];
         for (const k of ACTOR_ORDER) tgt[k] += row[k];

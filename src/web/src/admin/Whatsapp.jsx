@@ -9,6 +9,9 @@ import { MessageCircle, ArrowRight, AlertTriangle, Bot, User as UserIcon } from 
 import { adminApi } from '../api.js';
 import { Card, Button, Input, SearchSelect, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect, Stat, ymdLocal, niceCeil } from '../ui.jsx';
 
+// Israeli local form → 972…; a foreign sender already carries its country code.
+const waDigits = (p) => { const d = String(p || '').replace(/\D/g, ''); return d.startsWith('0') ? `972${d.slice(1)}` : d; };
+
 const KIND_HE = {
   text: 'טקסט', button: 'לחיצה על כפתור', confirm: 'בקשת אישור', result: 'תוצאת ביצוע', status: 'מצב ערוצים',
   support: 'תשובת תמיכה', handoff: 'הועבר לנציג', admin_reply: 'תשובת מנהל', error: 'שגיאה', image: 'תמונה', audio: 'הקלטה', document: 'קובץ', sticker: 'סטיקר', location: 'מיקום',
@@ -34,6 +37,8 @@ export function WhatsappAdmin() {
     for (const k of ['user_id', 'direction', 'status', 'q']) if (f[k]) q.set(k, f[k]);
     if (stamps.from) q.set('from', stamps.from);
     if (stamps.to) q.set('to', stamps.to);
+    q.set('tz_offset', String(-new Date().getTimezoneOffset()));
+    try { q.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || ''); } catch { /* offset fallback */ }
     setData(await adminApi.get(`/whatsapp?${q}`));
   });
   useEffect(() => {
@@ -128,7 +133,7 @@ export function WhatsappAdmin() {
                 <button type="button" className="md:hidden text-accent flex items-center gap-1 text-sm" onClick={() => setOpen(null)}><ArrowRight size={16} />חזרה</button>
                 <span className="font-medium">{current.user_name || 'לא רשום'}</span>
                 {current.user_id && <Link className="text-xs text-accent hover:underline" to={`/admin/users?q=${encodeURIComponent(current.user_name || '')}`}>#{current.user_id}</Link>}
-                <a dir="ltr" className="text-xs text-accent hover:underline" target="_blank" rel="noreferrer" href={`https://wa.me/972${current.phone.replace(/^0/, '')}`}>{current.phone}</a>
+                <a dir="ltr" className="text-xs text-accent hover:underline" target="_blank" rel="noreferrer" href={`https://wa.me/${waDigits(current.phone)}`}>{current.phone}</a>
               </div>
               <div className="p-3 space-y-2">
                 {[...current.messages].reverse().map((m) => {

@@ -36,7 +36,8 @@ export async function listHelpChats({ from, to, userId, source, answered, q } = 
     `SELECT n.id, n.user_id, u.full_name AS user_name, n.source, n.text AS question, n.answer, n.answered,
             n.model, n.input_tokens, n.output_tokens, n.cost_usd, n.created_at,
             (SELECT s.id FROM support_messages s
-              WHERE s.user_id = n.user_id AND s.deleted_at IS NULL
+              WHERE ((n.user_id IS NOT NULL AND s.user_id = n.user_id) OR (n.user_id IS NULL AND n.phone IS NOT NULL AND s.phone = n.phone))
+                AND s.deleted_at IS NULL
                 AND s.created_at >= n.created_at AND s.created_at <= DATE_ADD(n.created_at, INTERVAL 15 MINUTE)
               ORDER BY s.id LIMIT 1) AS ticket_id
        FROM nlu_usage n LEFT JOIN users u ON u.id = n.user_id
