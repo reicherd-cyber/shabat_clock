@@ -3,7 +3,11 @@
 // line-level diff between two bodies. Used by the admin action log so a plan
 // save reads "תזמונים: +ימי א–ה · 16:00 · הדלקה, −…" instead of raw JSON.
 import { DAY_NAMES } from './ui.jsx';
-import { anchorText, fmtDate, holidaySummary, HEB_DAYS, hebMonthLabel } from './user/ScheduleForm.jsx';
+import { anchorText, holidaySummary, HEB_DAYS, hebMonthLabel } from './user/ScheduleForm.jsx';
+
+// Dates keep their year here: the diff must tell 14.10.2026 from 14.10.2027
+// (PlanEditor's fmtDate drops the year for the compact in-editor view).
+const fmtDate = (d) => (d ? `${Number(String(d).slice(8, 10))}.${Number(String(d).slice(5, 7))}.${String(d).slice(0, 4)}` : '');
 
 const hebText = (d, m) => `${HEB_DAYS[(Number(d) || 1) - 1]} ${hebMonthLabel(m)}`;
 

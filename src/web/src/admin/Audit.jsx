@@ -102,7 +102,7 @@ const VALUES = {
   not_interested: 'לא מתעניין', customer: 'לקוח', delivered: 'נמסר', cancelled: 'בוטל', phone: 'טלפון', web: 'אתר',
   superadmin: 'מנהל־על', support: 'תמיכה', admin: 'מנהל', acked: 'בוצע', sent: 'נשלח', pending: 'ממתין', failed: 'נכשל',
 };
-const SOURCE_HE = { nlu: 'פקודה קולית', ivr_menu: 'תפריט טלפוני', google: 'Google' };
+const SOURCE_HE = { nlu: 'פקודה קולית', ivr_menu: 'תפריט טלפוני', google: 'Google', whatsapp: 'וואטסאפ' };
 const HIDDEN_FIELDS = new Set(['via', 'confirmed_registered', 'installer_jti']);
 
 function fmtValue(key, v) {
@@ -130,7 +130,8 @@ function fmtValue(key, v) {
 function planChanges(diff, action) {
   const out = [];
   if (action === 'plan_toggle') {
-    const hasBefore = diff.before && diff.before.is_enabled !== undefined;
+    // "enable" on an already-enabled plan is allowed (NLU) — show the state, not a fake change.
+    const hasBefore = diff.before && diff.before.is_enabled !== undefined && diff.before.is_enabled !== diff.after?.is_enabled;
     out.push({ key: 'is_enabled', label: 'פעיל', before: diff.before?.is_enabled, after: diff.after?.is_enabled, kind: hasBefore ? 'change' : 'set' });
     if (diff.members != null) out.push({ key: 'members', label: FIELDS.members, after: diff.members, kind: 'info' });
     return out;
@@ -278,7 +279,7 @@ function Details({ r, changes }) {
   return (
     <div className="mt-2 rounded-[10px] border border-line bg-surface2/60 p-3 text-sm" onClick={(e) => e.stopPropagation()}>
       {r.action === 'update' && r.diff?.plan_id && changes.some((c) => c.kind === 'list' && c.fresh) && (
-        <p className="text-xs text-muted mb-2">עדכון תוכנית — ברשומה זו לא נשמר המצב שלפני השינוי, לכן מוצג התוכן המלא של התוכנית אחרי השמירה (רשומות מ־14.10.2026 ואילך מציגות מה השתנה).</p>
+        <p className="text-xs text-muted mb-2">עדכון תוכנית — ברשומה זו לא נשמר המצב שלפני השינוי, לכן מוצג התוכן המלא של התוכנית אחרי השמירה. רשומות חדשות יותר מציגות מה השתנה.</p>
       )}
       {changes.length > 0 ? (
         <table className="w-full text-sm">
@@ -584,7 +585,7 @@ export default function Audit() {
   useEffect(() => { adminApi.get('/audit-log/facets').then(setFacets).catch(setError); }, []);
   const [relayTick, setRelayTick] = useState(0);
   useEffect(() => {
-    adminApi.get('/relays').then((rows) => { RELAY_NAMES = new Map(rows.map((x) => [Number(x.id), x.name])); setRelayTick((n) => n + 1); }).catch(() => {});
+    adminApi.get('/relays?all=1').then((rows) => { RELAY_NAMES = new Map(rows.map((x) => [Number(x.id), x.removed ? `${x.name} (הוסר)` : x.name])); setRelayTick((n) => n + 1); }).catch(() => {});
   }, []);
 
   const range = useMemo(() => rangeStamps(period, { fromDate, toDate }), [period, fromDate, toDate]);

@@ -10,7 +10,7 @@ import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { ensureDemoState } from '../../services/demo.js';
 import { patchDevice } from '../../services/devices.js';
 import { sendImmediateCommand } from '../../services/commands.js';
-import { createSchedule, updateSchedule, deleteSchedule, listSchedules, savePlan, previewScheduler, setPlanEnabled, lastLoggedPlanBody } from '../../services/schedules.js';
+import { createSchedule, updateSchedule, deleteSchedule, listSchedules, savePlan, previewScheduler, setPlanEnabled, lastLoggedPlanBody, deletePlan, planMemberIds } from '../../services/schedules.js';
 import { getHistory } from '../../services/history.js';
 import { logAction, actorStr } from '../../services/audit.js';
 import { REGIONS } from '../../services/zmanim.js';
@@ -379,7 +379,7 @@ userRouter.post('/plans', async (req, res, next) => {
 userRouter.put('/plans/:planId', async (req, res, next) => {
   try {
     const planId = String(req.params.planId);
-    const before = await lastLoggedPlanBody(planId); // what the log showed last time → "לפני"
+    const before = await lastLoggedPlanBody(planId, await planMemberIds(req.auth.userId, planId)); // the log's last body → "לפני"
     const r = await savePlan(planArgs(req, planId));
     await act(req, 'update', 'schedule', r.ids[0] ?? null, { plan_id: r.plan_id, before, after: req.body });
     res.json(r);
@@ -402,15 +402,10 @@ userRouter.patch('/plans/:planId', async (req, res, next) => {
 userRouter.delete('/plans/:planId', async (req, res, next) => {
   try {
     const planId = String(req.params.planId);
-    const members = await query(
-      'SELECT id, name FROM schedules WHERE plan_id = ? AND user_id = ? AND deleted_at IS NULL ORDER BY id',
-      [planId, req.auth.userId],
-    );
-    if (!members.length) throw errors.notFound('NOT_FOUND', 'Plan not found');
-    const before = await lastLoggedPlanBody(planId);
-    for (const m of members) await deleteSchedule({ userId: req.auth.userId, scheduleId: m.id, actor: actorStr(actorOf(req)) });
-    await act(req, 'plan_delete', 'schedule', members[0].id, { plan_id: planId, name: members[0].name, members: members.length, before });
-    res.json({ ok: true, members: members.length });
+    const before = await lastLoggedPlanBody(planId, await planMemberIds(req.auth.userId, planId));
+    const r = await deletePlan({ userId: req.auth.userId, planId, actor: actorStr(actorOf(req)) });
+    await act(req, 'plan_delete', 'schedule', r.first_id, { plan_id: planId, name: r.name, members: r.members, before });
+    res.json({ ok: true, members: r.members });
   } catch (e) { next(e); }
 });
 

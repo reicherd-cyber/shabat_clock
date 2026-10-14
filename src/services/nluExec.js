@@ -53,14 +53,16 @@ export async function runNluActions({ userId, actions, tz, source, callId = null
       // Stop/start a תוכנית = flip is_enabled on each member row — the same
       // per-row PATCH the web plan toggle issues (nothing deleted, restorable).
       const is_enabled = a.action === 'on';
-      // Whole plan in one go when it has a plan_id (the 'p…' keys); the legacy
-      // single-row plans ('s<id>') keep the per-row path.
-      if (String(a.plan_key).startsWith('p')) {
+      // Whole plan in one go for every real plan_id (user plans 'p…', demo
+      // plans 'demo…'); only the loose single-row entries ('s<id>', nlu.js
+      // planEntries) keep the per-row path.
+      const via = source === 'whatsapp' ? 'whatsapp' : 'nlu';
+      if (!/^s\d+$/.test(String(a.plan_key))) {
         const r = await setPlanEnabled({ userId, planId: String(a.plan_key), isEnabled: is_enabled, actor: actorStamp });
-        await logAction(actor, 'plan_toggle', 'schedule', r.first_id, { plan_id: r.plan_id, name: r.name, members: r.members, before: r.before, after: r.after, via: source === 'whatsapp' ? 'whatsapp' : 'nlu' });
+        await logAction(actor, 'plan_toggle', 'schedule', r.first_id, { plan_id: r.plan_id, name: r.name, members: r.members, before: r.before, after: r.after, via });
       } else for (const id of a.schedule_ids) {
         const changed = await updateSchedule({ userId, scheduleId: id, patch: { is_enabled }, actor: actorStamp });
-        await logAction(actor, 'update', 'schedule', id, { before: changed.before, after: { ...changed.after, plan_key: a.plan_key, via: 'nlu' } });
+        await logAction(actor, 'update', 'schedule', id, { before: changed.before, after: { ...changed.after, plan_key: a.plan_key, via } });
       }
     } else {
       const date = ymdForDay(a.day, tz);

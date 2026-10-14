@@ -255,12 +255,15 @@ adminRouter.get('/devices', async (req, res, next) => {
 
 // Every live channel across the fleet — feeds the channel filter on pages that
 // list per-relay data (history). Light row: no state, no schedules.
+// ?all=1 → every relay that ever existed (removed devices, soft-deleted
+// relays too) — the action log resolves channel ids in historic plan bodies.
 adminRouter.get('/relays', async (req, res, next) => {
   try {
+    const all = req.query.all === '1';
     res.json(await query(
-      `SELECT r.id, r.device_id, r.user_id, r.relay_no, r.name, r.is_enabled
+      `SELECT r.id, r.device_id, r.user_id, r.relay_no, r.name, r.is_enabled, (r.deleted_at IS NOT NULL) AS removed
        FROM relays r JOIN devices d ON d.id = r.device_id
-       WHERE r.deleted_at IS NULL AND d.is_enabled = TRUE ORDER BY r.device_id, r.relay_no`,
+       ${all ? '' : 'WHERE r.deleted_at IS NULL AND d.is_enabled = TRUE'} ORDER BY r.device_id, r.relay_no`,
     ));
   } catch (e) { next(e); }
 });
