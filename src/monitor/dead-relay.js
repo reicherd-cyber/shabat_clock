@@ -31,6 +31,12 @@ export const DEAD_A = 0.005;       // current below this while ON: nothing flows
 export const DEAD_W = 0.5;         // fallback for a model that meters power but not current
 export const DEAD_RELAY_PROBES = 10; // consecutive minutes before it's an incident
 export const MIN_WATCHED = 2;      // fewer loaded channels ON than this → no verdict possible
+// An automatic reboot needs more than the verdict: two lamps flipped off at
+// their wall switches on the way out of the building satisfy MIN_WATCHED and
+// the 90 s window — a nightly reboot would follow. Three loaded channels dying
+// in the same instant is a rail, not a habit. Below that the incident is
+// still raised and emailed; the reboot is left to a human.
+export const REBOOT_MIN_WATCHED = 3;
 export const IDLE_PROBES_TO_LEARN = 30; // cumulative idle-with-live-sibling probes before "thermostat"
 
 // Learned typical ON power: jumps up instantly, drifts down 5%/probe toward

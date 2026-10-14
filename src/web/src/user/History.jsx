@@ -6,7 +6,7 @@ const EMPTY_CUSTOM = { fromDate: '', fromHour: '', toDate: '', toHour: '' };
 import { Lightbulb, X, PhoneCall } from 'lucide-react';
 
 // Mockup .hist rows: icon square · sentence · time at the far edge.
-const SOURCE_HE = { ivr: 'דרך הטלפון', web: 'דרך האתר', schedule: 'לפי תזמון', admin: 'על ידי מנהל', whatsapp: 'דרך וואטסאפ', system: 'שחזור אחרי הפסקת חשמל' };
+const SOURCE_HE = { ivr: 'דרך הטלפון', web: 'דרך האתר', schedule: 'לפי תזמון', admin: 'על ידי מנהל', whatsapp: 'דרך וואטסאפ', system: 'שחזור אוטומטי אחרי ניתוק' };
 const OUTCOME_HE = { command: 'פקודה', schedule: 'תזמון חדש נשמר', status: 'בירור מצב', auth_fail: 'כשל זיהוי', abandoned: 'שיחה נותקה' };
 
 function fmtTime(ts) {
