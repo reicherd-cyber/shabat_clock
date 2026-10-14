@@ -72,11 +72,22 @@ export function bootSafeConfigFor(cfg, inputOn) {
 // Reads the channel's config + input and applies only what's missing. Returns
 // the keys it changed ([] = already boot-safe, or input in use). Best-effort
 // readers: a failed GetConfig/Input read falls back to setting restore_last only.
+// Channels whose SW input must stay wired (a real wall switch that may read
+// OFF at probe time): setting shelly.keep_input_channels = "deviceId:relayNo,…".
+// The admin edits it in הגדרות; device 5 is seeded (both its inputs read ON).
+async function keepInputFor(device, relayNo) {
+  if (device?.id == null) return false; // registration path: no id yet, input rule decides
+  const { getSetting } = await import('./settings.js');
+  const raw = String(await getSetting('shelly.keep_input_channels', '').catch(() => ''));
+  return raw.split(/[,\s]+/).includes(`${device.id}:${relayNo}`);
+}
+
 export async function shellySetBootSafe(device, relayNo) {
   const id = channelFor(relayNo);
   const cfg = await shellyCall(device, 'Switch.GetConfig', { id }).catch(() => null);
   const input = await shellyCall(device, 'Input.GetStatus', { id }).catch(() => null);
-  const want = bootSafeConfigFor(cfg, input?.state === true || input == null);
+  const keep = await keepInputFor(device, relayNo);
+  const want = bootSafeConfigFor(cfg, keep || input?.state === true || input == null);
   if (!cfg) want.initial_state = 'restore_last';
   if (!Object.keys(want).length) return [];
   await shellyCall(device, 'Switch.SetConfig', { id, config: want });

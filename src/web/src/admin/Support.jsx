@@ -25,6 +25,8 @@ const fmtTs = (ts) => new Date(ts).toLocaleString('he-IL', { dateStyle: 'short',
 // פנייה טלפונית אין לה משתמש — מציגים את המספר (או "מספר חסוי") במקום שם.
 const isPhone = (m) => m?.source === 'phone';
 const isWa = (m) => m?.source === 'whatsapp';
+// Israeli local form → 972…; a foreign sender already carries its country code.
+const waDigits = (p) => { const d = String(p || '').replace(/\D/g, ''); return d.startsWith('0') ? `972${d.slice(1)}` : d; };
 const nameOf = (m) => (isPhone(m) || (isWa(m) && !m.user_name) ? (m.phone || 'מספר חסוי') : (m?.user_name || '—'));
 
 // נגן להודעה קולית: הקובץ נשלף דרך השרת עם כותרת ההרשאה (לא <audio src> ישיר),
@@ -250,7 +252,7 @@ export function SupportInbox() {
               )}
               {open.topic && <span>נושא: {TOPIC_LABELS[open.topic] || open.topic}</span>}
               {isPhone(open) && <span>הודעה קולית מתפריט המכירות</span>}
-              {isWa(open) && <span className="flex items-center gap-1"><MessageCircle size={13} className="text-[#25d366]" />פנייה מוואטסאפ{open.phone ? <> · <a dir="ltr" className="text-accent hover:underline" href={`https://wa.me/972${String(open.phone).replace(/^0/, '')}`} target="_blank" rel="noreferrer">{open.phone}</a></> : null}</span>}
+              {isWa(open) && <span className="flex items-center gap-1"><MessageCircle size={13} className="text-[#25d366]" />פנייה מוואטסאפ{open.phone ? <> · <a dir="ltr" className="text-accent hover:underline" href={`https://wa.me/${waDigits(open.phone)}`} target="_blank" rel="noreferrer">{open.phone}</a></> : null}</span>}
             </div>
 
             {/* הודעה קולית — הנגן מעל השיחה */}

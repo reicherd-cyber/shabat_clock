@@ -10,7 +10,7 @@ import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { ensureDemoState } from '../../services/demo.js';
 import { patchDevice } from '../../services/devices.js';
 import { sendImmediateCommand } from '../../services/commands.js';
-import { createSchedule, updateSchedule, deleteSchedule, listSchedules, savePlan, previewScheduler } from '../../services/schedules.js';
+import { createSchedule, updateSchedule, deleteSchedule, listSchedules, savePlan, previewScheduler, setPlanEnabled, lastLoggedPlanBody, deletePlan, planMemberIds } from '../../services/schedules.js';
 import { getHistory } from '../../services/history.js';
 import { logAction, actorStr } from '../../services/audit.js';
 import { REGIONS } from '../../services/zmanim.js';
@@ -378,16 +378,41 @@ userRouter.post('/plans', async (req, res, next) => {
 });
 userRouter.put('/plans/:planId', async (req, res, next) => {
   try {
-    const r = await savePlan(planArgs(req, String(req.params.planId)));
-    await act(req, 'update', 'schedule', r.ids[0] ?? null, { plan_id: r.plan_id, after: req.body });
+    const planId = String(req.params.planId);
+    const before = await lastLoggedPlanBody(planId, await planMemberIds(req.auth.userId, planId)); // the log's last body → "לפני"
+    const r = await savePlan(planArgs(req, planId));
+    await act(req, 'update', 'schedule', r.ids[0] ?? null, { plan_id: r.plan_id, before, after: req.body });
     res.json(r);
+  } catch (e) { next(e); }
+});
+
+// Whole-plan enable/disable: one transaction, ONE action-log entry (the old
+// per-row loop produced a burst of identical "פעיל: לא" rows per plan).
+userRouter.patch('/plans/:planId', async (req, res, next) => {
+  try {
+    if (typeof req.body?.is_enabled !== 'boolean') throw errors.validation('is_enabled required', { is_enabled: 'boolean' });
+    const r = await setPlanEnabled({ userId: req.auth.userId, planId: String(req.params.planId), isEnabled: req.body.is_enabled, actor: actorStr(actorOf(req)) });
+    await act(req, 'plan_toggle', 'schedule', r.first_id, { plan_id: r.plan_id, name: r.name, members: r.members, before: r.before, after: r.after });
+    res.json({ ok: true, members: r.members });
+  } catch (e) { next(e); }
+});
+
+// Whole-plan delete (soft, every member row): one log entry with the plan's
+// last body so the log keeps what was removed.
+userRouter.delete('/plans/:planId', async (req, res, next) => {
+  try {
+    const planId = String(req.params.planId);
+    const before = await lastLoggedPlanBody(planId, await planMemberIds(req.auth.userId, planId));
+    const r = await deletePlan({ userId: req.auth.userId, planId, actor: actorStr(actorOf(req)) });
+    await act(req, 'plan_delete', 'schedule', r.first_id, { plan_id: planId, name: r.name, members: r.members, before });
+    res.json({ ok: true, members: r.members });
   } catch (e) { next(e); }
 });
 
 userRouter.patch('/schedules/:id', async (req, res, next) => {
   try {
-    await updateSchedule({ userId: req.auth.userId, scheduleId: Number(req.params.id), patch: req.body || {}, actor: actorStr(actorOf(req)) });
-    await act(req, 'update', 'schedule', Number(req.params.id), { after: req.body });
+    const changed = await updateSchedule({ userId: req.auth.userId, scheduleId: Number(req.params.id), patch: req.body || {}, actor: actorStr(actorOf(req)) });
+    await act(req, 'update', 'schedule', Number(req.params.id), { before: changed.before, after: { ...req.body, ...changed.after } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

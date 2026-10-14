@@ -120,8 +120,15 @@ async function verifyRebootOutputs(device, before, after) {
       changed.push({ channel: ch + 1, name: nameOf(ch), before: onOff(b), after: onOff(a) });
       const relay = relayAt(ch);
       if (b && !a && relay && active()) {
+        // Two reasons NOT to re-apply: a schedule was due in the reboot minute, or
+        // someone switched this channel off on purpose after our last probe (the
+        // probe is up to a minute stale) — an explicit OFF must win over the net.
         const due = await scheduleDueForRelay(relay.id).catch(() => true); // unsure → don't touch
-        if (!due) {
+        const manualOff = await query(
+          `SELECT 1 FROM commands WHERE relay_id = ? AND action = 'off' AND source <> 'system' AND status = 'acked'
+             AND requested_at > UTC_TIMESTAMP() - INTERVAL 5 MINUTE LIMIT 1`, [relay.id],
+        ).then((r) => r.length > 0).catch(() => true);
+        if (!due && !manualOff) {
           const r = await sendImmediateCommand({ relayId: relay.id, action: 'on', source: 'system' }).catch((e) => ({ status: 'failed', fail_reason: e.message }));
           restored.push({ channel: ch + 1, name: relay.name, ok: r.status === 'acked', verify: r.verify ?? null });
         }

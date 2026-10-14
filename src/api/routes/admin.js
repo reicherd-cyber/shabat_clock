@@ -255,12 +255,15 @@ adminRouter.get('/devices', async (req, res, next) => {
 
 // Every live channel across the fleet — feeds the channel filter on pages that
 // list per-relay data (history). Light row: no state, no schedules.
+// ?all=1 → every relay that ever existed (removed devices, soft-deleted
+// relays too) — the action log resolves channel ids in historic plan bodies.
 adminRouter.get('/relays', async (req, res, next) => {
   try {
+    const all = req.query.all === '1';
     res.json(await query(
-      `SELECT r.id, r.device_id, r.user_id, r.relay_no, r.name, r.is_enabled
+      `SELECT r.id, r.device_id, r.user_id, r.relay_no, r.name, r.is_enabled, (r.deleted_at IS NOT NULL) AS removed
        FROM relays r JOIN devices d ON d.id = r.device_id
-       WHERE r.deleted_at IS NULL AND d.is_enabled = TRUE ORDER BY r.device_id, r.relay_no`,
+       ${all ? '' : 'WHERE r.deleted_at IS NULL AND d.is_enabled = TRUE'} ORDER BY r.device_id, r.relay_no`,
     ));
   } catch (e) { next(e); }
 });
@@ -712,6 +715,11 @@ adminRouter.get('/whatsapp', async (req, res, next) => {
     }
     const where = cond.join(' AND ');
     const from = 'FROM whatsapp_messages m LEFT JOIN users u ON u.id = m.user_id';
+    const waTz = Math.max(-840, Math.min(840, Math.round(Number(req.query.tz_offset) || 0)));
+    const waZone = /^[A-Za-z_]+(\/[A-Za-z0-9_+\-]+){0,2}$/.test(String(req.query.tz || '')) ? String(req.query.tz) : null;
+    const waLocalDay = waZone
+      ? `COALESCE(CONVERT_TZ(m.created_at, '+00:00', ?), m.created_at + INTERVAL ${waTz} MINUTE)`
+      : `m.created_at + INTERVAL ${waTz} MINUTE`;
     const [rows, [counts], byDay, [tickets]] = await Promise.all([
       query(`SELECT m.id, m.wa_message_id, m.phone, m.user_id, m.direction, m.kind, m.body, m.status, m.error, m.created_at,
                     u.full_name AS user_name
@@ -719,7 +727,9 @@ adminRouter.get('/whatsapp', async (req, res, next) => {
       query(`SELECT COUNT(DISTINCT m.phone) AS phones, SUM(m.direction = 'in') AS \`in\`, SUM(m.direction = 'out') AS \`out\`,
                     SUM(m.status = 'failed') AS failed
                ${from} WHERE ${where}`, params),
-      query(`SELECT DATE(m.created_at) AS d, m.direction, COUNT(*) AS n ${from} WHERE ${where} GROUP BY 1, 2 ORDER BY 1`, params),
+      // Day buckets in the client's local day (same convention as /audit-log/stats):
+      // a 01:30 IDT message belongs to that date, not to the UTC day before.
+      query(`SELECT DATE_FORMAT(${waLocalDay}, '%Y-%m-%d') AS d, m.direction, COUNT(*) AS n ${from} WHERE ${where} GROUP BY 1, 2 ORDER BY 1`, waZone ? [waZone, ...params] : params),
       query(`SELECT COUNT(*) AS n FROM support_messages s WHERE s.source = 'whatsapp' AND s.deleted_at IS NULL
                ${req.query.from ? 'AND s.created_at >= ?' : ''} ${req.query.to ? 'AND s.created_at <= ?' : ''}`,
       [req.query.from, req.query.to].filter(Boolean).map(String)),
@@ -1016,7 +1026,8 @@ adminRouter.get('/audit-log', async (req, res, next) => {
       `SELECT a.id, a.actor_type, a.actor_id, a.action, a.entity, a.entity_id, a.diff, a.created_at,
               ${AUDIT_ACTOR_NAME} AS actor_name,
               ${AUDIT_ENTITY_NAME} AS entity_name,
-              ${AUDIT_ENTITY_CTX} AS entity_ctx
+              ${AUDIT_ENTITY_CTX} AS entity_ctx,
+              s.plan_id AS sched_plan_id, s.name AS sched_plan_name
        ${AUDIT_FROM} ${where} ORDER BY a.id DESC LIMIT ${limit + 1}`,
       params,
     );
@@ -1054,7 +1065,7 @@ adminRouter.get('/audit-log/stats', async (req, res, next) => {
     ]);
     res.json({
       total: Number(totals.total), admin: Number(totals.admin || 0), user: Number(totals.user || 0),
-      ivr: Number(totals.ivr || 0), system: Number(totals.system || 0),
+      ivr: Number(totals.ivr || 0), whatsapp: Number(totals.whatsapp || 0), system: Number(totals.system || 0),
       by_day: byDay.map((r) => ({ d: r.d, actor_type: r.actor_type, n: Number(r.n) })),
     });
   } catch (e) { next(e); }

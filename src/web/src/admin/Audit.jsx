@@ -11,6 +11,12 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { ShieldCheck, UserRound, Phone, MessageCircle, Cog, ChevronDown, ChevronUp } from 'lucide-react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, SearchSelect, Badge, ErrorNote, useAsync, DAY_NAMES, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, ymdLocal, RANGE_LOG, niceCeil, FilterSelect } from '../ui.jsx';
+import { planLines, diffLines } from '../planText.js';
+
+// Channel names for plan diffs (a plan body carries relay ids). Loaded once by
+// the page; rows re-render when it lands (relayTick).
+let RELAY_NAMES = new Map();
+const relayName = (id) => RELAY_NAMES.get(Number(id)) || `ערוץ #${id}`;
 
 // ── vocabulary ──
 // Actor kinds: label, icon, chart hue. Palette validated (dataviz validator, light
@@ -54,7 +60,7 @@ const ACTIONS = {
   create: 'יצירת {e}', update: 'עדכון {e}', delete: 'מחיקת {e}', restore: 'שחזור {e}',
   verify: 'אימות {e}', transfer: 'העברת {e} ללקוח אחר', provision: 'הקמת {e}', revoke: 'ביטול {e}',
   rotate_secret: 'החלפת סוד ההתחברות של {e}', pin_reset: 'איפוס קוד ל{e}', impersonate: 'כניסה בשם {e}',
-  signup: 'הרשמה עצמית של {e}', command: 'פקודה ל{e}',
+  signup: 'הרשמה עצמית של {e}', command: 'פקודה ל{e}', plan_toggle: 'הפעלה/השבתה של תוכנית', plan_delete: 'מחיקת תוכנית',
   register_shelly: 'רישום Shelly', onboard_shelly: 'קליטת Shelly', onboard_shelly_remote: 'קליטת Shelly מרחוק (מתקין)',
   prep_shelly: 'הכנת Shelly להתקנה', universal_installer: 'הפקת {e}',
   enable_2fa: 'הפעלת אימות דו־שלבי ל{e}', disable_2fa: 'כיבוי אימות דו־שלבי ל{e}', reset_2fa: 'איפוס אימות דו־שלבי ל{e}',
@@ -85,6 +91,7 @@ const FIELDS = {
   region: 'אזור', category: 'קטגוריה', recurrence: 'מחזוריות', entry_date: 'תאריך', end_date: 'סיום', lead_id: 'ליד',
   order_id: 'הזמנה', city: 'עיר', max_devices: 'מכסת מכשירים', terms: 'תנאים', key: 'מפתח', voice: 'קול', text: 'טקסט',
   reply_id: 'תגובה', removed: 'הוסרו', ids: 'סדר', installer_jti: 'מזהה קובץ', verify: 'אימות', fail_reason: 'סיבת כשל',
+  members: 'תזמונים בתוכנית', relays: 'ערוצים', schedulers: 'תזמונים', exclusions: 'החרגות', relay_ids: 'ערוצים',
 };
 const VALUES = {
   on: 'הדלקה', off: 'כיבוי', active: 'פעיל', suspended: 'מושהה', removed: 'הוסר', weekly: 'שבועי', once: 'חד־פעמי',
@@ -95,15 +102,15 @@ const VALUES = {
   not_interested: 'לא מתעניין', customer: 'לקוח', delivered: 'נמסר', cancelled: 'בוטל', phone: 'טלפון', web: 'אתר',
   superadmin: 'מנהל־על', support: 'תמיכה', admin: 'מנהל', acked: 'בוצע', sent: 'נשלח', pending: 'ממתין', failed: 'נכשל',
 };
-const SOURCE_HE = { nlu: 'פקודה קולית', ivr_menu: 'תפריט טלפוני', google: 'Google' };
+const SOURCE_HE = { nlu: 'פקודה קולית', ivr_menu: 'תפריט טלפוני', google: 'Google', whatsapp: 'וואטסאפ' };
 const HIDDEN_FIELDS = new Set(['via', 'confirmed_registered', 'installer_jti']);
 
 function fmtValue(key, v) {
   if (v === null || v === undefined || v === '') return '—';
   if (v === '[REDACTED]') return '•••••';
+  if (key === 'is_enabled') return (v === true || Number(v)) ? 'פעיל' : 'מושבת';
   if (typeof v === 'boolean') return v ? 'כן' : 'לא';
   if (key === 'days' && Array.isArray(v)) return v.map((d) => DAY_NAMES[d] || d).join(', ');
-  if (key === 'is_enabled') return Number(v) ? 'פעיל' : 'כבוי';
   if (key === 'verify') return VERIFY_HE[v] || v;
   if (key === 'fail_reason') return FAIL_HE[v] || v;
   if (Array.isArray(v)) return v.length ? v.map((x) => (typeof x === 'object' ? JSON.stringify(x) : fmtValue(key, x))).join(', ') : '—';
@@ -116,10 +123,39 @@ function fmtValue(key, v) {
   return VALUES[s] || s;
 }
 
+// A plan entry (diff.plan_id) is read as a whole: the plan's name, its channels,
+// its schedulers and its exclusions, each as human lines, diffed against the
+// previous saved body when the log has one. kind 'list' rows carry
+// { added, removed, kept } instead of before/after.
+function planChanges(diff, action) {
+  const out = [];
+  if (action === 'plan_toggle') {
+    // "enable" on an already-enabled plan is allowed (NLU) — show the state, not a fake change.
+    const hasBefore = diff.before && diff.before.is_enabled !== undefined && diff.before.is_enabled !== diff.after?.is_enabled;
+    out.push({ key: 'is_enabled', label: 'פעיל', before: diff.before?.is_enabled, after: diff.after?.is_enabled, kind: hasBefore ? 'change' : 'set' });
+    if (diff.members != null) out.push({ key: 'members', label: FIELDS.members, after: diff.members, kind: 'info' });
+    return out;
+  }
+  const before = diff.before && typeof diff.before === 'object' ? planLines(diff.before, relayName) : null;
+  const after = action === 'plan_delete' ? { relays: [], schedulers: [], exclusions: [] } : planLines(diff.after, relayName);
+  const bName = diff.before?.name, aName = action === 'plan_delete' ? undefined : diff.after?.name;
+  if (bName != null && aName != null && bName !== aName) out.push({ key: 'name', label: 'שם', before: bName, after: aName, kind: 'change' });
+  else if (aName && !before) out.push({ key: 'name', label: 'שם', after: aName, kind: 'set' });
+  for (const k of ['relays', 'schedulers', 'exclusions']) {
+    const d = before ? diffLines(before[k], after[k]) : { added: after[k], removed: [], kept: [] };
+    if (!before && !d.added.length) continue;
+    out.push({ key: k, label: FIELDS[k], kind: 'list', fresh: !before, ...d });
+  }
+  if (action === 'plan_delete' && diff.members != null) out.push({ key: 'members', label: FIELDS.members, after: diff.members, kind: 'info' });
+  return out;
+}
+
 // Flatten a diff into displayable change rows: [{ key, label, before, after, kind }].
-// kind: 'change' (before+after), 'set' (after only), 'info' (extra top-level data).
-function changesOf(diff) {
+// kind: 'change' (before+after), 'set' (after only), 'info' (extra top-level data),
+// 'list' (added/removed/kept lines — plan entries).
+function changesOf(diff, action) {
   if (!diff || typeof diff !== 'object') return [];
+  if (diff.plan_id) return planChanges(diff, action);
   const out = [];
   const before = diff.before && typeof diff.before === 'object' ? diff.before : null;
   const after = diff.after && typeof diff.after === 'object' ? diff.after : null;
@@ -213,6 +249,20 @@ function ActorChip({ r }) {
 }
 
 function Chip({ c }) {
+  if (c.kind === 'list') {
+    const same = !c.added.length && !c.removed.length;
+    return (
+      <span className="inline-flex items-baseline gap-1 rounded-md bg-surface2 border border-line px-1.5 py-0.5 text-xs max-w-full">
+        <span className="text-muted shrink-0">{c.label}:</span>
+        {c.fresh ? <span className="font-medium">{c.added.length}</span>
+          : same ? <span className="text-muted">ללא שינוי ({c.kept.length})</span>
+            : <>
+              {c.added.length > 0 && <span className="font-medium text-on" dir="ltr">+{c.added.length}</span>}
+              {c.removed.length > 0 && <span className="font-medium text-off" dir="ltr">−{c.removed.length}</span>}
+            </>}
+      </span>
+    );
+  }
   const dir = /^[\d\s:+\-./@a-zA-Z₪$]+$/.test(String(c.after ?? c.before ?? '')) ? 'ltr' : undefined;
   return (
     <span className="inline-flex items-baseline gap-1 rounded-md bg-surface2 border border-line px-1.5 py-0.5 text-xs max-w-full">
@@ -228,6 +278,9 @@ function Details({ r, changes }) {
   const hasChange = changes.some((c) => c.kind === 'change');
   return (
     <div className="mt-2 rounded-[10px] border border-line bg-surface2/60 p-3 text-sm" onClick={(e) => e.stopPropagation()}>
+      {r.action === 'update' && r.diff?.plan_id && changes.some((c) => c.kind === 'list' && c.fresh) && (
+        <p className="text-xs text-muted mb-2">עדכון תוכנית — ברשומה זו לא נשמר המצב שלפני השינוי, לכן מוצג התוכן המלא של התוכנית אחרי השמירה. רשומות חדשות יותר מציגות מה השתנה.</p>
+      )}
       {changes.length > 0 ? (
         <table className="w-full text-sm">
           <thead>
@@ -238,7 +291,23 @@ function Details({ r, changes }) {
             </tr>
           </thead>
           <tbody>
-            {changes.map((c) => (
+            {changes.map((c) => c.kind === 'list' ? (
+              <tr key={`list:${c.key}`} className="border-t border-line/70 align-top">
+                <td className="py-1 pe-3 text-muted whitespace-nowrap">{c.label}</td>
+                <td className="py-1 break-words" colSpan={hasChange ? 2 : 1}>
+                  {!c.added.length && !c.removed.length && !c.kept.length && <span className="text-muted">—</span>}
+                  {c.fresh ? (
+                    <ul className="space-y-0.5">{c.added.map((l, i) => <li key={`f${i}`}>{l}</li>)}</ul>
+                  ) : (
+                    <ul className="space-y-0.5">
+                      {c.removed.map((l, i) => <li key={`r${i}`} className="text-off"><span className="font-mono me-1" dir="ltr">−</span><span className="line-through">{l}</span></li>)}
+                      {c.added.map((l, i) => <li key={`a${i}`} className="text-on font-medium"><span className="font-mono me-1" dir="ltr">+</span>{l}</li>)}
+                      {c.kept.map((l, i) => <li key={`k${i}`} className="text-muted"><span className="font-mono me-1 opacity-0" dir="ltr">=</span>{l}</li>)}
+                    </ul>
+                  )}
+                </td>
+              </tr>
+            ) : (
               <tr key={`${c.kind}:${c.key}`} className="border-t border-line/70 align-top">
                 <td className="py-1 pe-3 text-muted whitespace-nowrap">{c.label}</td>
                 {hasChange && (
@@ -253,7 +322,7 @@ function Details({ r, changes }) {
         <p className="text-muted">לא נשמרו פרטים נוספים לפעולה זו.</p>
       )}
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-        <span>מזהה רשומה: {r.id}</span>
+        <span>{r._ids ? `${r._ids.length} רשומות (${r._ids[r._ids.length - 1]}–${r._ids[0]})` : `מזהה רשומה: ${r.id}`}</span>
         {r.entity_id && <span>{ENTITIES[r.entity]?.label || r.entity} #{r.entity_id}</span>}
         {r.actor_id && <span>{ACTORS[r.actor_type]?.label || r.actor_type} #{r.actor_id}</span>}
         <span dir="ltr">{r.action} · {r.entity}</span>
@@ -265,14 +334,64 @@ function Details({ r, changes }) {
   );
 }
 
-function Row({ r, open, onToggle }) {
-  const changes = useMemo(() => changesOf(r.diff), [r.diff]);
+// Before 2026-10-14 a plan enable/disable was logged as one row per member
+// schedule. Consecutive rows by the same actor on the same plan, same
+// direction, within two minutes, fold into one synthetic plan_toggle entry so
+// old and new history read alike. Rows arrive newest-first; folding works on
+// any consecutive run.
+const isLegacyToggleRow = (r) => r.entity === 'schedule' && r.action === 'update' && !r.diff?.plan_id && r.sched_plan_id
+  && r.diff?.after && r.diff.after.is_enabled !== undefined
+  && Object.keys(r.diff.after).every((k) => ['is_enabled', 'via', 'plan_key'].includes(k));
+function foldPlanToggles(rows) {
+  const out = [];
+  for (const r of rows) {
+    const last = out[out.length - 1];
+    if (isLegacyToggleRow(r)) {
+      const on = Boolean(r.diff.after.is_enabled);
+      if (last && last._ids && last.sched_plan_id === r.sched_plan_id && last.actor_type === r.actor_type && last.actor_id === r.actor_id
+        && last.diff.after.is_enabled === on && Math.abs(new Date(last.created_at) - new Date(r.created_at)) < 120000) {
+        last.diff.members += 1;
+        last._ids.push(r.id);
+        if (r.diff.before?.is_enabled !== undefined) last.diff.before = { is_enabled: last.diff.before?.is_enabled || Boolean(r.diff.before.is_enabled) };
+        continue;
+      }
+      out.push({
+        ...r, action: 'plan_toggle', _ids: [r.id],
+        diff: {
+          plan_id: r.sched_plan_id, name: r.sched_plan_name, members: 1,
+          ...(r.diff.before?.is_enabled !== undefined ? { before: { is_enabled: Boolean(r.diff.before.is_enabled) } } : {}),
+          after: { is_enabled: on }, ...(r.diff.after.via ? { via: r.diff.after.via } : {}),
+        },
+      });
+      continue;
+    }
+    out.push(r);
+  }
+  return out;
+}
+
+// Plan entries read as a plan, not as "תזמון לערוץ X": the headline names the
+// plan and, for a toggle, says which way it went.
+function planHeadline(r) {
+  const d = r.diff || {};
+  const pname = d.name || d.after?.name || d.before?.name || '';
+  const suffix = pname ? ` «${pname}»` : '';
+  if (r.action === 'plan_toggle') return `${d.after?.is_enabled ? 'הפעלת' : 'השבתת'} תוכנית${suffix}${d.members ? ` (${d.members} תזמונים)` : ''}`;
+  if (r.action === 'plan_delete') return `מחיקת תוכנית${suffix}${d.members ? ` (${d.members} תזמונים)` : ''}`;
+  if (r.action === 'create') return `יצירת תוכנית${suffix}`;
+  return `עדכון תוכנית${suffix}`;
+}
+
+function Row({ r, open, onToggle, tick }) {
+  const changes = useMemo(() => changesOf(r.diff, r.action), [r.diff, r.action, tick]); // eslint-disable-line react-hooks/exhaustive-deps
   const isCommand = r.entity === 'relay' && r.action === 'command';
-  const name = entityName(r);
+  const isPlan = r.entity === 'schedule' && !!r.diff?.plan_id;
+  const name = isPlan ? null : entityName(r);
   const ent = ENTITIES[r.entity];
   // "יצירת תזמון לערוץ סלון (ראשי)", "תגובה לפנייה של ישראל כהן · נושא".
   const headline = isCommand ? commandHeadline(r)
-    : actionLabel(r.action, r.entity) + (name && r.entity === 'schedule' ? ' לערוץ' : name && r.entity === 'support_message' ? ' של' : '');
+    : isPlan ? planHeadline(r)
+      : actionLabel(r.action, r.entity) + (name && r.entity === 'schedule' ? ' לערוץ' : name && r.entity === 'support_message' ? ' של' : '');
   const source = sourceOf(r.diff);
   const summary = isCommand ? changes.filter((c) => !['action', 'status', 'verify', 'fail_reason'].includes(c.key)) : changes;
   const t = new Date(r.created_at);
@@ -294,7 +413,8 @@ function Row({ r, open, onToggle }) {
                   ) : <b>{name}</b>}
                 </>
               )}
-              {r.entity_ctx && r.entity !== 'support_message' && <span className="text-muted"> ({VALUES[r.entity_ctx] || r.entity_ctx})</span>}
+              {r.entity_ctx && r.entity !== 'support_message' && !isPlan && <span className="text-muted"> ({VALUES[r.entity_ctx] || r.entity_ctx})</span>}
+              {isPlan && r.entity_ctx && <span className="text-muted"> · {r.entity_ctx}</span>}
               {r.entity === 'support_message' && r.entity_ctx && <span className="text-muted"> · {r.entity_ctx}</span>}
             </span>
             {isCommand && commandVerdict(r)}
@@ -356,13 +476,13 @@ function ActivityChart({ byDay, range }) {
     const weekly = span > 70;
     const map = new Map();
     for (const r of byDay) {
-      const k = map.get(r.d) || { admin: 0, user: 0, ivr: 0, system: 0 };
+      const k = map.get(r.d) || Object.fromEntries(ACTOR_ORDER.map((a) => [a, 0]));
       k[r.actor_type] = (k[r.actor_type] || 0) + r.n;
       map.set(r.d, k);
     }
     while (ymdLocal(cur) <= last && list.length < 400) {
       const key = ymdLocal(cur);
-      const row = map.get(key) || { admin: 0, user: 0, ivr: 0, system: 0 };
+      const row = map.get(key) || Object.fromEntries(ACTOR_ORDER.map((a) => [a, 0]));
       if (weekly && list.length && cur.getDay() !== 0) {
         const tgt = list[list.length - 1];
         for (const k of ACTOR_ORDER) tgt[k] += row[k];
@@ -463,6 +583,10 @@ export default function Audit() {
   const { error, setError } = useAsync();
 
   useEffect(() => { adminApi.get('/audit-log/facets').then(setFacets).catch(setError); }, []);
+  const [relayTick, setRelayTick] = useState(0);
+  useEffect(() => {
+    adminApi.get('/relays?all=1').then((rows) => { RELAY_NAMES = new Map(rows.map((x) => [Number(x.id), x.removed ? `${x.name} (הוסר)` : x.name])); setRelayTick((n) => n + 1); }).catch(() => {});
+  }, []);
 
   const range = useMemo(() => rangeStamps(period, { fromDate, toDate }), [period, fromDate, toDate]);
   const baseQuery = useMemo(() => {
@@ -574,7 +698,7 @@ export default function Audit() {
   // Group the loaded rows by local day.
   const groups = useMemo(() => {
     const out = [];
-    for (const r of data?.rows || []) {
+    for (const r of foldPlanToggles(data?.rows || [])) {
       const key = ymdLocal(new Date(r.created_at));
       if (!out.length || out[out.length - 1].key !== key) out.push({ key, rows: [] });
       out[out.length - 1].rows.push(r);
@@ -593,7 +717,7 @@ export default function Audit() {
       </div>
 
       {/* filters — one row, wraps on phones */}
-      <Card className="flex flex-wrap items-center gap-2 !py-3">
+      <Card className="flex flex-wrap items-center gap-2 !py-3 !overflow-visible">
         <RangeFilter value={period} onChange={setPeriod} keys={RANGE_LOG} className="w-auto"
           custom={{ fromDate, toDate }} onCustom={(p) => { if ('fromDate' in p) setFromDate(p.fromDate); if ('toDate' in p) setToDate(p.toDate); }} />
         <FilterSelect className="text-sm !py-2" value={actorType} onChange={(e) => { setActorType(e.target.value); setActor(''); }} aria-label="סוג גורם">
@@ -627,7 +751,7 @@ export default function Audit() {
         {groups.map((g) => (
           <div key={g.key}>
             <div className="sticky top-0 z-10 bg-surface2 border-b border-line px-3 py-1.5 text-xs font-semibold text-muted">{dayTitle(g.key)} · {g.rows.length}</div>
-            {g.rows.map((r) => <Row key={r.id} r={r} open={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)} />)}
+            {g.rows.map((r) => <Row key={r.id} r={r} tick={relayTick} open={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)} />)}
           </div>
         ))}
         {data && data.rows.length === 0 && <p className="p-6 text-muted text-center">לא נמצאו פעולות בתקופה ובסינון שנבחרו.</p>}

@@ -157,7 +157,7 @@ export default function Database() {
       )}
 
       {/* filters */}
-      <Card className="flex flex-wrap items-center gap-2 !py-3">
+      <Card className="flex flex-wrap items-center gap-2 !py-3 !overflow-visible">
         <Input className="w-48 !py-2 text-sm" placeholder="חיפוש טבלה…" value={q} onChange={(e) => setQ(e.target.value)} />
         {engines.length > 1 && (
           <FilterSelect className="text-sm !py-2" value={engine} onChange={(e) => setEngine(e.target.value)}>

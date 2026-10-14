@@ -533,8 +533,95 @@ export async function savePlan({ userId, planId, name, relayIds, schedulers, exc
   return { plan_id: planId, ids };
 }
 
+// Enable/disable every member row of a plan in one transaction. Returns what
+// the action log needs: the plan's name, member count, and the enabled state
+// before/after (before = "any member was enabled").
+export async function setPlanEnabled({ userId, planId, isEnabled, actor = null }) {
+  const deviceIds = new Set();
+  let info;
+  await withTransaction(async (conn) => {
+    const [rows] = await conn.query(
+      `SELECT s.id, s.name, s.is_enabled, r.device_id FROM schedules s JOIN relays r ON r.id = s.relay_id
+       WHERE s.plan_id = ? AND s.user_id = ? AND s.deleted_at IS NULL FOR UPDATE`,
+      [String(planId), userId],
+    );
+    if (!rows.length) throw errors.notFound('NOT_FOUND', 'Plan not found');
+    await conn.query(
+      `UPDATE schedules SET is_enabled = ?, updated_by = COALESCE(?, updated_by) WHERE id IN (${rows.map(() => '?').join(',')})`,
+      [isEnabled ? 1 : 0, actor, ...rows.map((r) => r.id)],
+    );
+    for (const r of rows) deviceIds.add(Number(r.device_id));
+    await bumpDevices(conn, [...deviceIds]);
+    info = {
+      plan_id: String(planId), name: rows[0].name, members: rows.length, first_id: rows[0].id,
+      before: { is_enabled: rows.some((r) => r.is_enabled) }, after: { is_enabled: Boolean(isEnabled) },
+    };
+  });
+  await pushAfterCommit([...deviceIds]);
+  return info;
+}
+
+// Soft-delete every member row of a plan in one transaction (never a physical
+// DELETE [D37]); one device bump/push. Returns the plan's name and member count
+// for the single action-log entry.
+export async function deletePlan({ userId, planId, actor = null }) {
+  const deviceIds = new Set();
+  let info;
+  await withTransaction(async (conn) => {
+    const [rows] = await conn.query(
+      `SELECT s.id, s.name, r.device_id FROM schedules s JOIN relays r ON r.id = s.relay_id
+       WHERE s.plan_id = ? AND s.user_id = ? AND s.deleted_at IS NULL FOR UPDATE`,
+      [String(planId), userId],
+    );
+    if (!rows.length) throw errors.notFound('NOT_FOUND', 'Plan not found');
+    await conn.query(
+      `UPDATE schedules SET deleted_at = UTC_TIMESTAMP(), is_enabled = FALSE, updated_by = COALESCE(?, updated_by)
+       WHERE id IN (${rows.map(() => '?').join(',')})`,
+      [actor, ...rows.map((r) => r.id)],
+    );
+    for (const r of rows) deviceIds.add(Number(r.device_id));
+    await bumpDevices(conn, [...deviceIds]);
+    info = { plan_id: String(planId), name: rows[0].name, members: rows.length, first_id: rows[0].id, member_ids: rows.map((r) => r.id) };
+  });
+  await pushAfterCommit([...deviceIds]);
+  return info;
+}
+
+// Live member ids of a plan (for the previous-body lookup below).
+export async function planMemberIds(userId, planId) {
+  const rows = await query(
+    'SELECT id FROM schedules WHERE plan_id = ? AND user_id = ? AND deleted_at IS NULL ORDER BY id',
+    [String(planId), userId],
+  );
+  return rows.map((r) => r.id);
+}
+
+// The previous saved body of a plan, as the action log recorded it — so a plan
+// update can be logged as before → after without reconstructing the editor
+// shape from rows. Every plan create/update entry is keyed on the plan's FIRST
+// member id of that save, i.e. one of the current member ids — so the lookup
+// hits idx_entity instead of parsing JSON across the whole log. Null for a
+// plan saved before plan bodies were logged.
+export async function lastLoggedPlanBody(planId, memberIds = []) {
+  if (!memberIds.length) return null;
+  const rows = await query(
+    `SELECT diff FROM audit_log WHERE entity = 'schedule' AND action IN ('create','update')
+      AND entity_id IN (${memberIds.map(() => '?').join(',')})
+      AND JSON_UNQUOTE(JSON_EXTRACT(diff, '$.plan_id')) = ? ORDER BY id DESC LIMIT 1`,
+    [...memberIds, String(planId)],
+  ).catch(() => []);
+  if (!rows.length) return null;
+  try {
+    const d = typeof rows[0].diff === 'string' ? JSON.parse(rows[0].diff) : rows[0].diff;
+    return d?.after && typeof d.after === 'object' ? d.after : null;
+  } catch { return null; }
+}
+
+// Returns { before, after } limited to the fields the patch touched, so the
+// action log can show "פעיל: כן → לא" rather than the new value alone.
 export async function updateSchedule({ userId, scheduleId, patch, actor = null }) {
   const deviceIds = [];
+  const changed = { before: {}, after: {} };
   await withTransaction(async (conn) => {
     const [rows] = await conn.query(
       `SELECT s.*, r.device_id, d.timezone FROM schedules s
@@ -582,6 +669,27 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
     }
     const s = onlyToggle ? merged : validateScheduleRules(merged, { tz: existing.timezone });
     const is_enabled = patch.is_enabled !== undefined ? (patch.is_enabled ? 1 : 0) : existing.is_enabled;
+    // What the log shows as before → after: only the schedule's own editable
+    // columns (not device_id/timezone from the join), and only when the value
+    // really changes — an empty name means "keep" (COALESCE below), not a rename.
+    const LOGGED = new Set(['name', 'on_day_of_week', 'on_time', 'on_anchor', 'on_offset_min', 'off_day_of_week', 'off_time', 'off_anchor', 'off_offset_min',
+      'repeat_type', 'holidays', 'annual_date', 'annual_end_date', 'annual_calendar', 'on_date', 'off_date',
+      'excl_type', 'excl_date', 'excl_end_date', 'excl_calendar', 'excl_holidays', 'excl_days', 'excl_list']);
+    const hhmm = (t) => (t == null ? null : String(t).slice(0, 5));
+    const norm = (k, v) => (v instanceof Date ? ymdOf(v) : (k === 'on_time' || k === 'off_time') ? hhmm(v) : v);
+    for (const k of Object.keys(patch)) {
+      if (k === 'is_enabled') {
+        const b = Boolean(Number(existing.is_enabled)), a = Boolean(is_enabled);
+        if (b !== a) { changed.before.is_enabled = b; changed.after.is_enabled = a; }
+        continue;
+      }
+      if (!LOGGED.has(k)) continue;
+      if (k === 'name' && !String(patch.name ?? '').trim()) continue;
+      const b = norm(k, existing[k]), a = norm(k, patch[k]);
+      if (JSON.stringify(b ?? null) === JSON.stringify(a ?? null)) continue;
+      changed.before[k] = b ?? null;
+      changed.after[k] = a ?? null;
+    }
 
     // Rename: a non-empty patch.name replaces the stored name; empty/absent keeps it.
     const newName = patch.name !== undefined ? String(patch.name ?? '').trim().slice(0, 100) : '';
@@ -604,6 +712,7 @@ export async function updateSchedule({ userId, scheduleId, patch, actor = null }
     await bumpDevices(conn, deviceIds);
   });
   await pushAfterCommit(deviceIds);
+  return changed;
 }
 
 // [D37] Soft delete — physical DELETE is never issued against schedules, by any actor.
