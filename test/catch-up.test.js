@@ -44,3 +44,13 @@ test('recentlyDueRelays: a channel whose schedule fired inside the grace window 
   const excl = { ...sched, excl_list: [{ type: 'weekly', days: [5] }] }; // 15.10.2026 is a Thursday (5)
   assert.equal(recentlyDueRelays([excl], to, upTo).size, 0);
 });
+
+test('recentlyDueRelays: the window the catch-up passes also covers the tick\'s own due minute (to − 1 min)', () => {
+  // ON due 20:30 (17:30Z); catch-up at 20:33:02 → to = 20:30, recent window = [20:29, 20:34)
+  const sched = { id: 2, relay_id: 17, device_id: 8, timezone: 'Asia/Jerusalem', repeat_type: 'weekly', on_day_of_week: null, on_time: '20:30', off_time: null, excl_list: null };
+  const to = new Date('2026-10-15T17:30:00Z');
+  assert.ok(recentlyDueRelays([sched], new Date(to.getTime() - 60000), new Date('2026-10-15T17:34:00Z')).has(17));
+  // a schedule whose row cannot be resolved is skipped, not fatal
+  const bad = { ...sched, id: 3, relay_id: 19, timezone: 'Not/AZone' };
+  assert.doesNotThrow(() => recentlyDueRelays([bad, sched], new Date(to.getTime() - 60000), new Date('2026-10-15T17:34:00Z')));
+});
