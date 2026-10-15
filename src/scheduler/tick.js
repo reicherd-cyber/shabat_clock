@@ -380,6 +380,21 @@ export async function scheduleDueBetween(relayId, from, to) {
 // minutes the server slept through. A same-minute ON+OFF tie is a user-data
 // conflict → null for that relay (nothing applied; the plan editor is where
 // it gets fixed). Pure, exported for tests.
+// Relays with an occurrence due in [from, upTo) — computed from the schedules
+// themselves, not the log (the log row for a just-due occurrence is only
+// written when the tick's backup window reaches it, minutes later). Pure.
+export function recentlyDueRelays(schedules, from, upTo) {
+  const out = new Set();
+  for (const s of schedules) {
+    for (const occ of occurrencesInWindow(s, from, upTo)) {
+      if (inExclusionRange(s, occ.localKey.slice(0, 10))) continue;
+      out.add(Number(s.relay_id));
+      break;
+    }
+  }
+  return out;
+}
+
 export function latestDueByRelay(rows) {
   const byRelay = new Map();
   for (const r of rows) {
@@ -441,9 +456,18 @@ export async function catchUpDevice(deviceId, { now = new Date(), reason = 'reco
         ORDER BY se.occurrence_utc, se.id`,
       [id, toDb(from), toDb(to)],
     );
+    // Channels with an occurrence due INSIDE the grace window are left alone:
+    // the unit may have just run it locally (the live state shows it, the
+    // log does not yet), and the tick's backup window owns those minutes.
+    // 2026-10-15: a reconnect 12 s after a 20:30 ON reverted two A/Cs to OFF.
+    const recent = recentlyDueRelays(
+      (await loadActiveSchedules()).filter((s) => Number(s.device_id) === id),
+      to, new Date(floorMinute(now).getTime() + 60000),
+    );
     const applied = [];
     for (const [relayId, latest] of latestDueByRelay(rows)) {
       if (!latest) continue; // same-minute conflict
+      if (recent.has(Number(relayId))) continue;
       const [relay] = await query('SELECT id, name, current_state FROM relays WHERE id = ? AND deleted_at IS NULL AND is_enabled = TRUE', [relayId]);
       if (!relay || relay.current_state === 'unknown' || relay.current_state === latest.action) continue;
       // A hand-made switch after the occurrence is the customer's word — keep it.
