@@ -31,7 +31,7 @@ import { query } from '../db/pool.js';
 import { isPrimary } from '../config/role.js';
 import { shellyCall } from './shelly.js';
 import { timeToMinutes, localParts, dowOfDate, isNextAnniversary, ymdOf } from './time.js';
-import { inExclusionRange } from './holidays.js';
+import { inExclusionRange, exclWeeklyDays, withoutWeeklyExcl, hasDatedExcl } from './holidays.js';
 
 const MAX_SHELLY_JOBS = 20;      // Gen2 firmware: "limit of 20 schedule instances per device"
 const MAX_CALLS_PER_JOB = 5;     // Gen2 firmware: "limit of 5 calls per schedule job"
@@ -60,12 +60,12 @@ export function buildShellyJobs(rows, today) {
       if (s.repeat_type === 'weekly') {
         const day = s[`${side}_day_of_week`];
         let days = day == null || Number(day) === 0 ? [1, 2, 3, 4, 5, 6, 7] : [Number(day)];
-        if (s.excl_type === 'weekly') {
-          const excl = String(s.excl_days || '').split(',').map(Number);
-          days = days.filter((d) => !excl.includes(d));
-        } else if ((s.excl_type || s.excl_list) && inExclusionRange(s, today)) {
-          continue; // omitted while today is inside the range; restored on the flip day
-        }
+        // Weekday exclusions (legacy field or excl_list items) drop days from
+        // the cron; dated/holiday ones omit the job while today is inside
+        // (restored on the flip day by the daily refresh).
+        const exclDays = exclWeeklyDays(s);
+        if (exclDays.size) days = days.filter((d) => !exclDays.has(d));
+        if (hasDatedExcl(s) && inExclusionRange(withoutWeeklyExcl(s), today)) continue;
         if (!days.length) continue;
         const dow = days.length === 7 ? '*' : days.map((d) => d - 1).sort((a, b) => a - b).join(',');
         jobs.push({ enable: true, timespec: `0 ${mm} ${hh} * * ${dow}`, calls: [call] });

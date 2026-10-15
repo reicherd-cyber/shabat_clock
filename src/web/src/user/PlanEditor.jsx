@@ -32,11 +32,17 @@ const newScheduler = () => ({
   // yearly = a date RANGE: the action fires on every day from→to, each year
   // (a single day when the end equals the start)
   end_date: '', heb_day_to: 1, heb_month_to: 7,
+  // dated types only (required, no default): 'add' = alongside the plan's
+  // weekly schedulers on those days, 'replace' = instead of them
+  mode: null,
 });
+// An exclusion has the same four type choices as a scheduler (no default):
+// weekly days, a one-time date range, a yearly date range, or שבת/חג days.
 const newExclusion = () => ({
-  uid: uid(), yearly: true, calendar: 'heb',
+  uid: uid(), type: null, calendar: 'heb',
   heb_day: 1, heb_month: 5, heb_day_to: 1, heb_month_to: 6,
   date: todayYmd(), end_date: todayYmd(),
+  days: [], holidays: [],
 });
 
 const signedOffset = (s) => (s.dir === 'before' ? -1 : 1) * Math.abs(Number(s.offset) || 0);
@@ -114,14 +120,21 @@ export function schedulerSummary(s) {
         ? `כל שנה ${yearlyRangeText(s)}`
         : holidaySummary(s.holidays.join(','));
   const time = s.kind === 'clock' ? s.time : anchorText(s.kind, signedOffset(s));
-  return `${when} · ${time} · ${s.action === 'on' ? 'הדלקה' : 'כיבוי'}`;
+  return `${when} · ${time} · ${s.action === 'on' ? 'הדלקה' : 'כיבוי'}${modeMark(s)}`;
 }
 export function exclusionSummary(x) {
+  if (x.type === 'weekly') {
+    const days = [...(x.days || [])].map(Number).sort((a, b) => a - b);
+    return days.length === 7 ? 'כל יום' : `בימי ${days.map((d) => DAY_NAMES[d]).join(', ')}`;
+  }
+  if (x.type === 'holiday') return holidaySummary((x.holidays || []).join(','));
   const from = x.calendar === 'heb' ? hebText(x.heb_day, x.heb_month) : fmtDate(x.date);
   const to = x.calendar === 'heb' ? hebText(x.heb_day_to, x.heb_month_to) : fmtDate(x.end_date || x.date);
   const range = to !== from ? `${from} עד ${to}` : from;
-  return x.yearly ? `כל שנה ${range}` : range;
+  return x.type === 'yearly' ? `כל שנה ${range}` : range;
 }
+// The scheduler list marks the ones that push the weekly schedule aside.
+const modeMark = (s) => (s.repeat_type && s.repeat_type !== 'weekly' && s.mode === 'replace' ? ' · במקום הקבוע' : '');
 
 // Rebuild the editor state from a plan's member rows (one row per channel ×
 // scheduler × weekly day): rows that differ only by channel/day collapse into
@@ -149,26 +162,36 @@ export function planFromMembers(members) {
         heb_day: m.annual_heb_day || 1, heb_month: m.annual_heb_month || 7,
         end_date: m.repeat_type === 'yearly' ? String(m.annual_end_date || m.annual_date || '').slice(0, 10) : '',
         heb_day_to: m.annual_end_heb_day || m.annual_heb_day || 1, heb_month_to: m.annual_end_heb_month || m.annual_heb_month || 7,
+        // pre-migration-67 dated rows carry no mode — they always behaved as 'add'
+        mode: m.repeat_type === 'weekly' ? null : (m.plan_mode === 'replace' ? 'replace' : 'add'),
       };
       const key = JSON.stringify([sch.action, sch.repeat_type, sch.kind, sch.time, sch.offset, sch.dir, sch.daily,
-        sch.holidays, sch.calendar, sch.date, sch.heb_day, sch.heb_month, sch.end_date, sch.heb_day_to, sch.heb_month_to]);
+        sch.holidays, sch.calendar, sch.date, sch.heb_day, sch.heb_month, sch.end_date, sch.heb_day_to, sch.heb_month_to, sch.mode]);
       if (map.has(key)) map.get(key).days = [...new Set([...map.get(key).days, ...sch.days])].sort((a, b) => a - b);
       else map.set(key, { uid: uid(), ...sch });
     }
   }
-  let exclusions = (Array.isArray(repr.excl_list) ? repr.excl_list : []).map((x) => ({
-    uid: uid(), yearly: x.type !== 'once', calendar: x.calendar === 'greg' ? 'greg' : 'heb',
-    date: String(x.date || '').slice(0, 10), end_date: String(x.end_date || x.date || '').slice(0, 10),
+  // The exclusion list is read from the plan's WEEKLY rows when it has any
+  // (they carry the user's items plus the derived ones; dated rows carry only
+  // the user's) — derived items are rebuilt from the schedulers' modes, not shown.
+  const exclSrc = members.find((m) => m.repeat_type === 'weekly' && Array.isArray(m.excl_list) && m.excl_list.length) || repr;
+  let exclusions = (Array.isArray(exclSrc.excl_list) ? exclSrc.excl_list : []).filter((x) => !x?.derived).map((x) => ({
+    uid: uid(),
+    type: ['weekly', 'holiday', 'once'].includes(x.type) ? x.type : 'yearly',
+    calendar: x.calendar === 'greg' ? 'greg' : 'heb',
+    date: String(x.date || '').slice(0, 10) || todayYmd(), end_date: String(x.end_date || x.date || '').slice(0, 10) || todayYmd(),
     heb_day: x.heb_day || 1, heb_month: x.heb_month || 5,
     heb_day_to: x.end_heb_day || x.heb_day || 1, heb_month_to: x.end_heb_month || x.heb_month || 6,
+    days: (x.days || []).map(Number), holidays: x.holidays || [],
   }));
   // a legacy single date-range exclusion re-opens as the first list item
   if (!exclusions.length && (repr.excl_type === 'yearly' || repr.excl_type === 'once') && repr.excl_date) {
     exclusions = [{
-      uid: uid(), yearly: repr.excl_type === 'yearly', calendar: repr.excl_calendar === 'greg' ? 'greg' : 'heb',
+      uid: uid(), type: repr.excl_type, calendar: repr.excl_calendar === 'greg' ? 'greg' : 'heb',
       date: String(repr.excl_date).slice(0, 10), end_date: String(repr.excl_end_date || repr.excl_date).slice(0, 10),
       heb_day: repr.excl_heb_day || 1, heb_month: repr.excl_heb_month || 5,
       heb_day_to: repr.excl_end_heb_day || repr.excl_heb_day || 1, heb_month_to: repr.excl_end_heb_month || repr.excl_heb_month || 6,
+      days: [], holidays: [],
     }];
   }
   return {
@@ -193,13 +216,33 @@ const schedulerToApi = (s) => ({
       ? { end_heb_day: Number(s.heb_day_to || s.heb_day), end_heb_month: Number(s.heb_month_to || s.heb_month) }
       : { end_date: s.end_date || s.date })
     : {}),
+  ...(s.repeat_type && s.repeat_type !== 'weekly' ? { mode: s.mode === 'replace' ? 'replace' : 'add' } : {}),
 });
-const exclusionToApi = (x) => ({
-  type: x.yearly ? 'yearly' : 'once', calendar: x.calendar,
-  ...(x.calendar === 'heb'
-    ? { heb_day: Number(x.heb_day), heb_month: Number(x.heb_month), end_heb_day: Number(x.heb_day_to), end_heb_month: Number(x.heb_month_to) }
-    : { date: x.date, end_date: x.end_date || x.date }),
-});
+const exclusionToApi = (x) => {
+  if (x.derived) return x; // already API-shaped (see derivedExclusions)
+  if (x.type === 'weekly') return { type: 'weekly', days: (x.days || []).map(Number) };
+  if (x.type === 'holiday') return { type: 'holiday', holidays: x.holidays || [] };
+  return {
+    type: x.type === 'once' ? 'once' : 'yearly', calendar: x.calendar,
+    ...(x.calendar === 'heb'
+      ? { heb_day: Number(x.heb_day), heb_month: Number(x.heb_month), end_heb_day: Number(x.heb_day_to), end_heb_month: Number(x.heb_month_to) }
+      : { date: x.date, end_date: x.end_date || x.date }),
+  };
+};
+// Client mirror of services/schedules.js derivedExclusions — what the plan's
+// replace-mode schedulers carve out of the weekly ones (for the preview).
+const derivedExclusions = (schedulers) => schedulers
+  .filter((s) => s.repeat_type && s.repeat_type !== 'weekly' && s.mode === 'replace')
+  .map((s) => {
+    const api = schedulerToApi(s);
+    if (s.repeat_type === 'holiday') return { type: 'holiday', holidays: api.holidays, derived: true };
+    return {
+      type: s.repeat_type, calendar: api.calendar, derived: true,
+      ...(api.calendar === 'heb'
+        ? { heb_day: api.heb_day, heb_month: api.heb_month, end_heb_day: api.end_heb_day || api.heb_day, end_heb_month: api.end_heb_month || api.heb_month }
+        : { date: api.date, end_date: api.end_date || api.date }),
+    };
+  });
 
 const TYPES = [
   { v: 'weekly', label: 'שבועי' }, { v: 'once', label: 'חד-פעמי' },
@@ -313,6 +356,7 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
     || ((s.repeat_type === 'once' || s.repeat_type === 'yearly') && s.calendar === 'greg' && !s.date)
     // the yearly range may wrap the year (end before start = next year's date); only an empty end is a gap
     || (s.repeat_type === 'yearly' && s.calendar === 'greg' && !s.end_date)
+    || (s.repeat_type !== 'weekly' && !s.mode) // add/replace is a required choice on dated types
     || (!anchored && !s.time)
     || (anchored && (s.offset === '' || Number.isNaN(Number(s.offset))));
   const previous = others.filter((o) => o.uid !== s.uid);
@@ -416,6 +460,24 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
         </div>
       )}
 
+      {/* dated types: alongside or instead of the plan's weekly schedulers on those days (required) */}
+      {s.repeat_type && s.repeat_type !== 'weekly' && (
+        <div className="space-y-1">
+          <span className="text-sm text-muted">בימים אלו, התזמון הזה פועל:</span>
+          <div className="flex flex-col gap-1">
+            {[
+              { v: 'add', label: 'בנוסף לתזמון הקבוע של התוכנית' },
+              { v: 'replace', label: 'במקום התזמון הקבוע — התזמונים השבועיים לא יפעלו בימים אלו' },
+            ].map((o) => (
+              <label key={o.v} className="flex items-start gap-1.5 text-sm">
+                <input type="radio" name="sch_mode" className="mt-1" checked={s.mode === o.v} onChange={() => set({ mode: o.v })} />
+                <span>{o.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* the single action — shown once a type is chosen */}
       {s.repeat_type && (<>
         <div className="space-y-1">
@@ -473,7 +535,9 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
           </Select>
         </label>
       )}
-      <NextPreview draft={s} exclusions={exclusions} region={region} relayId={relayId} invalid={invalid} />
+      {/* a weekly draft is also carved by the plan's replace-mode schedulers (same rule as the server) */}
+      <NextPreview draft={s} exclusions={s.repeat_type === 'weekly' ? [...exclusions, ...derivedExclusions(previous)] : exclusions}
+        region={region} relayId={relayId} invalid={invalid} />
       <div className="grid grid-cols-2 gap-2 pt-1">
         <Button disabled={invalid} onClick={onConfirm}>
           <span className="inline-flex items-center gap-1.5">{isNew ? <Plus size={15} /> : <Pencil size={14} />}{isNew ? 'הוסף לתוכנית' : 'עדכן תזמון'}</span>
@@ -484,44 +548,78 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
   );
 }
 
-// ── exclusion sub-form: a date range (עברי/לועזי), recurring yearly or once ──
+// ── exclusion sub-form: the same four type choices as a scheduler ──
+// weekly days / a one-time date range / a yearly date range / שבת-וחגים days.
 function ExclusionForm({ draft, setDraft, onConfirm, onCancel, isNew }) {
   const x = draft;
   const set = (patch) => setDraft({ ...x, ...patch });
-  const invalid = x.calendar === 'greg' && (!x.date || (!x.yearly && x.end_date && x.end_date < x.date));
+  const dated = x.type === 'once' || x.type === 'yearly';
+  const invalid = !x.type
+    || (x.type === 'weekly' && !x.days.length)
+    || (x.type === 'holiday' && !x.holidays.length)
+    || (dated && x.calendar === 'greg' && (!x.date || (x.type === 'once' && x.end_date && x.end_date < x.date)));
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted">בתאריכי ההחרגה התוכנית לא תפעל כלל (גם לא כיבויים), ותחזור לפעול מעצמה אחריהם.</p>
-      <div className="flex items-center gap-3 flex-wrap">
-        {[{ v: 'heb', label: 'תאריך עברי' }, { v: 'greg', label: 'תאריך לועזי' }].map((o) => (
-          <label key={o.v} className="flex items-center gap-1 text-sm">
-            <input type="radio" name="excl_calendar" checked={x.calendar === o.v}
-              onChange={() => {
-                set({ calendar: o.v });
-                if (o.v === 'heb') {
-                  Promise.all([hebOf(x.date || todayYmd()), hebOf(x.end_date || x.date || todayYmd())]).then(([a, z]) => setDraft((d) => (d
-                    ? { ...d, heb_day: a.heb_day, heb_month: a.heb_month, heb_day_to: z.heb_day, heb_month_to: z.heb_month } : d))).catch(() => {});
-                }
-              }} />
-            {o.label}
-          </label>
-        ))}
-      </div>
-      {['from', 'to'].map((end) => (
-        <div key={end} className="flex items-center gap-2">
-          <span className="text-sm text-muted w-14 shrink-0">{end === 'from' ? 'מתאריך' : 'עד'}</span>
-          {x.calendar === 'heb' ? (
-            <HebPick day={end === 'from' ? x.heb_day : x.heb_day_to} month={end === 'from' ? x.heb_month : x.heb_month_to}
-              onChange={({ day, month }) => set(end === 'from' ? { heb_day: day, heb_month: month } : { heb_day_to: day, heb_month_to: month })} />
-          ) : (
-            <Input type="date" value={end === 'from' ? x.date : x.end_date}
-              onChange={(e) => set(end === 'from' ? { date: e.target.value } : { end_date: e.target.value })} />
-          )}
+      <p className="text-xs text-muted">בימי ההחרגה התוכנית לא תפעל כלל (גם לא כיבויים), ותחזור לפעול מעצמה אחריהם.</p>
+      <div className="space-y-1">
+        {!x.type && <span className="text-sm text-muted">מתי? בחרו סוג החרגה</span>}
+        <div className="flex gap-2 items-center flex-wrap">
+          {TYPES.map((t) => (
+            <Button key={t.v} variant={x.type === t.v ? 'primary' : 'ghost'} onClick={() => set({ type: t.v })}>{t.label}</Button>
+          ))}
         </div>
-      ))}
-      <label className="flex items-center gap-1.5 text-sm">
-        <input type="checkbox" checked={x.yearly} onChange={(e) => set({ yearly: e.target.checked })} /> חוזר כל שנה
-      </label>
+      </div>
+      {x.type === 'weekly' && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted">באילו ימים?</span>
+            <Button variant="ghost" className="!px-2 !py-0.5 text-xs"
+              onClick={() => set({ days: x.days.length === 7 ? [] : [1, 2, 3, 4, 5, 6, 7] })}>
+              {x.days.length === 7 ? 'נקה הכל' : 'בחר הכל'}
+            </Button>
+          </div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            {Object.entries(DAY_NAMES).map(([v, n]) => (
+              <label key={v} className="flex items-center gap-1.5 text-sm">
+                <input type="checkbox" checked={x.days.includes(Number(v))}
+                  onChange={() => set({ days: x.days.includes(Number(v)) ? x.days.filter((d) => d !== Number(v)) : [...x.days, Number(v)] })} /> {n}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+      {x.type === 'holiday' && <HolidayDaysGrid value={x.holidays} onChange={(holidays) => set({ holidays })} />}
+      {dated && (<>
+        <div className="flex items-center gap-3 flex-wrap">
+          {x.type === 'yearly' && <span className="text-sm text-muted">חוזר כל שנה —</span>}
+          {[{ v: 'heb', label: 'תאריך עברי' }, { v: 'greg', label: 'תאריך לועזי' }].map((o) => (
+            <label key={o.v} className="flex items-center gap-1 text-sm">
+              <input type="radio" name="excl_calendar" checked={x.calendar === o.v}
+                onChange={() => {
+                  set({ calendar: o.v });
+                  if (o.v === 'heb') {
+                    Promise.all([hebOf(x.date || todayYmd()), hebOf(x.end_date || x.date || todayYmd())]).then(([a, z]) => setDraft((d) => (d
+                      ? { ...d, heb_day: a.heb_day, heb_month: a.heb_month, heb_day_to: z.heb_day, heb_month_to: z.heb_month } : d))).catch(() => {});
+                  }
+                }} />
+              {o.label}
+            </label>
+          ))}
+        </div>
+        {['from', 'to'].map((end) => (
+          <div key={end} className="flex items-center gap-2">
+            <span className="text-sm text-muted w-14 shrink-0">{end === 'from' ? 'מתאריך' : 'עד'}</span>
+            {x.calendar === 'heb' ? (
+              <HebPick day={end === 'from' ? x.heb_day : x.heb_day_to} month={end === 'from' ? x.heb_month : x.heb_month_to}
+                onChange={({ day, month }) => set(end === 'from' ? { heb_day: day, heb_month: month } : { heb_day_to: day, heb_month_to: month })} />
+            ) : (
+              <Input type="date" value={end === 'from' ? x.date : x.end_date}
+                onChange={(e) => set(end === 'from' ? { date: e.target.value } : { end_date: e.target.value })} />
+            )}
+          </div>
+        ))}
+        {x.type === 'once' && <p className="text-xs text-muted">חד-פעמי: הטווח הזה בלבד, לא חוזר בשנה הבאה.</p>}
+      </>)}
       <div className="grid grid-cols-2 gap-2 pt-1">
         <Button disabled={invalid} onClick={onConfirm}>
           <span className="inline-flex items-center gap-1.5">{isNew ? <Plus size={15} /> : <Pencil size={14} />}{isNew ? 'הוסף החרגה' : 'עדכן החרגה'}</span>
@@ -646,7 +744,7 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
           {/* exclusions */}
           {plan.exclusions.length > 0 && (
             <div className="space-y-1">
-              <span className="text-sm text-muted">החרגות — התוכנית לא פועלת בתאריכים אלו</span>
+              <span className="text-sm text-muted">החרגות — התוכנית לא פועלת בימים אלו</span>
               {plan.exclusions.map((x) => (
                 <div key={x.uid} className="flex items-center gap-2 border border-line rounded-xl px-3 py-2">
                   <CalendarOff size={15} className="shrink-0" style={{ color: '#B45309' }} />

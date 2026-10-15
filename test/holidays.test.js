@@ -210,7 +210,7 @@ test('inExclusionRange: excl_list ranges (yearly + once) count alongside the leg
 });
 
 // ── yearly (anniversary) schedules ──
-import { resolveYearlySchedule, yearlyDatesAround, yearlyRangesAround } from '../src/services/holidays.js';
+import { resolveYearlySchedule, yearlyDatesAround, yearlyRangesAround, exclWeeklyDays, withoutWeeklyExcl, hasDatedExcl } from '../src/services/holidays.js';
 import { HDate } from '@hebcal/core';
 
 test('yearly greg: next occurrence this year, rolls to next year once passed', () => {
@@ -348,4 +348,35 @@ test('yearly two-sided range keeps the legacy pairing (ON from-date, OFF to-date
   resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-09-02T16:30:00Z') });
   assert.equal(s.on_date, '2026-09-01');
   assert.equal(s.off_date, '2026-09-05');
+});
+
+// ── excl_list weekday / שבת-וחגים items (the תוכנית החרגה with all four types) ──
+
+test('inExclusionRange: excl_list weekly item excludes those weekdays only', () => {
+  const row = { excl_list: [{ type: 'weekly', days: [6, 7] }] };
+  assert.ok(inExclusionRange(row, '2026-07-03')); // Friday
+  assert.ok(inExclusionRange(row, '2026-07-04')); // Saturday
+  assert.ok(!inExclusionRange(row, '2026-07-05')); // Sunday
+});
+
+test('inExclusionRange: excl_list holiday item excludes the selected day and its erev', () => {
+  const row = { excl_list: [{ type: 'holiday', holidays: ['shabbat'] }] };
+  assert.ok(inExclusionRange(row, '2026-07-03')); // erev שבת
+  assert.ok(inExclusionRange(row, '2026-07-04')); // שבת
+  assert.ok(!inExclusionRange(row, '2026-07-01'));
+});
+
+test('exclWeeklyDays / withoutWeeklyExcl split weekday items from dated ones', () => {
+  const row = {
+    excl_type: 'weekly', excl_days: '1',
+    excl_list: [{ type: 'weekly', days: [7] }, { type: 'yearly', calendar: 'greg', date: '2026-07-09', end_date: '2026-07-18', derived: true }],
+  };
+  assert.deepEqual([...exclWeeklyDays(row)].sort(), [1, 7]);
+  const dated = withoutWeeklyExcl(row);
+  assert.equal(dated.excl_type, null);
+  assert.equal(dated.excl_list.length, 1);
+  assert.ok(hasDatedExcl(row));
+  assert.ok(!hasDatedExcl({ excl_type: 'weekly', excl_days: '1' }));
+  assert.ok(inExclusionRange(dated, '2026-07-10'));
+  assert.ok(!inExclusionRange(dated, '2026-07-05')); // Sunday no longer excluded once weekdays are stripped
 });

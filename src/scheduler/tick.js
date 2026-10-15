@@ -9,7 +9,7 @@ import { withTransaction } from '../db/pool.js';
 import { publishCommand, waitForAck, pushScheduleToDevice, brokerConnected } from '../mqtt/client.js';
 import { ACK_TIMEOUT_MS, BACKUP_GRACE_MIN, RETRY_WINDOW_MIN, RECONCILE_WINDOW_H } from '../config/constants.js';
 import { freshTimesFor } from '../services/zmanim.js';
-import { freshHolidayFor, freshYearlyFor, inExclusionRange } from '../services/holidays.js';
+import { freshHolidayFor, freshYearlyFor, inExclusionRange, withoutWeeklyExcl, hasDatedExcl } from '../services/holidays.js';
 import { isPrimary } from '../config/role.js';
 import { sendImmediateCommand } from '../services/commands.js';
 
@@ -549,8 +549,10 @@ async function refreshAnchoredTimes(now = new Date()) {
     // Per-schedule החרגה boundary: the payload's contents flip the day the
     // schedule's window opens or closes — re-push its device even when the
     // row's resolved times didn't move.
-    if (row.excl_type || row.excl_list) {
-      if (inExclusionRange(row, today) !== inExclusionRange(row, yesterday)) deviceIds.add(Number(row.device_id));
+    // (weekday exclusions live in the cron itself — only dated/holiday ones flip)
+    if (hasDatedExcl(row)) {
+      const dated = withoutWeeklyExcl(row);
+      if (inExclusionRange(dated, today) !== inExclusionRange(dated, yesterday)) deviceIds.add(Number(row.device_id));
     }
     // Dated sides ride the Shelly as year-less crons only inside the coming
     // year (shelly-schedules.js) — the day a date enters that window its job

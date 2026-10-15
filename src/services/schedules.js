@@ -127,10 +127,21 @@ function normalizeExclusionList(s, { tz = 'Asia/Jerusalem', now = new Date() } =
     s.excl_list = null;
     return;
   }
-  if (items.length > 20) throw errors.validation('עד 20 החרגות לתוכנית', { excl_list: 'max 20' });
+  if (items.length > 40) throw errors.validation('עד 40 החרגות לתוכנית', { excl_list: 'max 40' });
   const p0 = localParts(now, tz);
   const ymdRe = /^\d{4}-\d{2}-\d{2}$/;
   const out = items.map((x) => {
+    const derived = x?.derived ? { derived: true } : {};
+    // weekday / שבת-וחגים items (same choices as a scheduler); the rest are date ranges
+    if (x?.type === 'weekly') {
+      const days = [...new Set((Array.isArray(x.days) ? x.days : String(x.days || '').split(',')).map(Number))]
+        .filter((d) => Number.isInteger(d) && d >= 1 && d <= 7).sort((a, b) => a - b);
+      if (!days.length) throw errors.validation('בחרו לפחות יום אחד להחרגה', { excl_list: 'days 1-7' });
+      return { type: 'weekly', days, ...derived };
+    }
+    if (x?.type === 'holiday') {
+      return { type: 'holiday', holidays: parseHolidayKeys(x.holidays), ...derived };
+    }
     const type = x?.type === 'once' ? 'once' : 'yearly';
     const cal = x?.calendar === 'greg' ? 'greg' : 'heb';
     let date = x?.date ? String(x.date).slice(0, 10) : null;
@@ -152,7 +163,7 @@ function normalizeExclusionList(s, { tz = 'Asia/Jerusalem', now = new Date() } =
     if (type === 'once' && end < date) {
       throw errors.validation('תאריך הסיום של ההחרגה לפני תחילתה', { excl_list: 'end_date after date' });
     }
-    return { type, calendar: cal, date, end_date: end };
+    return { type, calendar: cal, date, end_date: end, ...derived };
   });
   s.excl_list = JSON.stringify(out);
 }
@@ -314,11 +325,11 @@ async function insertScheduleRow(conn, { relay, name, planId, fields, createdVia
   resolveSchedule(fields, { region: await regionOf(conn, relay.user_id), tz: relay.timezone });
   const s = validateScheduleRules(fields, { tz: relay.timezone });
   const res = await conn.query(
-    `INSERT INTO schedules (name, plan_id, user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
+    `INSERT INTO schedules (name, plan_id, plan_mode, user_id, relay_id, on_day_of_week, on_time, on_anchor, on_offset_min,
       off_day_of_week, off_time, off_anchor, off_offset_min,
       repeat_type, holidays, annual_date, annual_end_date, annual_calendar, excl_type, excl_date, excl_end_date, excl_calendar, excl_holidays, excl_days, excl_list, on_date, off_date, is_enabled, created_via, created_by, updated_by)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
-    [name, planId, relay.user_id, relay.id, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?,?,?)`,
+    [name, planId, planId ? (fields.plan_mode ?? null) : null, relay.user_id, relay.id, s.on_day_of_week, s.on_time, s.on_anchor, s.on_offset_min,
       s.off_day_of_week, s.off_time, s.off_anchor, s.off_offset_min,
       s.repeat_type, s.repeat_type === 'holiday' ? (s.holidays ?? null) : null,
       s.repeat_type === 'yearly' ? (s.annual_date ?? null) : null,
@@ -370,11 +381,47 @@ export async function createSchedule({ userId, relayId, createdVia, actingUserId
 //   { action:'on'|'off', repeat_type, time | anchor+offset_min,
 //     days:[1..7] | daily, holidays:[keys], calendar:'heb'|'greg',
 //     date (once/yearly civil), heb_day+heb_month (once/yearly Hebrew) }
+// A dated scheduler's `mode` ('add' | 'replace'): whether it runs alongside
+// the plan's all-year (weekly) schedulers on its days or instead of them.
+// 'replace' compiles into derived exclusions on the WEEKLY rows (one item per
+// replace-mode scheduler, same shape as a user exclusion), so the engine,
+// the calendar and the Shelly mirror need no new rule. Weekly schedulers
+// have no mode (they ARE the all-year schedule).
+export const schedulerMode = (sch) => (sch?.repeat_type && sch.repeat_type !== 'weekly'
+  ? (sch.mode === 'replace' ? 'replace' : 'add') : null);
+export function derivedExclusions(schedulers) {
+  const out = [];
+  for (const sch of Array.isArray(schedulers) ? schedulers : []) {
+    if (schedulerMode(sch) !== 'replace') continue;
+    if (sch.repeat_type === 'holiday') out.push({ type: 'holiday', holidays: sch.holidays, derived: true });
+    else if (sch.repeat_type === 'yearly' || sch.repeat_type === 'once') {
+      const heb = sch.calendar === 'heb';
+      out.push({
+        type: sch.repeat_type, calendar: heb ? 'heb' : 'greg', derived: true,
+        ...(heb
+          ? { heb_day: sch.heb_day, heb_month: sch.heb_month,
+            end_heb_day: sch.repeat_type === 'yearly' ? (sch.end_heb_day || sch.heb_day) : sch.heb_day,
+            end_heb_month: sch.repeat_type === 'yearly' ? (sch.end_heb_month || sch.heb_month) : sch.heb_month }
+          : { date: sch.date, end_date: sch.repeat_type === 'yearly' ? (sch.end_date || sch.date) : sch.date }),
+      });
+    }
+  }
+  return out;
+}
+// Exclusions a scheduler's rows carry: the user's list, plus — for the all-year
+// (weekly) ones — whatever the plan's replace-mode schedulers carve out.
+export function exclusionsFor(sch, exclusions, derived) {
+  const user = Array.isArray(exclusions) ? exclusions : [];
+  const extra = sch?.repeat_type === 'weekly' && derived?.length ? derived : [];
+  const all = [...user, ...extra];
+  return all.length ? all : (exclusions ?? null);
+}
+
 function schedulerRows(sch, exclusions) {
   const side = sch?.action === 'off' ? 'off' : 'on';
   const type = ['weekly', 'once', 'yearly', 'holiday'].includes(sch?.repeat_type) ? sch.repeat_type : 'weekly';
   const base = {
-    repeat_type: type, excl_list: exclusions ?? null,
+    repeat_type: type, excl_list: exclusions ?? null, plan_mode: schedulerMode({ ...sch, repeat_type: type }),
     on_time: null, on_day_of_week: null, on_date: null, on_anchor: 'clock', on_offset_min: 0,
     off_time: null, off_day_of_week: null, off_date: null, off_anchor: 'clock', off_offset_min: 0,
   };
@@ -520,11 +567,12 @@ export async function savePlan({ userId, planId, name, relayIds, schedulers, exc
       );
       for (const e of existing) deviceIds.add(Number(e.device_id));
     }
+    const derived = derivedExclusions(schedulers);
     for (const relayId of relays) {
       const relay = await requireRelay(conn, relayId, userId);
       deviceIds.add(Number(relay.device_id));
       for (const sch of schedulers) {
-        for (const fields of schedulerRows(sch, exclusions)) {
+        for (const fields of schedulerRows(sch, exclusionsFor(sch, exclusions, derived))) {
           ids.push(await insertScheduleRow(conn, { relay, name: planName, planId, fields, createdVia, actor }));
         }
       }
@@ -740,7 +788,7 @@ export async function deleteSchedule({ userId, scheduleId, actor = null }) {
 
 export async function listSchedules({ userId }) {
   const rows = await query(
-    `SELECT s.id, s.name, s.plan_id, s.relay_id, r.name AS relay_name, d.id AS device_id, d.name AS device_name, d.sync_status,
+    `SELECT s.id, s.name, s.plan_id, s.plan_mode, s.relay_id, r.name AS relay_name, d.id AS device_id, d.name AS device_name, d.sync_status,
             s.user_id, u.full_name AS user_name,
             s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time, s.on_anchor, s.on_offset_min,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time, s.off_anchor, s.off_offset_min,
@@ -836,13 +884,31 @@ export function describeScheduleHe(row) {
   } else if (row.excl_date) {
     excl = `, עם החרגה מ${exclDM(row.excl_date)} עד ${exclDM(row.excl_end_date || row.excl_date)}`;
   } else if (Array.isArray(row.excl_list) && row.excl_list.length) {
-    // תוכנית ranges: read the first one out, count the rest.
-    const x = row.excl_list[0];
-    const dm = (d) => (x.calendar === 'heb'
+    // תוכנית list: read the first user item out, count the rest (derived
+    // items — carved out by replace-mode schedulers — are read as such).
+    const user = row.excl_list.filter((x) => !x?.derived);
+    const derived = row.excl_list.length - user.length;
+    const x = user[0];
+    const dm = (d) => (x?.calendar === 'heb'
       ? (() => { const hd = new HDate(new Date(`${ymdOf(d)}T12:00:00`)); return `${hd.getDate()} ${HEB_MONTH_HE[hd.getMonth()] || ''}`; })()
       : dayMonth(d));
-    excl = `, עם החרגה מ${dm(x.date)} עד ${dm(x.end_date || x.date)}${row.excl_list.length > 1 ? ` ועוד ${row.excl_list.length - 1}` : ''}`;
+    let first = '';
+    if (x?.type === 'weekly') {
+      const days = (x.days || []).map((d) => DAY_NAMES_HE[d]).filter(Boolean).join(' ו');
+      if (days) first = `בימי ${days}`;
+    } else if (x?.type === 'holiday') {
+      const keys = x.holidays || [];
+      const parts = [];
+      if (keys.includes('shabbat')) parts.push('בשבתות');
+      if (keys.some((k) => k !== 'shabbat')) parts.push('בחגים');
+      first = parts.join(' ו');
+    } else if (x?.date) {
+      first = `מ${dm(x.date)} עד ${dm(x.end_date || x.date)}`;
+    }
+    if (first) excl = `, עם החרגה ${first}${user.length > 1 ? ` ועוד ${user.length - 1}` : ''}`;
+    if (derived) excl += `, ולא פועל בימי ${derived === 1 ? 'התזמון המיוחד' : 'התזמונים המיוחדים'} של התוכנית`;
   }
+  const modeNote = row.plan_mode === 'replace' ? ', במקום התזמון הקבוע' : '';
   const type = row.repeat_type === 'once' ? 'חד פעמי'
     : row.repeat_type === 'yearly' ? 'שנתי'
     : row.repeat_type === 'holiday' ? 'לחגים'
@@ -855,7 +921,7 @@ export function describeScheduleHe(row) {
   // Comma, not colon, after the name — Yemot rejects reads with non-time colons.
   // A custom name leads the readout so the caller recognizes their own labels.
   const label = row.name && !/^תזמון \d+$/.test(row.name) ? `${row.name}, ` : '';
-  return `${label}תזמון ${type} לממסר ${row.relay_name}, ${sides}${excl}${disabled}`;
+  return `${label}תזמון ${type} לממסר ${row.relay_name}, ${sides}${modeNote}${excl}${disabled}`;
 }
 
 function ymdOf(v) {
