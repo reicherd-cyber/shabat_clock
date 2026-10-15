@@ -2,7 +2,14 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Badge, Modal, ErrorNote, useAsync, FilterSelect } from '../ui.jsx';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Pencil, Trash2, ArrowUp, ArrowDown } from 'lucide-react';
+
+// Sort options (same control as the tasks page). Default = newest first,
+// which is the order the API already returns (id DESC).
+const SORT_FIELDS = {
+  created: { label: 'נוצר', key: (u) => (u.created_at ? new Date(u.created_at).getTime() : 0), defaultDir: 'desc' },
+  name: { label: 'שם', key: (u) => (u.full_name || '').trim(), defaultDir: 'asc' },
+};
 
 export default function Users() {
   const [users, setUsers] = useState(null);
@@ -13,6 +20,10 @@ export default function Users() {
   const [q, setQ] = useState(params.get('q') || '');
   useEffect(() => { setQ(params.get('q') || ''); }, [params]);
   const [fStatus, setFStatus] = useState('');
+  const [sortBy, setSortBy] = useState('created');
+  const [sortDir, setSortDir] = useState('desc');
+  // Picking a field resets the direction to that field's natural one (names A→ת, dates newest first).
+  const pickSort = (k) => { setSortBy(k); setSortDir(SORT_FIELDS[k].defaultDir); };
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => setUsers(await adminApi.get('/users'));
@@ -83,9 +94,16 @@ export default function Users() {
   if (!users) return <p className="text-muted">טוען…</p>;
   // Search matches name / email / IVR code / notes; status narrows further.
   const needle = q.trim().toLowerCase();
+  const keyOf = SORT_FIELDS[sortBy].key;
+  const dir = sortDir === 'desc' ? -1 : 1;
   const shown = users.filter((u) =>
     (!needle || `${u.full_name} ${u.email || ''} ${u.ivr_code || ''} ${u.notes || ''}`.toLowerCase().includes(needle))
-    && (!fStatus || u.status === fStatus));
+    && (!fStatus || u.status === fStatus))
+    .sort((a, b) => {
+      const ka = keyOf(a); const kb = keyOf(b);
+      const c = typeof ka === 'string' ? ka.localeCompare(kb, 'he') : ka - kb;
+      return c * dir || b.id - a.id;
+    });
   const filtering = needle || fStatus;
   return (
     <div className="space-y-4">
@@ -98,6 +116,14 @@ export default function Users() {
             <option value="active">פעיל</option>
             <option value="suspended">מושעה</option>
           </FilterSelect>
+          <span className="text-muted text-sm">מיון לפי:</span>
+          <FilterSelect className="py-2 text-sm" value={sortBy} onChange={(e) => pickSort(e.target.value)}>
+            {Object.entries(SORT_FIELDS).map(([k, f]) => <option key={k} value={k}>{f.label}</option>)}
+          </FilterSelect>
+          <Button variant="ghost" className="!px-2 !py-1" title={sortDir === 'asc' ? 'עולה' : 'יורד'}
+            onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}>
+            {sortDir === 'asc' ? <ArrowUp size={15} /> : <ArrowDown size={15} />}
+          </Button>
           {filtering && (
             <Button variant="ghost" onClick={() => { setQ(''); setFStatus(''); }}>נקה סינון</Button>
           )}
