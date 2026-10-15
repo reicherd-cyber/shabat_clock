@@ -31,7 +31,8 @@ export const reachableForBackup = (s, now = Date.now()) => {
 
 const floorMinute = (d) => new Date(Math.floor(d.getTime() / 60000) * 60000);
 
-async function loadActiveSchedules() {
+// Optional deviceId narrows the fleet-wide join to one unit (catch-up).
+async function loadActiveSchedules(deviceId = null) {
   return query(
     `SELECT s.id, s.on_day_of_week, TIME_FORMAT(s.on_time,'%H:%i') AS on_time,
             s.off_day_of_week, TIME_FORMAT(s.off_time,'%H:%i') AS off_time,
@@ -46,7 +47,8 @@ async function loadActiveSchedules() {
      JOIN devices d ON d.id = r.device_id
      WHERE s.is_enabled = TRUE AND s.deleted_at IS NULL
        AND r.is_enabled = TRUE AND r.deleted_at IS NULL
-       AND d.is_enabled = TRUE`,
+       AND d.is_enabled = TRUE${deviceId != null ? ' AND d.id = ?' : ''}`,
+    deviceId != null ? [Number(deviceId)] : [],
   );
 }
 
@@ -353,17 +355,29 @@ async function autoCompleteOnce() {
   for (const id of deviceIds) pushScheduleToDevice(id).catch(() => {});
 }
 
-// Due occurrences of ONE relay's enabled schedules inside [from, to)
-// (exclusion ranges honoured), newest last.
-async function relayOccurrences(relayId, from, to, schedules = null) {
-  const rows = (schedules ?? await loadActiveSchedules()).filter((s) => Number(s.relay_id) === Number(relayId));
+// Due occurrences of these schedules inside [from, to), exclusions honoured;
+// one bad row (unparseable timezone…) is skipped, never fatal. Pure.
+export function dueOccurrences(schedules, from, to) {
   const out = [];
-  for (const s of rows) {
+  for (const s of schedules) {
     let occs;
     try { occs = occurrencesInWindow(s, from, to); } catch { continue; }
     for (const occ of occs) if (!inExclusionRange(s, occ.localKey.slice(0, 10))) out.push(occ);
   }
-  return sortDue(out);
+  return out;
+}
+
+// Due occurrences of ONE relay's enabled schedules inside [from, to), newest last.
+async function relayOccurrences(relayId, from, to, schedules = null) {
+  const rows = (schedules ?? await loadActiveSchedules()).filter((s) => Number(s.relay_id) === Number(relayId));
+  return sortDue(dueOccurrences(rows, from, to));
+}
+
+// Relays with an occurrence due in [from, upTo) — computed from the schedules
+// themselves, not the log (the log row for a just-due occurrence is only
+// written when the tick's backup window reaches it, minutes later). Pure.
+export function recentlyDueRelays(schedules, from, upTo) {
+  return new Set(dueOccurrences(schedules, from, upTo).map((occ) => Number(occ.schedule.relay_id)));
 }
 
 // True when any enabled schedule of this relay has an occurrence inside
@@ -441,9 +455,21 @@ export async function catchUpDevice(deviceId, { now = new Date(), reason = 'reco
         ORDER BY se.occurrence_utc, se.id`,
       [id, toDb(from), toDb(to)],
     );
+    if (!rows.length) return { applied: [] };
+    // Channels with an occurrence due INSIDE the grace window — or in the
+    // minute the tick is handling right now (its due minute is to − 1 min;
+    // that tick may still be running, or skipped by the overrun guard) — are
+    // left alone: the unit may have just run it locally (the live state shows
+    // it, the log does not yet), and the tick's backup window owns those
+    // minutes. 2026-10-15: a reconnect 12 s after a 20:30 ON reverted two A/Cs.
+    const recent = recentlyDueRelays(
+      await loadActiveSchedules(id),
+      new Date(to.getTime() - 60000), new Date(floorMinute(now).getTime() + 60000),
+    );
     const applied = [];
     for (const [relayId, latest] of latestDueByRelay(rows)) {
       if (!latest) continue; // same-minute conflict
+      if (recent.has(Number(relayId))) continue;
       const [relay] = await query('SELECT id, name, current_state FROM relays WHERE id = ? AND deleted_at IS NULL AND is_enabled = TRUE', [relayId]);
       if (!relay || relay.current_state === 'unknown' || relay.current_state === latest.action) continue;
       // A hand-made switch after the occurrence is the customer's word — keep it.

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { latestDueByRelay, reachableForBackup } from '../src/scheduler/tick.js';
+import { latestDueByRelay, reachableForBackup, recentlyDueRelays } from '../src/scheduler/tick.js';
 
 const row = (relayId, utc, action, status = 'unverified_offline') => ({ relay_id: relayId, occurrence_utc: utc, action, status, execution_id: 1, schedule_id: 1 });
 
@@ -30,4 +30,27 @@ test('reachableForBackup: online flag alone is not enough for a Shelly', () => {
   assert.equal(reachableForBackup({ ...base, last_seen_at: '2026-10-15T09:50:00Z' }, now), false);
   assert.equal(reachableForBackup({ ...base, last_seen_at: null }, now), false);
   assert.equal(reachableForBackup({ ...base, is_online: 0, last_seen_at: '2026-10-15T09:59:00Z' }, now), false);
+});
+
+test('recentlyDueRelays: a channel whose schedule fired inside the grace window is left to the tick', () => {
+  // weekly daily ON 20:30 Israel time; 2026-10-15 20:30 local = 17:30Z
+  const sched = { id: 1, relay_id: 18, device_id: 8, timezone: 'Asia/Jerusalem', repeat_type: 'weekly', on_day_of_week: null, on_time: '20:30', off_time: null, excl_list: null };
+  const to = new Date('2026-10-15T17:27:00Z');   // catch-up window end (now − grace)
+  const upTo = new Date('2026-10-15T17:31:00Z'); // now, floored, + 1 min
+  assert.ok(recentlyDueRelays([sched], to, upTo).has(18));
+  // same schedule an hour later: nothing due inside the window
+  assert.equal(recentlyDueRelays([sched], new Date('2026-10-15T18:27:00Z'), new Date('2026-10-15T18:31:00Z')).size, 0);
+  // excluded day → not counted
+  const excl = { ...sched, excl_list: [{ type: 'weekly', days: [5] }] }; // 15.10.2026 is a Thursday (5)
+  assert.equal(recentlyDueRelays([excl], to, upTo).size, 0);
+});
+
+test('recentlyDueRelays: the window the catch-up passes also covers the tick\'s own due minute (to − 1 min)', () => {
+  // ON due 20:30 (17:30Z); catch-up at 20:33:02 → to = 20:30, recent window = [20:29, 20:34)
+  const sched = { id: 2, relay_id: 17, device_id: 8, timezone: 'Asia/Jerusalem', repeat_type: 'weekly', on_day_of_week: null, on_time: '20:30', off_time: null, excl_list: null };
+  const to = new Date('2026-10-15T17:30:00Z');
+  assert.ok(recentlyDueRelays([sched], new Date(to.getTime() - 60000), new Date('2026-10-15T17:34:00Z')).has(17));
+  // a schedule whose row cannot be resolved is skipped, not fatal
+  const bad = { ...sched, id: 3, relay_id: 19, timezone: 'Not/AZone' };
+  assert.doesNotThrow(() => recentlyDueRelays([bad, sched], new Date(to.getTime() - 60000), new Date('2026-10-15T17:34:00Z')));
 });
