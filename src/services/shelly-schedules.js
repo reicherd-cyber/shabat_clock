@@ -31,7 +31,7 @@ import { query } from '../db/pool.js';
 import { isPrimary } from '../config/role.js';
 import { shellyCall } from './shelly.js';
 import { timeToMinutes, localParts, dowOfDate, isNextAnniversary, ymdOf } from './time.js';
-import { inExclusionRange, exclWeeklyDays, withoutWeeklyExcl, hasDatedExcl } from './holidays.js';
+import { inExclusionRange, exclWeeklyDays, withoutWeeklyExcl } from './holidays.js';
 
 const MAX_SHELLY_JOBS = 20;      // Gen2 firmware: "limit of 20 schedule instances per device"
 const MAX_CALLS_PER_JOB = 5;     // Gen2 firmware: "limit of 5 calls per schedule job"
@@ -65,7 +65,8 @@ export function buildShellyJobs(rows, today) {
         // (restored on the flip day by the daily refresh).
         const exclDays = exclWeeklyDays(s);
         if (exclDays.size) days = days.filter((d) => !exclDays.has(d));
-        if (hasDatedExcl(s) && inExclusionRange(withoutWeeklyExcl(s), today)) continue;
+        const dated = withoutWeeklyExcl(s);
+        if ((dated.excl_type || dated.excl_list) && inExclusionRange(dated, today)) continue;
         if (!days.length) continue;
         const dow = days.length === 7 ? '*' : days.map((d) => d - 1).sort((a, b) => a - b).join(',');
         jobs.push({ enable: true, timespec: `0 ${mm} ${hh} * * ${dow}`, calls: [call] });

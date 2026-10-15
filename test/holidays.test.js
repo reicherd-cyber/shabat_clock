@@ -380,3 +380,15 @@ test('exclWeeklyDays / withoutWeeklyExcl split weekday items from dated ones', (
   assert.ok(inExclusionRange(dated, '2026-07-10'));
   assert.ok(!inExclusionRange(dated, '2026-07-05')); // Sunday no longer excluded once weekdays are stripped
 });
+
+test('yearly range wrapping the year boundary resolves while in progress (one- and two-sided)', () => {
+  // one-sided: 25.12 → 5.1, today 2.1 → tomorrow's... today's event (still ahead) this year
+  const s = { annual_date: '2025-12-25', annual_end_date: '2025-01-05', annual_calendar: 'greg', on_time: '18:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2027-01-02T09:00:00Z') });
+  assert.equal(s.on_date, '2027-01-02');
+  // two-sided legacy pairing: ON last year, OFF this year still pending
+  const p = { annual_date: '2025-12-25', annual_end_date: '2025-01-05', annual_calendar: 'greg', on_time: '18:00', off_time: '08:00' };
+  resolveYearlySchedule(p, { region: 'jerusalem', tz: TZ, now: new Date('2027-01-02T09:00:00Z') });
+  assert.equal(p.on_date, '2026-12-25');
+  assert.equal(p.off_date, '2027-01-05');
+});

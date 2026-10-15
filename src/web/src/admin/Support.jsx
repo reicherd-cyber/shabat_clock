@@ -40,7 +40,12 @@ function VoicePlayer({ id, hungUp = false }) {
     setState('loading');
     try {
       const res = await fetch(`/api/v1/admin/support/${id}/audio`, { headers: { Authorization: `Bearer ${tokens.admin}` } });
-      if (res.status === 404) { setState(hungUp ? 'hungup' : 'missing'); return; }
+      if (res.status === 404) {
+        // the server says which 404 this is (VOICEMAIL_HANGUP vs not-yet); the row flag is the fallback
+        const code = await res.json().then((b) => b?.error?.code).catch(() => null);
+        setState(code === 'VOICEMAIL_HANGUP' || (code == null && hungUp) ? 'hungup' : 'missing');
+        return;
+      }
       if (!res.ok) throw new Error();
       setUrl(URL.createObjectURL(await res.blob()));
       setState('ready');

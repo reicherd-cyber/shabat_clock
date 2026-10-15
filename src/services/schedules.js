@@ -127,7 +127,8 @@ function normalizeExclusionList(s, { tz = 'Asia/Jerusalem', now = new Date() } =
     s.excl_list = null;
     return;
   }
-  if (items.length > 40) throw errors.validation('עד 40 החרגות לתוכנית', { excl_list: 'max 40' });
+  // the cap counts what the user entered — derived (replace-mode) items ride along
+  if (items.filter((x) => !x?.derived).length > 40) throw errors.validation('עד 40 החרגות לתוכנית', { excl_list: 'max 40' });
   const p0 = localParts(now, tz);
   const ymdRe = /^\d{4}-\d{2}-\d{2}$/;
   const out = items.map((x) => {
@@ -416,14 +417,13 @@ export function derivedExclusions(schedulers) {
 // Returns Hebrew messages; empty = fine.
 export function planConflicts(schedulers, exclusions) {
   const out = [];
-  const DAY = { 1: 'ראשון', 2: 'שני', 3: 'שלישי', 4: 'רביעי', 5: 'חמישי', 6: 'שישי', 7: 'שבת' };
   for (const x of Array.isArray(exclusions) ? exclusions : []) {
     if (!x || x.derived) continue;
     for (const s of Array.isArray(schedulers) ? schedulers : []) {
       if (x.type === 'weekly' && s?.repeat_type === 'weekly' && !s.daily) {
         const xd = (Array.isArray(x.days) ? x.days : String(x.days || '').split(',')).map(Number);
         const hit = (s.days || []).map(Number).filter((d) => xd.includes(d)).sort((a, b) => a - b);
-        if (hit.length) out.push(`החרגה בימי ${hit.map((d) => DAY[d]).join(', ')} מבטלת תזמון שנקבע לימים אלו`);
+        if (hit.length) out.push(`החרגה בימי ${hit.map((d) => DAY_NAMES_HE[d]).join(', ')} מבטלת תזמון שנקבע לימים אלו`);
       } else if (x.type === 'holiday' && s?.repeat_type === 'holiday') {
         const xk = Array.isArray(x.holidays) ? x.holidays : String(x.holidays || '').split(',');
         const hit = (Array.isArray(s.holidays) ? s.holidays : String(s.holidays || '').split(',')).filter((k) => k && xk.includes(k));

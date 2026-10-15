@@ -366,7 +366,9 @@ export function withoutWeeklyExcl(row) {
     excl_list: list.length ? list : null,
   };
 }
-export const hasDatedExcl = (row) => Boolean(withoutWeeklyExcl(row).excl_type || withoutWeeklyExcl(row).excl_list);
+// Callers that also need the stripped row should keep the result of
+// withoutWeeklyExcl and test it directly (one parse per row).
+export const hasDatedExcl = (row) => { const d = withoutWeeklyExcl(row); return Boolean(d.excl_type || d.excl_list); };
 
 // Hebrew pick (day 1–30 + hebcal month, Nisan=1 … Tishrei=7 … Adar=12/Adar II=13)
 // → a representative Gregorian date whose Hebrew date equals the pick; a
@@ -424,7 +426,10 @@ export function resolveYearlySchedule(s, { region = DEFAULT_REGION, tz = 'Asia/J
   const endSrc = s.annual_end_date ? ymdParts(s.annual_end_date) : src;
   const today = { y: p0.y, mo: p0.mo, d: p0.d };
   const nowKey = localKey(today, p0.hh * 60 + p0.mm);
-  for (let i = 0; i < 3; i++) {
+  // From LAST year's occurrence: a range that wraps the year boundary
+  // (כ״ה אלול → י׳ תשרי, 25.12 → 5.1) may be in progress with a start date
+  // in the previous year; a fully passed occurrence just fails the key test.
+  for (let i = -1; i < 3; i++) {
     const date = yearlyOccurrence(src, calendar, i, today);
     let endDate = yearlyOccurrence(endSrc, calendar, i, today);
     if (ymdStr(endDate) < ymdStr(date)) endDate = yearlyOccurrence(endSrc, calendar, i + 1, today); // range wraps the year boundary

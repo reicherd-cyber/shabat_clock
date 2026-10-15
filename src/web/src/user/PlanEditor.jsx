@@ -176,6 +176,9 @@ export function planConflicts(schedulers, exclusions) {
         const keys = (s.holidays || []).filter((k) => (x.holidays || []).includes(k));
         if (keys.length) hit = `ב${keys.map((k) => HOLIDAY_NAMES[k] || k).join(', ')}`;
       } else if ((x.type === 'once' || x.type === 'yearly') && (s.repeat_type === 'once' || s.repeat_type === 'yearly') && x.calendar === s.calendar) {
+        // a one-time exclusion over a YEARLY scheduler is the legitimate
+        // "skip this year's occurrence" — not a conflict
+        if (x.type === 'once' && s.repeat_type === 'yearly') continue;
         const a = datedSpan(x, false);
         const b = datedSpan(s, true);
         if (a && b) {
@@ -656,7 +659,10 @@ function ExclusionForm({ draft, setDraft, onConfirm, onCancel, isNew, schedulers
           </div>
         </div>
       )}
-      {x.type === 'holiday' && <HolidayDaysGrid value={x.holidays} onChange={(holidays) => set({ holidays })} />}
+      {x.type === 'holiday' && (<>
+        <HolidayDaysGrid value={x.holidays} onChange={(holidays) => set({ holidays })} />
+        <p className="text-xs text-muted">ההחרגה כוללת גם את ערב היום שנבחר (ערב שבת / ערב חג) — אירועי הערב שייכים לשבת ולחג עצמם.</p>
+      </>)}
       {dated && (<>
         <div className="flex items-center gap-3 flex-wrap">
           {x.type === 'yearly' && <span className="text-sm text-muted">חוזר כל שנה —</span>}
