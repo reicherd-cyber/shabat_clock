@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Modal, ErrorNote, useAsync, SectionHead, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect } from '../ui.jsx';
-import { MessageSquare, MessageCircle, Send, Phone, Inbox, Bot } from 'lucide-react';
+import { MessageSquare, MessageCircle, Send, Phone, PhoneOff, Inbox, Bot } from 'lucide-react';
 import HelpChats from './HelpChats.jsx';
 
 // פניות תמיכה: תיבת ההודעות שמשתמשים שולחים ממרכז העזרה. סטטוסים רכים והפיכים
@@ -31,14 +31,21 @@ const nameOf = (m) => (isPhone(m) || (isWa(m) && !m.user_name) ? (m.phone || 'מ
 
 // נגן להודעה קולית: הקובץ נשלף דרך השרת עם כותרת ההרשאה (לא <audio src> ישיר),
 // כמו בדף ההקלטות. עד שההעתקה מימות הסתיימה השרת מחזיר 404 — מציעים לנסות שוב.
-function VoicePlayer({ id }) {
+// מתקשר שניתק לפני שהשאיר הודעה (hungUp) — אין הקלטה שתגיע אי פעם: מציגים זאת
+// במפורש ובלי כפתור "נסה שוב" (נסיון אחד עדיין נעשה, למקרה הנדיר שהקובץ כן נשמר).
+function VoicePlayer({ id, hungUp = false }) {
   const [url, setUrl] = useState(null);
-  const [state, setState] = useState('loading'); // loading | ready | missing | error
+  const [state, setState] = useState('loading'); // loading | ready | missing | hungup | error
   const load = async () => {
     setState('loading');
     try {
       const res = await fetch(`/api/v1/admin/support/${id}/audio`, { headers: { Authorization: `Bearer ${tokens.admin}` } });
-      if (res.status === 404) { setState('missing'); return; }
+      if (res.status === 404) {
+        // the server says which 404 this is (VOICEMAIL_HANGUP vs not-yet); the row flag is the fallback
+        const code = await res.json().then((b) => b?.error?.code).catch(() => null);
+        setState(code === 'VOICEMAIL_HANGUP' || (code == null && hungUp) ? 'hungup' : 'missing');
+        return;
+      }
       if (!res.ok) throw new Error();
       setUrl(URL.createObjectURL(await res.blob()));
       setState('ready');
@@ -46,6 +53,14 @@ function VoicePlayer({ id }) {
   };
   useEffect(() => { load(); return () => { if (url) URL.revokeObjectURL(url); }; }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
   if (state === 'ready') return <audio controls src={url} className="w-full" preload="metadata" />;
+  if (state === 'hungup') {
+    return (
+      <div className="flex items-start gap-2 text-sm">
+        <PhoneOff size={16} className="shrink-0 mt-0.5 text-[#e11d48]" aria-hidden />
+        <span>המתקשר ניתק לפני שהשאיר הודעה — אין הקלטה. יש לחזור אליו בטלפון.</span>
+      </div>
+    );
+  }
   return (
     <div className="flex items-center gap-2 text-sm text-muted">
       <span>{state === 'loading' ? 'טוען הקלטה…' : state === 'missing' ? 'ההקלטה עדיין לא התקבלה מימות המשיח (בדרך כלל תוך דקה)' : 'טעינת ההקלטה נכשלה'}</span>
@@ -216,7 +231,9 @@ export function SupportInbox() {
               <span className={`text-xs font-medium rounded-full px-2 py-0.5 shrink-0 ${STATUS[m.status].cls}`}>{STATUS[m.status].label}</span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-2">
-                  {isPhone(m) && <Phone size={13} className="shrink-0 self-center text-accent" aria-label="הודעה קולית" />}
+                  {isPhone(m) && (m.voicemail_hangup
+                    ? <PhoneOff size={13} className="shrink-0 self-center text-[#e11d48]" aria-label="ניתק ללא הודעה" />
+                    : <Phone size={13} className="shrink-0 self-center text-accent" aria-label="הודעה קולית" />)}
                   {isWa(m) && <MessageCircle size={13} className="shrink-0 self-center text-[#25d366]" aria-label="וואטסאפ" />}
                   <span className={`truncate ${m.status === 'new' ? 'font-bold' : 'font-medium'}`} dir={isPhone(m) ? 'ltr' : undefined}>{nameOf(m)}</span>
                   {m.topic && <span className="text-xs text-muted shrink-0">{TOPIC_LABELS[m.topic] || m.topic}</span>}
@@ -251,14 +268,14 @@ export function SupportInbox() {
                 </>
               )}
               {open.topic && <span>נושא: {TOPIC_LABELS[open.topic] || open.topic}</span>}
-              {isPhone(open) && <span>הודעה קולית מתפריט המכירות</span>}
+              {isPhone(open) && <span>{open.voicemail_hangup ? 'התקשר לתפריט המכירות וניתק לפני שהשאיר הודעה' : 'הודעה קולית מתפריט המכירות'}</span>}
               {isWa(open) && <span className="flex items-center gap-1"><MessageCircle size={13} className="text-[#25d366]" />פנייה מוואטסאפ{open.phone ? <> · <a dir="ltr" className="text-accent hover:underline" href={`https://wa.me/${waDigits(open.phone)}`} target="_blank" rel="noreferrer">{open.phone}</a></> : null}</span>}
             </div>
 
             {/* הודעה קולית — הנגן מעל השיחה */}
             {isPhone(open) && (
               <div className="border border-line rounded-[10px] bg-surface2/50 px-3 py-2">
-                <VoicePlayer id={open.id} />
+                <VoicePlayer id={open.id} hungUp={!!open.voicemail_hangup} />
               </div>
             )}
 

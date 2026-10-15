@@ -323,6 +323,16 @@ function inDateRange(x, dateStr) {
 // the stored fields. Legacy excl_type: 'yearly'/'once' date range, 'holiday'
 // (selected שבת/חג days + erev), 'weekly' (CSV of days 1–7); plus every range
 // in excl_list.
+// excl_list items (תוכנית): {type:'yearly'|'once', calendar, date, end_date} date
+// ranges, {type:'weekly', days:[1..7]} weekdays, {type:'holiday', holidays:[keys]}
+// selected שבת/חג days (+ erev, like the legacy field). A `derived` item was
+// compiled from a 'replace'-mode scheduler (schedules.js) — same effect.
+function inExclItem(x, dateStr) {
+  if (!x) return false;
+  if (x.type === 'weekly') return (x.days || []).map(Number).includes(dowOfDate(ymdParts(dateStr)));
+  if (x.type === 'holiday') return inHolidayBlock(x.holidays, dateStr);
+  return inDateRange(x, dateStr);
+}
 export function inExclusionRange(row, dateStr) {
   if (!row) return false;
   if (row.excl_type === 'weekly') {
@@ -332,8 +342,33 @@ export function inExclusionRange(row, dateStr) {
   } else if (row.excl_type && row.excl_date) {
     if (inDateRange({ type: row.excl_type, calendar: row.excl_calendar, date: row.excl_date, end_date: row.excl_end_date }, dateStr)) return true;
   }
-  return parseExclList(row.excl_list).some((x) => inDateRange(x, dateStr));
+  return parseExclList(row.excl_list).some((x) => inExclItem(x, dateStr));
 }
+
+// Weekday exclusions as a Set of 1–7 (legacy excl_days + excl_list weekly items)
+// — the Shelly mirror drops those days from the cron instead of toggling the
+// job day by day.
+export function exclWeeklyDays(row) {
+  const out = new Set();
+  if (row?.excl_type === 'weekly') for (const d of String(row.excl_days || '').split(',')) if (d) out.add(Number(d));
+  for (const x of parseExclList(row?.excl_list)) if (x?.type === 'weekly') for (const d of x.days || []) out.add(Number(d));
+  return out;
+}
+// The same row with its weekday exclusions removed — for "is today inside a
+// dated/holiday exclusion" questions where weekdays are handled separately.
+export function withoutWeeklyExcl(row) {
+  if (!row) return row;
+  const list = parseExclList(row.excl_list).filter((x) => x?.type !== 'weekly');
+  return {
+    ...row,
+    excl_type: row.excl_type === 'weekly' ? null : row.excl_type,
+    excl_days: row.excl_type === 'weekly' ? null : row.excl_days,
+    excl_list: list.length ? list : null,
+  };
+}
+// Callers that also need the stripped row should keep the result of
+// withoutWeeklyExcl and test it directly (one parse per row).
+export const hasDatedExcl = (row) => { const d = withoutWeeklyExcl(row); return Boolean(d.excl_type || d.excl_list); };
 
 // Hebrew pick (day 1–30 + hebcal month, Nisan=1 … Tishrei=7 … Adar=12/Adar II=13)
 // → a representative Gregorian date whose Hebrew date equals the pick; a
@@ -391,10 +426,36 @@ export function resolveYearlySchedule(s, { region = DEFAULT_REGION, tz = 'Asia/J
   const endSrc = s.annual_end_date ? ymdParts(s.annual_end_date) : src;
   const today = { y: p0.y, mo: p0.mo, d: p0.d };
   const nowKey = localKey(today, p0.hh * 60 + p0.mm);
-  for (let i = 0; i < 3; i++) {
+  // From LAST year's occurrence: a range that wraps the year boundary
+  // (כ״ה אלול → י׳ תשרי, 25.12 → 5.1) may be in progress with a start date
+  // in the previous year; a fully passed occurrence just fails the key test.
+  for (let i = -1; i < 3; i++) {
     const date = yearlyOccurrence(src, calendar, i, today);
     let endDate = yearlyOccurrence(endSrc, calendar, i, today);
     if (ymdStr(endDate) < ymdStr(date)) endDate = yearlyOccurrence(endSrc, calendar, i + 1, today); // range wraps the year boundary
+    // One-sided row over several days (a תוכנית scheduler "מתאריך עד תאריך"):
+    // the action fires on EVERY day of the range — resolve to the next pending
+    // day; the daily refresh walks it forward. Two-sided rows keep the legacy
+    // pairing below (ON on the from-date, OFF on the to-date).
+    if (hasOn !== hasOff && ymdStr(endDate) > ymdStr(date)) {
+      const side = hasOn ? 'on' : 'off';
+      const probe = sideMinutes(s, side, date, region, tz);
+      if (probe == null && (s[`${side}_anchor`] || 'clock') === 'clock') {
+        throw errors.validation(`${side.toUpperCase()} side needs ${side}_time HH:MM`, { [`${side}_time`]: 'HH:MM' });
+      }
+      for (let d = date, n = 0; ymdStr(d) <= ymdStr(endDate) && n < 400; d = shiftDate(d, 1), n++) {
+        const min = sideMinutes(s, side, d, region, tz);
+        if (min == null || localKey(d, min) <= nowKey) continue;
+        s.on_date = hasOn ? ymdStr(d) : null;
+        s.on_time = hasOn ? minutesToHHMM(min) : null;
+        s.off_date = hasOff ? ymdStr(d) : null;
+        s.off_time = hasOff ? minutesToHHMM(min) : null;
+        s.on_day_of_week = null;
+        s.off_day_of_week = null;
+        return s;
+      }
+      continue;
+    }
     const onMin = hasOn ? sideMinutes(s, 'on', date, region, tz) : null;
     if (hasOn && onMin == null) throw errors.validation('ON side needs on_time HH:MM', { on_time: 'HH:MM' });
     let offDate = endDate;

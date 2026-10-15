@@ -79,6 +79,16 @@ export function expandSchedules(rows, { from, days }) {
       // Every occurrence of the range in/near the calendar window; a same-day
       // OFF earlier than the ON crosses midnight (same rule as the resolver).
       for (const r of yearlyRangesAround(s.annual_date, s.annual_end_date, s.annual_calendar, from, Math.ceil(days / 365) + 1)) {
+        // One-sided range (תוכנית "מתאריך עד תאריך"): the action fires on every
+        // day of it — same rule as resolveYearlySchedule.
+        if (Boolean(s.on_time) !== Boolean(s.off_time) && ymdStr(r.off) > ymdStr(r.on)) {
+          const side = s.on_time ? 'on' : 'off';
+          for (let d = r.on, n = 0; ymdStr(d) <= ymdStr(r.off) && n < 400; d = shiftDate(d, 1), n++) {
+            const t = sideTimeFor(side, d);
+            if (t && inRange(ymdStr(d))) push(d, t, side);
+          }
+          continue;
+        }
         const onT = s.on_time ? sideTimeFor('on', r.on) : null;
         if (onT && inRange(ymdStr(r.on))) push(r.on, onT, 'on');
         if (s.off_time) {

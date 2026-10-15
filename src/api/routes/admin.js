@@ -1204,7 +1204,7 @@ adminRouter.get('/support', async (req, res, next) => {
     }
     const rows = await query(
       `SELECT m.id, m.user_id, m.source, m.phone, m.topic, m.body, m.transcript, m.status, m.created_at, m.updated_at, m.updated_by,
-              (m.audio_file IS NOT NULL) AS has_audio,
+              (m.audio_file IS NOT NULL) AS has_audio, m.voicemail_hangup,
               u.full_name AS user_name, u.email AS user_email,
               (SELECT COUNT(*) FROM support_replies r WHERE r.message_id = m.id AND r.deleted_at IS NULL) AS reply_count,
               (SELECT r.sender FROM support_replies r WHERE r.message_id = m.id AND r.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1) AS last_sender,
@@ -1256,7 +1256,7 @@ adminRouter.get('/support/:id/replies', async (req, res, next) => {
 adminRouter.get('/support/:id/audio', async (req, res, next) => {
   try {
     const id = Number(req.params.id);
-    const [m] = await query("SELECT id FROM support_messages WHERE id = ? AND source = 'phone' AND deleted_at IS NULL", [id]);
+    const [m] = await query("SELECT id, voicemail_hangup FROM support_messages WHERE id = ? AND source = 'phone' AND deleted_at IS NULL", [id]);
     if (!m) throw errors.notFound();
     let buf = readVoicemail(id);
     if (!buf) {
@@ -1265,6 +1265,9 @@ adminRouter.get('/support/:id/audio', async (req, res, next) => {
         .catch((e) => { console.warn(`voicemail ${id} inline fetch:`, e.message); return false; });
       if (got) buf = readVoicemail(id);
     }
+    // A hangup ticket has no recording to wait for — distinct code so the inbox
+    // says "call back" instead of offering a retry.
+    if (!buf && m.voicemail_hangup) throw errors.notFound('VOICEMAIL_HANGUP', 'המתקשר ניתק לפני שהשאיר הודעה — אין הקלטה');
     if (!buf) throw errors.notFound('NOT_FOUND', 'ההקלטה עדיין לא התקבלה מימות המשיח');
     res.set('Content-Type', 'audio/wav');
     res.set('Cache-Control', 'no-store');

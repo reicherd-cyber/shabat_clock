@@ -206,3 +206,59 @@ test('describeScheduleHe: halachic anchor is called out', () => {
   });
   assert.ok(txt.includes('לפי זמן הלכתי'));
 });
+
+// ── תוכנית: replace-mode schedulers carve exclusions out of the weekly ones ──
+import { derivedExclusions, exclusionsFor, schedulerMode } from '../src/services/schedules.js';
+
+test('derivedExclusions: only replace-mode dated schedulers produce items, shaped like user exclusions', () => {
+  const schedulers = [
+    { action: 'on', repeat_type: 'weekly', daily: true, time: '06:00' },
+    { action: 'on', repeat_type: 'yearly', calendar: 'greg', date: '2026-07-01', end_date: '2026-08-31', time: '07:00', mode: 'replace' },
+    { action: 'off', repeat_type: 'holiday', holidays: ['shabbat'], time: '23:00', mode: 'replace' },
+    { action: 'on', repeat_type: 'once', calendar: 'heb', heb_day: 15, heb_month: 11, time: '10:00', mode: 'add' },
+  ];
+  const d = derivedExclusions(schedulers);
+  assert.deepEqual(d, [
+    { type: 'yearly', calendar: 'greg', derived: true, date: '2026-07-01', end_date: '2026-08-31' },
+    { type: 'holiday', holidays: ['shabbat'], derived: true },
+  ]);
+  assert.equal(schedulerMode(schedulers[0]), null);
+  assert.equal(schedulerMode(schedulers[3]), 'add');
+  assert.equal(schedulerMode({ repeat_type: 'yearly' }), 'add'); // missing = add (pre-67 callers)
+});
+
+test('exclusionsFor: weekly rows get user + derived items, dated rows only the user ones', () => {
+  const user = [{ type: 'weekly', days: [7] }];
+  const derived = [{ type: 'holiday', holidays: ['shabbat'], derived: true }];
+  assert.deepEqual(exclusionsFor({ repeat_type: 'weekly' }, user, derived), [...user, ...derived]);
+  assert.deepEqual(exclusionsFor({ repeat_type: 'yearly' }, user, derived), user);
+  assert.equal(exclusionsFor({ repeat_type: 'yearly' }, null, derived), null);
+  assert.deepEqual(exclusionsFor({ repeat_type: 'weekly' }, null, derived), derived);
+});
+
+// ── תוכנית: an exclusion that cancels explicitly picked days is a conflict ──
+import { planConflicts } from '../src/services/schedules.js';
+
+test('planConflicts: weekly exclusion vs a scheduler picked for those days; daily and derived never conflict', () => {
+  const sunMonTue = { repeat_type: 'weekly', days: [1, 2, 3], time: '15:00', action: 'on' };
+  const daily = { repeat_type: 'weekly', daily: true, days: [], time: '06:00', action: 'on' };
+  assert.equal(planConflicts([sunMonTue], [{ type: 'weekly', days: [1] }]).length, 1);
+  assert.equal(planConflicts([sunMonTue], [{ type: 'weekly', days: [4, 5] }]).length, 0);
+  assert.equal(planConflicts([daily], [{ type: 'weekly', days: [1] }]).length, 0);
+  assert.equal(planConflicts([sunMonTue], [{ type: 'weekly', days: [1], derived: true }]).length, 0);
+  assert.equal(planConflicts([sunMonTue], [{ type: 'yearly', calendar: 'greg', date: '2026-07-01', end_date: '2026-07-10' }]).length, 0);
+});
+
+test('planConflicts: holiday exclusion vs a holiday scheduler sharing a key', () => {
+  const shabbat = { repeat_type: 'holiday', holidays: ['shabbat'], time: '18:00', action: 'on' };
+  assert.equal(planConflicts([shabbat], [{ type: 'holiday', holidays: ['shabbat', 'rh1'] }]).length, 1);
+  assert.equal(planConflicts([shabbat], [{ type: 'holiday', holidays: ['rh1'] }]).length, 0);
+});
+
+test('planConflicts: weekday exclusion vs a one-time civil action on that weekday', () => {
+  const once = { repeat_type: 'once', calendar: 'greg', date: '2026-07-05', time: '10:00', action: 'on' }; // a Sunday
+  assert.equal(planConflicts([once], [{ type: 'weekly', days: [1] }]).length, 1);
+  assert.equal(planConflicts([once], [{ type: 'weekly', days: [2] }]).length, 0);
+  const hebOnce = { repeat_type: 'once', calendar: 'heb', heb_day: 1, heb_month: 7, time: '10:00', action: 'on' };
+  assert.equal(planConflicts([hebOnce], [{ type: 'weekly', days: [1] }]).length, 0); // not checked server-side
+});

@@ -210,7 +210,7 @@ test('inExclusionRange: excl_list ranges (yearly + once) count alongside the leg
 });
 
 // ── yearly (anniversary) schedules ──
-import { resolveYearlySchedule, yearlyDatesAround, yearlyRangesAround } from '../src/services/holidays.js';
+import { resolveYearlySchedule, yearlyDatesAround, yearlyRangesAround, exclWeeklyDays, withoutWeeklyExcl, hasDatedExcl } from '../src/services/holidays.js';
 import { HDate } from '@hebcal/core';
 
 test('yearly greg: next occurrence this year, rolls to next year once passed', () => {
@@ -311,4 +311,84 @@ test('yearlyRangesAround pairs each start with its (possibly wrapped) end', () =
   }
   const flat = yearlyRangesAround('2024-03-05', null, 'greg', { y: 2026, mo: 7, d: 1 }, 2);
   assert.ok(flat.every((p) => p.on.y === p.off.y && p.off.d === 5 && p.off.mo === 3));
+});
+
+// ── yearly one-sided RANGE: the action fires on every day of it (תוכנית scheduler) ──
+
+test('yearly one-sided range: resolves to the next pending day inside the range', () => {
+  const mk = () => ({ annual_date: '2026-09-01', annual_end_date: '2026-09-05', annual_calendar: 'greg', on_time: '18:00' });
+  const s = mk();
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-07-14T09:00:00Z') });
+  assert.equal(s.on_date, '2026-09-01');
+  assert.equal(s.off_date, null);
+  // mid-range, today's event already fired → tomorrow
+  const s2 = mk();
+  resolveYearlySchedule(s2, { region: 'jerusalem', tz: TZ, now: new Date('2026-09-02T16:30:00Z') }); // 19:30 local
+  assert.equal(s2.on_date, '2026-09-03');
+  // mid-range, today's event still ahead → today
+  const s3 = mk();
+  resolveYearlySchedule(s3, { region: 'jerusalem', tz: TZ, now: new Date('2026-09-03T09:00:00Z') });
+  assert.equal(s3.on_date, '2026-09-03');
+  // last day passed → next year's from-date
+  const s4 = mk();
+  resolveYearlySchedule(s4, { region: 'jerusalem', tz: TZ, now: new Date('2026-09-05T16:30:00Z') });
+  assert.equal(s4.on_date, '2027-09-01');
+});
+
+test('yearly one-sided range: OFF-only rows walk the range the same way', () => {
+  const s = { annual_date: '2026-09-01', annual_end_date: '2026-09-03', annual_calendar: 'greg', off_time: '07:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-09-01T09:00:00Z') });
+  assert.equal(s.on_date, null);
+  assert.equal(s.off_date, '2026-09-02');
+  assert.equal(s.off_time, '07:00');
+});
+
+test('yearly two-sided range keeps the legacy pairing (ON from-date, OFF to-date)', () => {
+  const s = { annual_date: '2026-09-01', annual_end_date: '2026-09-05', annual_calendar: 'greg', on_time: '18:00', off_time: '08:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2026-09-02T16:30:00Z') });
+  assert.equal(s.on_date, '2026-09-01');
+  assert.equal(s.off_date, '2026-09-05');
+});
+
+// ── excl_list weekday / שבת-וחגים items (the תוכנית החרגה with all four types) ──
+
+test('inExclusionRange: excl_list weekly item excludes those weekdays only', () => {
+  const row = { excl_list: [{ type: 'weekly', days: [6, 7] }] };
+  assert.ok(inExclusionRange(row, '2026-07-03')); // Friday
+  assert.ok(inExclusionRange(row, '2026-07-04')); // Saturday
+  assert.ok(!inExclusionRange(row, '2026-07-05')); // Sunday
+});
+
+test('inExclusionRange: excl_list holiday item excludes the selected day and its erev', () => {
+  const row = { excl_list: [{ type: 'holiday', holidays: ['shabbat'] }] };
+  assert.ok(inExclusionRange(row, '2026-07-03')); // erev שבת
+  assert.ok(inExclusionRange(row, '2026-07-04')); // שבת
+  assert.ok(!inExclusionRange(row, '2026-07-01'));
+});
+
+test('exclWeeklyDays / withoutWeeklyExcl split weekday items from dated ones', () => {
+  const row = {
+    excl_type: 'weekly', excl_days: '1',
+    excl_list: [{ type: 'weekly', days: [7] }, { type: 'yearly', calendar: 'greg', date: '2026-07-09', end_date: '2026-07-18', derived: true }],
+  };
+  assert.deepEqual([...exclWeeklyDays(row)].sort(), [1, 7]);
+  const dated = withoutWeeklyExcl(row);
+  assert.equal(dated.excl_type, null);
+  assert.equal(dated.excl_list.length, 1);
+  assert.ok(hasDatedExcl(row));
+  assert.ok(!hasDatedExcl({ excl_type: 'weekly', excl_days: '1' }));
+  assert.ok(inExclusionRange(dated, '2026-07-10'));
+  assert.ok(!inExclusionRange(dated, '2026-07-05')); // Sunday no longer excluded once weekdays are stripped
+});
+
+test('yearly range wrapping the year boundary resolves while in progress (one- and two-sided)', () => {
+  // one-sided: 25.12 → 5.1, today 2.1 → tomorrow's... today's event (still ahead) this year
+  const s = { annual_date: '2025-12-25', annual_end_date: '2025-01-05', annual_calendar: 'greg', on_time: '18:00' };
+  resolveYearlySchedule(s, { region: 'jerusalem', tz: TZ, now: new Date('2027-01-02T09:00:00Z') });
+  assert.equal(s.on_date, '2027-01-02');
+  // two-sided legacy pairing: ON last year, OFF this year still pending
+  const p = { annual_date: '2025-12-25', annual_end_date: '2025-01-05', annual_calendar: 'greg', on_time: '18:00', off_time: '08:00' };
+  resolveYearlySchedule(p, { region: 'jerusalem', tz: TZ, now: new Date('2027-01-02T09:00:00Z') });
+  assert.equal(p.on_date, '2026-12-25');
+  assert.equal(p.off_date, '2027-01-05');
 });
