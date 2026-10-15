@@ -235,3 +235,22 @@ test('exclusionsFor: weekly rows get user + derived items, dated rows only the u
   assert.equal(exclusionsFor({ repeat_type: 'yearly' }, null, derived), null);
   assert.deepEqual(exclusionsFor({ repeat_type: 'weekly' }, null, derived), derived);
 });
+
+// ── תוכנית: an exclusion that cancels explicitly picked days is a conflict ──
+import { planConflicts } from '../src/services/schedules.js';
+
+test('planConflicts: weekly exclusion vs a scheduler picked for those days; daily and derived never conflict', () => {
+  const sunMonTue = { repeat_type: 'weekly', days: [1, 2, 3], time: '15:00', action: 'on' };
+  const daily = { repeat_type: 'weekly', daily: true, days: [], time: '06:00', action: 'on' };
+  assert.equal(planConflicts([sunMonTue], [{ type: 'weekly', days: [1] }]).length, 1);
+  assert.equal(planConflicts([sunMonTue], [{ type: 'weekly', days: [4, 5] }]).length, 0);
+  assert.equal(planConflicts([daily], [{ type: 'weekly', days: [1] }]).length, 0);
+  assert.equal(planConflicts([sunMonTue], [{ type: 'weekly', days: [1], derived: true }]).length, 0);
+  assert.equal(planConflicts([sunMonTue], [{ type: 'yearly', calendar: 'greg', date: '2026-07-01', end_date: '2026-07-10' }]).length, 0);
+});
+
+test('planConflicts: holiday exclusion vs a holiday scheduler sharing a key', () => {
+  const shabbat = { repeat_type: 'holiday', holidays: ['shabbat'], time: '18:00', action: 'on' };
+  assert.equal(planConflicts([shabbat], [{ type: 'holiday', holidays: ['shabbat', 'rh1'] }]).length, 1);
+  assert.equal(planConflicts([shabbat], [{ type: 'holiday', holidays: ['rh1'] }]).length, 0);
+});

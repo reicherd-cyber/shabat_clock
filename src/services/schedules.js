@@ -408,6 +408,32 @@ export function derivedExclusions(schedulers) {
   }
   return out;
 }
+// Contradictions the editor refuses too (PlanEditor.jsx planConflicts): an
+// exclusion that cancels days a scheduler was explicitly given — weekday
+// items vs a weekly scheduler's picked days (a daily one is a carve-out, not
+// a conflict), holiday items vs a holiday scheduler's keys. Date ranges are
+// checked by the editor only (Hebrew/civil comparison needs its converters).
+// Returns Hebrew messages; empty = fine.
+export function planConflicts(schedulers, exclusions) {
+  const out = [];
+  const DAY = { 1: 'ראשון', 2: 'שני', 3: 'שלישי', 4: 'רביעי', 5: 'חמישי', 6: 'שישי', 7: 'שבת' };
+  for (const x of Array.isArray(exclusions) ? exclusions : []) {
+    if (!x || x.derived) continue;
+    for (const s of Array.isArray(schedulers) ? schedulers : []) {
+      if (x.type === 'weekly' && s?.repeat_type === 'weekly' && !s.daily) {
+        const xd = (Array.isArray(x.days) ? x.days : String(x.days || '').split(',')).map(Number);
+        const hit = (s.days || []).map(Number).filter((d) => xd.includes(d)).sort((a, b) => a - b);
+        if (hit.length) out.push(`החרגה בימי ${hit.map((d) => DAY[d]).join(', ')} מבטלת תזמון שנקבע לימים אלו`);
+      } else if (x.type === 'holiday' && s?.repeat_type === 'holiday') {
+        const xk = Array.isArray(x.holidays) ? x.holidays : String(x.holidays || '').split(',');
+        const hit = (Array.isArray(s.holidays) ? s.holidays : String(s.holidays || '').split(',')).filter((k) => k && xk.includes(k));
+        if (hit.length) out.push(`החרגה של ${hit.join(', ')} מבטלת תזמון שנקבע לימים אלו`);
+      }
+    }
+  }
+  return out;
+}
+
 // Exclusions a scheduler's rows carry: the user's list, plus — for the all-year
 // (weekly) ones — whatever the plan's replace-mode schedulers carve out.
 export function exclusionsFor(sch, exclusions, derived) {
@@ -542,6 +568,8 @@ export async function savePlan({ userId, planId, name, relayIds, schedulers, exc
   if (!relays.length) throw errors.validation('בחרו לפחות ערוץ אחד', { relay_ids: 'required' });
   if (!Array.isArray(schedulers) || !schedulers.length) throw errors.validation('הוסיפו לפחות תזמון אחד לתוכנית', { schedulers: 'required' });
   if (schedulers.length > 40) throw errors.validation('עד 40 תזמונים בתוכנית', { schedulers: 'max 40' });
+  const conflicts = planConflicts(schedulers, exclusions);
+  if (conflicts.length) throw errors.validation(conflicts[0], { exclusions: 'conflict', conflicts });
   const deviceIds = new Set();
   const ids = [];
   await withTransaction(async (conn) => {

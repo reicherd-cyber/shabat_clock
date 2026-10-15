@@ -136,6 +136,71 @@ export function exclusionSummary(x) {
 // The scheduler list marks the ones that push the weekly schedule aside.
 const modeMark = (s) => (s.repeat_type && s.repeat_type !== 'weekly' && s.mode === 'replace' ? ' · במקום הקבוע' : '');
 
+// ── conflicts: an exclusion that cancels days the user explicitly picked for a
+// scheduler (exclude Sunday + a Sun/Mon/Tue scheduler) is contradictory, not a
+// carve-out — shown in red and blocks saving. A daily (כל יום) scheduler
+// carved by an exclusion is the intended use and is never a conflict; derived
+// items (replace-mode schedulers) are never conflicts either.
+// Dated ranges compare on a cyclic year: Hebrew (month,day) from Tishrei, civil
+// (month,day); a one-time civil range is compared by concrete dates.
+const hebOrd = (d, m) => ((Number(m) >= 7 ? Number(m) - 7 : Number(m) + 6) * 100) + Number(d);
+const gregOrd = (ymd) => { const [, mo, d] = String(ymd).split('-').map(Number); return mo * 100 + d; };
+const CYCLE = 1300;
+const cyclicOverlap = ([a1, b1], [a2, b2]) => {
+  const norm = ([a, b]) => (b < a ? [a, b + CYCLE] : [a, b]);
+  const [x1, y1] = norm([a1, b1]);
+  const [x2, y2] = norm([a2, b2]);
+  return [-CYCLE, 0, CYCLE].some((k) => x1 <= y2 + k && x2 + k <= y1);
+};
+const datedSpan = (o, isScheduler) => {
+  if (o.calendar === 'heb') {
+    const to = isScheduler && o.repeat_type === 'once' ? { d: o.heb_day, m: o.heb_month } : { d: o.heb_day_to, m: o.heb_month_to };
+    return { kind: 'cyc', span: [hebOrd(o.heb_day, o.heb_month), hebOrd(to.d, to.m)] };
+  }
+  const end = isScheduler && o.repeat_type === 'once' ? o.date : (o.end_date || o.date);
+  if (!o.date || !end) return null;
+  const once = isScheduler ? o.repeat_type === 'once' : o.type === 'once';
+  return { kind: once ? 'once' : 'cyc', from: o.date, to: end, span: [gregOrd(o.date), gregOrd(end)] };
+};
+export function planConflicts(schedulers, exclusions) {
+  const out = [];
+  for (const x of exclusions || []) {
+    if (!x?.type || x.derived) continue;
+    for (const s of schedulers || []) {
+      if (!s?.repeat_type) continue;
+      let hit = null;
+      if (x.type === 'weekly' && s.repeat_type === 'weekly' && !s.daily) {
+        const days = (s.days || []).map(Number).filter((d) => (x.days || []).map(Number).includes(d)).sort((a, b) => a - b);
+        if (days.length) hit = `ב${days.map((d) => DAY_NAMES[d]).join(', ')}`;
+      } else if (x.type === 'holiday' && s.repeat_type === 'holiday') {
+        const keys = (s.holidays || []).filter((k) => (x.holidays || []).includes(k));
+        if (keys.length) hit = `ב${keys.map((k) => HOLIDAY_NAMES[k] || k).join(', ')}`;
+      } else if ((x.type === 'once' || x.type === 'yearly') && (s.repeat_type === 'once' || s.repeat_type === 'yearly') && x.calendar === s.calendar) {
+        const a = datedSpan(x, false);
+        const b = datedSpan(s, true);
+        if (a && b) {
+          const overlap = a.kind === 'once' && b.kind === 'once'
+            ? a.from <= b.to && b.from <= a.to
+            : cyclicOverlap(a.span, b.span);
+          if (overlap) hit = 'בתאריכים אלו';
+        }
+      }
+      if (hit) out.push({ s, x, text: `ההחרגה "${exclusionSummary(x)}" מבטלת את התזמון "${schedulerSummary(s)}" ${hit} — הסירו את הימים מהתזמון או מההחרגה.` });
+    }
+  }
+  return out;
+}
+function ConflictNote({ conflicts }) {
+  if (!conflicts.length) return null;
+  return (
+    <div className="space-y-1">
+      {conflicts.map((c, i) => (
+        <p key={i} className="text-xs text-off bg-off-bg rounded-xl px-3 py-2">⚠ {c.text}</p>
+      ))}
+    </div>
+  );
+}
+
 // Rebuild the editor state from a plan's member rows (one row per channel ×
 // scheduler × weekly day): rows that differ only by channel/day collapse into
 // one scheduler; a legacy two-sided row splits into its ON and OFF schedulers.
@@ -334,6 +399,7 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
   const s = draft;
   const set = (patch) => setDraft({ ...s, ...patch });
   const anchored = s.kind !== 'clock';
+  const conflicts = planConflicts([s], exclusions);
   // Switching to the Hebrew calendar converts the civil date(s) already typed —
   // both ends of a yearly range.
   const convertToHeb = (cur) => {
@@ -538,8 +604,9 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
       {/* a weekly draft is also carved by the plan's replace-mode schedulers (same rule as the server) */}
       <NextPreview draft={s} exclusions={s.repeat_type === 'weekly' ? [...exclusions, ...derivedExclusions(previous)] : exclusions}
         region={region} relayId={relayId} invalid={invalid} />
+      <ConflictNote conflicts={conflicts} />
       <div className="grid grid-cols-2 gap-2 pt-1">
-        <Button disabled={invalid} onClick={onConfirm}>
+        <Button disabled={invalid || conflicts.length > 0} onClick={onConfirm}>
           <span className="inline-flex items-center gap-1.5">{isNew ? <Plus size={15} /> : <Pencil size={14} />}{isNew ? 'הוסף לתוכנית' : 'עדכן תזמון'}</span>
         </Button>
         <Button variant="ghost" onClick={onCancel}>ביטול</Button>
@@ -550,10 +617,11 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
 
 // ── exclusion sub-form: the same four type choices as a scheduler ──
 // weekly days / a one-time date range / a yearly date range / שבת-וחגים days.
-function ExclusionForm({ draft, setDraft, onConfirm, onCancel, isNew }) {
+function ExclusionForm({ draft, setDraft, onConfirm, onCancel, isNew, schedulers = [] }) {
   const x = draft;
   const set = (patch) => setDraft({ ...x, ...patch });
   const dated = x.type === 'once' || x.type === 'yearly';
+  const conflicts = planConflicts(schedulers, [x]);
   const invalid = !x.type
     || (x.type === 'weekly' && !x.days.length)
     || (x.type === 'holiday' && !x.holidays.length)
@@ -620,8 +688,9 @@ function ExclusionForm({ draft, setDraft, onConfirm, onCancel, isNew }) {
         ))}
         {x.type === 'once' && <p className="text-xs text-muted">חד-פעמי: הטווח הזה בלבד, לא חוזר בשנה הבאה.</p>}
       </>)}
+      <ConflictNote conflicts={conflicts} />
       <div className="grid grid-cols-2 gap-2 pt-1">
-        <Button disabled={invalid} onClick={onConfirm}>
+        <Button disabled={invalid || conflicts.length > 0} onClick={onConfirm}>
           <span className="inline-flex items-center gap-1.5">{isNew ? <Plus size={15} /> : <Pencil size={14} />}{isNew ? 'הוסף החרגה' : 'עדכן החרגה'}</span>
         </Button>
         <Button variant="ghost" onClick={onCancel}>ביטול</Button>
@@ -690,6 +759,7 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
   });
 
   const editing = Boolean(plan.plan_id || plan.member_ids?.length);
+  const conflicts = planConflicts(plan.schedulers, plan.exclusions);
   const title = view === 'scheduler' ? (draftIsNew ? 'תזמון חדש לתוכנית' : 'עריכת תזמון')
     : view === 'exclusion' ? (draftIsNew ? 'החרגה חדשה' : 'עריכת החרגה')
       : (editing ? 'עריכת תוכנית' : 'תוכנית חדשה');
@@ -703,7 +773,7 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
           onConfirm={() => confirmDraft('schedulers')} onCancel={() => { setDraft(null); setView('plan'); }} />
       )}
       {view === 'exclusion' && draft && (
-        <ExclusionForm draft={draft} setDraft={setDraft} isNew={draftIsNew}
+        <ExclusionForm draft={draft} setDraft={setDraft} isNew={draftIsNew} schedulers={plan.schedulers}
           onConfirm={() => confirmDraft('exclusions')} onCancel={() => { setDraft(null); setView('plan'); }} />
       )}
       {view === 'plan' && (
@@ -756,6 +826,8 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
             </div>
           )}
 
+          {/* contradictions between the lists block saving until fixed */}
+          <ConflictNote conflicts={conflicts} />
           <ErrorNote error={error} />
 
           {/* the three bottom actions */}
@@ -767,7 +839,7 @@ export function PlanEditorModal({ initial, relays, onClose, onSaved }) {
               <span className="inline-flex items-center gap-1.5"><CalendarOff size={15} />הוסף החרגה</span>
             </Button>
           </div>
-          <Button className="w-full" disabled={busy || !plan.relay_ids.length || !plan.schedulers.length} onClick={save}>
+          <Button className="w-full" disabled={busy || !plan.relay_ids.length || !plan.schedulers.length || conflicts.length > 0} onClick={save}>
             <span className="inline-flex items-center gap-1.5"><Save size={15} />
               {busy ? 'שומר…' : editing ? 'שמור תוכנית' : `שמור תוכנית${plan.relay_ids.length > 1 ? ` ל־${plan.relay_ids.length} ערוצים` : ''}`}
             </span>
