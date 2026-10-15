@@ -26,12 +26,17 @@ const localPath = (ticketId) => path.join(DIR, `${Number(ticketId)}.wav`);
 // Insert the ticket the moment the recording ends (or the caller hangs up mid-
 // message — the file is kept either way). `phone` may be '' for a withheld
 // caller-ID; the row still lands so the attempt is visible.
-export async function createPhoneTicket({ phone, callLogId, topic, yemotFile }) {
+// `hungUp` = the step ended with Yemot's hangup notification instead of the
+// "recording done" callback (caller dropped at/before the beep). Every such
+// call so far left NO file on Yemot despite the keep-on-hangup flag (migration
+// 66), so the ticket says so up front — the number is what's worth keeping.
+export async function createPhoneTicket({ phone, callLogId, topic, yemotFile, hungUp = false }) {
   const who = phone ? `מהמספר ${phone}` : 'ממספר חסוי';
+  const body = hungUp ? `ניתק לפני שהשאיר הודעה ${who}` : `הודעה קולית ${who}`;
   const r = await query(
-    `INSERT INTO support_messages (user_id, source, phone, call_log_id, topic, body, yemot_file, created_by)
-     VALUES (NULL, 'phone', ?, ?, ?, ?, ?, 'ivr')`,
-    [phone || null, callLogId, topic, `הודעה קולית ${who}`, yemotFile],
+    `INSERT INTO support_messages (user_id, source, phone, call_log_id, topic, body, yemot_file, voicemail_hangup, created_by)
+     VALUES (NULL, 'phone', ?, ?, ?, ?, ?, ?, 'ivr')`,
+    [phone || null, callLogId, topic, body, yemotFile, hungUp ? 1 : 0],
   );
   return r.insertId;
 }
@@ -58,18 +63,20 @@ async function downloadOnce(ticketId, yemotFile) {
 
 // Yemot finalizes the file a moment after the call step ends; retry with
 // growing gaps (≈3 min total) before giving up. One fetch chain per ticket.
+// A hangup ticket gets a single polite attempt (in case Yemot ever does keep
+// the file) and no retry chain — nothing is expected to land.
 const inflight = new Set();
 const DELAYS_MS = [3_000, 10_000, 30_000, 60_000, 90_000];
 export async function fetchVoicemail(ticketId, { retries = true } = {}) {
   const id = Number(ticketId);
   if (existsSync(localPath(id))) return true;
-  const [row] = await query('SELECT yemot_file FROM support_messages WHERE id = ? AND deleted_at IS NULL', [id]);
+  const [row] = await query('SELECT yemot_file, voicemail_hangup FROM support_messages WHERE id = ? AND deleted_at IS NULL', [id]);
   if (!row?.yemot_file) return false;
   if (inflight.has(id)) return false;
   inflight.add(id);
   try {
     if (await downloadOnce(id, row.yemot_file)) return true;
-    if (!retries) return false;
+    if (!retries || row.voicemail_hangup) return false;
     for (const ms of DELAYS_MS) {
       await new Promise((r) => setTimeout(r, ms));
       if (await downloadOnce(id, row.yemot_file)) return true;

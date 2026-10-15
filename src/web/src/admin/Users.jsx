@@ -113,7 +113,7 @@ export default function Users() {
           <thead>
             <tr className="text-right text-muted border-b border-line">
               <th className="p-3">שם</th><th className="p-3">אימייל</th><th className="p-3">קוד IVR</th><th className="p-3">מכשירים</th>
-              <th className="p-3">סטטוס</th><th className="p-3">PIN בכניסה</th><th className="p-3">פעולות</th>
+              <th className="p-3">סטטוס</th><th className="p-3">נוצר</th><th className="p-3">PIN בכניסה</th><th className="p-3">פעולות</th>
             </tr>
           </thead>
           <tbody>
@@ -124,6 +124,9 @@ export default function Users() {
                 <td className="p-3" dir="ltr">{u.ivr_code}</td>
                 <td className="p-3">{u.device_count}</td>
                 <td className="p-3"><Badge ok={u.status === 'active'}>{u.status === 'active' ? 'פעיל' : 'מושעה'}</Badge></td>
+                <td className="p-3 whitespace-nowrap" dir="ltr" title={u.created_at ? new Date(u.created_at).toLocaleString('he-IL') : ''}>
+                  {u.created_at ? new Date(u.created_at).toLocaleDateString('he-IL') : <span className="text-muted">—</span>}
+                </td>
                 <td className="p-3">{u.require_pin ? 'כן' : 'לא'}</td>
                 <td className="p-3 space-x-1 space-x-reverse whitespace-nowrap">
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => impersonate(u)}>כניסה בשמו</Button>
@@ -136,7 +139,7 @@ export default function Users() {
               </tr>
             ))}
             {shown.length === 0 && (
-              <tr><td colSpan={7} className="p-6 text-center text-muted">לא נמצאו משתמשים</td></tr>
+              <tr><td colSpan={8} className="p-6 text-center text-muted">לא נמצאו משתמשים</td></tr>
             )}
           </tbody>
         </table>

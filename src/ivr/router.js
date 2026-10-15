@@ -158,13 +158,15 @@ async function salesRecord(session, topic) {
 // Recording ended — # pressed / max length, or a hangup mid-message (Yemot keeps
 // the file either way, see askRecord). File the ticket now so the number is in
 // the inbox even if the audio copy lags; the WAV is fetched in the background.
-async function salesVoicemailDone(session) {
+// `hungUp`: the step ended with the hangup notification, not the # callback —
+// in practice Yemot leaves no file then (see services/voicemail.js).
+async function salesVoicemailDone(session, { hungUp = false } = {}) {
   const ticketId = await createPhoneTicket({
-    phone: session.phone, callLogId: session.callLogId, topic: session.data.vmTopic, yemotFile: session.data.vmFile,
+    phone: session.phone, callLogId: session.callLogId, topic: session.data.vmTopic, yemotFile: session.data.vmFile, hungUp,
   });
   await logAction({ type: 'ivr', id: null }, 'create', 'support_message', ticketId,
-    { after: { source: 'phone', topic: session.data.vmTopic, phone: session.phone } });
-  await appendPath(session.callLogId, 'vm_saved');
+    { after: { source: 'phone', topic: session.data.vmTopic, phone: session.phone, hung_up: hungUp } });
+  await appendPath(session.callLogId, hungUp ? 'vm_hangup' : 'vm_saved');
   await finishCall(session.callLogId, 'voicemail');
   endSession(session.callId);
   fetchVoicemailInBackground(ticketId);
@@ -465,8 +467,9 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
     if (req.query.ApiHangup !== undefined || req.query.hangup === 'yes') {
       if (session) {
         if (session.state === 'SALES_RECORD') {
-          // Hung up while recording — the message is saved on Yemot (keep-on-hangup).
-          await salesVoicemailDone(session);
+          // Hung up during the record step — file the number; Yemot has not
+          // kept the audio on any such call despite the keep-on-hangup flag.
+          await salesVoicemailDone(session, { hungUp: true });
         } else {
           await finishCall(session.callLogId, session.data.salesInfo ? 'info' : 'abandoned');
           endSession(callId);
