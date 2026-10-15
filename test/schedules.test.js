@@ -254,3 +254,11 @@ test('planConflicts: holiday exclusion vs a holiday scheduler sharing a key', ()
   assert.equal(planConflicts([shabbat], [{ type: 'holiday', holidays: ['shabbat', 'rh1'] }]).length, 1);
   assert.equal(planConflicts([shabbat], [{ type: 'holiday', holidays: ['rh1'] }]).length, 0);
 });
+
+test('planConflicts: weekday exclusion vs a one-time civil action on that weekday', () => {
+  const once = { repeat_type: 'once', calendar: 'greg', date: '2026-07-05', time: '10:00', action: 'on' }; // a Sunday
+  assert.equal(planConflicts([once], [{ type: 'weekly', days: [1] }]).length, 1);
+  assert.equal(planConflicts([once], [{ type: 'weekly', days: [2] }]).length, 0);
+  const hebOnce = { repeat_type: 'once', calendar: 'heb', heb_day: 1, heb_month: 7, time: '10:00', action: 'on' };
+  assert.equal(planConflicts([hebOnce], [{ type: 'weekly', days: [1] }]).length, 0); // not checked server-side
+});

@@ -122,8 +122,10 @@ function normalizeExclusionFields(s, { tz = 'Asia/Jerusalem', now = new Date() }
 // = the field wasn't sent (PATCH) — leave the stored value alone.
 function normalizeExclusionList(s, { tz = 'Asia/Jerusalem', now = new Date() } = {}) {
   if (s.excl_list === undefined) return;
+  // Kept on every row type, once included: "the plan is silent on these days"
+  // must hold for a one-time action too (the editor flags the contradiction).
   const items = parseExclList(s.excl_list);
-  if (!items.length || s.repeat_type === 'once') {
+  if (!items.length) {
     s.excl_list = null;
     return;
   }
@@ -424,6 +426,11 @@ export function planConflicts(schedulers, exclusions) {
         const xd = (Array.isArray(x.days) ? x.days : String(x.days || '').split(',')).map(Number);
         const hit = (s.days || []).map(Number).filter((d) => xd.includes(d)).sort((a, b) => a - b);
         if (hit.length) out.push(`החרגה בימי ${hit.map((d) => DAY_NAMES_HE[d]).join(', ')} מבטלת תזמון שנקבע לימים אלו`);
+      } else if (x.type === 'weekly' && s?.repeat_type === 'once' && s.calendar !== 'heb' && /^\d{4}-\d{2}-\d{2}$/.test(String(s.date || ''))) {
+        // a one-time action on an excluded weekday
+        const dow = new Date(`${s.date}T12:00:00Z`).getUTCDay() + 1;
+        const xd = (Array.isArray(x.days) ? x.days : String(x.days || '').split(',')).map(Number);
+        if (xd.includes(dow)) out.push(`החרגה בימי ${DAY_NAMES_HE[dow]} מבטלת תזמון חד-פעמי שנקבע ל-${s.date.slice(8, 10)}.${s.date.slice(5, 7)}`);
       } else if (x.type === 'holiday' && s?.repeat_type === 'holiday') {
         const xk = Array.isArray(x.holidays) ? x.holidays : String(x.holidays || '').split(',');
         const hit = (Array.isArray(s.holidays) ? s.holidays : String(s.holidays || '').split(',')).filter((k) => k && xk.includes(k));

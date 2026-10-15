@@ -172,6 +172,10 @@ export function planConflicts(schedulers, exclusions) {
       if (x.type === 'weekly' && s.repeat_type === 'weekly' && !s.daily) {
         const days = (s.days || []).map(Number).filter((d) => (x.days || []).map(Number).includes(d)).sort((a, b) => a - b);
         if (days.length) hit = `ב${days.map((d) => DAY_NAMES[d]).join(', ')}`;
+      } else if (x.type === 'weekly' && s.repeat_type === 'once' && s.calendar === 'greg' && s.date) {
+        // a one-time action whose civil date falls on an excluded weekday
+        const dow = new Date(`${s.date}T12:00:00`).getDay() + 1;
+        if ((x.days || []).map(Number).includes(dow)) hit = `ב${DAY_NAMES[dow]} ${fmtDate(s.date)}`;
       } else if (x.type === 'holiday' && s.repeat_type === 'holiday') {
         const keys = (s.holidays || []).filter((k) => (x.holidays || []).includes(k));
         if (keys.length) hit = `ב${keys.map((k) => HOLIDAY_NAMES[k] || k).join(', ')}`;
@@ -214,6 +218,14 @@ export function planFromMembers(members) {
     for (const side of ['on', 'off']) {
       if (!m[`${side}_time`]) continue;
       const anchored = m[`${side}_anchor`] && m[`${side}_anchor`] !== 'clock';
+      // Yearly range ends. A legacy TWO-sided yearly row means "ON on the from-
+      // date, OFF on the to-date" — it splits into two single-day schedulers so
+      // re-saving keeps that behaviour (a one-sided row's range = every day).
+      const yStart = { date: String(m.annual_date || '').slice(0, 10), hd: m.annual_heb_day || 1, hm: m.annual_heb_month || 7 };
+      const yEnd = { date: String(m.annual_end_date || m.annual_date || '').slice(0, 10), hd: m.annual_end_heb_day || yStart.hd, hm: m.annual_end_heb_month || yStart.hm };
+      const legacyPair = m.repeat_type === 'yearly' && m.on_time && m.off_time;
+      const yFrom = legacyPair ? (side === 'on' ? yStart : yEnd) : yStart;
+      const yTo = legacyPair ? yFrom : yEnd;
       const sch = {
         action: side, repeat_type: m.repeat_type,
         kind: anchored ? m[`${side}_anchor`] : 'clock',
@@ -225,11 +237,11 @@ export function planFromMembers(members) {
         holidays: m.repeat_type === 'holiday' ? String(m.holidays || '').split(',').filter(Boolean) : [...DAY_HOLIDAY_KEYS],
         calendar: m.repeat_type === 'yearly' ? (m.annual_calendar || 'heb') : 'greg',
         date: m.repeat_type === 'yearly'
-          ? String(m.annual_date || '').slice(0, 10)
+          ? yFrom.date
           : (m[`${side}_date`] ? String(m[`${side}_date`]).slice(0, 10) : todayYmd()),
-        heb_day: m.annual_heb_day || 1, heb_month: m.annual_heb_month || 7,
-        end_date: m.repeat_type === 'yearly' ? String(m.annual_end_date || m.annual_date || '').slice(0, 10) : '',
-        heb_day_to: m.annual_end_heb_day || m.annual_heb_day || 1, heb_month_to: m.annual_end_heb_month || m.annual_heb_month || 7,
+        heb_day: yFrom.hd, heb_month: yFrom.hm,
+        end_date: m.repeat_type === 'yearly' ? yTo.date : '',
+        heb_day_to: yTo.hd, heb_month_to: yTo.hm,
         // pre-migration-67 dated rows carry no mode — they always behaved as 'add'
         mode: m.repeat_type === 'weekly' ? null : (m.plan_mode === 'replace' ? 'replace' : 'add'),
       };
