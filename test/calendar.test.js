@@ -130,3 +130,20 @@ test('sanity: expanded times parse as HH:MM', () => {
   assert.equal(events.length, 7);
   assert.ok(events.every((e) => timeToMinutes(e.time) != null));
 });
+
+test('yearly one-sided range: the action lands on every day of the range (and only there)', () => {
+  const events = expandSchedules([{
+    ...base, repeat_type: 'yearly', annual_calendar: 'greg',
+    annual_date: '2025-07-10', annual_end_date: '2025-07-13', on_time: '06:30',
+  }], RANGE);
+  assert.deepEqual(events.map((e) => e.date), ['2026-07-10', '2026-07-11', '2026-07-12', '2026-07-13']);
+  assert.ok(events.every((e) => e.action === 'on' && e.time === '06:30'));
+});
+
+test('yearly two-sided range keeps the legacy pairing: ON on the from-date, OFF on the to-date', () => {
+  const events = expandSchedules([{
+    ...base, repeat_type: 'yearly', annual_calendar: 'greg',
+    annual_date: '2025-07-10', annual_end_date: '2025-07-13', on_time: '18:00', off_time: '08:00',
+  }], RANGE);
+  assert.deepEqual(events.map((e) => [e.date, e.action]), [['2026-07-10', 'on'], ['2026-07-13', 'off']]);
+});

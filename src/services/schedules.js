@@ -391,14 +391,16 @@ function schedulerRows(sch, exclusions) {
   const heb = sch.calendar === 'heb';
   if (type === 'yearly') {
     base.annual_calendar = heb ? 'heb' : 'greg';
+    // A range (end_* given) = the action fires on every day of it, each year
+    // (holidays.js resolveYearlySchedule); absent end = the single day.
     if (heb) {
       base.annual_heb_day = sch.heb_day;
       base.annual_heb_month = sch.heb_month;
-      base.annual_end_heb_day = sch.heb_day;
-      base.annual_end_heb_month = sch.heb_month;
+      base.annual_end_heb_day = sch.end_heb_day || sch.heb_day;
+      base.annual_end_heb_month = sch.end_heb_month || sch.heb_month;
     } else {
       base.annual_date = sch.date;
-      base.annual_end_date = sch.date;
+      base.annual_end_date = sch.end_date || sch.date;
     }
     return [base];
   }
@@ -796,7 +798,12 @@ export function describeScheduleHe(row) {
   const side = (label, day, time, date, anchor) => {
     if (!time) return null;
     let when = '';
-    if ((row.repeat_type === 'once' || row.repeat_type === 'yearly' || row.repeat_type === 'holiday') && date) {
+    const yearlyRange = row.repeat_type === 'yearly' && row.annual_date && row.annual_end_date
+      && ymdOf(row.annual_end_date) !== ymdOf(row.annual_date) && !(row.on_time && row.off_time);
+    if (yearlyRange) {
+      // one-sided range: fires every day from→to (holidays.js)
+      when = ` כל יום מ${dayMonth(row.annual_date)} עד ${dayMonth(row.annual_end_date)}`;
+    } else if ((row.repeat_type === 'once' || row.repeat_type === 'yearly' || row.repeat_type === 'holiday') && date) {
       when = ` בתאריך ${dayMonth(date)}`;
     } else if (day != null) {
       when = ` ביום ${DAY_NAMES_HE[day]}`;

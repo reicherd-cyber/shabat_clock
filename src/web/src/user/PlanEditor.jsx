@@ -29,6 +29,9 @@ const newScheduler = () => ({
   holidays: [],
   kind: 'clock', time: '', offset: '', dir: 'before',
   calendar: 'greg', date: '', heb_day: 1, heb_month: 7,
+  // yearly = a date RANGE: the action fires on every day from→to, each year
+  // (a single day when the end equals the start)
+  end_date: '', heb_day_to: 1, heb_month_to: 7,
 });
 const newExclusion = () => ({
   uid: uid(), yearly: true, calendar: 'heb',
@@ -38,6 +41,12 @@ const newExclusion = () => ({
 
 const signedOffset = (s) => (s.dir === 'before' ? -1 : 1) * Math.abs(Number(s.offset) || 0);
 const hebText = (d, m) => `${HEB_DAYS[(Number(d) || 1) - 1]} ${hebMonthLabel(m)}`;
+// "from" alone when the range is a single day, "from עד to" otherwise.
+const yearlyRangeText = (s) => {
+  const from = s.calendar === 'heb' ? hebText(s.heb_day, s.heb_month) : fmtDate(s.date);
+  const to = s.calendar === 'heb' ? hebText(s.heb_day_to, s.heb_month_to) : fmtDate(s.end_date || s.date);
+  return to !== from ? `${from} עד ${to}` : from;
+};
 
 // Chronological display order for a plan's schedulers: day (or date) first, then
 // time of day. Anchors have no fixed clock time — sort them by their typical
@@ -102,7 +111,7 @@ export function schedulerSummary(s) {
     : s.repeat_type === 'once'
       ? (s.calendar === 'heb' ? hebText(s.heb_day, s.heb_month) : fmtDate(s.date))
       : s.repeat_type === 'yearly'
-        ? `כל שנה ${s.calendar === 'heb' ? hebText(s.heb_day, s.heb_month) : fmtDate(s.date)}`
+        ? `כל שנה ${yearlyRangeText(s)}`
         : holidaySummary(s.holidays.join(','));
   const time = s.kind === 'clock' ? s.time : anchorText(s.kind, signedOffset(s));
   return `${when} · ${time} · ${s.action === 'on' ? 'הדלקה' : 'כיבוי'}`;
@@ -138,9 +147,11 @@ export function planFromMembers(members) {
           ? String(m.annual_date || '').slice(0, 10)
           : (m[`${side}_date`] ? String(m[`${side}_date`]).slice(0, 10) : todayYmd()),
         heb_day: m.annual_heb_day || 1, heb_month: m.annual_heb_month || 7,
+        end_date: m.repeat_type === 'yearly' ? String(m.annual_end_date || m.annual_date || '').slice(0, 10) : '',
+        heb_day_to: m.annual_end_heb_day || m.annual_heb_day || 1, heb_month_to: m.annual_end_heb_month || m.annual_heb_month || 7,
       };
       const key = JSON.stringify([sch.action, sch.repeat_type, sch.kind, sch.time, sch.offset, sch.dir, sch.daily,
-        sch.holidays, sch.calendar, sch.date, sch.heb_day, sch.heb_month]);
+        sch.holidays, sch.calendar, sch.date, sch.heb_day, sch.heb_month, sch.end_date, sch.heb_day_to, sch.heb_month_to]);
       if (map.has(key)) map.get(key).days = [...new Set([...map.get(key).days, ...sch.days])].sort((a, b) => a - b);
       else map.set(key, { uid: uid(), ...sch });
     }
@@ -176,6 +187,11 @@ const schedulerToApi = (s) => ({
   ...(s.repeat_type === 'holiday' ? { holidays: s.holidays } : {}),
   ...(s.repeat_type === 'yearly' || s.repeat_type === 'once'
     ? { calendar: s.calendar, ...(s.calendar === 'heb' ? { heb_day: Number(s.heb_day), heb_month: Number(s.heb_month) } : { date: s.date }) }
+    : {}),
+  ...(s.repeat_type === 'yearly'
+    ? (s.calendar === 'heb'
+      ? { end_heb_day: Number(s.heb_day_to || s.heb_day), end_heb_month: Number(s.heb_month_to || s.heb_month) }
+      : { end_date: s.end_date || s.date })
     : {}),
 });
 const exclusionToApi = (x) => ({
@@ -275,22 +291,28 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
   const s = draft;
   const set = (patch) => setDraft({ ...s, ...patch });
   const anchored = s.kind !== 'clock';
+  // Switching to the Hebrew calendar converts the civil date(s) already typed —
+  // both ends of a yearly range.
+  const convertToHeb = (cur) => {
+    if (!cur.date) return;
+    Promise.all([hebOf(cur.date), hebOf(cur.end_date || cur.date)])
+      .then(([a, z]) => setDraft((d) => (d ? { ...d, ...a, heb_day_to: z.heb_day, heb_month_to: z.heb_month } : d)))
+      .catch(() => {});
+  };
   const setType = (v) => {
-    const patch = { repeat_type: v };
-    // switching to a Hebrew date keeps the civil date the user already typed, converted
-    if (v === 'yearly' && s.calendar === 'heb' && s.date) {
-      hebOf(s.date).then((h) => setDraft((d) => (d ? { ...d, ...h } : d))).catch(() => {});
-    }
-    set(patch);
+    if (v === 'yearly' && s.calendar === 'heb') convertToHeb(s);
+    set({ repeat_type: v });
   };
   const setCalendar = (v) => {
     set({ calendar: v });
-    if (v === 'heb' && s.date) hebOf(s.date).then((h) => setDraft((d) => (d ? { ...d, ...h } : d))).catch(() => {});
+    if (v === 'heb') convertToHeb(s);
   };
   const invalid = !s.repeat_type || !s.action
     || (s.repeat_type === 'weekly' && !s.daily && !s.days.length)
     || (s.repeat_type === 'holiday' && !s.holidays.length)
     || ((s.repeat_type === 'once' || s.repeat_type === 'yearly') && s.calendar === 'greg' && !s.date)
+    // the yearly range may wrap the year (end before start = next year's date); only an empty end is a gap
+    || (s.repeat_type === 'yearly' && s.calendar === 'greg' && !s.end_date)
     || (!anchored && !s.time)
     || (anchored && (s.offset === '' || Number.isNaN(Number(s.offset))));
   const previous = others.filter((o) => o.uid !== s.uid);
@@ -361,12 +383,36 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
               </label>
             ))}
           </div>
-          <div className="flex items-center gap-2">
-            {s.calendar === 'heb'
-              ? <HebPick day={s.heb_day} month={s.heb_month} onChange={({ day, month }) => set({ heb_day: day, heb_month: month })} />
-              : <Input type="date" value={s.date} onChange={(e) => set({ date: e.target.value })} />}
-            {s.repeat_type === 'once' && s.calendar === 'heb' && <span className="text-xs text-muted">— המופע הקרוב</span>}
-          </div>
+          {s.repeat_type === 'once' ? (
+            <div className="flex items-center gap-2">
+              {s.calendar === 'heb'
+                ? <HebPick day={s.heb_day} month={s.heb_month} onChange={({ day, month }) => set({ heb_day: day, heb_month: month })} />
+                : <Input type="date" value={s.date} onChange={(e) => set({ date: e.target.value })} />}
+              {s.calendar === 'heb' && <span className="text-xs text-muted">— המופע הקרוב</span>}
+            </div>
+          ) : (
+            // yearly = a range: the action fires on every day from→to; typing the
+            // from-date pre-fills an empty to-date so a single day needs one entry.
+            <>
+              {['from', 'to'].map((end) => (
+                <div key={end} className="flex items-center gap-2">
+                  <span className="text-sm text-muted w-14 shrink-0">{end === 'from' ? 'מתאריך' : 'עד'}</span>
+                  {s.calendar === 'heb' ? (
+                    <HebPick day={end === 'from' ? s.heb_day : s.heb_day_to} month={end === 'from' ? s.heb_month : s.heb_month_to}
+                      onChange={({ day, month }) => set(end === 'from'
+                        ? { heb_day: day, heb_month: month, ...(s.heb_day_to === s.heb_day && s.heb_month_to === s.heb_month ? { heb_day_to: day, heb_month_to: month } : {}) }
+                        : { heb_day_to: day, heb_month_to: month })} />
+                  ) : (
+                    <Input type="date" value={end === 'from' ? s.date : s.end_date}
+                      onChange={(e) => set(end === 'from'
+                        ? { date: e.target.value, ...(!s.end_date || s.end_date === s.date ? { end_date: e.target.value } : {}) }
+                        : { end_date: e.target.value })} />
+                  )}
+                </div>
+              ))}
+              <p className="text-xs text-muted">הפעולה תתבצע בכל יום בטווח, מדי שנה. לתאריך בודד — אותו תאריך בשני השדות.</p>
+            </>
+          )}
         </div>
       )}
 

@@ -395,6 +395,29 @@ export function resolveYearlySchedule(s, { region = DEFAULT_REGION, tz = 'Asia/J
     const date = yearlyOccurrence(src, calendar, i, today);
     let endDate = yearlyOccurrence(endSrc, calendar, i, today);
     if (ymdStr(endDate) < ymdStr(date)) endDate = yearlyOccurrence(endSrc, calendar, i + 1, today); // range wraps the year boundary
+    // One-sided row over several days (a תוכנית scheduler "מתאריך עד תאריך"):
+    // the action fires on EVERY day of the range — resolve to the next pending
+    // day; the daily refresh walks it forward. Two-sided rows keep the legacy
+    // pairing below (ON on the from-date, OFF on the to-date).
+    if (hasOn !== hasOff && ymdStr(endDate) > ymdStr(date)) {
+      const side = hasOn ? 'on' : 'off';
+      const probe = sideMinutes(s, side, date, region, tz);
+      if (probe == null && (s[`${side}_anchor`] || 'clock') === 'clock') {
+        throw errors.validation(`${side.toUpperCase()} side needs ${side}_time HH:MM`, { [`${side}_time`]: 'HH:MM' });
+      }
+      for (let d = date, n = 0; ymdStr(d) <= ymdStr(endDate) && n < 400; d = shiftDate(d, 1), n++) {
+        const min = sideMinutes(s, side, d, region, tz);
+        if (min == null || localKey(d, min) <= nowKey) continue;
+        s.on_date = hasOn ? ymdStr(d) : null;
+        s.on_time = hasOn ? minutesToHHMM(min) : null;
+        s.off_date = hasOff ? ymdStr(d) : null;
+        s.off_time = hasOff ? minutesToHHMM(min) : null;
+        s.on_day_of_week = null;
+        s.off_day_of_week = null;
+        return s;
+      }
+      continue;
+    }
     const onMin = hasOn ? sideMinutes(s, 'on', date, region, tz) : null;
     if (hasOn && onMin == null) throw errors.validation('ON side needs on_time HH:MM', { on_time: 'HH:MM' });
     let offDate = endDate;
