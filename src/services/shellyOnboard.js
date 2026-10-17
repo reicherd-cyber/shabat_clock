@@ -582,9 +582,15 @@ async function stageDetect(){
  if(mac.length!==12){
   const manual0=$('ip').value.trim();
   log('מחפש את המכשיר ברשת...');
-  for(const c of (manual0?[manual0,'192.168.33.1']:['192.168.33.1'])){
-   const m=await wsMac(c);
-   if(m){mac=m;$('mac').value=m;DEVIP=c;break}
+  // Three rounds, 3 s apart: right after joining the device hotspot (no internet)
+  // Android keeps routing over cellular for a few seconds, so the first socket
+  // to 192.168.33.1 dies even though the device is right there.
+  for(let round=0;round<3&&mac.length!==12;round++){
+   if(round){log('עדיין מחפש... ('+(round+1)+'/3)','warn');await sleep(3000)}
+   for(const c of (manual0?[manual0,'192.168.33.1']:['192.168.33.1'])){
+    const m=await wsMac(c);
+    if(m){mac=m;$('mac').value=m;DEVIP=c;break}
+   }
   }
  }
  if(mac.length!==12){
