@@ -153,14 +153,22 @@ export const onboardStatusLimiter = limited({ windowMs: 60_000, limit: 30 });
 // Credential minting writes broker passwd/ACL entries — keep it slow.
 // Batch prep sessions (several devices back-to-back, with the page's own
 // retries) blew the old 10/10min and read as "no internet" on the phone.
-// check=1 polls mint nothing and are not rate limited at all: an already-provisioned
-// unit costs the page up to 12 polls per attempt, which ate the old 30/10min budget
-// in two or three devices and surfaced as "יותר מדי בקשות" with no mint ever made.
+// check=1 polls mint nothing and have their own cap below: an already-provisioned
+// unit costs the page up to 12 polls per attempt, which ate the old 30/10min mint
+// budget in two or three devices and surfaced as "יותר מדי בקשות" with no mint made.
 // The mint caps are sized so no real installer session can reach them — they exist
 // only so a leaked universal file cannot reload the broker in a loop (every mint
 // rewrites passwd/ACL and SIGHUPs mosquitto, which the whole fleet depends on).
 const isOnboardCheck = (req) => String(req.query.check || '') === '1';
 export const onboardPrepareLimiter = limited({ windowMs: 10 * 60_000, limit: 100, skip: isOnboardCheck });
+// The polls: each is a live MQTT RPC holding a 4 s waiter on the fleet broker, so a
+// leaked file must not get to fire them without bound. 300/10min per IP+file is
+// ~25 full 12-poll attempts — far beyond any real session.
+export const onboardCheckLimiter = limited({
+  windowMs: 10 * 60_000, limit: 300,
+  keyGenerator: (req) => `chk:${req.ip}:${jwt.decode(String(req.query.token || ''))?.jti || ''}`,
+  skip: (req) => !isOnboardCheck(req),
+});
 // …and per installer FILE, not just per IP: one leaked universal file must not be
 // able to churn the broker from many addresses. Keyed on the token's jti (decoded,
 // not verified — a forged jti only buckets itself; the route verifies the

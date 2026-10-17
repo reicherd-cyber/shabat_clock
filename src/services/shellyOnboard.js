@@ -410,8 +410,12 @@ function parseMac(v){const s=v.trim().toLowerCase();const tail=s.includes('-')?s
 // The model word in front of the dash ("ShellyPro1-8C4F00D91928" → 'shellypro1');
 // '' when only a bare code/MAC was given.
 function parseModel(v){const s=v.trim().toLowerCase();if(!s.includes('-'))return '';const head=s.slice(0,s.lastIndexOf('-')).replace(/[^a-z0-9]/g,'');return head.startsWith('shelly')?head:''}
-// LAN names to try: the unit's own model name when known, every model otherwise.
-function mdnsNames(uid){const m=MODEL||parseModel($('mac').value);return (m?[m]:${JSON.stringify(MDNS_PREFIXES)}).map(p=>p+'-'+uid+'.local')}
+// LAN names to try: the unit's own model name first when known (one hit, no walk),
+// then the rest of the list — a mistyped word ("ShellyPro4-…") must not lose a
+// unit the full walk would have found.
+const ALL_PREFIXES=${JSON.stringify(MDNS_PREFIXES)};
+function knownModel(){return MODEL||parseModel($('mac').value)}
+function mdnsNames(uid){const m=knownModel();const list=m?[m].concat(ALL_PREFIXES.filter(p=>p!==m)):ALL_PREFIXES;return list.map(p=>p+'-'+uid+'.local')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
 const log=(t,cls)=>{const d=document.createElement('div');d.textContent=t;if(cls)d.className=cls;$('log').appendChild(d);d.scrollIntoView()};
 const esc=(v)=>String(v).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -594,24 +598,31 @@ async function stageDetect(){
   // Three rounds, 3 s apart: right after joining the device hotspot (no internet)
   // Android keeps routing over cellular for a few seconds, so the first socket
   // to 192.168.33.1 dies even though the device is right there.
+  // The manual-code fold opens after the FIRST miss, so a helper who is not on
+  // the hotspot at all can type the network name while the retries run on.
+  const addrs=manual0?[manual0,'192.168.33.1']:['192.168.33.1'];
   for(let round=0;round<3&&mac.length!==12;round++){
-   if(round){log('עדיין מחפש... ('+(round+1)+'/3)','warn');await sleep(3000)}
-   for(const c of (manual0?[manual0,'192.168.33.1']:['192.168.33.1'])){
+   if(round){log('עדיין מחפש... ('+(round+1)+'/3) — אפשר בינתיים להקליד את שם הרשת בשדה שנפתח למעלה','warn');await sleep(3000)}
+   for(const c of addrs){
     const m=await wsMac(c);
     if(m){mac=m;$('mac').value=m;DEVIP=c;break}
    }
+   if(mac.length!==12){$('macFold').open=true;mac=parseMac($('mac').value)} // typed meanwhile?
   }
  }
  if(mac.length!==12){
   $('macFold').open=true;
-  // Tell apart "nothing at the hotspot address" from "answers HTTP but not the
-  // WebSocket RPC" — the second means the unit is there and only the readable
-  // channel failed, so typing the code is the whole fix.
-  const httpOk=await ping('192.168.33.1');
-  log(httpOk?'המכשיר עונה בכתובת 192.168.33.1 אבל לא פתח ערוץ WebSocket':'אין תשובה כלל בכתובת 192.168.33.1','warn');
+  // Tell apart "nothing at that address" from "answers HTTP but not the WebSocket
+  // RPC" — the second means the unit is there and only the readable channel
+  // failed, so typing the code is the whole fix. Probe the address actually tried.
+  const probe=$('ip').value.trim()||'192.168.33.1';
+  const httpOk=await ping(probe);
+  log(httpOk?'המכשיר עונה בכתובת '+probe+' אבל לא פתח ערוץ WebSocket':'אין תשובה כלל בכתובת '+probe,'warn');
   verdict(httpOk
    ?'המכשיר נמצא אך לא ניתן לקרוא ממנו את הקוד. הקלידו את הקוד ידנית בשדה שנפתח למעלה (האותיות והספרות שאחרי המקף בשם הרשת Shelly...) ולחצו שוב.'
-   :'לא נמצא מכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הקלידו את הקוד ידנית בשדה שנפתח למעלה.','warn');
+   :$('ip').value.trim()
+    ?'הכתובת '+probe+' לא עונה. בדקו אותה ברשימת המכשירים של הנתב, ודאו שהטלפון על אותה רשת — או הקלידו את שם הרשת שהמכשיר משדר בשדה שנפתח למעלה.'
+    :'לא נמצא מכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הקלידו את הקוד ידנית בשדה שנפתח למעלה.','warn');
   return}
  // Pre-provisioned unit (configured for our broker in advance, e.g. at the
  // seller's desk): the on-site visit collapses to Wi-Fi-only — one network,
@@ -814,7 +825,11 @@ async function stageInstall(){
  // (stale state), fall back to the mint step instead of failing mid-send.
  if(PREPARE_URL&&!(B&&parseMac($('mac').value)===UID)){await tryMint();return}
  const manual=$('ip').value.trim();
- const candidates=manual?[manual]:mdnsNames(UID).concat('192.168.33.1');
+ // Per-device file on the hotspot (the documented path) never learns the model:
+ // the hotspot address goes before the model walk then, and right after the one
+ // known name otherwise — .local misses cost ~4 s each.
+ const names=mdnsNames(UID);
+ const candidates=manual?[manual]:(knownModel()?[names[0],'192.168.33.1'].concat(names.slice(1)):['192.168.33.1'].concat(names));
  IP='';
  for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
  if(!IP){

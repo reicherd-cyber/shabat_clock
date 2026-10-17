@@ -1004,7 +1004,9 @@ function ConnectivityTimeline({ timeline }) {
                 <span className="text-muted">({EDGE_SOURCE[e.via] || e.via})</span>
                 {down && (
                   <span className={`text-muted ${e.ongoing ? 'font-semibold text-red-600' : ''}`}>
-                    {e.ongoing ? `— עדיין מנותק, כבר ${fmtDuration(e.duration_s)}` : `— למשך ${fmtDuration(e.duration_s)}`}
+                    {e.ongoing ? `— עדיין מנותק, כבר ${fmtDuration(e.duration_s)}`
+                      : e.duration_s == null ? '— הסתיים (מועד החיבור מחדש לא נרשם)'
+                        : `— למשך ${fmtDuration(e.duration_s)}`}
                   </span>
                 )}
                 {!down && e.rssi != null && <span className="text-muted" dir="ltr">RSSI {e.rssi}</span>}
@@ -1013,8 +1015,8 @@ function ConnectivityTimeline({ timeline }) {
           })}
         </ul>
       )}
-      {timeline?.events?.length >= 60 && (
-        <p className="text-xs text-muted mt-1">מוצגים 60 האירועים האחרונים.</p>
+      {timeline?.truncated && (
+        <p className="text-xs text-muted mt-1">מוצגים {timeline.events.length} האירועים האחרונים.</p>
       )}
     </div>
   );
