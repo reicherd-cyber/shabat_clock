@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Download } from 'lucide-react';
-import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, fmtWhen } from '../ui.jsx';
 
 // Provisioning modal shows the secret + QR EXACTLY ONCE with an explicit
 // "I saved it" confirmation before it can be closed (§7).
@@ -23,6 +23,19 @@ export default function Devices() {
   const [transferForm, setTransferForm] = useState(null); // {device, user_id}
   const [diagnosis, setDiagnosis] = useState(null);       // {device, loading} → {device, verdict, text, evidence} | {device, error}
   const [reasons, setReasons] = useState({});             // device id → diagnosis result (offline table's סיבה column)
+  const [timeline, setTimeline] = useState(null);         // {device_id, loading} → {device_id, events, is_online} | {device_id, error} — the modal's connectivity history
+
+  // The diagnosis modal also shows WHEN the device went down/up: the online/offline
+  // edges from device_events, fetched separately so a slow broker-log diagnosis
+  // never delays the timestamps (which is what the admin usually came for).
+  useEffect(() => {
+    const id = diagnosis?.device?.id;
+    if (!id) { setTimeline(null); return; }
+    setTimeline({ device_id: id, loading: true });
+    adminApi.get(`/devices/${id}/connectivity`)
+      .then((r) => setTimeline((t) => (t?.device_id === id ? { device_id: id, ...r } : t)))
+      .catch((e) => setTimeline((t) => (t?.device_id === id ? { device_id: id, error: e.message } : t)));
+  }, [diagnosis?.device?.id]);
   const [inventory, setInventory] = useState([]);         // prepared_devices rows
   const [showActivated, setShowActivated] = useState(false);
   const [installers, setInstallers] = useState([]);       // issued universal installer files (installer_tokens)
@@ -717,6 +730,7 @@ export default function Devices() {
             )}
           </div>
         )}
+        {diagnosis && <ConnectivityTimeline timeline={timeline} />}
       </Modal>
 
       <Modal open={!!transferForm} onClose={() => setTransferForm(null)} title={`העברת "${transferForm?.device?.name || ''}" ללקוח אחר`}>
@@ -953,4 +967,57 @@ function fmtAgo(min) {
   if (min < 60) return `לפני ${min} דקות`;
   if (min < 48 * 60) return `לפני ${Math.round(min / 60)} שעות`;
   return `לפני ${Math.round(min / 1440)} ימים`;
+}
+
+// "3 ימים 4 שעות" / "2 שעות 15 דק׳" / "40 שנ׳" — two largest units, for outage lengths.
+function fmtDuration(s) {
+  if (s == null) return '—';
+  if (s < 60) return `${s} שנ׳`;
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d} ימים${h ? ` ${h} שעות` : ''}`;
+  if (h > 0) return `${h} שעות${m ? ` ${m} דק׳` : ''}`;
+  return `${m} דק׳`;
+}
+
+const EDGE_SOURCE = { mqtt: 'הודעת ברוקר', health_probe: 'בדיקת בריאות' };
+
+// The device's connection history: every online/offline edge with its exact time,
+// how it was detected, and (for outages) how long the device stayed down.
+function ConnectivityTimeline({ timeline }) {
+  return (
+    <div className="border-t border-line pt-3 mt-3">
+      <h4 className="font-bold text-sm mb-2">היסטוריית חיבור</h4>
+      {(!timeline || timeline.loading) && <p className="text-xs text-muted">טוען…</p>}
+      {timeline?.error && <ErrorNote error={timeline.error} />}
+      {timeline?.events && timeline.events.length === 0 && (
+        <p className="text-xs text-muted">לא נרשמו ניתוקים או התחברויות למכשיר הזה.</p>
+      )}
+      {timeline?.events?.length > 0 && (
+        <ul className="text-xs space-y-1.5 max-h-72 overflow-y-auto pe-1">
+          {timeline.events.map((e, i) => {
+            const down = e.event === 'offline';
+            return (
+              <li key={i} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${down ? 'bg-red-500' : 'bg-green-600'}`} aria-hidden />
+                <span className="font-semibold text-ink tabular-nums" dir="ltr">{fmtWhen(e.at)}</span>
+                <span className={`font-bold ${down ? 'text-red-600' : 'text-green-700'}`}>{down ? 'נותק' : 'התחבר'}</span>
+                <span className="text-muted">({EDGE_SOURCE[e.via] || e.via})</span>
+                {down && (
+                  <span className={`text-muted ${e.ongoing ? 'font-semibold text-red-600' : ''}`}>
+                    {e.ongoing ? `— עדיין מנותק, כבר ${fmtDuration(e.duration_s)}`
+                      : e.duration_s == null ? '— הסתיים (מועד החיבור מחדש לא נרשם)'
+                        : `— למשך ${fmtDuration(e.duration_s)}`}
+                  </span>
+                )}
+                {!down && e.rssi != null && <span className="text-muted" dir="ltr">RSSI {e.rssi}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {timeline?.truncated && (
+        <p className="text-xs text-muted mt-1">מוצגים {timeline.events.length} האירועים האחרונים.</p>
+      )}
+    </div>
+  );
 }

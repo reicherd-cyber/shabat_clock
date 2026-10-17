@@ -219,3 +219,44 @@ export async function diagnoseDevice(deviceId) {
   };
   return { verdict, category: CATEGORY[verdict] || 'unknown', text, evidence };
 }
+
+// Connectivity timeline for the admin diagnosis modal: the device's online/offline
+// edges (MQTT birth/LWT + health-probe flags), newest first, each offline edge
+// carrying the outage length — until the next online edge, or until now while
+// still down. Edges only (device_events never records heartbeats), so a long
+// stable connection is a single 'online' row.
+export async function connectivityTimeline(deviceId, { limit = 60 } = {}) {
+  const [device] = await query('SELECT id, is_online, last_seen_at FROM devices WHERE id = ?', [deviceId]);
+  if (!device) throw Object.assign(new Error('device not found'), { status: 404 });
+  const cap = Math.min(500, Math.max(1, Number(limit) || 60));
+  const rows = await query(
+    `SELECT event, payload, created_at FROM device_events
+     WHERE device_id = ? AND event IN ('online','offline')
+     ORDER BY created_at DESC, id DESC LIMIT ?`,
+    [deviceId, cap],
+  );
+  const now = Date.now();
+  const payloadOf = (raw) => {
+    if (raw && typeof raw === 'object') return raw;
+    try { return JSON.parse(raw || '{}') || {}; } catch { return {}; } // a hand-edited row must not sink the whole history
+  };
+  const events = rows.map((r, i) => {
+    const p = payloadOf(r.payload);
+    const at = new Date(r.created_at);
+    const ev = { at, event: r.event, via: p.via || 'mqtt', rssi: p.rssi ?? null, ip: p.ip ?? null, failures: p.failures ?? null };
+    if (r.event === 'offline') {
+      // Rows are newest-first: the outage ends at the nearest NEWER 'online' edge.
+      // Same-type neighbours (pre-primary-gate duplicates, an LWT racing the health
+      // probe) are skipped, not treated as the end of the outage.
+      let end = null;
+      for (let j = i - 1; j >= 0; j--) if (rows[j].event === 'online') { end = new Date(rows[j].created_at).getTime(); break; }
+      // "Still down" needs both: no later online edge AND the device really flagged
+      // offline — the flag is authoritative, the event rows are best-effort.
+      ev.ongoing = end == null && !device.is_online;
+      ev.duration_s = Math.max(0, Math.round(((end ?? now) - at.getTime()) / 1000));
+      if (end == null && device.is_online) ev.duration_s = null; // ended, but the ending edge was never recorded
+    }
+    return ev;
+  });
+  return { is_online: !!device.is_online, last_seen_at: device.last_seen_at, events, truncated: rows.length >= cap };
+}

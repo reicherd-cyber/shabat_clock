@@ -44,7 +44,12 @@ const SNTP_SERVERS = ['pool.ntp.org', 'time.google.com', 'time.cloudflare.com'];
 // The MQTT topic_prefix/client_id stays 'shellypro2-<mac>' for ALL models: it's
 // a label our scripts write onto the device and the server/ACL expect — not
 // something the hardware must match.
-const MDNS_PREFIXES = ['shellypro2', 'shellypro4pm', 'shellyplus2pm'];
+// Every Gen2 Pro/Plus switch model, most common first (each miss costs one
+// ~4 s probe). A Pro 1 was "not found" on the home LAN until its prefix was here.
+const MDNS_PREFIXES = [
+  'shellypro4pm', 'shellypro2', 'shellypro1', 'shellypro2pm', 'shellypro1pm', 'shellypro3',
+  'shellyplus2pm', 'shellyplus1pm', 'shellyplus1',
+];
 const mdnsCandidates = (uid) => MDNS_PREFIXES.map((p) => `${p}-${uid}.local`);
 
 // The RPC bodies are serialized server-side so the scripts stay dumb pipes — no
@@ -354,9 +359,9 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
   <details id="macFold" class="hidden" style="font-size:14px;margin-bottom:8px">
    <summary style="cursor:pointer"><b>לא מחוברים לרשת שהמכשיר משדר? לחצו כאן ›</b></summary>
    <div style="margin-top:6px">
-    הקלידו את קוד המכשיר: את שם הרשת המלא שהוא משדר (למשל ברשת
-    <b dir="ltr">ShellyPro4PM-80F3DAC8DCA8</b> הקוד הוא <b dir="ltr">80F3DAC8DCA8</b>),
-    את הקוד בלבד, או את ה-MAC מהמדבקה שעל המכשיר.
+    הקלידו את שם הרשת המלא שהמכשיר משדר (למשל <b dir="ltr">ShellyPro1-8C4F00D91928</b>) —
+    כך נדע גם את הדגם ונמצא אותו ברשת הביתית מיד. אפשר גם רק את הקוד
+    (<b dir="ltr">8C4F00D91928</b>) או את ה-MAC מהמדבקה, ואז נחפש לפי כל הדגמים.
    </div>
    <input id="mac" placeholder="שם הרשת שהמכשיר משדר או קוד המכשיר (MAC)" style="margin-top:6px">
   </details>
@@ -383,6 +388,10 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
 let UID=${inject.uid}, STATUS_URL=${inject.statusUrl}, B=${inject.bodies};
 const PREPARE_URL=${inject.prepareUrl}, BROKER=${inject.broker};
 let IP='', sntpIdx=0, PROVISIONED=false, DEVIP='', STA_IP='';
+// Model word of the unit ('shellypro1'…), learned from its device id over the
+// hotspot or from the network name the installer typed. Known → the LAN lookup
+// asks for that one name instead of walking every model prefix (~4 s each).
+let MODEL='';
 const $=(id)=>document.getElementById(id);
 if(UID)$('uid').textContent=UID;
 if(PREPARE_URL){$('macFold').classList.remove('hidden');$('macHelp').classList.remove('hidden')}
@@ -398,6 +407,15 @@ let STAGE=PREPARE_URL?'detect':'install';
 // "80F3DAC8DCA8", or a colon-separated MAC — the part after the last dash wins
 // so the letters/digits of the model name don't pollute it.
 function parseMac(v){const s=v.trim().toLowerCase();const tail=s.includes('-')?s.slice(s.lastIndexOf('-')+1):s;const hex=tail.replace(/[^0-9a-f]/g,'');return hex.length===12?hex:s.replace(/[^0-9a-f]/g,'')}
+// The model word in front of the dash ("ShellyPro1-8C4F00D91928" → 'shellypro1');
+// '' when only a bare code/MAC was given.
+function parseModel(v){const s=v.trim().toLowerCase();if(!s.includes('-'))return '';const head=s.slice(0,s.lastIndexOf('-')).replace(/[^a-z0-9]/g,'');return head.startsWith('shelly')?head:''}
+// LAN names to try: the unit's own model name first when known (one hit, no walk),
+// then the rest of the list — a mistyped word ("ShellyPro4-…") must not lose a
+// unit the full walk would have found.
+const ALL_PREFIXES=${JSON.stringify(MDNS_PREFIXES)};
+function knownModel(){return MODEL||parseModel($('mac').value)}
+function mdnsNames(uid){const m=knownModel();const list=m?[m].concat(ALL_PREFIXES.filter(p=>p!==m)):ALL_PREFIXES;return list.map(p=>p+'-'+uid+'.local')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
 const log=(t,cls)=>{const d=document.createElement('div');d.textContent=t;if(cls)d.className=cls;$('log').appendChild(d);d.scrollIntoView()};
 const esc=(v)=>String(v).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -420,7 +438,7 @@ function wsRpc(ip,method,timeoutMs){return new Promise((res)=>{
   clearTimeout(t);fin(m.error?null:(m.result||null))};
  ws.onerror=()=>{clearTimeout(t);fin(null)};
 })}
-async function wsMac(ip){const r=await wsRpc(ip,'Shelly.GetDeviceInfo');if(!r)return null;const m=String(r.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');return m.length===12?m:null}
+async function wsMac(ip){const r=await wsRpc(ip,'Shelly.GetDeviceInfo');if(!r)return null;const m=String(r.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');if(m.length!==12)return null;MODEL=parseModel(String(r.id||''))||MODEL;return m}
 // ── Wi-Fi scan, shared: one in-flight scan at a time, result reused for 90 s ──
 // (the picker and the send step would otherwise scan twice back to back, and the
 // device rejects a scan while one runs). Returns the deduped networks, strongest
@@ -577,14 +595,34 @@ async function stageDetect(){
  if(mac.length!==12){
   const manual0=$('ip').value.trim();
   log('מחפש את המכשיר ברשת...');
-  for(const c of (manual0?[manual0,'192.168.33.1']:['192.168.33.1'])){
-   const m=await wsMac(c);
-   if(m){mac=m;$('mac').value=m;DEVIP=c;break}
+  // Three rounds, 3 s apart: right after joining the device hotspot (no internet)
+  // Android keeps routing over cellular for a few seconds, so the first socket
+  // to 192.168.33.1 dies even though the device is right there.
+  // The manual-code fold opens after the FIRST miss, so a helper who is not on
+  // the hotspot at all can type the network name while the retries run on.
+  const addrs=manual0?[manual0,'192.168.33.1']:['192.168.33.1'];
+  for(let round=0;round<3&&mac.length!==12;round++){
+   if(round){log('עדיין מחפש... ('+(round+1)+'/3) — אפשר בינתיים להקליד את שם הרשת בשדה שנפתח למעלה','warn');await sleep(3000)}
+   for(const c of addrs){
+    const m=await wsMac(c);
+    if(m){mac=m;$('mac').value=m;DEVIP=c;break}
+   }
+   if(mac.length!==12){$('macFold').open=true;mac=parseMac($('mac').value)} // typed meanwhile?
   }
  }
  if(mac.length!==12){
   $('macFold').open=true;
-  verdict('לא נמצא מכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הקלידו את הקוד ידנית בשדה שנפתח למעלה.','warn');
+  // Tell apart "nothing at that address" from "answers HTTP but not the WebSocket
+  // RPC" — the second means the unit is there and only the readable channel
+  // failed, so typing the code is the whole fix. Probe the address actually tried.
+  const probe=$('ip').value.trim()||'192.168.33.1';
+  const httpOk=await ping(probe);
+  log(httpOk?'המכשיר עונה בכתובת '+probe+' אבל לא פתח ערוץ WebSocket':'אין תשובה כלל בכתובת '+probe,'warn');
+  verdict(httpOk
+   ?'המכשיר נמצא אך לא ניתן לקרוא ממנו את הקוד. הקלידו את הקוד ידנית בשדה שנפתח למעלה (האותיות והספרות שאחרי המקף בשם הרשת Shelly...) ולחצו שוב.'
+   :$('ip').value.trim()
+    ?'הכתובת '+probe+' לא עונה. בדקו אותה ברשימת המכשירים של הנתב, ודאו שהטלפון על אותה רשת — או הקלידו את שם הרשת שהמכשיר משדר בשדה שנפתח למעלה.'
+    :'לא נמצא מכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הקלידו את הקוד ידנית בשדה שנפתח למעלה.','warn');
   return}
  // Pre-provisioned unit (configured for our broker in advance, e.g. at the
  // seller's desk): the on-site visit collapses to Wi-Fi-only — one network,
@@ -593,7 +631,8 @@ async function stageDetect(){
   const cfg=await wsRpc(DEVIP,'MQTT.GetConfig');
   if(cfg&&cfg.enable&&cfg.server===BROKER)PROVISIONED=true;
  }
- $('foundMac').textContent=mac+(PROVISIONED?' · מוגדר מראש לשרת ✓':'');
+ if(!MODEL)MODEL=parseModel($('mac').value);
+ $('foundMac').textContent=mac+(MODEL?' ('+MODEL+')':'')+(PROVISIONED?' · מוגדר מראש לשרת ✓':'');
  $('foundBox').classList.remove('hidden');
  // On the device's network: Wi-Fi comes FIRST — it's a local setting needing no
  // internet, and once the device joins the home LAN, everything else (creds,
@@ -749,7 +788,7 @@ async function stageComplete(){
  if(PREPARE_URL&&!(B&&parseMac($('mac').value)===UID)){if(!(await mintCreds()))return}
  const manual=$('ip').value.trim();
  const candidates=[...new Set([manual,STA_IP,DEVIP].filter(Boolean))]
-  .concat(${JSON.stringify(MDNS_PREFIXES)}.map(p=>p+'-'+UID+'.local'));
+  .concat(mdnsNames(UID));
  IP='';
  for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
  if(!IP){
@@ -786,7 +825,11 @@ async function stageInstall(){
  // (stale state), fall back to the mint step instead of failing mid-send.
  if(PREPARE_URL&&!(B&&parseMac($('mac').value)===UID)){await tryMint();return}
  const manual=$('ip').value.trim();
- const candidates=manual?[manual]:${JSON.stringify(MDNS_PREFIXES)}.map(p=>p+'-'+UID+'.local').concat('192.168.33.1');
+ // Per-device file on the hotspot (the documented path) never learns the model:
+ // the hotspot address goes before the model walk then, and right after the one
+ // known name otherwise — .local misses cost ~4 s each.
+ const names=mdnsNames(UID);
+ const candidates=manual?[manual]:(knownModel()?[names[0],'192.168.33.1'].concat(names.slice(1)):['192.168.33.1'].concat(names));
  IP='';
  for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
  if(!IP){
