@@ -595,7 +595,14 @@ async function stageDetect(){
  }
  if(mac.length!==12){
   $('macFold').open=true;
-  verdict('לא נמצא מכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הקלידו את הקוד ידנית בשדה שנפתח למעלה.','warn');
+  // Tell apart "nothing at the hotspot address" from "answers HTTP but not the
+  // WebSocket RPC" — the second means the unit is there and only the readable
+  // channel failed, so typing the code is the whole fix.
+  const httpOk=await ping('192.168.33.1');
+  log(httpOk?'המכשיר עונה בכתובת 192.168.33.1 אבל לא פתח ערוץ WebSocket':'אין תשובה כלל בכתובת 192.168.33.1','warn');
+  verdict(httpOk
+   ?'המכשיר נמצא אך לא ניתן לקרוא ממנו את הקוד. הקלידו את הקוד ידנית בשדה שנפתח למעלה (האותיות והספרות שאחרי המקף בשם הרשת Shelly...) ולחצו שוב.'
+   :'לא נמצא מכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הקלידו את הקוד ידנית בשדה שנפתח למעלה.','warn');
   return}
  // Pre-provisioned unit (configured for our broker in advance, e.g. at the
  // seller's desk): the on-site visit collapses to Wi-Fi-only — one network,
