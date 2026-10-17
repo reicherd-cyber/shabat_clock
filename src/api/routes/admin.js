@@ -458,6 +458,14 @@ adminRouter.get('/devices/:id/diagnosis', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Connectivity timeline (online/offline edges with outage lengths) for the diagnosis modal.
+adminRouter.get('/devices/:id/connectivity', async (req, res, next) => {
+  try {
+    const { connectivityTimeline } = await import('../../services/device-diagnosis.js');
+    res.json(await connectivityTimeline(Number(req.params.id), { limit: req.query.limit }));
+  } catch (e) { next(e); }
+});
+
 // Move a device (relays + schedules ride along) to another user.
 // The channel/code proposal the transfer modal shows (registration-style list).
 adminRouter.get('/devices/:id/transfer-preview', async (req, res, next) => {

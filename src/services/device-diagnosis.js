@@ -219,3 +219,33 @@ export async function diagnoseDevice(deviceId) {
   };
   return { verdict, category: CATEGORY[verdict] || 'unknown', text, evidence };
 }
+
+// Connectivity timeline for the admin diagnosis modal: the device's online/offline
+// edges (MQTT birth/LWT + health-probe flags), newest first, each offline edge
+// carrying the outage length — until the next online edge, or until now while
+// still down. Edges only (device_events never records heartbeats), so a long
+// stable connection is a single 'online' row.
+export async function connectivityTimeline(deviceId, { limit = 60 } = {}) {
+  const [device] = await query('SELECT id, is_online, last_seen_at FROM devices WHERE id = ?', [deviceId]);
+  if (!device) throw Object.assign(new Error('device not found'), { status: 404 });
+  const rows = await query(
+    `SELECT event, payload, created_at FROM device_events
+     WHERE device_id = ? AND event IN ('online','offline')
+     ORDER BY created_at DESC, id DESC LIMIT ?`,
+    [deviceId, Math.min(500, Math.max(1, Number(limit) || 60))],
+  );
+  const now = Date.now();
+  const events = rows.map((r, i) => {
+    const p = typeof r.payload === 'string' ? JSON.parse(r.payload || '{}') : (r.payload || {});
+    const at = new Date(r.created_at);
+    const ev = { at, event: r.event, via: p.via || 'mqtt', rssi: p.rssi ?? null, ip: p.ip ?? null, failures: p.failures ?? null };
+    if (r.event === 'offline') {
+      // rows are newest-first: the edge that ENDED this outage is the previous element.
+      const next = rows[i - 1];
+      ev.duration_s = Math.max(0, Math.round(((next ? new Date(next.created_at).getTime() : now) - at.getTime()) / 1000));
+      ev.ongoing = !next;
+    }
+    return ev;
+  });
+  return { is_online: !!device.is_online, last_seen_at: device.last_seen_at, events };
+}
