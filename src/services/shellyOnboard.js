@@ -44,7 +44,12 @@ const SNTP_SERVERS = ['pool.ntp.org', 'time.google.com', 'time.cloudflare.com'];
 // The MQTT topic_prefix/client_id stays 'shellypro2-<mac>' for ALL models: it's
 // a label our scripts write onto the device and the server/ACL expect — not
 // something the hardware must match.
-const MDNS_PREFIXES = ['shellypro2', 'shellypro4pm', 'shellyplus2pm'];
+// Every Gen2 Pro/Plus switch model, most common first (each miss costs one
+// ~4 s probe). A Pro 1 was "not found" on the home LAN until its prefix was here.
+const MDNS_PREFIXES = [
+  'shellypro4pm', 'shellypro2', 'shellypro1', 'shellypro2pm', 'shellypro1pm', 'shellypro3',
+  'shellyplus2pm', 'shellyplus1pm', 'shellyplus1',
+];
 const mdnsCandidates = (uid) => MDNS_PREFIXES.map((p) => `${p}-${uid}.local`);
 
 // The RPC bodies are serialized server-side so the scripts stay dumb pipes — no
