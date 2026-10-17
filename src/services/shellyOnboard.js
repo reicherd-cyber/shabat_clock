@@ -359,9 +359,9 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
   <details id="macFold" class="hidden" style="font-size:14px;margin-bottom:8px">
    <summary style="cursor:pointer"><b>לא מחוברים לרשת שהמכשיר משדר? לחצו כאן ›</b></summary>
    <div style="margin-top:6px">
-    הקלידו את קוד המכשיר: את שם הרשת המלא שהוא משדר (למשל ברשת
-    <b dir="ltr">ShellyPro4PM-80F3DAC8DCA8</b> הקוד הוא <b dir="ltr">80F3DAC8DCA8</b>),
-    את הקוד בלבד, או את ה-MAC מהמדבקה שעל המכשיר.
+    הקלידו את שם הרשת המלא שהמכשיר משדר (למשל <b dir="ltr">ShellyPro1-8C4F00D91928</b>) —
+    כך נדע גם את הדגם ונמצא אותו ברשת הביתית מיד. אפשר גם רק את הקוד
+    (<b dir="ltr">8C4F00D91928</b>) או את ה-MAC מהמדבקה, ואז נחפש לפי כל הדגמים.
    </div>
    <input id="mac" placeholder="שם הרשת שהמכשיר משדר או קוד המכשיר (MAC)" style="margin-top:6px">
   </details>
@@ -388,6 +388,10 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
 let UID=${inject.uid}, STATUS_URL=${inject.statusUrl}, B=${inject.bodies};
 const PREPARE_URL=${inject.prepareUrl}, BROKER=${inject.broker};
 let IP='', sntpIdx=0, PROVISIONED=false, DEVIP='', STA_IP='';
+// Model word of the unit ('shellypro1'…), learned from its device id over the
+// hotspot or from the network name the installer typed. Known → the LAN lookup
+// asks for that one name instead of walking every model prefix (~4 s each).
+let MODEL='';
 const $=(id)=>document.getElementById(id);
 if(UID)$('uid').textContent=UID;
 if(PREPARE_URL){$('macFold').classList.remove('hidden');$('macHelp').classList.remove('hidden')}
@@ -403,6 +407,11 @@ let STAGE=PREPARE_URL?'detect':'install';
 // "80F3DAC8DCA8", or a colon-separated MAC — the part after the last dash wins
 // so the letters/digits of the model name don't pollute it.
 function parseMac(v){const s=v.trim().toLowerCase();const tail=s.includes('-')?s.slice(s.lastIndexOf('-')+1):s;const hex=tail.replace(/[^0-9a-f]/g,'');return hex.length===12?hex:s.replace(/[^0-9a-f]/g,'')}
+// The model word in front of the dash ("ShellyPro1-8C4F00D91928" → 'shellypro1');
+// '' when only a bare code/MAC was given.
+function parseModel(v){const s=v.trim().toLowerCase();if(!s.includes('-'))return '';const head=s.slice(0,s.lastIndexOf('-')).replace(/[^a-z0-9]/g,'');return head.startsWith('shelly')?head:''}
+// LAN names to try: the unit's own model name when known, every model otherwise.
+function mdnsNames(uid){const m=MODEL||parseModel($('mac').value);return (m?[m]:${JSON.stringify(MDNS_PREFIXES)}).map(p=>p+'-'+uid+'.local')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
 const log=(t,cls)=>{const d=document.createElement('div');d.textContent=t;if(cls)d.className=cls;$('log').appendChild(d);d.scrollIntoView()};
 const esc=(v)=>String(v).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -425,7 +434,7 @@ function wsRpc(ip,method,timeoutMs){return new Promise((res)=>{
   clearTimeout(t);fin(m.error?null:(m.result||null))};
  ws.onerror=()=>{clearTimeout(t);fin(null)};
 })}
-async function wsMac(ip){const r=await wsRpc(ip,'Shelly.GetDeviceInfo');if(!r)return null;const m=String(r.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');return m.length===12?m:null}
+async function wsMac(ip){const r=await wsRpc(ip,'Shelly.GetDeviceInfo');if(!r)return null;const m=String(r.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');if(m.length!==12)return null;MODEL=parseModel(String(r.id||''))||MODEL;return m}
 // ── Wi-Fi scan, shared: one in-flight scan at a time, result reused for 90 s ──
 // (the picker and the send step would otherwise scan twice back to back, and the
 // device rejects a scan while one runs). Returns the deduped networks, strongest
@@ -611,7 +620,8 @@ async function stageDetect(){
   const cfg=await wsRpc(DEVIP,'MQTT.GetConfig');
   if(cfg&&cfg.enable&&cfg.server===BROKER)PROVISIONED=true;
  }
- $('foundMac').textContent=mac+(PROVISIONED?' · מוגדר מראש לשרת ✓':'');
+ if(!MODEL)MODEL=parseModel($('mac').value);
+ $('foundMac').textContent=mac+(MODEL?' ('+MODEL+')':'')+(PROVISIONED?' · מוגדר מראש לשרת ✓':'');
  $('foundBox').classList.remove('hidden');
  // On the device's network: Wi-Fi comes FIRST — it's a local setting needing no
  // internet, and once the device joins the home LAN, everything else (creds,
@@ -767,7 +777,7 @@ async function stageComplete(){
  if(PREPARE_URL&&!(B&&parseMac($('mac').value)===UID)){if(!(await mintCreds()))return}
  const manual=$('ip').value.trim();
  const candidates=[...new Set([manual,STA_IP,DEVIP].filter(Boolean))]
-  .concat(${JSON.stringify(MDNS_PREFIXES)}.map(p=>p+'-'+UID+'.local'));
+  .concat(mdnsNames(UID));
  IP='';
  for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
  if(!IP){
@@ -804,7 +814,7 @@ async function stageInstall(){
  // (stale state), fall back to the mint step instead of failing mid-send.
  if(PREPARE_URL&&!(B&&parseMac($('mac').value)===UID)){await tryMint();return}
  const manual=$('ip').value.trim();
- const candidates=manual?[manual]:${JSON.stringify(MDNS_PREFIXES)}.map(p=>p+'-'+UID+'.local').concat('192.168.33.1');
+ const candidates=manual?[manual]:mdnsNames(UID).concat('192.168.33.1');
  IP='';
  for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
  if(!IP){
