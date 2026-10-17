@@ -153,21 +153,21 @@ export const onboardStatusLimiter = limited({ windowMs: 60_000, limit: 30 });
 // Credential minting writes broker passwd/ACL entries — keep it slow.
 // Batch prep sessions (several devices back-to-back, with the page's own
 // retries) blew the old 10/10min and read as "no internet" on the phone.
-// check=1 polls mint nothing and are counted separately below: an already-provisioned
-// unit costs the page up to 12 polls per attempt, which ate this budget in two or
-// three devices and surfaced as "יותר מדי בקשות" with no mint ever made.
+// check=1 polls mint nothing and are not rate limited at all: an already-provisioned
+// unit costs the page up to 12 polls per attempt, which ate the old 30/10min budget
+// in two or three devices and surfaced as "יותר מדי בקשות" with no mint ever made.
+// The mint caps are sized so no real installer session can reach them — they exist
+// only so a leaked universal file cannot reload the broker in a loop (every mint
+// rewrites passwd/ACL and SIGHUPs mosquitto, which the whole fleet depends on).
 const isOnboardCheck = (req) => String(req.query.check || '') === '1';
-export const onboardPrepareLimiter = limited({ windowMs: 10 * 60_000, limit: 30, skip: isOnboardCheck });
+export const onboardPrepareLimiter = limited({ windowMs: 10 * 60_000, limit: 100, skip: isOnboardCheck });
 // …and per installer FILE, not just per IP: one leaked universal file must not be
 // able to churn the broker from many addresses. Keyed on the token's jti (decoded,
 // not verified — a forged jti only buckets itself; the route verifies the
-// signature). A batch of ~10 units with the page's one retry each is ~20 mints,
-// so 40/hour leaves headroom while still being far too slow for a churn attack.
+// signature). A batch of ~10 units with the page's one retry each is ~20 mints;
+// 200/hour is ten times that and still a trickle for a churn attack.
 export const onboardPrepareTokenLimiter = limited({
-  windowMs: 60 * 60_000, limit: 40,
+  windowMs: 60 * 60_000, limit: 200,
   keyGenerator: (req) => `tok:${jwt.decode(String(req.query.token || ''))?.jti || req.ip}`,
   skip: isOnboardCheck,
 });
-// The connectivity polls themselves: each one is a live MQTT RPC to the device,
-// so they get their own cap rather than none — 12 polls × 5 s per attempt.
-export const onboardCheckLimiter = limited({ windowMs: 10 * 60_000, limit: 120, skip: (req) => !isOnboardCheck(req) });

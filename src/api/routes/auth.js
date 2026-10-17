@@ -9,7 +9,7 @@ import { bcryptCompare, bcryptHash, createUser } from '../../services/users.js';
 import { logAction } from '../../services/audit.js';
 import { verifyTotp } from '../../services/totp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
-import { signUserToken, signAdminToken, otpRequestLimiter, otpRequestIpLimiter, otpVerifyIpLimiter, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter, onboardPrepareTokenLimiter, onboardCheckLimiter } from '../middleware.js';
+import { signUserToken, signAdminToken, otpRequestLimiter, otpRequestIpLimiter, otpVerifyIpLimiter, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter, onboardPrepareTokenLimiter } from '../middleware.js';
 import { env } from '../../config/env.js';
 
 export const authRouter = Router();
@@ -137,7 +137,7 @@ authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, 
 // typed, authorized by the 30-day installer token embedded in the downloaded file
 // (p:'shelly-onboard-any', minted by an admin — their id rides along for the audit
 // trail). GET so the file:// page gets a readable (no-preflight, ACAO:*) response.
-authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, onboardPrepareTokenLimiter, onboardCheckLimiter, async (req, res, next) => {
+authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, onboardPrepareTokenLimiter, async (req, res, next) => {
   try {
     res.set('Access-Control-Allow-Origin', '*');
     let claims;
