@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, Input, Badge } from '../ui.jsx';
-import { Wifi, Send } from 'lucide-react';
+import { Wifi, Send, RefreshCw } from 'lucide-react';
 
 // הגדרות → "הגדרת רשת Wi-Fi למכשיר": the owner's phone, joined to the Shelly's own
 // hotspot, sends Wifi.SetConfig to 192.168.33.1 and the page then watches OUR
@@ -30,6 +30,41 @@ async function sendToDevice(url) {
   return 'blocked';
 }
 
+// Readable call to the device (the scan list). Needs the device's CORS header on
+// top of the local-network allowance; when either is missing the list stays
+// unreadable and the user types the name. Returns the JSON or null.
+async function readFromDevice(method) {
+  for (const extra of [{ targetAddressSpace: 'local' }, { targetAddressSpace: 'private' }, {}]) {
+    try {
+      const res = await fetch(`http://192.168.33.1/rpc/${method}`, { mode: 'cors', cache: 'no-store', signal: AbortSignal.timeout(15000), ...extra });
+      if (res.ok) return await res.json();
+    } catch { /* next variant */ }
+  }
+  return null;
+}
+
+// Blind reachability probe (an opaque reply still means the device answered).
+async function deviceAnswers() {
+  return (await sendToDevice('http://192.168.33.1/rpc/Shelly.GetDeviceInfo')) === 'sent';
+}
+
+const signalWord = (rssi) => (rssi >= -60 ? 'חזק' : rssi >= -75 ? 'בינוני' : 'חלש');
+
+// Scan results → one row per network, strongest first; Shelly hotspots (any
+// model's own network) and hidden networks are left out.
+export function networksFromScan(scan) {
+  const best = new Map();
+  for (const r of Array.isArray(scan?.results) ? scan.results : []) {
+    const ssid = String(r?.ssid || '');
+    if (!ssid || /^shelly/i.test(ssid)) continue;
+    const cur = best.get(ssid);
+    if (!cur || Number(r.rssi) > Number(cur.rssi)) best.set(ssid, r);
+  }
+  return [...best.values()]
+    .sort((a, b) => Number(b.rssi) - Number(a.rssi))
+    .map((r) => ({ ssid: r.ssid, rssi: Number(r.rssi), open: Number(r.auth) === 0, signal: signalWord(Number(r.rssi)) }));
+}
+
 export default function WifiCard({ devices }) {
   const shelly = devices.filter((d) => d.is_enabled && d.device_type === 'shelly' && d.device_uid);
   const [ssid, setSsid] = useState('');
@@ -41,6 +76,26 @@ export default function WifiCard({ devices }) {
   const [elapsed, setElapsed] = useState(0);
   const startedAt = useRef(0);
   const wasOffline = useRef([]); // device ids offline when the config was sent
+  const [nets, setNets] = useState(null); // null = not scanned; [] = nothing usable
+  const [scanning, setScanning] = useState(false);
+  const [scanNote, setScanNote] = useState('');
+
+  // The device scans (~5–10 s) and the page reads the list where the browser
+  // lets it; otherwise the note says so and the name is typed by hand.
+  const scan = async () => {
+    setScanning(true); setScanNote(''); setNets(null);
+    const data = await readFromDevice('Wifi.Scan');
+    if (data) {
+      const list = networksFromScan(data);
+      setNets(list);
+      if (!list.length) setScanNote('המכשיר לא רואה כרגע רשתות אחרות — סרקו שוב או הקלידו את שם הרשת ידנית.');
+    } else if (await deviceAnswers()) {
+      setScanNote('הדפדפן הזה לא מאפשר לקרוא את רשימת הרשתות מהמכשיר — הקלידו את שם הרשת ידנית.');
+    } else {
+      setScanNote('לא הצלחנו להגיע למכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly…) ולחצו שוב.');
+    }
+    setScanning(false);
+  };
 
   // Verification: poll the server until every Shelly is online (after a settle
   // period) or 3 minutes pass. While the phone sits on the hotspot the calls
@@ -108,9 +163,28 @@ export default function WifiCard({ devices }) {
           (במכשיר עם מסך: לחיצה ארוכה על הכפתור הימני → Network → Wi-Fi AP → Enable).
           <span className="text-off"> אל תחזיקו 10 שניות — זה איפוס יצרן שמוחק גם את החיבור לשעון שבת.</span>
         </li>
-        <li>מלאו כאן את פרטי הרשת הביתית ולחצו "שלח למכשיר". אחרי השליחה חזרו ל-Wi-Fi הביתי — הדף יבדוק שהמכשיר באמת התחבר ויעדכן כאן.</li>
+        <li>לחצו "סרוק רשתות" ובחרו את הרשת הביתית (או הקלידו את שמה), הקלידו את הסיסמה ולחצו "שלח למכשיר". אחרי השליחה חזרו ל-Wi-Fi הביתי — הדף יבדוק שהמכשיר באמת התחבר ויעדכן כאן.</li>
       </ol>
-      <div className="flex items-center gap-2 flex-wrap mt-3">
+      <div className="mt-3">
+        <Button variant="ghost" disabled={scanning || busy} onClick={scan}>
+          <span className="inline-flex items-center gap-1"><RefreshCw size={14} className={scanning ? 'animate-spin' : ''} />
+            {scanning ? 'סורק רשתות מהמכשיר… (כ-10 שניות)' : nets ? 'סרוק שוב' : 'סרוק רשתות'}</span>
+        </Button>
+        {scanNote && <p className="text-muted text-xs mt-1">{scanNote}</p>}
+        {nets && nets.length > 0 && (
+          <div className="flex flex-col gap-1 mt-2 max-w-md">
+            {nets.map((n) => (
+              <button key={n.ssid} type="button" disabled={busy}
+                className={`flex items-center justify-between gap-2 border rounded-xl px-3 py-2 text-sm text-start cursor-pointer ${n.ssid === ssid ? 'border-on bg-on-bg' : 'border-line hover:bg-surface2'}`}
+                onClick={() => { setSsid(n.ssid); setPhase('idle'); }}>
+                <span dir="auto" className="truncate">{n.ssid}</span>
+                <span className="text-muted text-xs whitespace-nowrap">{n.open ? 'פתוחה · ' : ''}אות {n.signal}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap mt-2">
         <Input dir="auto" className="w-56" placeholder="שם רשת ה-Wi-Fi הביתית" value={ssid} disabled={busy}
           onChange={(e) => { setSsid(e.target.value); if (!busy) setPhase('idle'); }} />
         <Input dir="ltr" className="w-56" type="text" autoComplete="off" placeholder="סיסמת ה-Wi-Fi" value={pass} disabled={busy}
