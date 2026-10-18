@@ -92,7 +92,7 @@ export default function WifiCard({ devices }) {
   const [ssid, setSsid] = useState('');
   const [pass, setPass] = useState('');
   const [showPass, setShowPass] = useState(false);
-  const [phase, setPhase] = useState('idle'); // idle | sending | unreachable | refused | verifying | ok | fail
+  const [phase, setPhase] = useState('idle'); // idle | sending | unreachable | refused | verifying | ok | fail | wrong_net | no_wifi
   const [how, setHow] = useState('direct'); // 'direct' | 'window'
   const [elapsed, setElapsed] = useState(0);
   const [nets, setNets] = useState(null); // null = not scanned; [] = nothing usable
@@ -105,7 +105,7 @@ export default function WifiCard({ devices }) {
   const [needPick, setNeedPick] = useState(false);
   const [live, setLive] = useState(null); // the watched device's latest row
   const startedAt = useRef(0);
-  const target = useRef(null); // { id, name, wasOnline } while verifying
+  const target = useRef(null); // { id, name, ssid } while verifying
   const pending = useRef(null); // params awaiting the window fallback
 
   // Who is on the other end of the hotspot — null when unreadable.
@@ -138,33 +138,34 @@ export default function WifiCard({ devices }) {
     setScanning(false);
   };
 
-  // Verification: poll the server until the configured device is online or the
-  // time runs out. A unit that was online keeps its stale "online" row until the
-  // broker notices the drop (~90 s), so for it the proof is a sign of life
-  // NEWER than the send (last_seen_at). While the phone sits on the hotspot the
-  // calls fail for lack of internet — that is just "keep waiting".
+  // Verification: the server asks the device itself (live RPC over the broker)
+  // what Wi-Fi it is on. A reply is proof of life NOW — no cached flag, no
+  // clock to compare — and its ssid must be the one just sent: a unit on a
+  // cable, or one that fell back to another network, stays online with a wrong
+  // password and must not pass. While the phone sits on the hotspot the calls
+  // fail for lack of internet — that is just "keep waiting".
   useEffect(() => {
     if (phase !== 'verifying') return undefined;
     let stop = false;
     let timer = null;
+    const sameNet = (a, b) => a === b || String(a || '').trim() === String(b || '').trim();
     const tick = async () => {
       if (stop) return;
       const age = Date.now() - startedAt.current;
       setElapsed(Math.round(age / 1000));
       try {
-        const rows = await api.get('/devices');
+        const st = await api.get(`/devices/${target.current.id}/wifi-status`);
         if (stop) return;
-        const row = rows.find((d) => d.id === target.current?.id);
-        if (row) {
-          setLive(row);
-          const seenAfter = row.last_seen_at && new Date(row.last_seen_at).getTime() > startedAt.current;
-          if (row.is_online && (!target.current.wasOnline || seenAfter)) { setPhase('ok'); return; }
-        }
+        setLive(st);
+        if (st.online && st.wifi && sameNet(st.ssid, target.current.ssid)) { setPhase('ok'); return; }
+        // Alive but not on the requested network: the join failed for good
+        // (wrong password / name) — no point waiting the clock out.
+        if (st.online && age > 15_000) { setPhase(st.wifi ? 'wrong_net' : 'no_wifi'); return; }
       } catch { /* no internet on the hotspot — wait */ }
       if (age > VERIFY_MS) { setPhase('fail'); return; }
-      timer = setTimeout(tick, 5000);
+      timer = setTimeout(tick, 6000);
     };
-    timer = setTimeout(tick, 2000);
+    timer = setTimeout(tick, 3000);
     return () => { stop = true; clearTimeout(timer); };
   }, [phase]);
 
@@ -172,7 +173,7 @@ export default function WifiCard({ devices }) {
 
   const startVerify = (f, viaWindow) => {
     setHow(viaWindow ? 'window' : 'direct');
-    target.current = { ...f, wasOnline: !!shelly.find((d) => d.id === f.id)?.is_online };
+    target.current = { ...f, ssid };
     startedAt.current = Date.now(); setElapsed(0); setLive(null);
     setPhase('verifying');
   };
@@ -310,19 +311,35 @@ export default function WifiCard({ devices }) {
         </div>
       )}
 
-      {(phase === 'verifying' || phase === 'ok' || phase === 'fail') && (
+      {['verifying', 'ok', 'fail', 'wrong_net', 'no_wifi'].includes(phase) && (
         <div className="text-sm mt-3 bg-surface2 rounded-xl px-3 py-2 space-y-1.5">
           {how === 'direct'
             ? <div className="text-on">✓ הפרטים נשלחו למכשיר {tName}.</div>
             : <div>הבקשה נשלחה דרך החלון — תשובת המכשיר מופיעה שם.</div>}
           {phase === 'verifying' && (
             <div className="flex items-center gap-2 flex-wrap">
-              <span>עכשיו חזרו ל-Wi-Fi הביתי. בודקים אם {tName} התחבר… ({elapsed} שניות, עד {VERIFY_MIN} דקות)</span>
-              {live && <Badge ok={!!live.is_online}>{live.is_online ? 'מחובר' : 'מנותק'}</Badge>}
+              <span>עכשיו חזרו ל-Wi-Fi הביתי. בודקים אם {tName} התחבר לרשת "{target.current?.ssid}"… ({elapsed} שניות, עד {VERIFY_MIN} דקות)</span>
+              {live && (
+                <Badge ok={!!live.online}>
+                  {!live.online ? 'מנותק' : live.wifi ? `מחובר לרשת "${live.ssid || ''}"` : 'מחובר (לא דרך Wi-Fi)'}
+                </Badge>
+              )}
             </div>
           )}
           {phase === 'ok' && (
-            <div className="text-on font-semibold">✓ המכשיר {tName} התחבר בהצלחה — ההגדרה הושלמה.</div>
+            <div className="text-on font-semibold">✓ המכשיר {tName} מחובר לרשת "{target.current?.ssid}" — ההגדרה הושלמה.</div>
+          )}
+          {phase === 'wrong_net' && (
+            <div className="text-off">
+              המכשיר {tName} מחובר, אבל לרשת "{live?.ssid}" ולא לרשת "{target.current?.ssid}" שביקשתם — כנראה סיסמה או שם רשת שגויים.
+              התחברו לרשת המכשיר, תקנו ושלחו שוב.
+            </div>
+          )}
+          {phase === 'no_wifi' && (
+            <div className="text-off">
+              המכשיר {tName} מחובר לשרת (כנראה בכבל רשת), אבל ה-Wi-Fi לא התחבר לרשת "{target.current?.ssid}" — כנראה סיסמה או שם רשת שגויים.
+              התחברו לרשת המכשיר, תקנו ושלחו שוב.
+            </div>
           )}
           {phase === 'fail' && (
             <div className="text-off">

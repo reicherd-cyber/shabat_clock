@@ -465,11 +465,13 @@ export function RangeFilter({ value, onChange, keys = RANGE_DEFAULT, custom = {}
 
 // ── shared admin formatters + stat tile ──
 // Shelly MAC / device code as the system stores it: 12 lowercase hex digits, or
-// null for anything else ("80:F3:DA:C8:DC:A8", "ShellyPro4PM-80F3DAC8DCA8" tail…).
+// null for anything else. Accepts "80:F3:DA:C8:DC:A8", "80-F3-DA-C8-DC-A8",
+// "80f3dac8dca8" and a hotspot/device name "ShellyPro4PM-80F3DAC8DCA8" (only a
+// leading Shelly model word is cut off — a dash is otherwise just a separator).
 export const normalizeMac = (v) => {
-  const s = String(v || '').toLowerCase();
-  const tail = s.includes('-') ? s.slice(s.lastIndexOf('-') + 1) : s;
-  const hex = tail.replace(/[^0-9a-f]/g, '');
+  const s = String(v || '').trim().toLowerCase();
+  const m = s.match(/^shelly[a-z0-9]*-(.+)$/);
+  const hex = (m ? m[1] : s).replace(/[^0-9a-f]/g, '');
   return hex.length === 12 ? hex : null;
 };
 
