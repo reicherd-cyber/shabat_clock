@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
-import { requireUser, signUserToken, supportAskLimiter, supportMessageLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
+import { requireUser, signUserToken, invalidateSession, supportAskLimiter, supportMessageLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, accountsForEmail } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
@@ -50,16 +50,14 @@ userRouter.get('/me', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// The verified address behind the session. Normally the token's `em` claim
-// (Google login / code received by email). A token minted before the claim
-// existed (30-day sessions) still counts for an account that was OPENED with
-// Google: its primary address was verified by Google at signup. Phone logins
-// carry none — the self-typed address proves nothing. Never under impersonation.
+// The verified address behind the session: the token's `em` claim, minted only
+// by a Google login or a login code received by email. Nothing is derived for
+// a token without it — a phone login (or a session from before the claim
+// existed) proves nothing about the address, so it gets no switcher until the
+// person logs in again through the address. Never under impersonation.
 async function sessionIdentity(req) {
   if (req.auth.imp) return null;
-  if (req.auth.email) return req.auth.email;
-  const [row] = await query("SELECT email FROM users WHERE id = ? AND signup_via = 'google'", [req.auth.userId]);
-  return row?.email || null;
+  return req.auth.email || null;
 }
 
 // Switch the session into another account the identity may enter: a fresh
@@ -134,6 +132,7 @@ userRouter.post('/me/emails', async (req, res, next) => {
 userRouter.delete('/me/emails/:id', async (req, res, next) => {
   try {
     const { removed } = await removeUserEmail({ userId: req.auth.userId, emailId: Number(req.params.id), actor: actorStr(actorOf(req)) });
+    invalidateSession('user', req.auth.userId); // sessions that entered through this address end now, not in 60s
     await act(req, 'delete', 'user_email', Number(req.params.id), { before: { email: removed } });
     res.json({ ok: true });
   } catch (e) { next(e); }

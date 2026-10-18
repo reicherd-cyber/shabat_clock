@@ -178,6 +178,7 @@ adminRouter.patch('/users/:id', requireWrite, async (req, res, next) => {
     // users.email mirror column is written there, never directly here).
     if (req.body?.email !== undefined) {
       await setUserEmailAdmin({ userId: Number(req.params.id), email: req.body.email, actor: adminActor(req) });
+      invalidateSession('user', Number(req.params.id)); // a cleared primary ends sessions that entered through it now
       fields.email = req.body.email; // audit-diff visibility only
     }
     // Add a verified phone directly (admin path). The phone column is globally

@@ -10,16 +10,24 @@ import { normalizePhone } from '../services/phone.js';
 // 12h). This liveness check closes that gap: the subject row is re-read at most
 // once a minute per session and a dead subject gets SESSION_EXPIRED.
 const LIVE_TTL_MS = 60_000;
-const liveCache = new Map(); // `${kind}:${id}:${role}` → { ok, until }
-async function subjectAlive(kind, id, role) {
-  const key = `${kind}:${id}:${role}`;
+// For a user session that carries an identity (shared accounts: `em`), the
+// same check also re-reads whether that address is still live on the account
+// — removing an invitation (or the admin clearing the primary) ends every
+// session that entered through it, instead of lingering for the token's 30 days.
+const liveCache = new Map(); // `${kind}:${id}:${role}[:${email}]` → { ok, until }
+async function subjectAlive(kind, id, role, email = null) {
+  const key = `${kind}:${id}:${role}${email ? `:${email}` : ''}`;
   const hit = liveCache.get(key);
   if (hit && hit.until > Date.now()) return hit.ok;
   let ok = false;
   try {
     if (kind === 'user') {
-      const [u] = await query('SELECT status FROM users WHERE id = ?', [id]);
-      ok = Boolean(u) && u.status === 'active';
+      const [u] = await query(
+        `SELECT u.status, ${email ? '(SELECT 1 FROM user_emails e WHERE e.user_id = u.id AND e.email = ? AND e.deleted_at IS NULL LIMIT 1)' : 'NULL'} AS member
+         FROM users u WHERE u.id = ?`,
+        email ? [email, id] : [id],
+      );
+      ok = Boolean(u) && u.status === 'active' && (!email || Boolean(u.member));
     } else {
       const [a] = await query('SELECT is_active, role FROM admins WHERE id = ?', [id]);
       ok = Boolean(a) && Boolean(a.is_active) && a.role === role;
@@ -74,8 +82,8 @@ export async function requireUser(req, res, next) {
   try {
     const t = decode(req);
     if (t.role !== 'user') throw errors.forbidden();
-    if (!(await subjectAlive('user', Number(t.sub), 'user'))) {
-      throw new ApiError(401, 'SESSION_EXPIRED', 'החשבון אינו פעיל — יש להתחבר מחדש');
+    if (!(await subjectAlive('user', Number(t.sub), 'user', t.em || null))) {
+      throw new ApiError(401, 'SESSION_EXPIRED', 'החשבון אינו פעיל או שהגישה אליו הוסרה — יש להתחבר מחדש');
     }
     auth = { userId: Number(t.sub), role: 'user', imp: t.imp ? Number(t.imp) : null, email: t.em || null };
   } catch (e) {
