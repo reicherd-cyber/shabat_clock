@@ -148,6 +148,8 @@ export const phoneAddLimiter = limited({ windowMs: 15 * 60_000, limit: 5, keyGen
 // The editor's live preview is debounced client-side (~3/s at most while typing);
 // a holiday scheduler fans out to one calendar expansion per selected day.
 export const previewLimiter = limited({ windowMs: 60_000, limit: 90, keyGenerator: perUser });
+// Wi-Fi verdict polls (one device RPC each): ~30 per 3-minute attempt.
+export const deviceWifiLimiter = limited({ windowMs: 10 * 60_000, limit: 150, keyGenerator: perUser });
 // The phone onboarding page polls its verdict every ~4s for up to ~90s per attempt.
 export const onboardStatusLimiter = limited({ windowMs: 60_000, limit: 30 });
 // Credential minting writes broker passwd/ACL entries — keep it slow.

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, timeFormat, channelColorOf, ChannelDot } from '../ui.jsx';
 import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2 } from 'lucide-react';
+import WifiCard from './WifiCard.jsx';
 
 // Phones (caller-ID) + PIN + relay management — relay names/codes drive the IVR
 // prompts directly (PLAN §3).
@@ -295,6 +296,8 @@ export default function Settings() {
           </div>
         </Card>
       ))}
+
+      <WifiCard devices={devices} />
 
       {devices.some((d) => !d.is_enabled) && (
         <Card>

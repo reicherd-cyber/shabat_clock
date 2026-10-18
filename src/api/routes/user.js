@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
-import { requireUser, supportAskLimiter, supportMessageLimiter, phoneAddLimiter, previewLimiter } from '../middleware.js';
+import { requireUser, supportAskLimiter, supportMessageLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, setPrimaryUserEmail } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
@@ -257,6 +257,26 @@ userRouter.patch('/devices/:id', async (req, res, next) => {
     const recovery = await patchDevice(Number(req.params.id), patch, { userId: req.auth.userId, actor: actorStr(actorOf(req)) });
     await act(req, 'update', 'device', Number(req.params.id), { after: patch });
     res.json({ ok: true, recovery });
+  } catch (e) { next(e); }
+});
+
+// Live Wi-Fi state of an owned Shelly, asked of the device itself over the
+// broker — the verdict for הגדרות → הגדרת Wi-Fi (WifiCard.jsx): a reply proves
+// the unit is connected NOW, and its ssid says to which network (a cabled unit
+// stays online with a wrong Wi-Fi password; the cached is_online flag cannot
+// tell). { online:false } when the device does not answer.
+userRouter.get('/devices/:id/wifi-status', deviceWifiLimiter, async (req, res, next) => {
+  try {
+    const [d] = await query(
+      `SELECT id, device_uid, device_type, transport, ip_address FROM devices WHERE id = ? AND user_id = ?`,
+      [Number(req.params.id), req.auth.userId],
+    );
+    if (!d) throw errors.notFound('DEVICE_NOT_FOUND', 'Device not found');
+    if (d.device_type !== 'shelly' || !d.device_uid) throw errors.validation('זמין רק למכשירי Shelly');
+    const { shellyCall } = await import('../../services/shelly.js');
+    const st = await shellyCall(d, 'Wifi.GetStatus').catch(() => null);
+    if (!st) return res.json({ online: false });
+    res.json({ online: true, wifi: st.status === 'got ip', ssid: st.ssid || null, ip: st.sta_ip || null, rssi: st.rssi ?? null });
   } catch (e) { next(e); }
 });
 
