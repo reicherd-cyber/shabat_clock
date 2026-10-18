@@ -77,21 +77,35 @@ function UserLayout() {
   // More than one → the name in the header becomes a select box.
   const [accounts, setAccounts] = useState([]);
   const [me, setMe] = useState(null);
+  const [identity, setIdentity] = useState(null);
   useEffect(() => {
     if (tokens.user) api.get('/me').then((r) => {
       setName(r.user.full_name); setDemo(Boolean(r.demo)); setAccounts(r.accounts || []); setMe(Number(r.user.id));
+      setIdentity(r.identity_email || null);
     }).catch(() => {});
   }, []);
   const [switching, setSwitching] = useState(false);
+  const [switchErr, setSwitchErr] = useState(null);
   const switchAccount = async (userId) => {
     if (!userId || userId === me || switching) return;
-    setSwitching(true);
+    setSwitching(true); setSwitchErr(null);
     try {
       const r = await api.post('/me/switch', { user_id: userId });
       tokens.user = r.token;
       window.location.assign('/'); // full remount as the other account
-    } catch { setSwitching(false); }
+    } catch (e) { setSwitching(false); setSwitchErr(e?.message || 'המעבר נכשל'); }
   };
+  // Desktop: inline in the header. Phone: its own slim bar under the header —
+  // the header has no room at ~390px (memory: every layout must fit a phone).
+  const accountSelect = (cls) => (
+    <select value={me ?? ''} disabled={switching} title={identity ? `החשבונות שיש לכתובת ${identity} גישה אליהם` : 'מעבר בין החשבונות שלך'}
+      className={`border border-line rounded-[10px] px-2 py-1.5 bg-surface text-sm text-ink cursor-pointer ${cls}`}
+      onChange={(e) => switchAccount(Number(e.target.value))}>
+      {accounts.map((a) => (
+        <option key={a.id} value={a.id}>{a.full_name}{a.is_home ? '' : ' (גישה)'}</option>
+      ))}
+    </select>
+  );
   // תשובות צוות שטרם נקראו — מונה על כפתור ה-?; נדגם כל דקה + מתעדכן מיד
   // כשפותחים שיחה ב-/help (אירוע support-unread-changed).
   const [supportUnread, setSupportUnread] = useState(0);
@@ -152,15 +166,7 @@ function UserLayout() {
               </span>
             )}
           </NavLink>
-          {accounts.length > 1 ? (
-            <select value={me ?? ''} disabled={switching} title="מעבר בין החשבונות שיש לכתובת שלך גישה אליהם"
-              className="border border-line rounded-[10px] px-2 py-1.5 bg-surface text-sm text-ink max-w-[150px] sm:max-w-[220px] truncate cursor-pointer"
-              onChange={(e) => switchAccount(Number(e.target.value))}>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>{a.full_name}{a.is_home ? '' : ' (גישה)'}</option>
-              ))}
-            </select>
-          ) : (
+          {accounts.length > 1 ? accountSelect('hidden md:block max-w-[220px] truncate') : (
             <span className="hidden sm:inline">{name}</span>
           )}
           <span className="w-8 h-8 rounded-full bg-surface2 border border-line grid place-items-center font-bold text-accent-dk">
@@ -169,6 +175,15 @@ function UserLayout() {
           <button className="text-muted text-sm cursor-pointer hover:text-ink" onClick={() => { tokens.user = null; nav('/login'); }}>יציאה</button>
         </div>
       </header>
+      {accounts.length > 1 && (
+        <div className="md:hidden flex items-center gap-2 px-4 py-2 border-b border-line bg-surface2 text-sm">
+          <span className="text-muted shrink-0">חשבון:</span>
+          {accountSelect('flex-1 min-w-0')}
+        </div>
+      )}
+      {switchErr && (
+        <div className="bg-[#fde8ec] text-[#e11d48] text-sm px-6 py-2 text-center">{switchErr}</div>
+      )}
       <main className="max-w-[1040px] mx-auto px-6 py-8">
         <Outlet />
       </main>

@@ -28,7 +28,7 @@ export async function createUser({ full_name, pin, require_pin = false, notes = 
   // another account already owns it; checked up front so the user row isn't half-born.
   if (cleanEmail) {
     const [taken] = await query('SELECT id FROM user_emails WHERE primary_email = ?', [cleanEmail]);
-    if (taken) throw errors.conflict('CONFLICT', EMAIL_TAKEN_MSG);
+    if (taken) throw errors.conflict('CONFLICT', PRIMARY_TAKEN_MSG);
   }
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
@@ -41,7 +41,7 @@ export async function createUser({ full_name, pin, require_pin = false, notes = 
           'INSERT INTO user_emails (user_id, email, is_primary, created_by) VALUES (?,?,TRUE,?)',
           [res.insertId, cleanEmail, actor],
         ).catch((e) => {
-          if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', EMAIL_TAKEN_MSG);
+          if (e.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', PRIMARY_TAKEN_MSG);
           throw e;
         });
       }
@@ -63,7 +63,16 @@ export async function createUser({ full_name, pin, require_pin = false, notes = 
 // primary (OTP-by-email destination, admin lists).
 
 const PRIMARY_TAKEN_MSG = 'כתובת האימייל הזו היא הכתובת הראשית של חשבון אחר במערכת';
-const EMAIL_TAKEN_MSG = PRIMARY_TAKEN_MSG; // createUser: the address becomes the new account's primary
+
+// uq_primary_email / uq_user_email violations (a concurrent claim that slipped
+// past the FOR UPDATE check, which cannot lock a row that does not exist yet)
+// surface as the same 409 the check itself gives.
+function asConflict(e) {
+  if (e.code === 'ER_DUP_ENTRY') {
+    return errors.conflict('CONFLICT', String(e.message).includes('uq_user_email') ? 'הכתובת הזו כבר קיימת בחשבון שלך' : PRIMARY_TAKEN_MSG);
+  }
+  return e;
+}
 
 export async function listUserEmails(userId) {
   return query(
@@ -106,13 +115,13 @@ export async function addUserEmail({ userId, email, actor = null }) {
       [userId, clean],
     );
     if (existing && existing.deleted_at == null) throw errors.conflict('CONFLICT', 'הכתובת הזו כבר קיימת בחשבון שלך');
-    const [[{ n }]] = await conn.query(
-      'SELECT COUNT(*) AS n FROM user_emails WHERE user_id = ? AND deleted_at IS NULL',
+    const [[hasPrimary]] = await conn.query(
+      'SELECT id FROM user_emails WHERE user_id = ? AND primary_email IS NOT NULL FOR UPDATE',
       [userId],
     );
-    // An account's first address becomes its primary (identity) — which no
-    // other account may already own.
-    const primary = n === 0;
+    // An account without a primary (its first address, or the admin cleared
+    // it) gets this one as its identity — which no other account may own.
+    const primary = !hasPrimary;
     if (primary && await primaryTakenElsewhere(conn, clean, userId)) throw errors.conflict('CONFLICT', PRIMARY_TAKEN_MSG);
     let id;
     if (existing) { // own removed row revives
@@ -130,7 +139,7 @@ export async function addUserEmail({ userId, email, actor = null }) {
     }
     if (primary) await conn.query('UPDATE users SET email = ? WHERE id = ?', [clean, userId]);
     return { id: Number(id), email: clean, is_primary: primary };
-  });
+  }).catch((e) => { throw asConflict(e); });
 }
 
 // Soft remove of an INVITED address (the row stays for history; re-adding
@@ -152,10 +161,12 @@ export async function removeUserEmail({ userId, emailId, actor = null }) {
 }
 
 // Admin panel edits ONE email field — it manages the user's PRIMARY address
-// (the owner can't; the admin can): clearing removes it (the oldest invited
-// address, if any, inherits), a value already invited here becomes primary, a
-// value that is another account's live primary is refused, and a brand-new
-// value joins as primary (the old primary stays as an invited address).
+// (the owner can't; the admin can): clearing removes it and leaves the account
+// without an identity (an invited address is someone ELSE's identity, so it is
+// never promoted — the owner's next added address becomes the new primary), a
+// value already invited here becomes primary, a value that is another
+// account's live primary is refused, and a brand-new value joins as primary
+// (the old primary stays as an invited address).
 export async function setUserEmailAdmin({ userId, email, actor = null }) {
   const clean = normalizeEmail(email);
   await withTransaction(async (conn) => {
@@ -170,15 +181,7 @@ export async function setUserEmailAdmin({ userId, email, actor = null }) {
         'UPDATE user_emails SET deleted_at = UTC_TIMESTAMP(), is_primary = FALSE, updated_by = ? WHERE id = ?',
         [actor, current.id],
       );
-      const [[next]] = await conn.query(
-        'SELECT id, email FROM user_emails WHERE user_id = ? AND deleted_at IS NULL ORDER BY id LIMIT 1 FOR UPDATE',
-        [userId],
-      );
-      if (next) {
-        if (await primaryTakenElsewhere(conn, next.email, userId)) throw errors.conflict('CONFLICT', PRIMARY_TAKEN_MSG);
-        await conn.query('UPDATE user_emails SET is_primary = TRUE, updated_by = ? WHERE id = ?', [actor, next.id]);
-      }
-      await conn.query('UPDATE users SET email = ? WHERE id = ?', [next?.email ?? null, userId]);
+      await conn.query('UPDATE users SET email = NULL WHERE id = ?', [userId]);
       return;
     }
     if (await primaryTakenElsewhere(conn, clean, userId)) throw errors.conflict('CONFLICT', PRIMARY_TAKEN_MSG);
@@ -201,7 +204,7 @@ export async function setUserEmailAdmin({ userId, email, actor = null }) {
       );
     }
     await conn.query('UPDATE users SET email = ? WHERE id = ?', [clean, userId]);
-  });
+  }).catch((e) => { throw asConflict(e); });
 }
 
 export async function getUser(id) {

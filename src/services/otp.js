@@ -115,10 +115,12 @@ export async function requestOtp({ phone, purpose, userPhoneId = null, channel =
       'UPDATE otp_codes SET used_at = UTC_TIMESTAMP() WHERE phone = ? AND purpose = ? AND used_at IS NULL',
       [phone, purpose],
     );
+    // channel is recorded so a verified EMAIL code can vouch for the address
+    // (auth.js: identity claim for the account switcher).
     await query(
-      `INSERT INTO otp_codes (phone, purpose, user_phone_id, code_hash, expires_at)
-       VALUES (?,?,?,?, UTC_TIMESTAMP() + INTERVAL ? MINUTE)`,
-      [phone, purpose, userPhoneId, bcryptHash(code), OTP_TTL_MIN],
+      `INSERT INTO otp_codes (phone, purpose, channel, user_phone_id, code_hash, expires_at)
+       VALUES (?,?,?,?,?, UTC_TIMESTAMP() + INTERVAL ? MINUTE)`,
+      [phone, purpose, channel === 'email' && email ? 'email' : 'call', userPhoneId, bcryptHash(code), OTP_TTL_MIN],
     );
   }
   if (channel === 'email' && email) await deliverOtpEmail(email, code, userId);

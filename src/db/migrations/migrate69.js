@@ -12,4 +12,8 @@ export async function migrate69(conn) {
     ADD COLUMN primary_email VARCHAR(255)
       GENERATED ALWAYS AS (IF(is_primary = 1 AND deleted_at IS NULL, email, NULL)) STORED,
     ADD UNIQUE KEY uq_primary_email (primary_email)`);
+  // Which way a login code went out: a code received by EMAIL proves control of
+  // the account's primary address, so that login may carry the address as its
+  // identity (switch box); a phone call proves nothing about the address.
+  await conn.query("ALTER TABLE otp_codes ADD COLUMN channel VARCHAR(8) NOT NULL DEFAULT 'call' AFTER purpose");
 }

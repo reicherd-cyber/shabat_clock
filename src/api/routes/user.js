@@ -44,10 +44,23 @@ userRouter.get('/me', async (req, res, next) => {
     // Shared accounts: every account the session's identity (address) may
     // enter — its own first, then the ones that invited it. Drives the header
     // select box; a lone entry hides it.
-    const accounts = await accountsForEmail(req.auth.email);
-    res.json({ user, phones, emails, demo, accounts, identity_email: req.auth.email });
+    const identity = await sessionIdentity(req);
+    const accounts = await accountsForEmail(identity);
+    res.json({ user, phones, emails, demo, accounts, identity_email: identity });
   } catch (e) { next(e); }
 });
+
+// The verified address behind the session. Normally the token's `em` claim
+// (Google login / code received by email). A token minted before the claim
+// existed (30-day sessions) still counts for an account that was OPENED with
+// Google: its primary address was verified by Google at signup. Phone logins
+// carry none — the self-typed address proves nothing. Never under impersonation.
+async function sessionIdentity(req) {
+  if (req.auth.imp) return null;
+  if (req.auth.email) return req.auth.email;
+  const [row] = await query("SELECT email FROM users WHERE id = ? AND signup_via = 'google'", [req.auth.userId]);
+  return row?.email || null;
+}
 
 // Switch the session into another account the identity may enter: a fresh
 // token for that account, same identity. Not under impersonation (an admin
@@ -55,12 +68,13 @@ userRouter.get('/me', async (req, res, next) => {
 userRouter.post('/me/switch', async (req, res, next) => {
   try {
     if (req.auth.imp) throw errors.forbidden('לא ניתן להחליף חשבון במצב התחזות');
+    const identity = await sessionIdentity(req);
     const target = Number(req.body?.user_id);
-    const accounts = await accountsForEmail(req.auth.email);
+    const accounts = await accountsForEmail(identity);
     const acc = accounts.find((a) => a.id === target);
     if (!acc) throw errors.forbidden('אין לכתובת שלך גישה לחשבון הזה');
-    await act(req, 'switch_account', 'user', acc.id, { after: { from_user_id: req.auth.userId, identity: req.auth.email } });
-    res.json({ token: signUserToken(acc.id, null, req.auth.email), user: { id: acc.id, full_name: acc.full_name } });
+    await act(req, 'switch_account', 'user', acc.id, { after: { from_user_id: req.auth.userId, identity } });
+    res.json({ token: signUserToken(acc.id, null, identity), user: { id: acc.id, full_name: acc.full_name } });
   } catch (e) { next(e); }
 });
 

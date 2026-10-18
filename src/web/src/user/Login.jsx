@@ -26,7 +26,7 @@ export default function Login() {
   };
   const onGoogle = (credential) => run(async () => {
     const r = await publicApi.post('/auth/google', { credential });
-    if (r.needs_terms) { setPending({ credential, name: r.name, email: r.email }); setAgreed(false); setStage('consent'); return; }
+    if (r.needs_terms) { setPending({ credential, name: r.name, email: r.email, invited_by: r.invited_by || [] }); setAgreed(false); setStage('consent'); return; }
     finishLogin(r);
   });
   const signUp = () => run(async () => {
@@ -64,6 +64,11 @@ export default function Login() {
               שלום <b>{pending.name}</b> — אין עדיין חשבון לכתובת <b dir="ltr">{pending.email}</b>.
               נפתח לך חשבון חדש עם הפרטים האלה מחשבון Google שלך.
             </p>
+            {pending.invited_by?.length > 0 && (
+              <p className="text-sm text-muted">
+                לכתובת הזו יש גישה לחשבון של <b>{pending.invited_by.join(', ')}</b> — אחרי פתיחת החשבון שלך תוכלו לעבור אליו מתיבת בחירת החשבון שבראש המסך.
+              </p>
+            )}
             <label className="flex items-start gap-2 text-sm cursor-pointer">
               <input type="checkbox" className="mt-1" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
               <span>
