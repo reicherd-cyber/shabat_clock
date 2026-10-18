@@ -73,9 +73,25 @@ function UserLayout() {
   const nav = useNavigate();
   const [name, setName] = useState('');
   const [demo, setDemo] = useState(false);
+  // Shared accounts: every account this login's address may enter (own first).
+  // More than one → the name in the header becomes a select box.
+  const [accounts, setAccounts] = useState([]);
+  const [me, setMe] = useState(null);
   useEffect(() => {
-    if (tokens.user) api.get('/me').then((r) => { setName(r.user.full_name); setDemo(Boolean(r.demo)); }).catch(() => {});
+    if (tokens.user) api.get('/me').then((r) => {
+      setName(r.user.full_name); setDemo(Boolean(r.demo)); setAccounts(r.accounts || []); setMe(Number(r.user.id));
+    }).catch(() => {});
   }, []);
+  const [switching, setSwitching] = useState(false);
+  const switchAccount = async (userId) => {
+    if (!userId || userId === me || switching) return;
+    setSwitching(true);
+    try {
+      const r = await api.post('/me/switch', { user_id: userId });
+      tokens.user = r.token;
+      window.location.assign('/'); // full remount as the other account
+    } catch { setSwitching(false); }
+  };
   // תשובות צוות שטרם נקראו — מונה על כפתור ה-?; נדגם כל דקה + מתעדכן מיד
   // כשפותחים שיחה ב-/help (אירוע support-unread-changed).
   const [supportUnread, setSupportUnread] = useState(0);
@@ -136,7 +152,17 @@ function UserLayout() {
               </span>
             )}
           </NavLink>
-          <span className="hidden sm:inline">{name}</span>
+          {accounts.length > 1 ? (
+            <select value={me ?? ''} disabled={switching} title="מעבר בין החשבונות שיש לכתובת שלך גישה אליהם"
+              className="border border-line rounded-[10px] px-2 py-1.5 bg-surface text-sm text-ink max-w-[150px] sm:max-w-[220px] truncate cursor-pointer"
+              onChange={(e) => switchAccount(Number(e.target.value))}>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.full_name}{a.is_home ? '' : ' (גישה)'}</option>
+              ))}
+            </select>
+          ) : (
+            <span className="hidden sm:inline">{name}</span>
+          )}
           <span className="w-8 h-8 rounded-full bg-surface2 border border-line grid place-items-center font-bold text-accent-dk">
             {name ? name[0] : '·'}
           </span>

@@ -48,9 +48,11 @@ authRouter.post('/admin/auth/google', adminLoginLimiter, async (req, res, next) 
   } catch (e) { next(e); }
 });
 
-// "Sign in with Google" for users — an alternative to phone-OTP. ANY of the
-// account's addresses (user_emails) signs in; the global one-address-one-account
-// rule guarantees a single match.
+// "Sign in with Google" for users — an alternative to phone-OTP. The address is
+// an identity (shared accounts, migration 69): it lands in its OWN account (where
+// it is the primary) when it has one, otherwise in the first account that
+// invited it; every account it may enter is then offered in the header select
+// box (/me → accounts, /me/switch). The token carries the address (`em`).
 //
 // Self-signup (2026-08-30): an unknown (verified) Google address may open an
 // account — but only after the person accepts the terms. First call answers
@@ -64,13 +66,16 @@ authRouter.post('/auth/google', adminLoginLimiter, async (req, res, next) => {
     const rows = await query(
       `SELECT u.id, u.full_name, u.status FROM user_emails e
        JOIN users u ON u.id = e.user_id
-       WHERE e.email = ? AND e.deleted_at IS NULL`,
+       WHERE e.email = ? AND e.deleted_at IS NULL
+       ORDER BY e.is_primary DESC, u.id`,
       [email],
     );
     if (rows.length) {
-      const u = rows[0];
-      if (u.status !== 'active') throw errors.unauthenticated('החשבון מושעה — פנו לתמיכה');
-      return res.json({ token: signUserToken(u.id), user: { id: Number(u.id), full_name: u.full_name } });
+      // Own account first (primary), else the first inviting account that is
+      // still active; suspended everywhere → refused.
+      const u = rows.find((r) => r.status === 'active');
+      if (!u) throw errors.unauthenticated('החשבון מושעה — פנו לתמיכה');
+      return res.json({ token: signUserToken(u.id, null, email), user: { id: Number(u.id), full_name: u.full_name } });
     }
     // New person. Google gives us a verified address and a display name.
     const fullName = String(claims.name || email.split('@')[0]).trim().slice(0, 100) || 'משתמש חדש';
@@ -87,7 +92,7 @@ authRouter.post('/auth/google', adminLoginLimiter, async (req, res, next) => {
     );
     await logAction({ type: 'user', id: user.id }, 'signup', 'user', user.id, { via: 'google', email, terms: true });
     res.status(201).json({
-      token: signUserToken(user.id),
+      token: signUserToken(user.id, null, email),
       user: { id: Number(user.id), full_name: user.full_name },
       created: true, pin,
     });
@@ -219,7 +224,7 @@ authRouter.post('/auth/otp/verify', otpVerifyIpLimiter, async (req, res, next) =
     const code = String(req.body?.code || '');
     await verifyOtp({ phone, code, purpose: 'login' }); // login codes only — purposes never cross
     const [row] = await query(
-      `SELECT u.id, u.full_name, p.id AS phone_id, p.verified_at FROM users u
+      `SELECT u.id, u.full_name, u.email, p.id AS phone_id, p.verified_at FROM users u
        JOIN user_phones p ON p.user_id = u.id WHERE p.phone = ? AND p.deleted_at IS NULL AND u.status = 'active'`,
       [phone],
     );
@@ -228,7 +233,9 @@ authRouter.post('/auth/otp/verify', otpVerifyIpLimiter, async (req, res, next) =
     if (!row.verified_at) {
       await query('UPDATE user_phones SET verified_at = UTC_TIMESTAMP() WHERE id = ?', [row.phone_id]);
     }
-    res.json({ token: signUserToken(row.id), user: { id: Number(row.id), full_name: row.full_name } });
+    // A phone login is the account owner — their identity is the account's
+    // primary address (if any), so the header select box works here too.
+    res.json({ token: signUserToken(row.id, null, row.email), user: { id: Number(row.id), full_name: row.full_name } });
   } catch (e) { next(e); }
 });
 
