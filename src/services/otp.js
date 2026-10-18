@@ -55,6 +55,7 @@ async function deliverOtpEmail(email, code) {
     to: email,
     subject: `קוד הכניסה שלך: ${code}`,
     text: `קוד הכניסה שלך לשעון שבת הוא: ${code}\nהקוד תקף ל-${OTP_TTL_MIN} דקות.`,
+    kind: 'user_otp', redact: [code],
   });
 }
 

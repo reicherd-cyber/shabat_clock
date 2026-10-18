@@ -276,6 +276,7 @@ authRouter.post('/admin/auth/email-code', adminLoginLimiter, async (req, res, ne
       to: admin.email,
       subject: `קוד כניסה לניהול: ${code}`,
       text: `קוד הכניסה שלך לפאנל הניהול של שעון שבת: ${code}\nהקוד תקף ל-${OTP_TTL_MIN} דקות.`,
+      kind: 'admin_otp', adminId: admin.id, redact: [code],
     });
     res.json({ ok: true, email_masked: maskEmail(admin.email) });
   } catch (e) { next(e); }

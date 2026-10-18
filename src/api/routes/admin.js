@@ -751,6 +751,66 @@ adminRouter.get('/whatsapp', async (req, res, next) => {
 });
 
 
+// ── Emails: every message the system sent (email_log, services/email.js), for
+// the אימיילים page. Filters: time window, kind, status, user, free text over
+// recipient/subject/body/name. The recipient's account is resolved through
+// user_emails when the sender did not know it (login codes).
+adminRouter.get('/emails', async (req, res, next) => {
+  try {
+    const cond = ['1=1'];
+    const params = [];
+    if (req.query.from) { cond.push('l.created_at >= ?'); params.push(String(req.query.from)); }
+    if (req.query.to) { cond.push('l.created_at <= ?'); params.push(String(req.query.to)); }
+    if (req.query.kind) { cond.push('l.kind = ?'); params.push(String(req.query.kind).slice(0, 20)); }
+    if (req.query.status) { cond.push('l.status = ?'); params.push(String(req.query.status).slice(0, 10)); }
+    if (req.query.event) { cond.push('l.last_event = ?'); params.push(String(req.query.event).slice(0, 40)); }
+    if (req.query.user_id) { cond.push('u.id = ?'); params.push(Number(req.query.user_id)); }
+    if (req.query.q) {
+      const like = `%${String(req.query.q)}%`;
+      cond.push('(l.to_email LIKE ? OR l.subject LIKE ? OR l.body LIKE ? OR u.full_name LIKE ? OR a.name LIKE ?)');
+      params.push(like, like, like, like, like);
+    }
+    const where = cond.join(' AND ');
+    const from = `FROM email_log l
+      LEFT JOIN users u ON u.id = COALESCE(l.user_id,
+        (SELECT ue.user_id FROM user_emails ue WHERE ue.email = l.to_email AND ue.deleted_at IS NULL ORDER BY ue.is_primary DESC, ue.id LIMIT 1))
+      LEFT JOIN admins a ON a.id = COALESCE(l.admin_id, (SELECT a2.id FROM admins a2 WHERE a2.email = l.to_email LIMIT 1))`;
+    const tzOff = Math.max(-840, Math.min(840, Math.round(Number(req.query.tz_offset) || 0)));
+    const zone = /^[A-Za-z_]+(\/[A-Za-z0-9_+\-]+){0,2}$/.test(String(req.query.tz || '')) ? String(req.query.tz) : null;
+    const localDay = zone
+      ? `COALESCE(CONVERT_TZ(l.created_at, '+00:00', ?), l.created_at + INTERVAL ${tzOff} MINUTE)`
+      : `l.created_at + INTERVAL ${tzOff} MINUTE`;
+    const [rows, [counts], byKind, byDay] = await Promise.all([
+      query(`SELECT l.id, l.kind, l.to_email, l.from_email, l.subject, l.body, l.ref, l.provider, l.provider_id, l.status, l.error,
+                    l.duration_ms, l.last_event, l.event_checked_at, l.created_at,
+                    u.id AS user_id, u.full_name AS user_name, a.id AS admin_id, a.name AS admin_name
+               ${from} WHERE ${where} ORDER BY l.id DESC LIMIT 1000`, params),
+      query(`SELECT COUNT(*) AS total, SUM(l.status = 'sent') AS sent, SUM(l.status = 'failed') AS failed, SUM(l.status = 'dev') AS dev,
+                    COUNT(DISTINCT l.to_email) AS recipients,
+                    SUM(l.last_event IN ('bounced','complained')) AS undelivered
+               ${from} WHERE ${where}`, params),
+      query(`SELECT l.kind, COUNT(*) AS n, SUM(l.status = 'failed') AS failed ${from} WHERE ${where} GROUP BY l.kind ORDER BY n DESC`, params),
+      // Day buckets in the client's local day (same convention as /whatsapp).
+      query(`SELECT DATE_FORMAT(${localDay}, '%Y-%m-%d') AS d, l.status, COUNT(*) AS n ${from} WHERE ${where} GROUP BY 1, 2 ORDER BY 1`,
+        zone ? [zone, ...params] : params),
+    ]);
+    res.json({
+      rows,
+      counts: Object.fromEntries(Object.entries(counts).map(([k, v]) => [k, Number(v || 0)])),
+      byKind: byKind.map((r) => ({ kind: r.kind, n: Number(r.n), failed: Number(r.failed || 0) })),
+      byDay: byDay.map((r) => ({ d: typeof r.d === 'string' ? r.d.slice(0, 10) : new Date(r.d).toISOString().slice(0, 10), status: r.status, n: Number(r.n) })),
+    });
+  } catch (e) { next(e); }
+});
+
+// Ask Resend what became of one message (delivered / bounced / …) and cache it on the row.
+adminRouter.post('/emails/:id/refresh', async (req, res, next) => {
+  try {
+    const { refreshEmailEvent } = await import('../../services/email.js');
+    res.json(await refreshEmailEvent(Number(req.params.id)));
+  } catch (e) { next(e); }
+});
+
 // ── schedules (any user's; same soft-delete path [D37]) ──
 adminRouter.get('/schedules', async (req, res, next) => {
   try {
