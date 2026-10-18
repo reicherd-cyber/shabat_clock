@@ -74,6 +74,7 @@ export default function WifiCard({ devices }) {
   const [url, setUrl] = useState('');
   const [live, setLive] = useState(null); // latest device rows while verifying
   const [elapsed, setElapsed] = useState(0);
+  const [done, setDone] = useState([]); // names of the units that reconnected
   const startedAt = useRef(0);
   const wasOffline = useRef([]); // device ids offline when the config was sent
   const [nets, setNets] = useState(null); // null = not scanned; [] = nothing usable
@@ -113,7 +114,16 @@ export default function WifiCard({ devices }) {
         if (stop) return;
         const mine = rows.filter((d) => shelly.some((s) => s.id === d.id));
         setLive(mine);
-        if (mine.length && mine.every((d) => d.is_online) && age > SETTLE_MS) { setPhase('ok'); return; }
+        // The unit being configured is one that was offline when the config was
+        // sent — the first of those to come back settles it (other units may be
+        // offline for their own reasons). Nothing offline at send time: an
+        // online unit changing network drops for a moment, so wait the settle
+        // period and require them all back.
+        const watched = mine.filter((d) => wasOffline.current.includes(d.id));
+        if (watched.length) {
+          const back = watched.filter((d) => d.is_online);
+          if (back.length) { setDone(back.map((d) => d.name)); setPhase('ok'); return; }
+        } else if (mine.length && mine.every((d) => d.is_online) && age > SETTLE_MS) { setDone([]); setPhase('ok'); return; }
       } catch { /* no internet on the hotspot — wait */ }
       if (age > VERIFY_MS) { setPhase('fail'); return; }
       timer = setTimeout(tick, 5000);
@@ -143,7 +153,6 @@ export default function WifiCard({ devices }) {
 
   const retryVerify = () => { startedAt.current = Date.now(); setElapsed(0); setPhase('verifying'); };
   const busy = phase === 'sending' || phase === 'verifying';
-  const names = (ids) => shelly.filter((d) => ids.includes(d.id)).map((d) => d.name).join(', ');
 
   return (
     <Card>
@@ -227,13 +236,13 @@ export default function WifiCard({ devices }) {
           )}
           {phase === 'ok' && (
             <div className="text-on font-semibold">
-              ✓ {wasOffline.current.length ? `${names(wasOffline.current)} התחבר לשרת — ההגדרה הצליחה.` : 'המכשירים מחוברים לשרת.'}
+              ✓ {done.length ? `המכשיר ${done.join(', ')} התחבר בהצלחה — ההגדרה הושלמה.` : 'המכשירים מחוברים — ההגדרה הושלמה.'}
             </div>
           )}
           {phase === 'fail' && (
             <div className="text-off">
-              המכשיר עדיין לא התחבר לשרת אחרי 3 דקות. כנראה שם רשת או סיסמה שגויים (המכשיר מאשר קבלה גם לסיסמה שגויה).
-              התחברו שוב לרשת המכשיר, תקנו ולחצו "שלח למכשיר". הטלפון עדיין על רשת המכשיר? חזרו ל-Wi-Fi הביתי ולחצו "בדוק שוב".
+              המכשיר לא התחבר. בדקו שוב את פרטי הרשת — שם הרשת והסיסמה — התחברו לרשת המכשיר ושלחו שוב.
+              הטלפון עדיין על רשת המכשיר? חזרו ל-Wi-Fi הביתי ולחצו "בדוק שוב".
               <div className="mt-1.5"><Button variant="ghost" onClick={retryVerify}>בדוק שוב</Button></div>
             </div>
           )}
