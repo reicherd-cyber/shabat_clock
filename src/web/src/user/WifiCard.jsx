@@ -11,7 +11,7 @@ import { Wifi, Send, RefreshCw } from 'lucide-react';
 // tells us its MAC (Shelly.GetDeviceInfo) where the browser can read it;
 // otherwise the owner picks it (one device = no question).
 const DEVICE_URL = 'http://192.168.33.1/rpc/Wifi.SetConfig';
-const VERIFY_MS = 2 * 60_000;
+const VERIFY_MS = 3 * 60_000;
 const SETTLE_MS = 20_000; // an online unit drops for a moment when its network changes
 
 // The site is https and the device is plain http, which browsers block ("mixed
@@ -119,7 +119,7 @@ export default function WifiCard({ devices }) {
   };
 
   // Verification: poll the server until the configured device is online or
-  // 2 minutes pass. While the phone sits on the hotspot the calls fail for
+  // 3 minutes pass. While the phone sits on the hotspot the calls fail for
   // lack of internet — that is just "keep waiting".
   useEffect(() => {
     if (phase !== 'verifying') return undefined;
@@ -266,7 +266,7 @@ export default function WifiCard({ devices }) {
 
           {phase === 'verifying' && (
             <div className="flex items-center gap-2 flex-wrap">
-              <span>עכשיו חזרו ל-Wi-Fi הביתי. בודקים אם {tName} התחבר… ({elapsed} שניות, עד 2 דקות)</span>
+              <span>עכשיו חזרו ל-Wi-Fi הביתי. בודקים אם {tName} התחבר… ({elapsed} שניות, עד 3 דקות)</span>
               {live && <Badge ok={!!live.is_online}>{live.is_online ? 'מחובר' : 'מנותק'}</Badge>}
             </div>
           )}
