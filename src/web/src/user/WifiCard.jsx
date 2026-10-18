@@ -271,11 +271,11 @@ export default function WifiCard({ devices }) {
         <Input dir="auto" className="w-56" placeholder="שם רשת ה-Wi-Fi הביתית" value={ssid} disabled={busy}
           onChange={(e) => { setSsid(e.target.value); if (!busy) setPhase('idle'); }} />
         <span className="relative inline-block w-56">
-          <Input dir="ltr" className="w-full pe-10" type={showPass ? 'text' : 'password'} autoComplete="off"
+          <Input dir="ltr" className="w-full pr-10" type={showPass ? 'text' : 'password'} autoComplete="off"
             placeholder="סיסמת ה-Wi-Fi" value={pass} disabled={busy}
             onChange={(e) => { setPass(e.target.value); if (!busy) setPhase('idle'); }} />
           <button type="button" title={showPass ? 'הסתר סיסמה' : 'הצג סיסמה'}
-            className="absolute top-1/2 -translate-y-1/2 end-3 text-muted hover:text-ink cursor-pointer"
+            className="absolute top-1/2 -translate-y-1/2 right-3 text-muted hover:text-ink cursor-pointer"
             onClick={() => setShowPass(!showPass)}>{showPass ? <EyeOff size={16} /> : <Eye size={16} />}</button>
         </span>
         {shelly.length > 1 && (!found || found === 'other') && (
