@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { query } from '../../db/pool.js';
 import { errors, ApiError } from '../../config/errors.js';
 import { bcryptCompare, bcryptHash, createUser } from '../../services/users.js';
+import { recordFailure, isLockedOut } from '../../services/authFailures.js';
 import { logAction } from '../../services/audit.js';
 import { verifyTotp } from '../../services/totp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
@@ -206,14 +207,24 @@ async function verifyAdminEmailCode(admin, code) {
 // review account: REVIEW_EMAIL signs in with the fixed REVIEW_OTP_CODE, into the
 // account whose primary address that is. No identity claim (nothing was
 // verified about the address), so no account switcher for the reviewers.
+//
+// The code is permanent, so the per-IP limiter alone would let a guesser rotate
+// addresses: failures also land in auth_failures under one fixed key (there is a
+// single review identity) and lock the review login for everyone for the
+// standard window [D10] — the same account-wide lockout the phone login had.
+const REVIEW_LOCK_KEY = 'review';
 authRouter.post('/auth/review-login', adminLoginLimiter, async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const code = String(req.body?.code || '');
     if (!env.review.email || !env.review.otp) throw errors.unauthenticated();
+    if (await isLockedOut(REVIEW_LOCK_KEY, 'web_otp')) throw errors.rateLimited();
     const emailOk = crypto.timingSafeEqual(Buffer.from(email.padEnd(255)), Buffer.from(env.review.email.toLowerCase().padEnd(255)));
     const codeOk = crypto.timingSafeEqual(Buffer.from(code.padEnd(64)), Buffer.from(env.review.otp.padEnd(64)));
-    if (!emailOk || !codeOk) throw errors.unauthenticated('קוד גישה שגוי');
+    if (!emailOk || !codeOk) {
+      await recordFailure(REVIEW_LOCK_KEY, 'web_otp');
+      throw errors.unauthenticated('קוד גישה שגוי');
+    }
     const [u] = await query(
       `SELECT u.id, u.full_name FROM user_emails e JOIN users u ON u.id = e.user_id
        WHERE e.primary_email = ? AND u.status = 'active'`,
