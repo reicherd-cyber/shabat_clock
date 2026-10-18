@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MessageCircle, ArrowRight, AlertTriangle, Bot, User as UserIcon } from 'lucide-react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, SearchSelect, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect, Stat, ymdLocal, niceCeil } from '../ui.jsx';
+import { Card, Button, Input, SearchSelect, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect, Stat, StackedDayChart } from '../ui.jsx';
 
 // Israeli local form → 972…; a foreign sender already carries its country code.
 const waDigits = (p) => { const d = String(p || '').replace(/\D/g, ''); return d.startsWith('0') ? `972${d.slice(1)}` : d; };
@@ -161,7 +161,9 @@ export function WhatsappAdmin() {
       {data && data.byDay.length > 0 && (
         <Card>
           <h3 className="font-semibold mb-2">הודעות לפי יום</h3>
-          <DayChart byDay={data.byDay} range={stamps} />
+          <StackedDayChart ariaLabel="הודעות וואטסאפ לפי יום" range={stamps}
+            rows={data.byDay.map((r) => ({ d: r.d, key: r.direction, n: r.n }))}
+            series={[{ key: "in", label: "מלקוחות", color: "#2a78d6" }, { key: "out", label: "מהבוט", color: "#1f9d55" }]} />
         </Card>
       )}
       {busy && <p className="text-muted text-sm">טוען…</p>}
@@ -169,78 +171,3 @@ export function WhatsappAdmin() {
   );
 }
 
-// In/out per day, stacked. Two fixed hues (validated with the dataviz palette
-// checker: ΔE 23.6 deutan / 24.8 normal); legend + direct colour never alone.
-const C_IN = '#2a78d6';
-const C_OUT = '#1f9d55';
-const C_GRID = '#DFE6F2';
-const C_MUTED = '#64708D';
-
-function DayChart({ byDay, range }) {
-  const [tip, setTip] = useState(null);
-  const buckets = useMemo(() => {
-    const days = [...new Set(byDay.map((r) => r.d))].sort();
-    const first = range.from ? ymdLocal(new Date(range.from.replace(' ', 'T') + 'Z')) : days[0];
-    const last = range.to ? ymdLocal(new Date(range.to.replace(' ', 'T') + 'Z')) : ymdLocal(new Date());
-    const map = new Map();
-    for (const r of byDay) {
-      const k = map.get(r.d) || { in: 0, out: 0 };
-      k[r.direction] += r.n;
-      map.set(r.d, k);
-    }
-    const [fy, fm, fd] = first.split('-').map(Number);
-    const cur = new Date(fy, fm - 1, fd);
-    const list = [];
-    while (ymdLocal(cur) <= last && list.length < 400) {
-      const key = ymdLocal(cur);
-      list.push({ key, ...(map.get(key) || { in: 0, out: 0 }) });
-      cur.setDate(cur.getDate() + 1);
-    }
-    return list;
-  }, [byDay, range.from, range.to]);
-  if (!buckets.length) return null;
-
-  const W = 720, H = 200, padL = 8, padR = 40, padT = 12, padB = 26;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const max = niceCeil(Math.max(1, ...buckets.map((b) => b.in + b.out)));
-  const ticks = [0, 0.5, 1].map((f) => f * max);
-  const band = plotW / buckets.length;
-  const barW = Math.min(28, Math.max(3, band - 4));
-  const y = (v) => padT + plotH - (v / max) * plotH;
-  const fmtKey = (k) => { const [, m, d] = k.split('-').map(Number); return `${d}.${m}`; };
-  const every = Math.max(1, Math.ceil(buckets.length / 14));
-
-  return (
-    <div className="relative" dir="ltr">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 240 }} role="img" aria-label="הודעות וואטסאפ לפי יום">
-        {ticks.map((t) => (
-          <g key={t}>
-            <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke={t === 0 ? '#BAC8E0' : C_GRID} strokeWidth="1" />
-            <text x={W - padR + 6} y={y(t) + 3.5} fontSize="10" fill={C_MUTED}>{t}</text>
-          </g>
-        ))}
-        {buckets.map((b, i) => {
-          const x = padL + i * band + (band - barW) / 2;
-          const hIn = (b.in / max) * plotH, hOut = (b.out / max) * plotH;
-          return (
-            <g key={b.key} onMouseEnter={() => setTip({ i, b })} onMouseLeave={() => setTip(null)}>
-              <rect x={padL + i * band} y={padT} width={band} height={plotH} fill="transparent" />
-              {b.in > 0 && <rect x={x} y={y(b.in)} width={barW} height={hIn} rx="2" fill={C_IN} />}
-              {b.out > 0 && <rect x={x} y={y(b.in + b.out) - (b.in ? 2 : 0)} width={barW} height={Math.max(0, hOut - (b.in ? 2 : 0))} rx="2" fill={C_OUT} />}
-              {i % every === 0 && <text x={x + barW / 2} y={H - 8} fontSize="10" fill={C_MUTED} textAnchor="middle">{fmtKey(b.key)}</text>}
-            </g>
-          );
-        })}
-      </svg>
-      {tip && (
-        <div className="absolute top-2 start-2 bg-surface border border-line rounded-[8px] px-2 py-1 text-xs shadow" dir="rtl">
-          <b>{fmtKey(tip.b.key)}</b> · מלקוחות {tip.b.in} · מהבוט {tip.b.out}
-        </div>
-      )}
-      <div className="flex gap-4 text-xs text-muted mt-1" dir="rtl">
-        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: C_IN }} />מלקוחות</span>
-        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: C_OUT }} />מהבוט</span>
-      </div>
-    </div>
-  );
-}

@@ -77,7 +77,7 @@ async function alertAdmins(key, subject, text) {
       "SELECT email FROM admins WHERE is_active = TRUE AND role = 'superadmin'",
     );
     await Promise.all(admins.map(({ email }) =>
-      sendEmail({ to: email, subject: `שעון שבת — ${subject}`, text })));
+      sendEmail({ to: email, subject: `שעון שבת — ${subject}`, text, kind: 'health_alert', ref: key })));
   } catch (e) {
     console.error('[health] alert email failed:', e.message);
   }

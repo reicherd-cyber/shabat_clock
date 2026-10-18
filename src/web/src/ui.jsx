@@ -1,4 +1,4 @@
-import { Children, useEffect, useRef, useState } from 'react';
+import { Children, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 // Command verification verdicts (services/commands.js verifyCommand) and
@@ -464,6 +464,94 @@ export function RangeFilter({ value, onChange, keys = RANGE_DEFAULT, custom = {}
 }
 
 // ── shared admin formatters + stat tile ──
+// Stacked per-day bar chart shared by the activity pages (WhatsApp in/out,
+// emails sent/failed). `rows` = [{ d:'YYYY-MM-DD', key, n }] with `key` naming
+// one of `series` ([{ key, label, color }], drawn bottom-up in that order);
+// `range` = { from, to } UTC stamps that bound the day axis (empty days are
+// drawn). Fixed hues per series (never cycled), legend + tooltip so colour is
+// never alone, a 2px surface gap between stacked segments.
+const CHART_GRID = '#DFE6F2';
+const CHART_MUTED = '#64708D';
+export function StackedDayChart({ rows, series, range, ariaLabel }) {
+  const [tip, setTip] = useState(null);
+  const buckets = useMemo(() => {
+    const days = [...new Set(rows.map((r) => r.d))].sort();
+    const first = range?.from ? ymdLocal(new Date(range.from.replace(' ', 'T') + 'Z')) : days[0];
+    const last = range?.to ? ymdLocal(new Date(range.to.replace(' ', 'T') + 'Z')) : ymdLocal(new Date());
+    if (!first) return [];
+    const empty = () => Object.fromEntries(series.map((s) => [s.key, 0]));
+    const map = new Map();
+    for (const r of rows) {
+      const k = map.get(r.d) || empty();
+      if (r.key in k) k[r.key] += r.n;
+      map.set(r.d, k);
+    }
+    const [fy, fm, fd] = first.split('-').map(Number);
+    const cur = new Date(fy, fm - 1, fd);
+    const list = [];
+    while (ymdLocal(cur) <= last && list.length < 400) {
+      const key = ymdLocal(cur);
+      list.push({ key, ...(map.get(key) || empty()) });
+      cur.setDate(cur.getDate() + 1);
+    }
+    return list;
+  }, [rows, series, range?.from, range?.to]);
+  if (!buckets.length) return null;
+
+  const total = (b) => series.reduce((s, x) => s + b[x.key], 0);
+  const W = 720, H = 200, padL = 8, padR = 40, padT = 12, padB = 26;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const max = niceCeil(Math.max(1, ...buckets.map(total)));
+  const ticks = [0, 0.5, 1].map((t) => t * max);
+  const band = plotW / buckets.length;
+  const barW = Math.min(28, Math.max(3, band - 4));
+  const y = (v) => padT + plotH - (v / max) * plotH;
+  const fmtKey = (k) => { const [, m, d] = k.split('-').map(Number); return `${d}.${m}`; };
+  const every = Math.max(1, Math.ceil(buckets.length / 14));
+
+  return (
+    <div className="relative" dir="ltr">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 240 }} role="img" aria-label={ariaLabel}>
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke={t === 0 ? '#BAC8E0' : CHART_GRID} strokeWidth="1" />
+            <text x={W - padR + 6} y={y(t) + 3.5} fontSize="10" fill={CHART_MUTED}>{t}</text>
+          </g>
+        ))}
+        {buckets.map((b, i) => {
+          const x = padL + i * band + (band - barW) / 2;
+          let base = 0;
+          return (
+            <g key={b.key} onMouseEnter={() => setTip(b)} onMouseLeave={() => setTip(null)}>
+              <rect x={padL + i * band} y={padT} width={band} height={plotH} fill="transparent" />
+              {series.map((s) => {
+                const v = b[s.key];
+                if (!v) return null;
+                const gap = base ? 2 : 0; // surface gap above the segment below
+                const h = Math.max(0, (v / max) * plotH - gap);
+                const top = y(base + v);
+                base += v;
+                return <rect key={s.key} x={x} y={top} width={barW} height={h} rx="2" fill={s.color} />;
+              })}
+              {i % every === 0 && <text x={x + barW / 2} y={H - 8} fontSize="10" fill={CHART_MUTED} textAnchor="middle">{fmtKey(b.key)}</text>}
+            </g>
+          );
+        })}
+      </svg>
+      {tip && (
+        <div className="absolute top-2 start-2 bg-surface border border-line rounded-[8px] px-2 py-1 text-xs shadow" dir="rtl">
+          <b>{fmtKey(tip.key)}</b>{series.map((s) => <span key={s.key}> · {s.label} {tip[s.key]}</span>)}
+        </div>
+      )}
+      <div className="flex gap-4 text-xs text-muted mt-1" dir="rtl">
+        {series.map((s) => (
+          <span key={s.key} className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: s.color }} />{s.label}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Shelly MAC / device code as the system stores it: 12 lowercase hex digits, or
 // null for anything else. Accepts "80:F3:DA:C8:DC:A8", "80-F3-DA-C8-DC-A8",
 // "80f3dac8dca8" and a hotspot/device name "ShellyPro4PM-80F3DAC8DCA8" (only a
