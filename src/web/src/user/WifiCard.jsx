@@ -223,6 +223,8 @@ export default function WifiCard({ devices }) {
   const retryVerify = () => { startedAt.current = Date.now(); setElapsed(0); setPhase('verifying'); };
   const busy = phase === 'sending' || phase === 'verifying';
   const tName = target.current?.name || '';
+  // Several units and no identity from the hotspot: the owner must say which one.
+  const askPick = shelly.length > 1 && (!found || found === 'other');
 
   return (
     <Card>
@@ -278,13 +280,13 @@ export default function WifiCard({ devices }) {
             className="absolute top-1/2 -translate-y-1/2 right-3 text-muted hover:text-ink cursor-pointer"
             onClick={() => setShowPass(!showPass)}>{showPass ? <EyeOff size={16} /> : <Eye size={16} />}</button>
         </span>
-        {shelly.length > 1 && (!found || found === 'other') && (
+        {askPick && (
           <Select className="w-56" value={pick} disabled={busy} onChange={(e) => { setPick(e.target.value); setNeedPick(false); }}>
             <option value="" disabled>איזה מכשיר מגדירים?</option>
             {shelly.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </Select>
         )}
-        <Button disabled={busy || !ssid.trim()} onClick={send}>
+        <Button disabled={busy || !ssid.trim() || (askPick && !pick)} onClick={send}>
           <span className="inline-flex items-center gap-1"><Send size={14} />{phase === 'sending' ? 'שולח…' : 'שלח למכשיר'}</span>
         </Button>
       </div>
