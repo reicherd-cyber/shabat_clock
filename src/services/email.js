@@ -24,6 +24,7 @@ async function sendViaResendApi({ to, subject, text }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ from: env.smtp.from, to: [to], subject, text }),
+    signal: AbortSignal.timeout(15_000), // a stalled edge must not hang the login request
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -74,7 +75,9 @@ export async function sendEmail({ to, subject, text, kind = 'other', userId = nu
     status = 'failed';
     error = String(e?.message || e).slice(0, 500);
   }
-  await query(
+  // Dev-mode sends never reach the log: a dev machine shares the production
+  // database, and a console-only "send" is not a sent email.
+  if (provider !== 'dev') await query(
     `INSERT INTO email_log (kind, to_email, from_email, subject, body, user_id, admin_id, ref, provider, provider_id, status, error, duration_ms)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [EMAIL_KINDS.includes(kind) ? kind : 'other', String(to).slice(0, 255), env.smtp.from || null,

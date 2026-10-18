@@ -49,13 +49,13 @@ async function deliverOtp(phone, code) {
   if (!ok && env.nodeEnv !== 'development') throw new Error(`Yemot OTP call failed: ${detail}`);
 }
 
-async function deliverOtpEmail(email, code) {
+async function deliverOtpEmail(email, code, userId = null) {
   const { sendEmail } = await import('./email.js');
   await sendEmail({
     to: email,
     subject: `קוד הכניסה שלך: ${code}`,
     text: `קוד הכניסה שלך לשעון שבת הוא: ${code}\nהקוד תקף ל-${OTP_TTL_MIN} דקות.`,
-    kind: 'user_otp', redact: [code],
+    kind: 'user_otp', userId, redact: [code],
   });
 }
 
@@ -84,7 +84,7 @@ export async function pendingPhoneAddCode(phone) {
 }
 
 // channel 'call' (default, Yemot) or 'email' (requires a target email).
-export async function requestOtp({ phone, purpose, userPhoneId = null, channel = 'call', email = null }) {
+export async function requestOtp({ phone, purpose, userPhoneId = null, channel = 'call', email = null, userId = null }) {
   // Google Play review account: no code is stored and no call/email goes out —
   // verifyOtp accepts the fixed REVIEW_OTP_CODE for this phone instead.
   if (env.review.phone && env.review.otp && phone === env.review.phone && purpose === 'login') return;
@@ -121,7 +121,7 @@ export async function requestOtp({ phone, purpose, userPhoneId = null, channel =
       [phone, purpose, userPhoneId, bcryptHash(code), OTP_TTL_MIN],
     );
   }
-  if (channel === 'email' && email) await deliverOtpEmail(email, code);
+  if (channel === 'email' && email) await deliverOtpEmail(email, code, userId);
   else await deliverOtp(phone, code);
 }
 

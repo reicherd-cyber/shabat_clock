@@ -203,12 +203,12 @@ authRouter.post('/auth/otp/request', otpRequestIpLimiter, otpRequestLimiter, asy
     if (!isValidIsraeliPhone(phone)) throw errors.validation('מספר טלפון לא תקין');
     const channel = req.body?.channel === 'email' ? 'email' : 'call';
     const [row] = await query(
-      'SELECT p.id, u.email FROM user_phones p JOIN users u ON u.id = p.user_id WHERE p.phone = ? AND p.deleted_at IS NULL',
+      'SELECT p.id, u.id AS user_id, u.email FROM user_phones p JOIN users u ON u.id = p.user_id WHERE p.phone = ? AND p.deleted_at IS NULL',
       [phone],
     );
     if (!row) throw errors.notFound('PHONE_NOT_REGISTERED', 'מספר הטלפון אינו רשום במערכת');
     if (channel === 'email' && !row.email) throw errors.notFound('NO_EMAIL', 'אין כתובת אימייל רשומה למשתמש זה');
-    await requestOtp({ phone, purpose: 'login', channel, email: row.email });
+    await requestOtp({ phone, purpose: 'login', channel, email: row.email, userId: row.user_id });
     res.json({ ok: true, channel, email_masked: channel === 'email' ? maskEmail(row.email) : undefined });
   } catch (e) { next(e); }
 });
