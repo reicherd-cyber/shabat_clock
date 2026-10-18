@@ -205,7 +205,7 @@ export default function Settings() {
           {emailAdd != null && <ErrorNote error={error} />}
         </div>
         <p className="text-muted text-xs mt-1">
-          הכתובת הראשית היא זהות החשבון — איתה נכנסים ואליה נשלח קוד הכניסה בדוא״ל, ולא ניתן לשנות אותה.
+          הכתובת הראשית היא זהות החשבון — איתה נכנסים (חשבון Google), ולא ניתן לשנות אותה.
           כל כתובת נוספת נותנת לבעליה גישה לחשבון הזה: אחרי שייכנסו לחשבון שלהם יוכלו לעבור לכאן מתיבת בחירת החשבון שבראש המסך.
         </p>
         <div className="flex items-center gap-2 flex-wrap mt-3">

@@ -1,23 +1,27 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { publicApi, tokens } from '../api.js';
 import { Card, Button, Input, ErrorNote, useAsync, Logo, Wordmark } from '../ui.jsx';
 import GoogleButton from '../GoogleButton.jsx';
 
-// Phone → OTP (Yemot outbound call reads the code) — no passwords to forget (PLAN §3).
-// Google sign-in signs an existing account in, or — for a new person — opens an
-// account after they accept the terms (the "consent" step below), like any
-// Google sign-up. The welcome step then shows the one-time PIN.
+// Google-only sign-in (phone-number login removed 2026-10-19): an existing
+// account signs in, a new person opens an account after accepting the terms
+// (the "consent" step), and the welcome step shows the one-time PIN. The only
+// other way in is the Google Play reviewers' email + fixed code, shown as a
+// discreet link when the server has it configured (REVIEW_EMAIL).
 export default function Login() {
-  const [phone, setPhone] = useState('');
-  const [code, setCode] = useState('');
-  const [stage, setStage] = useState('phone'); // 'phone' | 'code' | 'consent' | 'welcome'
-  const [sentVia, setSentVia] = useState(null); // {channel, email_masked}
-  const [pending, setPending] = useState(null); // consent step: { credential, name, email }
+  const [stage, setStage] = useState('google'); // 'google' | 'consent' | 'welcome' | 'review'
+  const [pending, setPending] = useState(null); // consent step: { credential, name, email, invited_by }
   const [agreed, setAgreed] = useState(false);
   const [welcome, setWelcome] = useState(null); // { full_name, pin }
+  const [reviewLogin, setReviewLogin] = useState(false); // server has a review account configured
+  const [review, setReview] = useState({ email: '', code: '' });
   const { busy, error, run, setError } = useAsync();
   const nav = useNavigate();
+
+  useEffect(() => {
+    publicApi.get('/auth/config').then((c) => setReviewLogin(Boolean(c.review_login))).catch(() => {});
+  }, []);
 
   const finishLogin = (r) => {
     tokens.user = r.token;
@@ -34,17 +38,9 @@ export default function Login() {
     if (r.needs_terms) throw new Error('נדרש אישור התנאים');
     finishLogin(r);
   });
-
-  const requestCode = (channel = 'call') => run(async () => {
-    const res = await publicApi.post('/auth/otp/request', { phone, channel });
-    setSentVia(res);
-    setStage('code');
-  });
-
-  const verify = () => run(async () => {
-    const { token } = await publicApi.post('/auth/otp/verify', { phone, code });
-    tokens.user = token;
-    nav('/');
+  const reviewSignIn = () => run(async () => {
+    const r = await publicApi.post('/auth/review-login', { email: review.email.trim(), code: review.code.trim() });
+    finishLogin(r);
   });
 
   return (
@@ -82,7 +78,7 @@ export default function Login() {
             <Button className="w-full" disabled={busy || !agreed} onClick={signUp}>
               {busy ? 'פותח חשבון…' : 'אישור ופתיחת חשבון'}
             </Button>
-            <button className="text-muted text-sm w-full" onClick={() => { setPending(null); setStage('phone'); }}>ביטול</button>
+            <button className="text-muted text-sm w-full" onClick={() => { setPending(null); setStage('google'); }}>ביטול</button>
           </div>
         ) : stage === 'welcome' && welcome ? (
           <div className="space-y-3">
@@ -90,36 +86,34 @@ export default function Login() {
             <div className="border border-line rounded-[10px] px-3 py-2.5 text-sm">
               הקוד הסודי (PIN) של החשבון: <b dir="ltr" className="text-lg tracking-widest">{welcome.pin}</b>
               <div className="text-muted text-xs mt-1">
-                משמש למענה הטלפוני ולפעולות רגישות. אפשר לשנות אותו בכל עת בהגדרות; הכניסה לאתר היא עם Google או קוד לאימייל.
+                משמש למענה הטלפוני ולפעולות רגישות. אפשר לשנות אותו בכל עת בהגדרות; הכניסה לאתר היא עם Google.
               </div>
             </div>
             <p className="text-muted text-xs">הצעד הבא: הוסיפו מכשיר ומספר טלפון בהגדרות, או פנו אלינו דרך כפתור העזרה (?).</p>
             <Button className="w-full" onClick={() => nav('/')}>המשך לאזור האישי</Button>
           </div>
-        ) : stage === 'phone' ? (
+        ) : stage === 'review' ? (
           <div className="space-y-3">
-            <Input type="tel" dir="ltr" placeholder="מספר טלפון" value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && requestCode('email')} />
-            <Button className="w-full" disabled={busy || phone.length < 9} onClick={() => requestCode('email')}>
-              שלחו קוד לאימייל
-            </Button>
-            <div className={busy ? 'opacity-50 pointer-events-none' : ''}>
-              <GoogleButton onCredential={onGoogle} onError={setError} />
-            </div>
+            <p className="text-sm text-muted">כניסה עם קוד גישה (לבודקי האפליקציה).</p>
+            <Input autoFocus type="email" dir="ltr" placeholder="Email" value={review.email}
+              onChange={(e) => setReview({ ...review, email: e.target.value })} />
+            <Input inputMode="numeric" dir="ltr" placeholder="Access code" value={review.code}
+              onChange={(e) => setReview({ ...review, code: e.target.value })}
+              onKeyDown={(e) => e.key === 'Enter' && reviewSignIn()} />
+            <Button className="w-full" disabled={busy || !review.email.trim() || !review.code.trim()} onClick={reviewSignIn}>כניסה</Button>
+            <button className="text-muted text-sm w-full" onClick={() => { setError(null); setStage('google'); }}>חזרה</button>
           </div>
         ) : (
           <div className="space-y-3">
-            <p className="text-sm">
-              {sentVia?.channel === 'email'
-                ? <>קוד בן 6 ספרות נשלח לאימייל <b dir="ltr">{sentVia.email_masked}</b></>
-                : <>תתקבל שיחה עם קוד בן 6 ספרות למספר <b dir="ltr">{phone}</b></>}
-            </p>
-            <Input inputMode="numeric" dir="ltr" placeholder="קוד אימות" value={code}
-              onChange={(e) => setCode(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && verify()} />
-            <Button className="w-full" disabled={busy || code.length !== 6} onClick={verify}>כניסה</Button>
-            <button className="text-muted text-sm w-full" onClick={() => setStage('phone')}>מספר אחר</button>
+            <p className="text-sm text-muted">הכניסה לאזור האישי היא עם חשבון Google. אין עדיין חשבון? הכניסה הראשונה פותחת אחד.</p>
+            <div className={busy ? 'opacity-50 pointer-events-none' : ''}>
+              <GoogleButton onCredential={onGoogle} onError={setError} />
+            </div>
+            {reviewLogin && (
+              <button className="text-muted text-xs w-full cursor-pointer hover:text-ink" onClick={() => setStage('review')}>
+                כניסה עם קוד גישה
+              </button>
+            )}
           </div>
         )}
       </Card>

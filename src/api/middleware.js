@@ -3,7 +3,6 @@ import rateLimit from 'express-rate-limit';
 import { env } from '../config/env.js';
 import { errors, ApiError } from '../config/errors.js';
 import { query } from '../db/pool.js';
-import { normalizePhone } from '../services/phone.js';
 
 // Sessions are stateless bearer JWTs, so on their own a suspended user or a
 // deactivated/demoted admin would keep access until the token expires (30d /
@@ -139,16 +138,8 @@ export const ivrLimiter = limited({
 // per-sender guard lives in whatsapp/bot.js; this only stops a flood from a
 // stranger who found the URL.
 export const whatsappLimiter = limited({ windowMs: 60_000, limit: 600 });
-// Keyed on the NORMALIZED number: "050-123-4567", "+972501234567" and
-// "0501234567" are one bucket, not three (each request is a billed call).
-export const otpRequestLimiter = limited({
-  windowMs: 15 * 60_000, limit: 3,
-  keyGenerator: (req) => normalizePhone(req.body?.phone) || String(req.body?.email || req.ip),
-});
-export const otpRequestIpLimiter = limited({ windowMs: 60 * 60_000, limit: 10 });
-// verify has per-code attempt counting + lockout; an IP cap on top stops a
-// distributed guess across many phones from one box.
-export const otpVerifyIpLimiter = limited({ windowMs: 15 * 60_000, limit: 20 });
+// Google sign-in (admin + user), the Play review-account login, and the
+// emergency admin password login share one per-IP cap.
 export const adminLoginLimiter = limited({ windowMs: 15 * 60_000, limit: 5 });
 // Per-user caps on the endpoints that cost money (Claude API) or enumerate
 // (phone add). Keyed by the authenticated user, not the IP.

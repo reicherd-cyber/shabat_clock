@@ -3,13 +3,11 @@ import jwt from 'jsonwebtoken';
 import { Router } from 'express';
 import { query } from '../../db/pool.js';
 import { errors, ApiError } from '../../config/errors.js';
-import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { bcryptCompare, bcryptHash, createUser } from '../../services/users.js';
 import { logAction } from '../../services/audit.js';
 import { verifyTotp } from '../../services/totp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
-import { signUserToken, signAdminToken, otpRequestLimiter, otpRequestIpLimiter, otpVerifyIpLimiter, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter, onboardPrepareTokenLimiter, onboardCheckLimiter } from '../middleware.js';
+import { signUserToken, signAdminToken, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter, onboardPrepareTokenLimiter, onboardCheckLimiter } from '../middleware.js';
 import { env } from '../../config/env.js';
 
 export const authRouter = Router();
@@ -17,7 +15,9 @@ export const authRouter = Router();
 // Public login-page config — the Google client id is public by design (it ships in
 // every browser that renders the button); empty means the button is hidden.
 authRouter.get('/auth/config', (req, res) => {
-  res.json({ google_client_id: env.googleClientId });
+  // review_login: a Play review account is configured → the login page shows
+  // the discreet "access code" link (see /auth/review-login).
+  res.json({ google_client_id: env.googleClientId, review_login: Boolean(env.review.email && env.review.otp) });
 });
 
 // Validate a GIS credential via Google's tokeninfo endpoint (signature+expiry) and
@@ -201,45 +201,26 @@ async function verifyAdminEmailCode(admin, code) {
   return true;
 }
 
-// Returns an explicit error for an unregistered phone so the UI can tell the caller.
-// NOTE: this trades away the anti-enumeration property (§3.1) — an unknown number is
-// now distinguishable from a known one.
-authRouter.post('/auth/otp/request', otpRequestIpLimiter, otpRequestLimiter, async (req, res, next) => {
+// Phone-number login (OTP by call / by email, keyed by the phone) was removed
+// 2026-10-19 — the site is Google-only. The one exception is the Google Play
+// review account: REVIEW_EMAIL signs in with the fixed REVIEW_OTP_CODE, into the
+// account whose primary address that is. No identity claim (nothing was
+// verified about the address), so no account switcher for the reviewers.
+authRouter.post('/auth/review-login', adminLoginLimiter, async (req, res, next) => {
   try {
-    const phone = normalizePhone(req.body?.phone);
-    if (!isValidIsraeliPhone(phone)) throw errors.validation('מספר טלפון לא תקין');
-    const channel = req.body?.channel === 'email' ? 'email' : 'call';
-    const [row] = await query(
-      'SELECT p.id, u.id AS user_id, u.email FROM user_phones p JOIN users u ON u.id = p.user_id WHERE p.phone = ? AND p.deleted_at IS NULL',
-      [phone],
-    );
-    if (!row) throw errors.notFound('PHONE_NOT_REGISTERED', 'מספר הטלפון אינו רשום במערכת');
-    if (channel === 'email' && !row.email) throw errors.notFound('NO_EMAIL', 'אין כתובת אימייל רשומה למשתמש זה');
-    await requestOtp({ phone, purpose: 'login', channel, email: row.email, userId: row.user_id });
-    res.json({ ok: true, channel, email_masked: channel === 'email' ? maskEmail(row.email) : undefined });
-  } catch (e) { next(e); }
-});
-
-authRouter.post('/auth/otp/verify', otpVerifyIpLimiter, async (req, res, next) => {
-  try {
-    const phone = normalizePhone(req.body?.phone);
+    const email = String(req.body?.email || '').trim().toLowerCase();
     const code = String(req.body?.code || '');
-    const otp = await verifyOtp({ phone, code, purpose: 'login' }); // login codes only — purposes never cross
-    const [row] = await query(
-      `SELECT u.id, u.full_name, u.email, p.id AS phone_id, p.verified_at FROM users u
-       JOIN user_phones p ON p.user_id = u.id WHERE p.phone = ? AND p.deleted_at IS NULL AND u.status = 'active'`,
-      [phone],
+    if (!env.review.email || !env.review.otp) throw errors.unauthenticated();
+    const emailOk = crypto.timingSafeEqual(Buffer.from(email.padEnd(255)), Buffer.from(env.review.email.toLowerCase().padEnd(255)));
+    const codeOk = crypto.timingSafeEqual(Buffer.from(code.padEnd(64)), Buffer.from(env.review.otp.padEnd(64)));
+    if (!emailOk || !codeOk) throw errors.unauthenticated('קוד גישה שגוי');
+    const [u] = await query(
+      `SELECT u.id, u.full_name FROM user_emails e JOIN users u ON u.id = e.user_id
+       WHERE e.primary_email = ? AND u.status = 'active'`,
+      [email],
     );
-    if (!row) throw errors.badCode();
-    // [D34] a successful OTP login via an unverified phone also verifies it.
-    if (!row.verified_at) {
-      await query('UPDATE user_phones SET verified_at = UTC_TIMESTAMP() WHERE id = ?', [row.phone_id]);
-    }
-    // Identity (account switcher) only from a VERIFIED channel: a code received
-    // by email proves control of the account's primary address; a phone call
-    // proves nothing about the self-typed address, so that login carries none.
-    const identity = otp?.channel === 'email' ? row.email : null;
-    res.json({ token: signUserToken(row.id, null, identity), user: { id: Number(row.id), full_name: row.full_name } });
+    if (!u) throw errors.unauthenticated('חשבון הבדיקה אינו קיים');
+    res.json({ token: signUserToken(u.id), user: { id: Number(u.id), full_name: u.full_name } });
   } catch (e) { next(e); }
 });
 
