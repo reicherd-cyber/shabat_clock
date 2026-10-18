@@ -2,9 +2,9 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
-import { requireUser, supportAskLimiter, supportMessageLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
+import { requireUser, signUserToken, invalidateSession, supportAskLimiter, supportMessageLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, setPrimaryUserEmail } from '../../services/users.js';
+import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, accountsForEmail } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { ensureDemoState } from '../../services/demo.js';
@@ -41,7 +41,38 @@ userRouter.get('/me', async (req, res, next) => {
       [req.auth.userId],
     );
     const emails = await listUserEmails(req.auth.userId);
-    res.json({ user, phones, emails, demo });
+    // Shared accounts: every account the session's identity (address) may
+    // enter — its own first, then the ones that invited it. Drives the header
+    // select box; a lone entry hides it.
+    const identity = await sessionIdentity(req);
+    const accounts = await accountsForEmail(identity);
+    res.json({ user, phones, emails, demo, accounts, identity_email: identity });
+  } catch (e) { next(e); }
+});
+
+// The verified address behind the session: the token's `em` claim, minted only
+// by a Google login or a login code received by email. Nothing is derived for
+// a token without it — a phone login (or a session from before the claim
+// existed) proves nothing about the address, so it gets no switcher until the
+// person logs in again through the address. Never under impersonation.
+async function sessionIdentity(req) {
+  if (req.auth.imp) return null;
+  return req.auth.email || null;
+}
+
+// Switch the session into another account the identity may enter: a fresh
+// token for that account, same identity. Not under impersonation (an admin
+// enters accounts through the admin panel, with its own audit trail).
+userRouter.post('/me/switch', async (req, res, next) => {
+  try {
+    if (req.auth.imp) throw errors.forbidden('לא ניתן להחליף חשבון במצב התחזות');
+    const identity = await sessionIdentity(req);
+    const target = Number(req.body?.user_id);
+    const accounts = await accountsForEmail(identity);
+    const acc = accounts.find((a) => a.id === target);
+    if (!acc) throw errors.forbidden('אין לכתובת שלך גישה לחשבון הזה');
+    await act(req, 'switch_account', 'user', acc.id, { after: { from_user_id: req.auth.userId, identity } });
+    res.json({ token: signUserToken(acc.id, null, identity), user: { id: acc.id, full_name: acc.full_name } });
   } catch (e) { next(e); }
 });
 
@@ -84,9 +115,10 @@ userRouter.post('/me/pin', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// ── emails: several per account, ONE account per address; login codes by
-// email go to the primary. No verification step (same trust as the old single
-// email field) and no PIN gate — the login session suffices.
+// ── emails (shared accounts): the primary address is the account's fixed
+// identity; every further address INVITES its owner into this account (they
+// switch in from their own account). Login codes by email go to the primary.
+// No verification step and no PIN gate — the login session suffices.
 userRouter.post('/me/emails', async (req, res, next) => {
   try {
     const row = await addUserEmail({ userId: req.auth.userId, email: req.body?.email, actor: actorStr(actorOf(req)) });
@@ -95,20 +127,13 @@ userRouter.post('/me/emails', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// Soft remove — the row/history stays, mirroring phones; a primary removal
-// hands primary (and the login-code destination) to the oldest remaining address.
+// Soft remove of an invited address — the row/history stays, mirroring phones.
+// The primary (identity) is refused inside; only an admin can change it.
 userRouter.delete('/me/emails/:id', async (req, res, next) => {
   try {
     const { removed } = await removeUserEmail({ userId: req.auth.userId, emailId: Number(req.params.id), actor: actorStr(actorOf(req)) });
+    invalidateSession('user', req.auth.userId); // sessions that entered through this address end now, not in 60s
     await act(req, 'delete', 'user_email', Number(req.params.id), { before: { email: removed } });
-    res.json({ ok: true });
-  } catch (e) { next(e); }
-});
-
-userRouter.post('/me/emails/:id/primary', async (req, res, next) => {
-  try {
-    await setPrimaryUserEmail({ userId: req.auth.userId, emailId: Number(req.params.id), actor: actorStr(actorOf(req)) });
-    await act(req, 'update', 'user_email', Number(req.params.id), { after: { is_primary: true } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

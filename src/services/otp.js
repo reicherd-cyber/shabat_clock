@@ -1,5 +1,6 @@
-// [D9] Web-login / phone-add OTPs. bcrypt-hashed, 5-min TTL, 3 verify attempts;
-// failures pool into auth_failures('web_otp') [D10].
+// [D9] Phone-add OTPs (web login by phone was removed 2026-10-19 — the site is
+// Google-only). bcrypt-hashed, 5-min TTL, 3 verify attempts; failures pool into
+// auth_failures('web_otp') [D10].
 import crypto from 'node:crypto';
 import { query, withTransaction } from '../db/pool.js';
 import { errors } from '../config/errors.js';
@@ -49,16 +50,6 @@ async function deliverOtp(phone, code) {
   if (!ok && env.nodeEnv !== 'development') throw new Error(`Yemot OTP call failed: ${detail}`);
 }
 
-async function deliverOtpEmail(email, code, userId = null) {
-  const { sendEmail } = await import('./email.js');
-  await sendEmail({
-    to: email,
-    subject: `קוד הכניסה שלך: ${code}`,
-    text: `קוד הכניסה שלך לשעון שבת הוא: ${code}\nהקוד תקף ל-${OTP_TTL_MIN} דקות.`,
-    kind: 'user_otp', userId, redact: [code],
-  });
-}
-
 // phone_add codes are DERIVED (HMAC of row id + phone with the server secret),
 // not random: the plaintext is recoverable server-side, so the IVR can read the
 // code back to a caller whose campaign call never arrived — while the DB still
@@ -83,12 +74,7 @@ export async function pendingPhoneAddCode(phone) {
   return bcryptCompare(code, rows[0].code_hash) ? code : null;
 }
 
-// channel 'call' (default, Yemot) or 'email' (requires a target email).
-export async function requestOtp({ phone, purpose, userPhoneId = null, channel = 'call', email = null, userId = null }) {
-  // Google Play review account: no code is stored and no call/email goes out —
-  // verifyOtp accepts the fixed REVIEW_OTP_CODE for this phone instead.
-  if (env.review.phone && env.review.otp && phone === env.review.phone && purpose === 'login') return;
-
+export async function requestOtp({ phone, purpose, userPhoneId = null }) {
   let code;
   if (purpose === 'phone_add') {
     // Reuse the live code (10-min validity) — re-requesting keeps the SAME code.
@@ -121,8 +107,7 @@ export async function requestOtp({ phone, purpose, userPhoneId = null, channel =
       [phone, purpose, userPhoneId, bcryptHash(code), OTP_TTL_MIN],
     );
   }
-  if (channel === 'email' && email) await deliverOtpEmail(email, code, userId);
-  else await deliverOtp(phone, code);
+  await deliverOtp(phone, code);
 }
 
 // Verify: lockout checked BEFORE the code; failed verify writes code attempts++ AND a
@@ -130,15 +115,6 @@ export async function requestOtp({ phone, purpose, userPhoneId = null, channel =
 // Returns the winning otp_codes row (with user_phone_id for phone_add).
 export async function verifyOtp({ phone, code, purpose, userPhoneId = null }) {
   if (await isLockedOut(phone, 'web_otp')) throw errors.rateLimited();
-
-  // Google Play review account: the fixed code works (login only) — but only
-  // AFTER the lockout gate, and a wrong guess counts like any other failure, so
-  // the review number is no better a brute-force target than a real one.
-  if (env.review.phone && env.review.otp && phone === env.review.phone && purpose === 'login') {
-    if (code === env.review.otp) return {};
-    await recordFailure(phone, 'web_otp');
-    throw errors.badCode();
-  }
 
   const rows = await query(
     `SELECT * FROM otp_codes

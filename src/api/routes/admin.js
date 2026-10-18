@@ -174,10 +174,11 @@ adminRouter.patch('/users/:id', requireWrite, async (req, res, next) => {
       await query(`UPDATE users SET ${sets} WHERE id = ?`, [...Object.values(fields), req.params.id]);
     }
     // The admin's single email field manages the user's PRIMARY address in
-    // user_emails (global one-address-one-account rule enforced inside; the
+    // user_emails (a live primary is unique across accounts — enforced inside; the
     // users.email mirror column is written there, never directly here).
     if (req.body?.email !== undefined) {
       await setUserEmailAdmin({ userId: Number(req.params.id), email: req.body.email, actor: adminActor(req) });
+      invalidateSession('user', Number(req.params.id)); // a cleared primary ends sessions that entered through it now
       fields.email = req.body.email; // audit-diff visibility only
     }
     // Add a verified phone directly (admin path). The phone column is globally

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, timeFormat, channelColorOf, ChannelDot } from '../ui.jsx';
-import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2 } from 'lucide-react';
+import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2, Lock } from 'lucide-react';
 import WifiCard from './WifiCard.jsx';
 
 // Phones (caller-ID) + PIN + relay management — relay names/codes drive the IVR
@@ -75,16 +75,12 @@ export default function Settings() {
     await refresh();
   });
 
-  // Emails: several per account; every address is globally unique (one account
-  // per address — the server refuses one that exists anywhere in the system).
+  // Emails (shared accounts): the primary address is the account's fixed
+  // identity (no change / removal here); every further address invites its
+  // owner into this account — they switch in from their own account's header.
   const addEmail = () => run(async () => {
     await api.post('/me/emails', { email: emailAdd.trim() });
     setEmailAdd(null);
-    await refresh();
-  });
-
-  const makePrimaryEmail = (em) => run(async () => {
-    await api.post(`/me/emails/${em.id}/primary`);
     await refresh();
   });
 
@@ -173,13 +169,21 @@ export default function Settings() {
           {(me.emails || []).map((em) => (
             <div key={em.id} className="flex items-center gap-2 flex-wrap border border-line rounded-xl px-3 py-1.5">
               <span dir="ltr" className="text-sm">{em.email}</span>
-              {!!em.is_primary && me.emails.length > 1 && <Badge ok>ראשי</Badge>}
-              {!em.is_primary && (
-                <Button variant="ghost" disabled={busy} onClick={() => makePrimaryEmail(em)}>קבע כראשי</Button>
+              {em.is_primary ? (
+                <>
+                  <Badge ok>ראשית</Badge>
+                  <span className="ms-auto text-muted inline-flex items-center gap-1 text-xs" title="הכתובת הראשית היא זהות החשבון ואינה ניתנת לשינוי">
+                    <Lock size={13} />קבועה
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Badge>גישה לחשבון</Badge>
+                  <button disabled={busy} title="הסרת הכתובת — בעליה לא יוכל יותר להיכנס לחשבון הזה"
+                    className={`ms-auto text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
+                    onClick={() => setRemovingEmail(em)}><Trash2 size={15} /></button>
+                </>
               )}
-              <button disabled={busy} title="הסרת האימייל"
-                className={`ms-auto text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
-                onClick={() => setRemovingEmail(em)}><Trash2 size={15} /></button>
             </div>
           ))}
           {emailAdd == null ? (
@@ -200,7 +204,10 @@ export default function Settings() {
           )}
           {emailAdd != null && <ErrorNote error={error} />}
         </div>
-        <p className="text-muted text-xs mt-1">אימייל מאפשר לקבל קוד כניסה גם בדוא״ל; הקוד נשלח לכתובת הראשית. כל כתובת יכולה להשתייך לחשבון אחד בלבד במערכת.</p>
+        <p className="text-muted text-xs mt-1">
+          הכתובת הראשית היא זהות החשבון — איתה נכנסים (חשבון Google), ולא ניתן לשנות אותה.
+          כל כתובת נוספת נותנת לבעליה גישה לחשבון הזה: אחרי שייכנסו לחשבון שלהם יוכלו לעבור לכאן מתיבת בחירת החשבון שבראש המסך.
+        </p>
         <div className="flex items-center gap-2 flex-wrap mt-3">
           <span className="text-sm">אזור לחישוב זמנים:</span>
           <Select value={me.user.zmanim_region || 'jerusalem'} disabled={busy}
@@ -365,7 +372,7 @@ export default function Settings() {
         {removingEmail && (
           <div className="space-y-3">
             <p className="text-sm">
-              להסיר את הכתובת <b dir="ltr">{removingEmail.email}</b> מהחשבון? לא יישלחו אליה יותר קודי כניסה ולא ניתן יהיה להתחבר איתה.
+              להסיר את הכתובת <b dir="ltr">{removingEmail.email}</b> מהחשבון? בעלי הכתובת לא יוכלו יותר להיכנס לחשבון הזה.
             </p>
             <ErrorNote error={error} />
             <div className="flex gap-2">
