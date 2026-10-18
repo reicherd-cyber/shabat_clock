@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, timeFormat, channelColorOf, ChannelDot } from '../ui.jsx';
-import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2 } from 'lucide-react';
+import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2, Wifi, ExternalLink } from 'lucide-react';
 
 // Phones (caller-ID) + PIN + relay management — relay names/codes drive the IVR
 // prompts directly (PLAN §3).
@@ -19,6 +19,7 @@ export default function Settings() {
   const [disablingDevice, setDisablingDevice] = useState(null); // device pending "disable all" confirmation
   const [removingDevice, setRemovingDevice] = useState(null); // device pending removal confirmation
   const [showRemoved, setShowRemoved] = useState(false);
+  const [wifi, setWifi] = useState({ ssid: '', pass: '', sent: false }); // Wi-Fi form for the device hotspot
   const [clockFmt, setClockFmt] = useState(timeFormat.get()); // 12/24h time-entry preference (per device)
   const { busy, error, run, setError } = useAsync();
   // Channel identity color (shared app-wide assignment — same as the calendar);
@@ -295,6 +296,62 @@ export default function Settings() {
           </div>
         </Card>
       ))}
+
+      {devices.some((d) => d.is_enabled && d.device_type === 'shelly') && (
+        <Card>
+          <h3 className="font-bold mb-1 flex items-center gap-1.5"><Wifi size={16} className="text-accent" />הגדרת רשת Wi-Fi למכשיר</h3>
+          <p className="text-muted text-xs mb-2">
+            למקרה שהחלפתם נתב או סיסמה והמכשיר מנותק. ההגדרה נשלחת מהטלפון ישירות למכשיר, ולכן קודם מתחברים לרשת שלו:
+          </p>
+          <ol className="list-decimal ps-5 space-y-2 text-sm">
+            <li>
+              בהגדרות ה-Wi-Fi של הטלפון התחברו לרשת שהמכשיר משדר — שמה מתחיל ב-<b dir="ltr">Shelly</b> ומסתיים
+              בקוד המכשיר{' '}
+              {devices.filter((d) => d.is_enabled && d.device_uid).map((d, i) => (
+                <span key={d.id}>{i > 0 && ', '}<b dir="ltr">{d.device_uid.toUpperCase()}</b></span>
+              ))}.
+              אם הטלפון מזהיר שאין אינטרנט ברשת — הישארו בה.
+            </li>
+            <li>
+              לא רואים רשת כזו? לחצו על כפתור ה-RESET הקטן במכשיר כ-5 שניות ושחררו — הרשת שלו תופיע לכמה דקות
+              (במכשיר עם מסך: לחיצה ארוכה על הכפתור הימני → Network → Wi-Fi AP → Enable).
+              <span className="text-off"> אל תחזיקו 10 שניות — זה איפוס יצרן שמוחק גם את החיבור לשעון שבת.</span>
+            </li>
+            <li>מלאו כאן את פרטי הרשת הביתית ולחצו "שלח למכשיר". תיפתח לשונית עם תשובת המכשיר.</li>
+          </ol>
+          <div className="flex items-center gap-2 flex-wrap mt-3">
+            <Input dir="auto" className="w-56" placeholder="שם רשת ה-Wi-Fi הביתית" value={wifi.ssid}
+              onChange={(e) => setWifi({ ...wifi, ssid: e.target.value, sent: false })} />
+            <Input dir="ltr" className="w-56" type="text" autoComplete="off" placeholder="סיסמת ה-Wi-Fi" value={wifi.pass}
+              onChange={(e) => setWifi({ ...wifi, pass: e.target.value, sent: false })} />
+            <Button disabled={!wifi.ssid.trim()} onClick={() => {
+              // The site is https and the device speaks plain http, so the browser will not
+              // let the page call it directly — a new tab does, and shows the device's answer.
+              const config = JSON.stringify({ sta: { ssid: wifi.ssid, pass: wifi.pass, enable: true } });
+              window.open(`http://192.168.33.1/rpc/Wifi.SetConfig?config=${encodeURIComponent(config)}`, '_blank', 'noopener');
+              setWifi({ ...wifi, sent: true });
+            }}>
+              <span className="inline-flex items-center gap-1"><ExternalLink size={14} />שלח למכשיר</span>
+            </Button>
+          </div>
+          <p className="text-muted text-xs mt-1">המכשיר קולט רשתות 2.4GHz בלבד. הפרטים נשלחים למכשיר בלבד ואינם נשמרים באתר.</p>
+          {wifi.sent && (
+            <div className="mt-3 text-sm bg-surface2 rounded-xl px-3 py-2 space-y-1.5">
+              <b>מה כתוב בלשונית שנפתחה?</b>
+              <div><code dir="ltr" className="code-chip">{'{"restart_required":false}'}</code> — ההגדרה התקבלה ✓. חזרו ל-Wi-Fi הביתי; תוך כדקה המכשיר אמור להופיע "מחובר" במסך הראשי.</div>
+              <div>"לא ניתן לגשת לאתר" / "This site can't be reached" — הטלפון לא מחובר לרשת של המכשיר. התחברו אליה (שלב 1) ולחצו שוב.</div>
+              <div>תשובה עם <code dir="ltr" className="code-chip">"code":-10…</code> — המכשיר דחה את הפרטים; בדקו את שם הרשת והסיסמה.</div>
+              <div>
+                עדיין על רשת המכשיר? אפשר לבדוק אם הוא התחבר:{' '}
+                <a className="underline" href="http://192.168.33.1/rpc/Wifi.GetStatus" target="_blank" rel="noopener noreferrer">
+                  בדיקת מצב החיבור
+                </a>{' '}
+                — <code dir="ltr" className="code-chip">"status":"got ip"</code> פירושו שהתחבר.
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
 
       {devices.some((d) => !d.is_enabled) && (
         <Card>

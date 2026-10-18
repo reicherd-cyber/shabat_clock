@@ -19,7 +19,8 @@ export const isValidIvrDigit = (d) => Number.isInteger(d) && d >= 1 && d <= IVR_
 
 export async function listDevicesWithRelays(userId) {
   const devices = await query(
-    `SELECT id, name, is_online, last_seen_at, sync_status, fw_version, relay_count, is_enabled
+    `SELECT id, name, is_online, last_seen_at, sync_status, fw_version, relay_count, is_enabled,
+            device_type, device_uid
      FROM devices WHERE user_id = ? ORDER BY id`,
     [userId],
   );
