@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Input, Select, Badge } from '../ui.jsx';
-import { Wifi, Send, RefreshCw } from 'lucide-react';
+import { Card, Button, Input, Select, Badge, normalizeMac } from '../ui.jsx';
+import { Wifi, Send, RefreshCw, Eye, EyeOff } from 'lucide-react';
 
 // הגדרות → "הגדרת רשת Wi-Fi למכשיר": the owner's phone, joined to the Shelly's own
 // hotspot, sends Wifi.SetConfig to 192.168.33.1 and the page then watches OUR
@@ -10,50 +10,53 @@ import { Wifi, Send, RefreshCw } from 'lucide-react';
 // reconnect is the only honest verdict. Which device is "that" one: the hotspot
 // tells us its MAC (Shelly.GetDeviceInfo) where the browser can read it;
 // otherwise the owner picks it (one device = no question).
-const DEVICE_URL = 'http://192.168.33.1/rpc/Wifi.SetConfig';
-const VERIFY_MS = 3 * 60_000;
-const SETTLE_MS = 20_000; // an online unit drops for a moment when its network changes
+const DEVICE = 'http://192.168.33.1';
+const VERIFY_MIN = 3;
+const VERIFY_MS = VERIFY_MIN * 60_000;
+const SCAN_SEC = 10;
+const PROBE_MS = 10_000; // long enough for Chrome's local-network permission prompt
 
 // The site is https and the device is plain http, which browsers block ("mixed
 // content") unless the request is declared local-network (Chrome 138+:
-// targetAddressSpace, asks the user once). Returns 'sent' (the device answered),
-// 'blocked' (the browser refused on the spot) or 'unreachable' (nothing answered
-// within the timeout — the phone is not on the hotspot).
-async function sendToDevice(url) {
+// targetAddressSpace, asks the user once). The password travels in a POST body,
+// never in a URL. Returns:
+//   'sent'    — the device answered (opaque reply, but it got the request);
+//   'timeout' — the request went out and nothing answered: not on the hotspot;
+//   'refused' — the browser rejected it on the spot (policy) or the network
+//               answered "no such host" at once — indistinguishable from here.
+async function callDevice(method, params) {
+  const body = JSON.stringify({ id: 1, src: 'web', method, ...(params ? { params } : {}) });
   for (const extra of [{ targetAddressSpace: 'local' }, { targetAddressSpace: 'private' }, {}]) {
-    const t0 = Date.now();
     try {
-      await fetch(url, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(6000), ...extra });
+      await fetch(`${DEVICE}/rpc`, { method: 'POST', mode: 'no-cors', cache: 'no-store', body, signal: AbortSignal.timeout(PROBE_MS), ...extra });
       return 'sent';
-    } catch {
-      if (Date.now() - t0 > 2500) return 'unreachable'; // a real timeout, not a policy refusal
+    } catch (e) {
+      if (e?.name === 'TimeoutError') return 'timeout';
     }
   }
-  return 'blocked';
+  return 'refused';
 }
 
-// Readable call to the device (identity, scan list). Needs the device's CORS
-// header on top of the local-network allowance; when either is missing the
-// reply stays unreadable. Returns the JSON or null.
-async function readFromDevice(method) {
+// Readable call (identity, scan list). Needs the device's CORS header on top of
+// the local-network allowance; when either is missing the reply stays
+// unreadable → null. A timeout ends the attempt (nothing is listening).
+async function readFromDevice(method, timeoutMs) {
   for (const extra of [{ targetAddressSpace: 'local' }, { targetAddressSpace: 'private' }, {}]) {
     try {
-      const res = await fetch(`http://192.168.33.1/rpc/${method}`, { mode: 'cors', cache: 'no-store', signal: AbortSignal.timeout(15000), ...extra });
+      const res = await fetch(`${DEVICE}/rpc/${method}`, { mode: 'cors', cache: 'no-store', signal: AbortSignal.timeout(timeoutMs), ...extra });
       if (res.ok) return await res.json();
-    } catch { /* next variant */ }
+    } catch (e) {
+      if (e?.name === 'TimeoutError') return null;
+    }
   }
   return null;
 }
 
-// Blind reachability probe (an opaque reply still means the device answered).
-async function deviceAnswers() {
-  return (await sendToDevice('http://192.168.33.1/rpc/Shelly.GetDeviceInfo')) === 'sent';
-}
-
 const signalWord = (rssi) => (rssi >= -60 ? 'חזק' : rssi >= -75 ? 'בינוני' : 'חלש');
 
-// Scan results → one row per network, strongest first; Shelly hotspots (any
-// model's own network) and hidden networks are left out.
+// Scan results → one row per network, strongest first. Shelly hotspots (this
+// unit's and any neighbour's — the owner asked for all of them out) and hidden
+// networks are left out.
 export function networksFromScan(scan) {
   const best = new Map();
   for (const r of Array.isArray(scan?.results) ? scan.results : []) {
@@ -67,15 +70,30 @@ export function networksFromScan(scan) {
     .map((r) => ({ ssid: r.ssid, rssi: Number(r.rssi), open: Number(r.auth) === 0, signal: signalWord(Number(r.rssi)) }));
 }
 
-const macOf = (info) => String(info?.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+// Fallback for browsers that refuse the in-page call: a form POST into a small
+// window — a top-level navigation, which the browser allows (after its own
+// "not secure" warning). The text/plain form encoding yields `name=value`, so
+// the JSON is split around the '=' to stay valid: {...,"_":"="}.
+function postViaWindow(params, win) {
+  const head = JSON.stringify({ id: 1, src: 'web', method: 'Wifi.SetConfig', params, _: '' }).slice(0, -3); // drop `""}`
+  const form = document.createElement('form');
+  form.method = 'POST'; form.action = `${DEVICE}/rpc`; form.enctype = 'text/plain'; form.target = win;
+  form.style.display = 'none';
+  const f = document.createElement('input');
+  f.type = 'hidden'; f.name = `${head}"`; f.value = '"}';
+  form.appendChild(f);
+  document.body.appendChild(form);
+  form.submit();
+  form.remove();
+}
 
 export default function WifiCard({ devices }) {
   const shelly = devices.filter((d) => d.is_enabled && d.device_type === 'shelly' && d.device_uid);
   const [ssid, setSsid] = useState('');
   const [pass, setPass] = useState('');
-  const [phase, setPhase] = useState('idle'); // idle | sending | unreachable | verifying | ok | fail
-  const [how, setHow] = useState('direct'); // 'direct' | 'popup' | 'popup_blocked'
-  const [url, setUrl] = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [phase, setPhase] = useState('idle'); // idle | sending | unreachable | refused | verifying | ok | fail
+  const [how, setHow] = useState('direct'); // 'direct' | 'window'
   const [elapsed, setElapsed] = useState(0);
   const [nets, setNets] = useState(null); // null = not scanned; [] = nothing usable
   const [scanning, setScanning] = useState(false);
@@ -88,12 +106,13 @@ export default function WifiCard({ devices }) {
   const [live, setLive] = useState(null); // the watched device's latest row
   const startedAt = useRef(0);
   const target = useRef(null); // { id, name, wasOnline } while verifying
+  const pending = useRef(null); // params awaiting the window fallback
 
-  // Who is on the other end of 192.168.33.1 — null when unreadable.
+  // Who is on the other end of the hotspot — null when unreadable.
   const identify = async () => {
-    const info = await readFromDevice('Shelly.GetDeviceInfo');
-    if (!info) return null;
-    const mac = macOf(info);
+    const info = await readFromDevice('Shelly.GetDeviceInfo', 8000);
+    const mac = normalizeMac(info?.mac);
+    if (!mac) return null;
     const d = shelly.find((x) => x.device_uid.toLowerCase() === mac);
     const f = d ? { id: d.id, name: d.name } : 'other';
     setFound(f);
@@ -104,23 +123,26 @@ export default function WifiCard({ devices }) {
   // lets it; otherwise the note says so and the name is typed by hand.
   const scan = async () => {
     setScanning(true); setScanNote(''); setNets(null);
-    const data = await readFromDevice('Wifi.Scan');
+    const data = await readFromDevice('Wifi.Scan', 15000);
     if (data) {
       identify();
       const list = networksFromScan(data);
       setNets(list);
       if (!list.length) setScanNote('המכשיר לא רואה כרגע רשתות אחרות — סרקו שוב או הקלידו את שם הרשת ידנית.');
-    } else if (await deviceAnswers()) {
-      setScanNote('הדפדפן הזה לא מאפשר לקרוא את רשימת הרשתות מהמכשיר — הקלידו את שם הרשת ידנית.');
     } else {
-      setScanNote('לא הצלחנו להגיע למכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly…) ולחצו שוב.');
+      const r = await callDevice('Shelly.GetDeviceInfo');
+      setScanNote(r === 'sent'
+        ? 'הדפדפן הזה לא מאפשר לקרוא את רשימת הרשתות מהמכשיר — הקלידו את שם הרשת ידנית.'
+        : 'לא הצלחנו להגיע למכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly…) ולחצו שוב.');
     }
     setScanning(false);
   };
 
-  // Verification: poll the server until the configured device is online or
-  // 3 minutes pass. While the phone sits on the hotspot the calls fail for
-  // lack of internet — that is just "keep waiting".
+  // Verification: poll the server until the configured device is online or the
+  // time runs out. A unit that was online keeps its stale "online" row until the
+  // broker notices the drop (~90 s), so for it the proof is a sign of life
+  // NEWER than the send (last_seen_at). While the phone sits on the hotspot the
+  // calls fail for lack of internet — that is just "keep waiting".
   useEffect(() => {
     if (phase !== 'verifying') return undefined;
     let stop = false;
@@ -135,9 +157,8 @@ export default function WifiCard({ devices }) {
         const row = rows.find((d) => d.id === target.current?.id);
         if (row) {
           setLive(row);
-          // A unit that was online drops for a moment while it switches — give
-          // it the settle period before its "online" counts.
-          if (row.is_online && (!target.current.wasOnline || age > SETTLE_MS)) { setPhase('ok'); return; }
+          const seenAfter = row.last_seen_at && new Date(row.last_seen_at).getTime() > startedAt.current;
+          if (row.is_online && (!target.current.wasOnline || seenAfter)) { setPhase('ok'); return; }
         }
       } catch { /* no internet on the hotspot — wait */ }
       if (age > VERIFY_MS) { setPhase('fail'); return; }
@@ -149,29 +170,53 @@ export default function WifiCard({ devices }) {
 
   if (!shelly.length) return null;
 
-  const send = async () => {
-    setPhase('sending'); setLive(null); setNeedPick(false);
-    // Which unit is on the hotspot: ask it; else the only one; else the owner's pick.
-    let f = await identify();
-    if (f === 'other') { setPhase('idle'); return; }
-    if (!f) {
-      const chosen = shelly.length === 1 ? shelly[0] : shelly.find((d) => String(d.id) === pick);
-      if (!chosen) { setNeedPick(true); setPhase('idle'); return; }
-      f = { id: chosen.id, name: chosen.name };
-    }
-    const config = JSON.stringify({ sta: { ssid, pass, enable: true } });
-    const url_ = `${DEVICE_URL}?config=${encodeURIComponent(config)}`;
-    setUrl(url_);
-    const r = await sendToDevice(url_);
-    if (r === 'unreachable') { setPhase('unreachable'); return; }
-    if (r === 'blocked') {
-      // Last resort: a small window of the device's own reply (readable only there).
-      const w = window.open(url_, 'shelly-wifi', 'popup,width=420,height=320');
-      setHow(w ? 'popup' : 'popup_blocked');
-    } else setHow('direct');
+  const startVerify = (f, viaWindow) => {
+    setHow(viaWindow ? 'window' : 'direct');
     target.current = { ...f, wasOnline: !!shelly.find((d) => d.id === f.id)?.is_online };
-    startedAt.current = Date.now(); setElapsed(0);
+    startedAt.current = Date.now(); setElapsed(0); setLive(null);
     setPhase('verifying');
+  };
+
+  // Which unit is being configured: the hotspot's own answer, else what the last
+  // scan learned, else the only unit, else the owner's pick.
+  const resolveTarget = async () => {
+    const f = (await identify()) ?? (found && found !== 'other' ? found : null);
+    if (f === 'other') return null;
+    if (f) return f;
+    const chosen = shelly.length === 1 ? shelly[0] : shelly.find((d) => String(d.id) === pick);
+    if (!chosen) { setNeedPick(true); return null; }
+    return { id: chosen.id, name: chosen.name };
+  };
+
+  const send = async () => {
+    setPhase('sending'); setNeedPick(false);
+    // Reachability first (one short call), so a phone that is not on the hotspot
+    // hears so within seconds instead of after the identity attempts.
+    const probe = await callDevice('Shelly.GetDeviceInfo');
+    if (probe === 'timeout') { setPhase('unreachable'); return; }
+    const f = await resolveTarget();
+    if (!f) { setPhase('idle'); return; }
+    const params = { config: { sta: { ssid, pass, enable: true } } };
+    if (probe === 'refused') {
+      // The page cannot reach the device from here; the owner may send it
+      // through a window instead (their click, so the browser allows it).
+      pending.current = { params, f };
+      setPhase('refused');
+      return;
+    }
+    const r = await callDevice('Wifi.SetConfig', params);
+    if (r === 'timeout') { setPhase('unreachable'); return; }
+    if (r === 'refused') { pending.current = { params, f }; setPhase('refused'); return; }
+    startVerify(f, false);
+  };
+
+  const sendViaWindow = () => {
+    const { params, f } = pending.current || {};
+    if (!params) return;
+    const win = window.open('', 'shelly-wifi', 'popup,width=420,height=320');
+    if (!win) { setHow('window'); return; } // blocked — the refused box says so
+    postViaWindow(params, 'shelly-wifi');
+    startVerify(f, true);
   };
 
   const retryVerify = () => { startedAt.current = Date.now(); setElapsed(0); setPhase('verifying'); };
@@ -201,7 +246,7 @@ export default function WifiCard({ devices }) {
       <div className="mt-3">
         <Button variant="ghost" disabled={scanning || busy} onClick={scan}>
           <span className="inline-flex items-center gap-1"><RefreshCw size={14} className={scanning ? 'animate-spin' : ''} />
-            {scanning ? 'סורק רשתות מהמכשיר… (כ-10 שניות)' : nets ? 'סרוק שוב' : 'סרוק רשתות'}</span>
+            {scanning ? `סורק רשתות מהמכשיר… (כ-${SCAN_SEC} שניות)` : nets ? 'סרוק שוב' : 'סרוק רשתות'}</span>
         </Button>
         {scanNote && <p className="text-muted text-xs mt-1">{scanNote}</p>}
         {found && found !== 'other' && <p className="text-on text-xs mt-1">✓ מחוברים למכשיר <b>{found.name}</b></p>}
@@ -224,8 +269,14 @@ export default function WifiCard({ devices }) {
       <div className="flex items-center gap-2 flex-wrap mt-2">
         <Input dir="auto" className="w-56" placeholder="שם רשת ה-Wi-Fi הביתית" value={ssid} disabled={busy}
           onChange={(e) => { setSsid(e.target.value); if (!busy) setPhase('idle'); }} />
-        <Input dir="ltr" className="w-56" type="text" autoComplete="off" placeholder="סיסמת ה-Wi-Fi" value={pass} disabled={busy}
-          onChange={(e) => { setPass(e.target.value); if (!busy) setPhase('idle'); }} />
+        <span className="relative inline-block w-56">
+          <Input dir="ltr" className="w-full pe-10" type={showPass ? 'text' : 'password'} autoComplete="off"
+            placeholder="סיסמת ה-Wi-Fi" value={pass} disabled={busy}
+            onChange={(e) => { setPass(e.target.value); if (!busy) setPhase('idle'); }} />
+          <button type="button" title={showPass ? 'הסתר סיסמה' : 'הצג סיסמה'}
+            className="absolute top-1/2 -translate-y-1/2 end-3 text-muted hover:text-ink cursor-pointer"
+            onClick={() => setShowPass(!showPass)}>{showPass ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+        </span>
         {shelly.length > 1 && (!found || found === 'other') && (
           <Select className="w-56" value={pick} disabled={busy} onChange={(e) => { setPick(e.target.value); setNeedPick(false); }}>
             <option value="" disabled>איזה מכשיר מגדירים?</option>
@@ -247,26 +298,26 @@ export default function WifiCard({ devices }) {
         </p>
       )}
 
+      {phase === 'refused' && (
+        <div className="text-sm mt-3 bg-surface2 rounded-xl px-3 py-2 space-y-1.5">
+          <div>
+            הדפדפן הזה לא מאפשר לשלוח למכשיר ישירות מהדף. אם הטלפון מחובר לרשת המכשיר — שלחו דרך חלון:
+            הדפדפן יזהיר ש"המידע אינו מאובטח" (זו רשת מקומית בלי אינטרנט) — אשרו, ובחלון תופיע תשובת המכשיר.
+            אם כתוב בה <code dir="ltr" className="code-chip">restart_required</code> — הבקשה הגיעה למכשיר.
+          </div>
+          {how === 'window' && <div className="text-off">הדפדפן חסם את החלון — אפשרו חלונות קופצים לאתר ולחצו שוב.</div>}
+          <Button variant="ghost" onClick={sendViaWindow}>שלח דרך חלון</Button>
+        </div>
+      )}
+
       {(phase === 'verifying' || phase === 'ok' || phase === 'fail') && (
         <div className="text-sm mt-3 bg-surface2 rounded-xl px-3 py-2 space-y-1.5">
-          {how === 'direct' && <div className="text-on">✓ הפרטים נשלחו למכשיר {tName}.</div>}
-          {how === 'popup' && (
-            <div>
-              הדפדפן הזה לא מאפשר לשלוח למכשיר ישירות מהדף, לכן נפתח חלון קטן עם הבקשה. אם כתוב בו
-              <code dir="ltr" className="code-chip mx-1">restart_required</code>— הבקשה הגיעה למכשיר; אם כתוב שלא ניתן לגשת — הטלפון
-              לא על רשת המכשיר.
-            </div>
-          )}
-          {how === 'popup_blocked' && (
-            <div>
-              הדפדפן חסם את החלון. <a className="underline" href={url} target="_blank" rel="noopener noreferrer">לחצו כאן</a> לשליחה ידנית
-              — אם כתוב <code dir="ltr" className="code-chip">restart_required</code>, הבקשה הגיעה למכשיר.
-            </div>
-          )}
-
+          {how === 'direct'
+            ? <div className="text-on">✓ הפרטים נשלחו למכשיר {tName}.</div>
+            : <div>הבקשה נשלחה דרך החלון — תשובת המכשיר מופיעה שם.</div>}
           {phase === 'verifying' && (
             <div className="flex items-center gap-2 flex-wrap">
-              <span>עכשיו חזרו ל-Wi-Fi הביתי. בודקים אם {tName} התחבר… ({elapsed} שניות, עד 3 דקות)</span>
+              <span>עכשיו חזרו ל-Wi-Fi הביתי. בודקים אם {tName} התחבר… ({elapsed} שניות, עד {VERIFY_MIN} דקות)</span>
               {live && <Badge ok={!!live.is_online}>{live.is_online ? 'מחובר' : 'מנותק'}</Badge>}
             </div>
           )}

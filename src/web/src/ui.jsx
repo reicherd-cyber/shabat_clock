@@ -464,6 +464,15 @@ export function RangeFilter({ value, onChange, keys = RANGE_DEFAULT, custom = {}
 }
 
 // ── shared admin formatters + stat tile ──
+// Shelly MAC / device code as the system stores it: 12 lowercase hex digits, or
+// null for anything else ("80:F3:DA:C8:DC:A8", "ShellyPro4PM-80F3DAC8DCA8" tail…).
+export const normalizeMac = (v) => {
+  const s = String(v || '').toLowerCase();
+  const tail = s.includes('-') ? s.slice(s.lastIndexOf('-') + 1) : s;
+  const hex = tail.replace(/[^0-9a-f]/g, '');
+  return hex.length === 12 ? hex : null;
+};
+
 export const fmtInt = (n) => (n == null ? '—' : Number(n).toLocaleString('he-IL'));
 export const fmtBytes = (b) => {
   if (b == null) return '—';

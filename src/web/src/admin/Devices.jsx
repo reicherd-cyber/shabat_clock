@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Download } from 'lucide-react';
-import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, fmtWhen } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, fmtWhen, normalizeMac } from '../ui.jsx';
 
 // Provisioning modal shows the secret + QR EXACTLY ONCE with an explicit
 // "I saved it" confirmation before it can be closed (§7).
@@ -171,8 +171,8 @@ export default function Devices() {
   // hardware side is completed automatically on the device's first hello.
   const offlineRelays = (n) => Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, name: `ערוץ ${i + 1}`, ivr_digit: i + 1, state: 'unknown' }));
   const shellyOffline = () => {
-    const mac = String(shelly.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
-    if (mac.length !== 12) { setError(new Error('כתובת MAC לא תקינה — 12 תווים הקסדצימליים')); return; }
+    const mac = normalizeMac(shelly.mac);
+    if (!mac) { setError(new Error('כתובת MAC לא תקינה — 12 תווים הקסדצימליים')); return; }
     setError(null);
     setShelly({ ...shelly, step: 'offline', offline: true, mac, relays: shelly.relays?.length ? shelly.relays : [] });
   };
