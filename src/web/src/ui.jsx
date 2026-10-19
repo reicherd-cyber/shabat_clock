@@ -563,6 +563,17 @@ export const normalizeMac = (v) => {
   return hex.length === 12 ? hex : null;
 };
 
+// Shelly model code → human name + channel count. The code's 3-digit block ends
+// with the relay count (SPSW-003XE16EU = Pro 3, SPSW-204PE16EU = Pro 4PM v3,
+// SPSW-201XE15UL = Pro 1; verified against relay_count of registered units),
+// 'P' = metered (PM), 'X' = plain switch. Pro = SPSW, Plus = SNSW.
+export const shellyModelInfo = (code) => {
+  const m = String(code || '').toUpperCase().match(/^S([NP])SW-\d?(\d\d)([PX])/);
+  if (!m) return null;
+  const channels = Number(m[2]);
+  return { name: `${m[1] === 'P' ? 'Pro' : 'Plus'} ${channels}${m[3] === 'P' ? 'PM' : ''}`, channels, metered: m[3] === 'P' };
+};
+
 export const fmtInt = (n) => (n == null ? '—' : Number(n).toLocaleString('he-IL'));
 export const fmtBytes = (b) => {
   if (b == null) return '—';

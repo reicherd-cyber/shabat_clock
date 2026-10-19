@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Download } from 'lucide-react';
-import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, fmtWhen, normalizeMac } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, fmtWhen, normalizeMac, shellyModelInfo } from '../ui.jsx';
 
 // Provisioning modal shows the secret + QR EXACTLY ONCE with an explicit
 // "I saved it" confirmation before it can be closed (§7).
@@ -464,7 +464,7 @@ export default function Devices() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-3">MAC</th><th className="p-3">דגם</th><th className="p-3">fw</th>
+              <th className="p-3">MAC</th><th className="p-3">דגם</th><th className="p-3">ערוצים</th><th className="p-3">fw</th>
               <th className="p-3">הוכן בתאריך</th><th className="p-3">סטטוס</th><th className="p-3">פעולות</th>
             </tr>
           </thead>
@@ -472,7 +472,12 @@ export default function Devices() {
             {inventory.filter((p) => showActivated || p.status === 'prepared').map((p) => (
               <tr key={p.id} className="border-b border-line last:border-0">
                 <td className="p-3 text-xs" dir="ltr">{p.mac}</td>
-                <td className="p-3 text-xs">{p.model || '—'}</td>
+                <td className="p-3 text-xs">
+                  {shellyModelInfo(p.model)
+                    ? <><b>{shellyModelInfo(p.model).name}</b> <span className="text-muted" dir="ltr">{p.model}</span></>
+                    : (p.model || '—')}
+                </td>
+                <td className="p-3 text-xs">{shellyModelInfo(p.model)?.channels ?? '—'}</td>
                 <td className="p-3 text-xs text-muted">{p.fw_version || '—'}</td>
                 <td className="p-3 text-xs">{String(p.prepared_at).slice(0, 10)}</td>
                 <td className="p-3">
@@ -497,7 +502,7 @@ export default function Devices() {
               </tr>
             ))}
             {inventory.filter((p) => showActivated || p.status === 'prepared').length === 0 && (
-              <tr><td colSpan={6} className="p-6 text-center text-muted">אין מכשירים מוכנים במלאי — הכינו מכשיר עם "הגדרת Shelly חדש"</td></tr>
+              <tr><td colSpan={7} className="p-6 text-center text-muted">אין מכשירים מוכנים במלאי — הכינו מכשיר עם "הגדרת Shelly חדש"</td></tr>
             )}
           </tbody>
         </table>
@@ -654,7 +659,7 @@ export default function Devices() {
         {shelly?.step === 2 && (
           <div className="space-y-3">
             <Card className="text-sm">
-              נמצא: <b>{shelly.probe.model}</b> · fw {shelly.probe.fw_version || '?'} · <span dir="ltr">{shelly.probe.mac}</span>
+              נמצא: <b>{shellyModelInfo(shelly.probe.model)?.name || shelly.probe.model}</b> <span dir="ltr">{shellyModelInfo(shelly.probe.model) ? shelly.probe.model : ''}</span> · {shelly.probe.channels?.length ?? shellyModelInfo(shelly.probe.model)?.channels ?? '?'} ערוצים · fw {shelly.probe.fw_version || '?'} · <span dir="ltr">{shelly.probe.mac}</span>
               {shelly.probe.already_registered_as && <div className="text-off mt-1">⚠ המכשיר כבר רשום (מספר {shelly.probe.already_registered_as})</div>}
             </Card>
             <Input placeholder="שם המכשיר" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
