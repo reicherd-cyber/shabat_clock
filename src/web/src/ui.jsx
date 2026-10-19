@@ -566,12 +566,15 @@ export const normalizeMac = (v) => {
 // Shelly model code → human name + channel count. The code's 3-digit block ends
 // with the relay count (SPSW-003XE16EU = Pro 3, SPSW-204PE16EU = Pro 4PM v3,
 // SPSW-201XE15UL = Pro 1; verified against relay_count of registered units),
-// 'P' = metered (PM), 'X' = plain switch. Pro = SPSW, Plus = SNSW.
+// 'P' = metered (PM), 'X' = plain switch, then the rating (8 A = Mini).
+// Family letter: P = Pro, N = Plus, a digit = that generation (S3SW… = Gen3).
 export const shellyModelInfo = (code) => {
-  const m = String(code || '').toUpperCase().match(/^S([NP])SW-\d?(\d\d)([PX])/);
+  const m = String(code || '').toUpperCase().match(/^S([NP0-9])SW-\d?(\d\d)([PX])E?(\d+)/);
   if (!m) return null;
   const channels = Number(m[2]);
-  return { name: `${m[1] === 'P' ? 'Pro' : 'Plus'} ${channels}${m[3] === 'P' ? 'PM' : ''}`, channels, metered: m[3] === 'P' };
+  const family = m[1] === 'P' ? 'Pro' : m[1] === 'N' ? 'Plus' : `Gen${m[1]}`;
+  const mini = m[4] === '8' ? ' Mini' : '';
+  return { name: `${family} ${channels}${m[3] === 'P' ? 'PM' : ''}${mini}`, channels, metered: m[3] === 'P' };
 };
 
 export const fmtInt = (n) => (n == null ? '—' : Number(n).toLocaleString('he-IL'));

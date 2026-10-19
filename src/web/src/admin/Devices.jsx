@@ -269,7 +269,7 @@ export default function Devices() {
                     {d.name}
                     <span className="text-muted text-xs font-normal ms-2" title="מספר המכשיר במערכת">#{d.id}</span>
                     {!!d.mute_alerts && <span className="ms-1" title="התראות מייל מושתקות למכשיר זה">🔕</span>}
-                    {!d.is_enabled && <span className="ms-1"><Badge ok={false}>מושהה</Badge></span>}
+                    {!d.is_enabled && <span className="ms-1"><Badge ok={false}>{d.returned_to_stock_at ? 'הוחזר למלאי' : 'מושהה'}</Badge></span>}
                     {!!d.first_contact_pending && d.is_enabled && (
                       <span className="ms-1" title="נרשם ללא בדיקת חיבור — ההגדרה תושלם בחיבור הראשון"><Badge ok={false}>ממתין לחיבור ראשון</Badge></span>
                     )}
@@ -334,7 +334,7 @@ export default function Devices() {
                           )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             onClick={() => setTransferForm({ device: d, user_id: '' })}>העבר ללקוח</Button>
-                          {d.device_type === 'shelly' && !!d.device_uid && d.is_enabled && (
+                          {d.device_type === 'shelly' && !!(d.is_enabled ? d.device_uid : d.removed_uid) && !d.returned_to_stock_at && (
                             <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                               title="המכשיר חזר מהלקוח? מושהה אצלו וחוזר למלאי המכשירים שהוכנו"
                               onClick={() => { setError(null); setReturning(d); }}>החזר למלאי</Button>
@@ -483,30 +483,37 @@ export default function Devices() {
             </tr>
           </thead>
           <tbody>
-            {inventory.filter((p) => showActivated || p.status === 'prepared').map((p) => (
+            {inventory.filter((p) => showActivated || p.status === 'prepared').map((p) => {
+              const info = shellyModelInfo(p.model);
+              const dev = p.device_id ? devices?.find((x) => x.id === p.device_id) : null;
+              return (
               <tr key={p.id} className="border-b border-line last:border-0">
                 <td className="p-3 text-xs" dir="ltr">{p.mac}</td>
                 <td className="p-3 text-xs">
-                  {shellyModelInfo(p.model)
-                    ? <><b>{shellyModelInfo(p.model).name}</b> <span className="text-muted" dir="ltr">{p.model}</span></>
+                  {info
+                    ? <><b>{info.name}</b> <span className="text-muted" dir="ltr">{p.model}</span></>
                     : (p.model || '—')}
                 </td>
-                <td className="p-3 text-xs">{shellyModelInfo(p.model)?.channels ?? '—'}</td>
+                <td className="p-3 text-xs">{info?.channels ?? '—'}</td>
                 <td className="p-3 text-xs text-muted">{p.fw_version || '—'}</td>
                 <td className="p-3 text-xs">{String(p.prepared_at).slice(0, 10)}</td>
                 <td className="p-3">
                   {p.status === 'prepared'
-                    ? <Badge ok>מוכן להפעלה</Badge>
+                    ? <>
+                        <Badge ok>מוכן להפעלה</Badge>
+                        {p.returned_at && (
+                          <div className="text-xs text-muted mt-1" title="יחידה שחזרה מלקוח">
+                            חזר מ{p.activated_user_name || '—'} · {String(p.returned_at).slice(0, 10)}
+                          </div>
+                        )}
+                      </>
                     : <span className="text-xs">הופעל ל{p.activated_user_name || '—'} · {p.activated_at ? String(p.activated_at).slice(0, 10) : ''}</span>}
                 </td>
                 <td className="p-3 whitespace-nowrap space-x-1 space-x-reverse">
-                  {p.status === 'activated' && !!p.device_id && (() => {
-                    const d = devices?.find((x) => x.id === p.device_id);
-                    return d?.is_enabled && !!d.device_uid
-                      ? <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
-                          onClick={() => { setError(null); setReturning(d); }}>החזר למלאי</Button>
-                      : null;
-                  })()}
+                  {p.status === 'activated' && dev && !dev.returned_to_stock_at && !!(dev.is_enabled ? dev.device_uid : dev.removed_uid) && (
+                    <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                      onClick={() => { setError(null); setReturning(dev); }}>החזר למלאי</Button>
+                  )}
                   {p.status === 'prepared' && (
                     <Button variant="ghost" className="!px-2 !py-1 text-xs"
                       onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: p.mac, user_id: '', name: '' })}>
@@ -521,7 +528,8 @@ export default function Devices() {
                     })}>מחק</Button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
             {inventory.filter((p) => showActivated || p.status === 'prepared').length === 0 && (
               <tr><td colSpan={7} className="p-6 text-center text-muted">אין מכשירים מוכנים במלאי — הכינו מכשיר עם "הגדרת Shelly חדש"</td></tr>
             )}
@@ -941,9 +949,11 @@ export default function Devices() {
               להחזיר את <b>{returning.name}</b>{returning.owner_name ? <> של <b>{returning.owner_name}</b></> : null} למלאי המכשירים שהוכנו?
             </p>
             <ul className="text-sm text-muted list-disc ps-5 space-y-1">
-              <li>אצל הלקוח המכשיר יושהה — יפסיק להגיב בלוח הבקרה, בתזמונים ובטלפון. הנתונים נשמרים וניתן לשחזר ב"שחזר" כל עוד לא הופעל ללקוח אחר.</li>
-              <li>היחידה <span dir="ltr">{returning.device_uid}</span> תופיע במלאי כ"מוכן להפעלה" וניתן להפעיל אותה ללקוח חדש.</li>
-              <li>התזמונים המקומיים שעל המכשיר נמחקים (אם הוא מחובר כעת).</li>
+              {returning.is_enabled
+                ? <li>אצל הלקוח המכשיר יושהה — יפסיק להגיב בלוח הבקרה, בתזמונים ובטלפון, וייעלם מרשימת המכשירים שלו. הנתונים נשמרים; רק מנהל יכול לשחזר (ב"שחזר" כאן) כל עוד לא הופעל ללקוח אחר.</li>
+                : <li>המכשיר כבר מושהה אצל הלקוח — הוא ייעלם מרשימת המכשירים שלו והלקוח לא יוכל לשחזרו בעצמו. הנתונים נשמרים; רק מנהל יכול לשחזר כל עוד לא הופעל ללקוח אחר.</li>}
+              <li>היחידה <span dir="ltr">{returning.device_uid || returning.removed_uid}</span> תופיע במלאי כ"מוכן להפעלה" וניתן להפעיל אותה ללקוח חדש.</li>
+              {returning.is_enabled && <li>התזמונים המקומיים שעל המכשיר נמחקים (אם הוא מחובר כעת).</li>}
             </ul>
             <ErrorNote error={error} />
             <div className="flex gap-2">

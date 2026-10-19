@@ -199,12 +199,13 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
   let recovery;
   let passwdEntry = null;
   let shellyWipe = null;
+  let device;
   await withTransaction(async (conn) => {
     const [rows] = await conn.query(
       `SELECT * FROM devices WHERE id = ? ${userId != null ? 'AND user_id = ?' : ''} FOR UPDATE`,
       userId != null ? [deviceId, userId] : [deviceId],
     );
-    const device = rows[0];
+    device = rows[0];
     if (!device) throw errors.notFound('NOT_FOUND', 'Device not found');
     const fields = {};
 
@@ -226,7 +227,15 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
         }
       }
       if (recovering) {
+        // A unit returned to stock is not with the customer any more — only the
+        // admin's שחזר (userId == null) undoes the return.
+        if (device.returned_to_stock_at && userId != null) {
+          throw errors.conflict('RETURNED_TO_STOCK', 'המכשיר הוחזר לחברה ואינו ניתן לשחזור מכאן');
+        }
         ({ recovery, passwdEntry } = await recoverRemovedDevice(conn, device));
+        if (device.returned_to_stock_at) {
+          await conn.query('UPDATE devices SET returned_to_stock_at = NULL WHERE id = ?', [deviceId]);
+        }
         // A recovered Shelly's local jobs were wiped (or went stale) — hand it
         // to the scheduler's resync loop.
         if (device.device_type === 'shelly') {
@@ -286,14 +295,16 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
   });
   if (passwdEntry) writeBrokerPasswdEntry(passwdEntry.uid, passwdEntry.hash);
   // Recovering a Shelly that was "returned to stock" takes it out of the
-  // inventory again — unless the unit was activated anew meanwhile (then the
-  // UID was reported lost and the inventory row belongs to that activation).
-  if (recovery?.restored_uid) {
+  // inventory again — only the row this very return freed (device_id guard),
+  // and not when the unit was activated anew meanwhile (then the UID was
+  // reported lost and the inventory row belongs to that activation).
+  if (recovery?.restored_uid && device?.returned_to_stock_at) {
     await query(
-      `UPDATE prepared_devices SET status = 'activated', activated_at = UTC_TIMESTAMP(),
-              activated_user_id = (SELECT user_id FROM devices WHERE id = ?), device_id = ?
-       WHERE mac = ? AND status = 'prepared'`,
-      [deviceId, deviceId, recovery.restored_uid],
+      `UPDATE prepared_devices
+       SET status = 'activated', returned_at = NULL, activated_at = COALESCE(activated_at, UTC_TIMESTAMP()),
+           activated_user_id = (SELECT user_id FROM devices WHERE id = ?)
+       WHERE mac = ? AND status = 'prepared' AND device_id = ?`,
+      [deviceId, recovery.restored_uid, deviceId],
     ).catch((e) => console.error('prepared_devices re-activate:', e.message));
   }
   if (shellyWipe) {
@@ -313,20 +324,32 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
 // suspended (is_enabled=false — the normal soft removal: UID and IVR digits move
 // to the stash, local Schedule jobs are wiped), so the customer side is fully
 // restorable with שחזר, which also re-activates the inventory row.
+// A device the customer already removed in their panel (suspended, UID in the
+// stash) is returned the same way — only the inventory step remains. Each step
+// is idempotent, so a failure after the suspension leaves the device suspended
+// but NOT stamped, and the button simply offers the return again.
 export async function returnDeviceToStock(deviceId, { actor = null } = {}) {
-  const [d] = await query('SELECT id, user_id, device_type, device_uid, fw_version, is_enabled FROM devices WHERE id = ?', [deviceId]);
-  if (!d) throw errors.notFound('NOT_FOUND', 'Device not found');
-  if (d.device_type !== 'shelly' || !d.device_uid) throw errors.validation('רק מכשיר Shelly רשום (עם MAC) ניתן להחזיר למלאי');
-  if (!d.is_enabled) throw errors.conflict('CONFLICT', 'המכשיר כבר מושהה — שחזרו אותו תחילה');
-  const mac = d.device_uid;
-  await patchDevice(deviceId, { is_enabled: false }, { actor });
-  await query(
-    `INSERT INTO prepared_devices (mac, fw_version, status, prepared_by, prepared_at)
-     VALUES (?, ?, 'prepared', ?, UTC_TIMESTAMP())
-     ON DUPLICATE KEY UPDATE status = 'prepared', activated_at = NULL, activated_user_id = NULL, device_id = NULL,
-       fw_version = COALESCE(VALUES(fw_version), fw_version), prepared_by = VALUES(prepared_by), prepared_at = UTC_TIMESTAMP()`,
-    [mac, d.fw_version || null, actor ? `return:${actor}`.slice(0, 32) : null],
+  const [d] = await query(
+    'SELECT id, user_id, device_type, device_uid, removed_uid, fw_version, is_enabled, returned_to_stock_at FROM devices WHERE id = ?',
+    [deviceId],
   );
+  if (!d) throw errors.notFound('NOT_FOUND', 'Device not found');
+  const mac = d.is_enabled ? d.device_uid : (d.removed_uid || d.device_uid);
+  if (d.device_type !== 'shelly' || !mac) throw errors.validation('רק מכשיר Shelly רשום (עם MAC) ניתן להחזיר למלאי');
+  if (d.returned_to_stock_at) throw errors.conflict('CONFLICT', 'המכשיר כבר הוחזר למלאי');
+  if (d.is_enabled) await patchDevice(deviceId, { is_enabled: false }, { actor });
+  // The previous activation (who, since when) stays on the row as a second-hand
+  // hint; device_id keeps pointing at the returning device so admin recovery
+  // can tell "its own" freed row from a later prep of the same hardware.
+  await query(
+    `INSERT INTO prepared_devices (mac, fw_version, status, prepared_by, activated_user_id, device_id, returned_at)
+     VALUES (?, ?, 'prepared', ?, ?, ?, UTC_TIMESTAMP())
+     ON DUPLICATE KEY UPDATE status = 'prepared', returned_at = UTC_TIMESTAMP(), device_id = VALUES(device_id),
+       activated_user_id = VALUES(activated_user_id),
+       fw_version = COALESCE(VALUES(fw_version), fw_version), prepared_by = COALESCE(prepared_by, VALUES(prepared_by))`,
+    [mac, d.fw_version || null, actor, d.user_id, deviceId],
+  );
+  await query('UPDATE devices SET returned_to_stock_at = UTC_TIMESTAMP() WHERE id = ?', [deviceId]);
   return { mac, device_id: deviceId, previous_user_id: d.user_id };
 }
 
@@ -461,7 +484,7 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     // Inventory: registration is the activation moment for a prepared unit.
     await query(
       `UPDATE prepared_devices
-       SET status = 'activated', activated_at = UTC_TIMESTAMP(), activated_user_id = ?, device_id = ?, model = COALESCE(model, ?)
+       SET status = 'activated', returned_at = NULL, activated_at = UTC_TIMESTAMP(), activated_user_id = ?, device_id = ?, model = COALESCE(model, ?)
        WHERE mac = ?`,
       [userId, result.id, probe.model || null, probe.mac],
     ).catch((e) => console.error('prepared_devices activate:', e.message));
@@ -620,7 +643,7 @@ export async function listAllDevices() {
   return query(
     `SELECT d.id, d.user_id, u.full_name AS owner_name, d.device_uid, d.removed_uid, d.name, d.device_type, d.fw_version, d.timezone,
             d.relay_count, d.is_online, d.first_contact_pending, d.last_seen_at, d.schedule_version, d.device_ack_version,
-            d.sync_status, d.sync_error, d.created_at, d.is_enabled, d.mute_alerts
+            d.sync_status, d.sync_error, d.created_at, d.is_enabled, d.mute_alerts, d.returned_to_stock_at
      FROM devices d JOIN users u ON u.id = d.user_id ORDER BY d.id`,
   );
 }
