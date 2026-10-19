@@ -16,7 +16,7 @@ const cleanLanIp = (transport, ip) => {
 };
 import { createUser, getUser, setPin, bcryptHash, setUserEmailAdmin } from '../../services/users.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview } from '../../services/devices.js';
+import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview, returnDeviceToStock } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
@@ -447,6 +447,16 @@ adminRouter.patch('/devices/:id', requireWrite, async (req, res, next) => {
     const recovery = await patchDevice(Number(req.params.id), req.body || {}, { actor: adminActor(req) });
     await audit(req, 'update', 'device', Number(req.params.id), { after: req.body });
     res.json({ ok: true, recovery });
+  } catch (e) { next(e); }
+});
+
+// A customer's Shelly goes back to the prepared-devices inventory (the device
+// row is suspended, restorable; the inventory lists the unit as ready again).
+adminRouter.post('/devices/:id/return-to-stock', requireWrite, async (req, res, next) => {
+  try {
+    const result = await returnDeviceToStock(Number(req.params.id), { actor: adminActor(req) });
+    await audit(req, 'return_to_stock', 'device', Number(req.params.id), { after: result });
+    res.json({ ok: true, ...result });
   } catch (e) { next(e); }
 });
 

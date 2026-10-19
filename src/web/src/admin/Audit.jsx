@@ -58,7 +58,7 @@ const enc = (s) => encodeURIComponent(s || '');
 // sentence as a link. Nominal forms keep the Hebrew gender-neutral.
 const ACTIONS = {
   create: 'יצירת {e}', update: 'עדכון {e}', delete: 'מחיקת {e}', restore: 'שחזור {e}',
-  verify: 'אימות {e}', transfer: 'העברת {e} ללקוח אחר', provision: 'הקמת {e}', revoke: 'ביטול {e}',
+  verify: 'אימות {e}', transfer: 'העברת {e} ללקוח אחר', return_to_stock: 'החזרת {e} למלאי', provision: 'הקמת {e}', revoke: 'ביטול {e}',
   rotate_secret: 'החלפת סוד ההתחברות של {e}', pin_reset: 'איפוס קוד ל{e}', impersonate: 'כניסה בשם {e}',
   signup: 'הרשמה עצמית של {e}', command: 'פקודה ל{e}', plan_toggle: 'הפעלה/השבתה של תוכנית', plan_delete: 'מחיקת תוכנית',
   register_shelly: 'רישום Shelly', onboard_shelly: 'קליטת Shelly', onboard_shelly_remote: 'קליטת Shelly מרחוק (מתקין)',

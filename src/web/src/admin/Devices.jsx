@@ -11,6 +11,7 @@ export default function Devices() {
   const [users, setUsers] = useState([]);
   const [shelly, setShelly] = useState(null);         // wizard: {step, ip, user_id, name, probe, relays}
   const [suspending, setSuspending] = useState(null); // device pending suspension confirmation
+  const [returning, setReturning] = useState(null);   // device pending "return to stock" confirmation
   const [showRemoved, setShowRemoved] = useState(false);
   const [fUser, setFUser] = useState('');
   const [fDevice, setFDevice] = useState('');
@@ -81,6 +82,14 @@ export default function Devices() {
         + recovery.lost_digits.map((x) => `• קוד IVR ${x.digit} (${x.relay})`).join('\n'));
     }
     setSuspending(null);
+    await refresh();
+  });
+
+  // Return to stock = suspend for the customer (restorable with שחזר) + the unit
+  // reappears in the prepared-devices inventory as ready for a new activation.
+  const returnToStock = (d) => run(async () => {
+    await adminApi.post(`/devices/${d.id}/return-to-stock`, {});
+    setReturning(null);
     await refresh();
   });
 
@@ -325,6 +334,11 @@ export default function Devices() {
                           )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             onClick={() => setTransferForm({ device: d, user_id: '' })}>העבר ללקוח</Button>
+                          {d.device_type === 'shelly' && !!d.device_uid && d.is_enabled && (
+                            <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                              title="המכשיר חזר מהלקוח? מושהה אצלו וחוזר למלאי המכשירים שהוכנו"
+                              onClick={() => { setError(null); setReturning(d); }}>החזר למלאי</Button>
+                          )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             title="השתקה עוצרת מיילים על תקלות במכשיר הזה; התקלות עדיין נרשמות ביומן"
                             onClick={() => run(async () => {
@@ -486,6 +500,13 @@ export default function Devices() {
                     : <span className="text-xs">הופעל ל{p.activated_user_name || '—'} · {p.activated_at ? String(p.activated_at).slice(0, 10) : ''}</span>}
                 </td>
                 <td className="p-3 whitespace-nowrap space-x-1 space-x-reverse">
+                  {p.status === 'activated' && !!p.device_id && (() => {
+                    const d = devices?.find((x) => x.id === p.device_id);
+                    return d?.is_enabled && !!d.device_uid
+                      ? <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                          onClick={() => { setError(null); setReturning(d); }}>החזר למלאי</Button>
+                      : null;
+                  })()}
                   {p.status === 'prepared' && (
                     <Button variant="ghost" className="!px-2 !py-1 text-xs"
                       onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: p.mac, user_id: '', name: '' })}>
@@ -908,6 +929,26 @@ export default function Devices() {
             <div className="flex gap-2">
               <Button variant="ghost" className="flex-1" onClick={() => setOnboardConfirm(null)}>ביטול</Button>
               <Button variant="danger" className="flex-1" disabled={busy} onClick={() => shellyOnboard(true)}>צור פרטי חיבור חדשים</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!returning} onClose={() => setReturning(null)} title="החזרת מכשיר למלאי">
+        {returning && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              להחזיר את <b>{returning.name}</b>{returning.owner_name ? <> של <b>{returning.owner_name}</b></> : null} למלאי המכשירים שהוכנו?
+            </p>
+            <ul className="text-sm text-muted list-disc ps-5 space-y-1">
+              <li>אצל הלקוח המכשיר יושהה — יפסיק להגיב בלוח הבקרה, בתזמונים ובטלפון. הנתונים נשמרים וניתן לשחזר ב"שחזר" כל עוד לא הופעל ללקוח אחר.</li>
+              <li>היחידה <span dir="ltr">{returning.device_uid}</span> תופיע במלאי כ"מוכן להפעלה" וניתן להפעיל אותה ללקוח חדש.</li>
+              <li>התזמונים המקומיים שעל המכשיר נמחקים (אם הוא מחובר כעת).</li>
+            </ul>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setReturning(null)}>ביטול</Button>
+              <Button variant="danger" className="flex-1" disabled={busy} onClick={() => returnToStock(returning)}>החזר למלאי</Button>
             </div>
           </div>
         )}

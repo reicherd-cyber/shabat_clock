@@ -285,6 +285,17 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
     if (fields.device_uid) writeBrokerPasswdEntry(fields.device_uid, device.mqtt_passwd_hash);
   });
   if (passwdEntry) writeBrokerPasswdEntry(passwdEntry.uid, passwdEntry.hash);
+  // Recovering a Shelly that was "returned to stock" takes it out of the
+  // inventory again — unless the unit was activated anew meanwhile (then the
+  // UID was reported lost and the inventory row belongs to that activation).
+  if (recovery?.restored_uid) {
+    await query(
+      `UPDATE prepared_devices SET status = 'activated', activated_at = UTC_TIMESTAMP(),
+              activated_user_id = (SELECT user_id FROM devices WHERE id = ?), device_id = ?
+       WHERE mac = ? AND status = 'prepared'`,
+      [deviceId, deviceId, recovery.restored_uid],
+    ).catch((e) => console.error('prepared_devices re-activate:', e.message));
+  }
   if (shellyWipe) {
     // Best-effort, off the request path: unreachable now = ghost jobs keep
     // firing until this hardware is reached again (re-registration syncs a
@@ -295,6 +306,28 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
       .catch((e) => console.error(`shelly ${deviceId} local schedule wipe:`, e.message));
   }
   return recovery;
+}
+
+// "Return to stock": the customer's Shelly goes back to the prepared-devices
+// inventory as a unit ready for a new activation. The device row itself is
+// suspended (is_enabled=false — the normal soft removal: UID and IVR digits move
+// to the stash, local Schedule jobs are wiped), so the customer side is fully
+// restorable with שחזר, which also re-activates the inventory row.
+export async function returnDeviceToStock(deviceId, { actor = null } = {}) {
+  const [d] = await query('SELECT id, user_id, device_type, device_uid, fw_version, is_enabled FROM devices WHERE id = ?', [deviceId]);
+  if (!d) throw errors.notFound('NOT_FOUND', 'Device not found');
+  if (d.device_type !== 'shelly' || !d.device_uid) throw errors.validation('רק מכשיר Shelly רשום (עם MAC) ניתן להחזיר למלאי');
+  if (!d.is_enabled) throw errors.conflict('CONFLICT', 'המכשיר כבר מושהה — שחזרו אותו תחילה');
+  const mac = d.device_uid;
+  await patchDevice(deviceId, { is_enabled: false }, { actor });
+  await query(
+    `INSERT INTO prepared_devices (mac, fw_version, status, prepared_by, prepared_at)
+     VALUES (?, ?, 'prepared', ?, UTC_TIMESTAMP())
+     ON DUPLICATE KEY UPDATE status = 'prepared', activated_at = NULL, activated_user_id = NULL, device_id = NULL,
+       fw_version = COALESCE(VALUES(fw_version), fw_version), prepared_by = VALUES(prepared_by), prepared_at = UTC_TIMESTAMP()`,
+    [mac, d.fw_version || null, actor ? `return:${actor}`.slice(0, 32) : null],
+  );
+  return { mac, device_id: deviceId, previous_user_id: d.user_id };
 }
 
 // ── Shelly wizard (admin panel) ──
