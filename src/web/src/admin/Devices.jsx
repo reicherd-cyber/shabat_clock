@@ -603,17 +603,18 @@ export default function Devices() {
               </div>
             </Card>
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
-            <label className="text-sm flex items-center gap-2">מספר ערוצים במכשיר: <span className="text-off">*</span>
-              <div className="flex rounded-[10px] border border-line overflow-hidden">
-                {[1, 2, 3, 4].map((n) => (
-                  <button key={n} type="button"
-                    onClick={() => setShelly({ ...shelly, relays: offlineRelays(n).map((r, i) => shelly.relays[i] ? { ...shelly.relays[i], relay_no: r.relay_no } : r) })}
-                    className={`px-3 py-1 text-sm cursor-pointer ${shelly.relays.length === n ? 'bg-accent text-white font-bold' : 'text-muted hover:text-ink'}`}>
-                    {n}
-                  </button>
-                ))}
-              </div>
-              <span className="text-muted text-xs">(Plus 1 = 1 · Pro 2 = 2 · Pro 4 = 4)</span>
+            <label className="text-sm flex items-center gap-2 flex-wrap">מספר ערוצים במכשיר: <span className="text-off">*</span>
+              <Select className="py-1.5 text-sm" value={shelly.relays.length || ''}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setShelly({ ...shelly, relays: n ? offlineRelays(n).map((r, i) => shelly.relays[i] ? { ...shelly.relays[i], relay_no: r.relay_no } : r) : [] });
+                }}>
+                <option value="" disabled>בחרו…</option>
+                <option value="1">1 — Pro 1 / Plus 1</option>
+                <option value="2">2 — Pro 2</option>
+                <option value="3">3 — Pro 3</option>
+                <option value="4">4 — Pro 4PM</option>
+              </Select>
             </label>
             {shelly.relays.map((r, i) => (
               <div key={r.relay_no} className="flex items-center gap-2">
