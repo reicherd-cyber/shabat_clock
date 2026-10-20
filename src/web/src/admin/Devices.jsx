@@ -167,12 +167,22 @@ export default function Devices() {
   const fmtDT = (v) => (v ? String(v).replace('T', ' ').slice(0, 16) : '—');
 
 
+  // IVR codes default to the customer's first free ones (1, 2, 3… skipping
+  // codes their existing channels already use) — the admin may still edit.
+  const freeIvrDigits = async (userId, n) => {
+    const fleet = await adminApi.get('/relays');
+    const taken = new Set(fleet.filter((r) => String(r.user_id) === String(userId) && r.ivr_digit != null).map((r) => Number(r.ivr_digit)));
+    const out = [];
+    for (let d = 1; out.length < n; d++) if (!taken.has(d)) out.push(d);
+    return out;
+  };
   const shellyProbe = () => run(async () => {
     const probe = await adminApi.post('/shelly/probe', { transport: shelly.transport, ip: shelly.ip, mac: shelly.mac });
+    const digits = await freeIvrDigits(shelly.user_id, probe.channels.length);
     setShelly({
       ...shelly, step: 2, probe,
       name: shelly.name || `Shelly (${probe.model})`,
-      relays: probe.channels.map((c) => ({ relay_no: c.relay_no, name: `ערוץ ${c.relay_no}`, ivr_digit: c.relay_no, state: c.state })),
+      relays: probe.channels.map((c, i) => ({ relay_no: c.relay_no, name: `ערוץ ${c.relay_no}`, ivr_digit: digits[i], state: c.state })),
     });
   });
   const shellyRegister = () => run(async () => {
@@ -186,20 +196,20 @@ export default function Devices() {
   });
   // Register without a connection: the admin states the channel count; the
   // hardware side is completed automatically on the device's first hello.
-  const offlineRelays = (n) => Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, name: `ערוץ ${i + 1}`, ivr_digit: i + 1, state: 'unknown' }));
+  const offlineRelays = (n, digits = []) => Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, name: `ערוץ ${i + 1}`, ivr_digit: digits[i] ?? i + 1, state: 'unknown' }));
   // The channel count is the unit's own (model code in the inventory); the
   // admin only states it for a unit the inventory never saw.
-  const shellyOffline = () => {
+  const shellyOffline = () => run(async () => {
     const mac = normalizeMac(shelly.mac);
-    if (!mac) { setError(new Error('כתובת MAC לא תקינה — 12 תווים הקסדצימליים')); return; }
-    setError(null);
+    if (!mac) throw new Error('כתובת MAC לא תקינה — 12 תווים הקסדצימליים');
     const model = inventory.find((p) => p.mac === mac)?.model || null;
     const known = shellyModelInfo(model);
+    const digits = await freeIvrDigits(shelly.user_id, 4);
     setShelly({
-      ...shelly, step: 'offline', offline: true, mac, model,
-      relays: known ? offlineRelays(known.channels) : (shelly.relays?.length ? shelly.relays : []),
+      ...shelly, step: 'offline', offline: true, mac, model, freeDigits: digits,
+      relays: known ? offlineRelays(known.channels, digits) : (shelly.relays?.length ? shelly.relays : []),
     });
-  };
+  });
 
   if (!devices) return <p className="text-muted">טוען…</p>;
   // Removed devices (is_enabled=false) are hidden by default — a toggle reveals
@@ -620,7 +630,7 @@ export default function Devices() {
               <Select className="py-1.5 text-sm" value={shelly.relays.length || ''}
                 onChange={(e) => {
                   const n = Number(e.target.value);
-                  setShelly({ ...shelly, relays: n ? offlineRelays(n).map((r, i) => shelly.relays[i] ? { ...shelly.relays[i], relay_no: r.relay_no } : r) : [] });
+                  setShelly({ ...shelly, relays: n ? offlineRelays(n, shelly.freeDigits).map((r, i) => shelly.relays[i] ? { ...shelly.relays[i], relay_no: r.relay_no } : r) : [] });
                 }}>
                 <option value="" disabled>בחרו…</option>
                 <option value="1">1 — Pro 1 / Plus 1</option>

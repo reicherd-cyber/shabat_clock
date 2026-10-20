@@ -281,7 +281,7 @@ adminRouter.get('/relays', async (req, res, next) => {
   try {
     const all = req.query.all === '1';
     res.json(await query(
-      `SELECT r.id, r.device_id, r.user_id, r.relay_no, r.name, r.is_enabled, (r.deleted_at IS NOT NULL) AS removed
+      `SELECT r.id, r.device_id, r.user_id, r.relay_no, r.name, r.ivr_digit, r.is_enabled, (r.deleted_at IS NOT NULL) AS removed
        FROM relays r JOIN devices d ON d.id = r.device_id
        ${all ? '' : 'WHERE r.deleted_at IS NULL AND d.is_enabled = TRUE'} ORDER BY r.device_id, r.relay_no`,
     ));
