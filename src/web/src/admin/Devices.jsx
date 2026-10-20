@@ -299,6 +299,8 @@ export default function Devices() {
           <thead>
             <tr className="text-right text-muted border-b border-line">
               <th className="p-3">שם</th><th className="p-3">לקוח</th>
+              <th className="p-3" title="מספר ערוצים (ממסרים) במכשיר">ערוצים</th>
+              <th className="p-3" title="מועד השיוך ללקוח במערכת">הותקן</th>
               {withReason && <th className="p-3">סיבת הניתוק</th>}
               <th className="p-3"></th>
             </tr>
@@ -317,6 +319,8 @@ export default function Devices() {
                     )}
                   </td>
                   <td className="p-3">{d.owner_name}</td>
+                  <td className="p-3">{d.relay_count}</td>
+                  <td className="p-3 text-xs text-muted whitespace-nowrap">{d.created_at ? new Date(d.created_at).toLocaleDateString('he-IL') : '—'}</td>
                   {withReason && (
                     <td className="p-3 text-xs">
                       {!d.device_uid ? <span className="text-muted">לא חובר מעולם</span>
@@ -346,7 +350,7 @@ export default function Devices() {
                 </tr>
                 {expanded === d.id && (
                   <tr className="border-b border-line last:border-0 bg-surface2/50">
-                    <td colSpan={withReason ? 4 : 3} className="p-3">
+                    <td colSpan={withReason ? 6 : 5} className="p-3">
                       <div className="flex items-center gap-x-5 gap-y-2 flex-wrap text-xs text-muted">
                         <span>מזהה: {d.id}</span>
                         <span dir="ltr">
@@ -403,7 +407,7 @@ export default function Devices() {
               </Fragment>
             ))}
             {list.length === 0 && (
-              <tr><td colSpan={withReason ? 4 : 3} className="p-6 text-center text-muted">אין מכשירים {title}</td></tr>
+              <tr><td colSpan={withReason ? 6 : 5} className="p-6 text-center text-muted">אין מכשירים {title}</td></tr>
             )}
           </tbody>
         </table>
