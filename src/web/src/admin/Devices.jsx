@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Download } from 'lucide-react';
-import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, fmtWhen, normalizeMac, shellyModelInfo } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, SearchSelect, fmtWhen, normalizeMac, shellyModelInfo } from '../ui.jsx';
 
 // Provisioning modal shows the secret + QR EXACTLY ONCE with an explicit
 // "I saved it" confirmation before it can be closed (§7).
@@ -187,11 +187,18 @@ export default function Devices() {
   // Register without a connection: the admin states the channel count; the
   // hardware side is completed automatically on the device's first hello.
   const offlineRelays = (n) => Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, name: `ערוץ ${i + 1}`, ivr_digit: i + 1, state: 'unknown' }));
+  // The channel count is the unit's own (model code in the inventory); the
+  // admin only states it for a unit the inventory never saw.
   const shellyOffline = () => {
     const mac = normalizeMac(shelly.mac);
     if (!mac) { setError(new Error('כתובת MAC לא תקינה — 12 תווים הקסדצימליים')); return; }
     setError(null);
-    setShelly({ ...shelly, step: 'offline', offline: true, mac, relays: shelly.relays?.length ? shelly.relays : [] });
+    const model = inventory.find((p) => p.mac === mac)?.model || null;
+    const known = shellyModelInfo(model);
+    setShelly({
+      ...shelly, step: 'offline', offline: true, mac, model,
+      relays: known ? offlineRelays(known.channels) : (shelly.relays?.length ? shelly.relays : []),
+    });
   };
 
   if (!devices) return <p className="text-muted">טוען…</p>;
@@ -577,10 +584,9 @@ export default function Devices() {
             <p className="text-sm text-muted">
               מכשיר שהוגדר ומחובר לשרת — בחרו לקוח, הזינו את ה-MAC ולחצו "בדוק חיבור".
             </p>
-            <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>
-              <option value="">בחרו לקוח…</option>
-              {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-            </Select>
+            <SearchSelect className="w-full" value={shelly.user_id} onChange={(v) => setShelly({ ...shelly, user_id: v })}
+              allLabel={null} placeholder="בחרו לקוח… (חיפוש לפי שם / טלפון)"
+              options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: u.phones?.[0]?.phone || `#${u.id}`, search: `${(u.phones || []).map((x) => x.phone).join(' ')} ${u.email || ''} ${u.ivr_code || ''} #${u.id}` }))} />
             <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל 80f3dac7deec)" value={shelly.mac} onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
             <ErrorNote error={error} />
@@ -603,7 +609,14 @@ export default function Devices() {
               </div>
             </Card>
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
-            <label className="text-sm flex items-center gap-2 flex-wrap">מספר ערוצים במכשיר: <span className="text-off">*</span>
+            {shellyModelInfo(shelly.model) ? (
+              <p className="text-sm">
+                דגם: <b>{shellyModelInfo(shelly.model).name}</b> <span className="text-muted" dir="ltr">{shelly.model}</span>
+                {' · '}<b>{shellyModelInfo(shelly.model).channels}</b> ערוצים <span className="text-muted text-xs">(מהמלאי)</span>
+              </p>
+            ) : (
+            <label className="text-sm flex items-center gap-2 flex-wrap">
+              <span title="המכשיר לא נמצא במלאי המכשירים שהוכנו, לכן הדגם לא ידוע">מספר ערוצים במכשיר (הדגם לא ידוע):</span> <span className="text-off">*</span>
               <Select className="py-1.5 text-sm" value={shelly.relays.length || ''}
                 onChange={(e) => {
                   const n = Number(e.target.value);
@@ -616,6 +629,7 @@ export default function Devices() {
                 <option value="4">4 — Pro 4PM</option>
               </Select>
             </label>
+            )}
             {shelly.relays.map((r, i) => (
               <div key={r.relay_no} className="flex items-center gap-2">
                 <span className="text-muted text-xs whitespace-nowrap">ערוץ {r.relay_no}</span>

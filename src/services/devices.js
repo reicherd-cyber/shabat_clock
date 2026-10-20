@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import QRCode from 'qrcode';
 import { query, withTransaction } from '../db/pool.js';
 import { errors } from '../config/errors.js';
+import { shellyModelChannels } from './shelly-model.js';
 import { env } from '../config/env.js';
 import { bcryptHash } from './users.js';
 import { shellyInfo, shellyGetState, shellySetBootSafe } from './shelly.js';
@@ -434,11 +435,15 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     if (transport !== 'mqtt') throw errors.validation('רישום ללא חיבור אפשרי רק דרך MQTT');
     const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
     if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה — 12 תווים הקסדצימליים', { mac: 'invalid' });
-    const n = Number(relay_count);
-    if (!Number.isInteger(n) || n < 1 || n > 4) throw errors.validation('מספר ערוצים חייב להיות 1–4', { relay_count: '1-4' });
     const [existing] = await query('SELECT id FROM devices WHERE is_enabled = TRUE AND device_uid = ?', [uid]);
     if (existing) throw errors.conflict('CONFLICT', `מכשיר זה כבר רשום (מספר ${existing.id})`);
+    // The channel count comes from the unit itself — its model code in the
+    // inventory; only a unit the inventory never saw needs the admin's number.
     const [prep] = await query('SELECT model FROM prepared_devices WHERE mac = ?', [uid]);
+    const n = shellyModelChannels(prep?.model) || Number(relay_count);
+    if (!Number.isInteger(n) || n < 1 || n > 4) {
+      throw errors.validation('מספר הערוצים לא ידוע — המכשיר לא נמצא במלאי המכשירים שהוכנו; ציינו אותו ידנית', { relay_count: 'required' });
+    }
     probe = {
       transport, mac: uid, model: prep?.model || null, fw_version: null,
       channels: Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, state: 'unknown' })),
