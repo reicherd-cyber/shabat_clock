@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi, tokens } from '../api.js';
-import { Card, Button, Input, Badge, Modal, ErrorNote, useAsync, FilterSelect } from '../ui.jsx';
-import { Pencil, Trash2, ArrowUp, ArrowDown } from 'lucide-react';
+import { Card, Button, Input, Badge, Modal, ErrorNote, useAsync, FilterSelect, useSort, SortTh } from '../ui.jsx';
+import { Pencil, Trash2 } from 'lucide-react';
 
-// Sort options (same control as the tasks page). Default = newest first,
-// which is the order the API already returns (id DESC).
-const SORT_FIELDS = {
-  created: { label: 'נוצר', key: (u) => (u.created_at ? new Date(u.created_at).getTime() : 0), defaultDir: 'desc' },
-  name: { label: 'שם', key: (u) => (u.full_name || '').trim(), defaultDir: 'asc' },
+// Click-to-sort columns (shared useSort). Default = newest first, which is
+// the order the API already returns (id DESC); ties keep that order.
+const SORT_KEYS = {
+  name: (u) => (u.full_name || '').trim(),
+  email: (u) => u.email || null,
+  ivr: (u) => Number(u.ivr_code) || u.ivr_code || null,
+  devices: (u) => Number(u.device_count),
+  status: (u) => (u.status === 'active' ? 1 : 0),
+  created: (u) => (u.created_at ? Date.parse(u.created_at) : null),
+  pin: (u) => (u.require_pin ? 1 : 0),
 };
 
 export default function Users() {
@@ -20,10 +25,7 @@ export default function Users() {
   const [q, setQ] = useState(params.get('q') || '');
   useEffect(() => { setQ(params.get('q') || ''); }, [params]);
   const [fStatus, setFStatus] = useState('');
-  const [sortBy, setSortBy] = useState('created');
-  const [sortDir, setSortDir] = useState('desc');
-  // Picking a field resets the direction to that field's natural one (names A→ת, dates newest first).
-  const pickSort = (k) => { setSortBy(k); setSortDir(SORT_FIELDS[k].defaultDir); };
+  const sort = useSort({ key: 'created', dir: 'desc' });
   const { busy, error, run, setError } = useAsync();
 
   const refresh = async () => setUsers(await adminApi.get('/users'));
@@ -94,16 +96,9 @@ export default function Users() {
   if (!users) return <p className="text-muted">טוען…</p>;
   // Search matches name / email / IVR code / notes; status narrows further.
   const needle = q.trim().toLowerCase();
-  const keyOf = SORT_FIELDS[sortBy].key;
-  const dir = sortDir === 'desc' ? -1 : 1;
-  const shown = users.filter((u) =>
-    (!needle || `${u.full_name} ${u.email || ''} ${u.ivr_code || ''} ${u.notes || ''}`.toLowerCase().includes(needle))
-    && (!fStatus || u.status === fStatus))
-    .sort((a, b) => {
-      const ka = keyOf(a); const kb = keyOf(b);
-      const c = typeof ka === 'string' ? ka.localeCompare(kb, 'he') : ka - kb;
-      return c * dir || b.id - a.id;
-    });
+  const shown = sort.apply(users.filter((u) =>
+    (!needle || `${u.full_name} ${u.email || ''} ${u.ivr_code || ''} ${u.phones_text || ''} ${u.notes || ''}`.toLowerCase().includes(needle))
+    && (!fStatus || u.status === fStatus)), SORT_KEYS);
   const filtering = needle || fStatus;
   return (
     <div className="space-y-4">
@@ -116,14 +111,6 @@ export default function Users() {
             <option value="active">פעיל</option>
             <option value="suspended">מושעה</option>
           </FilterSelect>
-          <span className="text-muted text-sm">מיון לפי:</span>
-          <FilterSelect className="py-2 text-sm" value={sortBy} onChange={(e) => pickSort(e.target.value)}>
-            {Object.entries(SORT_FIELDS).map(([k, f]) => <option key={k} value={k}>{f.label}</option>)}
-          </FilterSelect>
-          <Button variant="ghost" className="!px-2 !py-1" title={sortDir === 'asc' ? 'עולה' : 'יורד'}
-            onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}>
-            {sortDir === 'asc' ? <ArrowUp size={15} /> : <ArrowDown size={15} />}
-          </Button>
           {filtering && (
             <Button variant="ghost" onClick={() => { setQ(''); setFStatus(''); }}>נקה סינון</Button>
           )}
@@ -138,8 +125,8 @@ export default function Users() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-3">שם</th><th className="p-3">אימייל</th><th className="p-3">קוד IVR</th><th className="p-3">מכשירים</th>
-              <th className="p-3">סטטוס</th><th className="p-3">נוצר</th><th className="p-3">PIN בכניסה</th><th className="p-3">פעולות</th>
+              <SortTh k="name" sort={sort}>שם</SortTh><SortTh k="email" sort={sort}>אימייל</SortTh><SortTh k="ivr" sort={sort}>קוד IVR</SortTh><SortTh k="devices" sort={sort}>מכשירים</SortTh>
+              <SortTh k="status" sort={sort}>סטטוס</SortTh><SortTh k="created" sort={sort}>נוצר</SortTh><SortTh k="pin" sort={sort}>PIN בכניסה</SortTh><th className="p-3">פעולות</th>
             </tr>
           </thead>
           <tbody>
