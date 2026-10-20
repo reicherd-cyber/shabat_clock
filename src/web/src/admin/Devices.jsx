@@ -17,9 +17,17 @@ export default function Devices() {
   const [fDevice, setFDevice] = useState('');
   const [fOnline, setFOnline] = useState('');
   // ?q= seeds the search box (deep links from the action log) and follows later URL changes.
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(params.get('q') || '');
   useEffect(() => { setQ(params.get('q') || ''); }, [params]);
+  // Four tabs, ?tab= deep-linkable (a ?q= link from the action log lands on the devices tab).
+  const TAB_KEYS = ['devices', 'demo', 'installers', 'inventory'];
+  const tab = TAB_KEYS.includes(params.get('tab')) ? params.get('tab') : 'devices';
+  const setTab = (key) => setParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (key === 'devices') next.delete('tab'); else next.set('tab', key);
+    return next;
+  }, { replace: true });
   const [expanded, setExpanded] = useState(null); // device id with its details row open
   const [transferForm, setTransferForm] = useState(null); // {device, user_id}
   const [diagnosis, setDiagnosis] = useState(null);       // {device, loading} → {device, verdict, text, evidence} | {device, error}
@@ -208,6 +216,7 @@ export default function Devices() {
     <div className="space-y-4">
       <div className="flex justify-between items-center flex-wrap gap-2">
         <h2 className="font-bold text-xl">מכשירים</h2>
+        {tab === 'devices' && (
         <div className="flex gap-2 items-center flex-wrap">
           <Input className="w-44 py-2 text-sm" placeholder="חיפוש שם / לקוח / UID" value={q} onChange={(e) => setQ(e.target.value)} />
           <FilterSelect className="py-2 text-sm w-40" value={fUser} onChange={(e) => { setFUser(e.target.value); setFDevice(''); }}>
@@ -232,8 +241,24 @@ export default function Devices() {
             </Button>
           )}
         </div>
+        )}
+      </div>
+      <div className="flex gap-1 border-b border-line overflow-x-auto" role="tablist">
+        {[
+          { key: 'devices', label: 'מכשירים', count: realDevices.length },
+          { key: 'demo', label: 'מכשירי הדגמה', count: demoDevices.length },
+          { key: 'installers', label: 'קבצי התקנה', count: installers.filter((t) => t.is_live).length },
+          { key: 'inventory', label: 'מלאי', count: inventory.filter((x) => x.status === 'prepared').length },
+        ].map((t) => (
+          <button key={t.key} type="button" role="tab" aria-selected={tab === t.key}
+            className={`inline-flex items-center gap-1 px-3 py-2 text-sm -mb-px border-b-2 whitespace-nowrap ${tab === t.key ? 'border-accent font-bold' : 'border-transparent text-muted hover:text-ink'}`}
+            onClick={() => setTab(t.key)}>
+            {t.label}<span className="text-muted text-xs font-normal">({t.count})</span>
+          </button>
+        ))}
       </div>
       <ErrorNote error={error} />
+      {tab === 'devices' && (<>
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-muted text-sm">
           {realDevices.length} מכשירים{filtering ? ' (מסונן)' : ''}
@@ -366,11 +391,12 @@ export default function Devices() {
           </Card>
         </div>
       ))}
+      </>)}
 
       {/* Demo devices: one block per device-less account (2 simulated 4-channel
           devices each). Read-only here — no transfer/mute/suspend, since the
           demo is rebuilt/deleted automatically by the account's own state. */}
-      {demoDevices.length > 0 && (
+      {tab === 'demo' && (
         <div className="space-y-2">
           <h3 className="font-bold">
             <span className="inline-flex items-center gap-2">🧪 מכשירי הדגמה
@@ -395,6 +421,9 @@ export default function Devices() {
                     <td className="p-3 text-muted text-xs">{new Date(d.created_at).toLocaleDateString('he-IL')}</td>
                   </tr>
                 ))}
+                {demoDevices.length === 0 && (
+                  <tr><td colSpan={4} className="p-6 text-center text-muted">אין מכשירי הדגמה כרגע — לכל החשבונות יש מכשיר אמיתי</td></tr>
+                )}
               </tbody>
             </table>
           </Card>
@@ -403,7 +432,8 @@ export default function Devices() {
 
       {/* Issued universal installer files: each is a revocable token. The download
           button sits here, above the list it appends to. */}
-      <div className="flex items-center justify-between flex-wrap gap-2 mt-6">
+      {tab === 'installers' && (<>
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <h3 className="font-bold">
           קבצי התקנה ל-Shelly חדש
           <span className="text-muted text-sm font-normal ms-2">
@@ -460,9 +490,11 @@ export default function Devices() {
           </tbody>
         </table>
       </Card>
+      </>)}
 
       {/* Prepared-devices inventory: every unit that completed the prep process. */}
-      <div className="flex items-center justify-between flex-wrap gap-2 mt-6">
+      {tab === 'inventory' && (<>
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <h3 className="font-bold">
           מלאי מכשירים שהוכנו
           <span className="text-muted text-sm font-normal ms-2">
@@ -536,6 +568,7 @@ export default function Devices() {
           </tbody>
         </table>
       </Card>
+      </>)}
 
       <Modal open={!!shelly} onClose={() => setShelly(null)}
         title={{ 1: 'שיוך Shelly ללקוח', prep: 'סקריפטים למכשיר מסוים', 2: 'שיוך Shelly — הגדרת ערוצים', offline: 'שיוך Shelly — ללא חיבור', 3: 'שיוך Shelly — הושלם' }[shelly?.step] || 'Shelly'}>
