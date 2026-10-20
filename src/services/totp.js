@@ -63,15 +63,21 @@ function hotp(secret, counter) {
   return String(bin % 1_000_000).padStart(6, '0');
 }
 
-// Verify a 6-digit code with ±`window` steps of clock skew tolerance (default ±1 = ±30s).
-export function verifyTotp(secret, token, window = 1) {
+// The 30-second step a 6-digit code matches, within ±`window` steps of clock
+// skew (default ±1 = ±30s), or null.
+export function totpStep(secret, token, window = 1) {
   const clean = String(token || '').replace(/\D/g, '');
-  if (clean.length !== 6 || !secret) return false;
+  if (clean.length !== 6 || !secret) return null;
   const counter = Math.floor(Date.now() / 1000 / 30);
+  let hit = null;
   for (let i = -window; i <= window; i++) {
-    // timingSafeEqual on equal-length 6-digit strings.
+    // timingSafeEqual on equal-length 6-digit strings; no early exit.
     const candidate = hotp(secret, counter + i);
-    if (crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(clean))) return true;
+    if (crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(clean)) && hit == null) hit = counter + i;
   }
-  return false;
+  return hit;
 }
+
+// Single-use verification lives in adminTotp.js (consumeTotp) — there is
+// deliberately no plain "is this code valid" export, so no caller can bypass
+// the replay guard by reaching for the obvious name.
