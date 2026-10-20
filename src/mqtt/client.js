@@ -1,5 +1,6 @@
 // MQTT contract per SPEC §5. Server connects via localhost 1883 with its superuser
 // cred [D13]; devices use 8883 TLS with per-device creds + ACL.
+import crypto from 'node:crypto';
 import mqtt from 'mqtt';
 import { env } from '../config/env.js';
 import { isPrimary } from '../config/role.js';
@@ -20,7 +21,10 @@ const shellyRpcWaiters = new Map(); // rpc id → {prefix, uid, resolve}
 // every process, so two servers could hold the same id at once and a probe of
 // device A could resolve with device B's status. Start each process at a random
 // point in the id space, and (below) match a reply on its src as well as its id.
-let shellyRpcSeq = 1 + Math.floor(Math.random() * 1_000_000_000);
+// Reply matching is by id (plus the answering device's mac, see reply-src.js).
+// Every device may write the shared reply topic, so ids must be unguessable:
+// a fresh random 31-bit id per request, never a counter.
+const nextRpcId = () => { let id; do { id = crypto.randomInt(1, 0x7fffffff); } while (shellyRpcWaiters.has(id)); return id; };
 
 // Shelly Gen2 topics: <prefix>/online (LWT), <prefix>/status/switch:N (state
 // notifications), <prefix>/rpc (requests in), replies land on <src>/rpc.
@@ -189,7 +193,7 @@ async function handleShellyMessage(topic, buf) {
 // or null on timeout (device offline / not connected to the broker).
 export function shellyMqttRpc(deviceUid, method, params = undefined, timeoutMs = 5000) {
   const prefix = `shellypro2-${deviceUid}`;
-  const id = shellyRpcSeq++;
+  const id = nextRpcId();
   return new Promise((resolve, reject) => {
     const req = { id, src: 'shabat-server', method, ...(params ? { params } : {}) };
     const timer = setTimeout(() => {

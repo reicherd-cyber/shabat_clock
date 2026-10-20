@@ -35,7 +35,8 @@ import { notifyWhatsappReply } from '../../whatsapp/bot.js';
 import { readVoicemail, fetchVoicemail } from '../../services/voicemail.js';
 import { brokerConnected } from '../../mqtt/client.js';
 import { healthSnapshot } from '../../monitor/health.js';
-import { generateSecret, otpauthUri, verifyTotp } from '../../services/totp.js';
+import { generateSecret, otpauthUri, consumeTotp } from '../../services/totp.js';
+import { encryptSecret, decryptSecret } from '../../services/secretbox.js';
 import QRCode from 'qrcode';
 
 export const adminRouter = Router();
@@ -78,8 +79,8 @@ adminRouter.get('/2fa/status', async (req, res, next) => {
 // use "setup" to switch enforcement off and plant its own secret.
 adminRouter.post('/2fa/setup', async (req, res, next) => {
   try {
-    const [a] = await query('SELECT email, totp_secret, totp_enabled FROM admins WHERE id = ?', [req.auth.adminId]);
-    if (a?.totp_enabled && !verifyTotp(a.totp_secret, req.body?.code)) {
+    const [a] = await query('SELECT id, email, totp_secret, totp_enabled, totp_last_counter FROM admins WHERE id = ?', [req.auth.adminId]);
+    if (a?.totp_enabled && !(await consumeTotp(a, req.body?.code))) {
       throw errors.validation('נדרש קוד אימות נוכחי כדי להגדיר מחדש', { code: 'current TOTP required' });
     }
     const secret = generateSecret();
@@ -94,9 +95,9 @@ adminRouter.post('/2fa/setup', async (req, res, next) => {
 // Confirm a code from the app to switch enforcement on.
 adminRouter.post('/2fa/enable', async (req, res, next) => {
   try {
-    const [a] = await query('SELECT totp_secret, totp_enabled FROM admins WHERE id = ?', [req.auth.adminId]);
+    const [a] = await query('SELECT id, totp_secret, totp_enabled, totp_last_counter FROM admins WHERE id = ?', [req.auth.adminId]);
     if (!a?.totp_secret) throw errors.validation('אין סוד להפעלה, התחל מחדש את ההגדרה');
-    if (!verifyTotp(a.totp_secret, req.body?.code)) throw errors.validation('קוד שגוי, נסה שוב');
+    if (!(await consumeTotp(a, req.body?.code))) throw errors.validation('קוד שגוי, נסה שוב');
     await query('UPDATE admins SET totp_enabled = TRUE WHERE id = ?', [req.auth.adminId]);
     audit(req, 'enable_2fa', 'admin', req.auth.adminId);
     res.json({ ok: true });
@@ -106,9 +107,9 @@ adminRouter.post('/2fa/enable', async (req, res, next) => {
 // Turn 2FA off — requires a valid current code so a hijacked session can't silently disable it.
 adminRouter.post('/2fa/disable', async (req, res, next) => {
   try {
-    const [a] = await query('SELECT totp_secret, totp_enabled FROM admins WHERE id = ?', [req.auth.adminId]);
+    const [a] = await query('SELECT id, totp_secret, totp_enabled, totp_last_counter FROM admins WHERE id = ?', [req.auth.adminId]);
     if (!a?.totp_enabled) return res.json({ ok: true });
-    if (!verifyTotp(a.totp_secret, req.body?.code)) throw errors.validation('קוד שגוי, נסה שוב');
+    if (!(await consumeTotp(a, req.body?.code))) throw errors.validation('קוד שגוי, נסה שוב');
     await query('UPDATE admins SET totp_enabled = FALSE, totp_secret = NULL WHERE id = ?', [req.auth.adminId]);
     audit(req, 'disable_2fa', 'admin', req.auth.adminId);
     res.json({ ok: true });
@@ -330,7 +331,7 @@ adminRouter.post('/shelly/universal-installer', requireWrite, async (req, res, n
     const result = await universalInstaller({
       statusBase: `${req.protocol}://${req.get('host')}`, adminId: req.auth.adminId,
       audience: String(req.body?.audience || ''), label: req.body?.label,
-      wifiSsid: row?.default_wifi_ssid || '', wifiPass: row?.default_wifi_pass || '',
+      wifiSsid: row?.default_wifi_ssid || '', wifiPass: decryptSecret(row?.default_wifi_pass),
     });
     await audit(req, 'universal_installer', 'installer_token', null,
       { after: { audience: result.audience, valid_days: result.valid_days, jti: result.jti, label: req.body?.label || null } });
@@ -369,14 +370,14 @@ adminRouter.post('/shelly/installers/:id/restore', requireWrite, async (req, res
 adminRouter.get('/shelly/prep-wifi', requireSuperadmin, async (req, res, next) => {
   try {
     const [row] = await query('SELECT default_wifi_ssid, default_wifi_pass FROM admins WHERE id = ?', [req.auth.adminId]);
-    res.json({ admin_id: req.auth.adminId, ssid: row?.default_wifi_ssid || '', pass: row?.default_wifi_pass || '' });
+    res.json({ admin_id: req.auth.adminId, ssid: row?.default_wifi_ssid || '', pass: decryptSecret(row?.default_wifi_pass) });
   } catch (e) { next(e); }
 });
 
 adminRouter.patch('/shelly/prep-wifi', requireSuperadmin, async (req, res, next) => {
   try {
     await query('UPDATE admins SET default_wifi_ssid = ?, default_wifi_pass = ? WHERE id = ?',
-      [String(req.body?.ssid || '').slice(0, 64) || null, String(req.body?.pass || '').slice(0, 128) || null, req.auth.adminId]);
+      [String(req.body?.ssid || '').slice(0, 64) || null, encryptSecret(String(req.body?.pass || '').slice(0, 128)), req.auth.adminId]);
     await audit(req, 'update', 'admin', req.auth.adminId, { after: { default_wifi_ssid: req.body?.ssid } });
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -391,7 +392,7 @@ adminRouter.post('/shelly/prep', requireSuperadmin, async (req, res, next) => {
     const result = await prepLinks({
       mac: req.body?.mac, confirm: req.body?.confirm === true,
       wifiSsid: String(req.body?.wifi_ssid ?? '') || row?.default_wifi_ssid || '',
-      wifiPass: String(req.body?.wifi_pass ?? '') || row?.default_wifi_pass || '',
+      wifiPass: String(req.body?.wifi_pass ?? '') || decryptSecret(row?.default_wifi_pass),
     });
     await audit(req, 'prep_shelly', 'device', null, { after: { mac: result.mac } });
     res.json(result);
@@ -461,6 +462,10 @@ adminRouter.post('/devices/:id/return-to-stock', requireWrite, async (req, res, 
     res.json({ ok: true, ...result });
   } catch (e) { next(e); }
 });
+
+// Business, money and system administration are superadmin-only; the
+// read-only support role keeps customers, devices, schedules, calls, tickets.
+adminRouter.use(['/crm', '/finance', '/billing', '/voice-costs', '/db', '/admins'], requireSuperadmin);
 
 // Prepared-devices inventory: prepared units awaiting activation + history.
 adminRouter.get('/shelly/inventory', async (req, res, next) => {

@@ -8,6 +8,15 @@ export const tokens = {
   set admin(v) { v ? localStorage.setItem('admin_token', v) : localStorage.removeItem('admin_token'); },
 };
 
+// Role claim of the admin token (payload is plain base64url JSON) — for hiding
+// pages the server refuses to a read-only support admin. Not a security boundary.
+export const adminRole = () => {
+  try {
+    const payload = tokens.admin.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(payload)).role || null;
+  } catch { return null; }
+};
+
 // localStorage is shared across same-origin tabs, so logging in as someone else in
 // another tab silently swaps the token under this one — periodic refreshes then mix
 // the old identity's page with the new identity's data. The storage event fires only

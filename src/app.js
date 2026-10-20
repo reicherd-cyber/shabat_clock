@@ -17,8 +17,32 @@ export function createApp() {
   app.set('trust proxy', 1); // behind nginx [D6]
   // COOP must allow popups: helmet's default `same-origin` severs window.opener,
   // leaving the Google sign-in popup blank (it can't post the credential back).
+  // Content-Security-Policy: the panel is a self-hosted bundle; the only
+  // third parties are Google sign-in (GIS script, its iframe/styles) and Google
+  // Fonts. 'unsafe-inline' styles are needed by GIS and React's style props.
+  // http://192.168.33.1 is a Shelly's setup hotspot, which the owner's phone
+  // talks to straight from the Wi-Fi card (fetch + a form posted from a popup)
+  // — so no upgrade-insecure-requests either.
   app.use(helmet({
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        'default-src': ["'self'"],
+        'script-src': ["'self'", 'https://accounts.google.com/gsi/client'],
+        'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://accounts.google.com/gsi/style'],
+        'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
+        'img-src': ["'self'", 'data:', 'blob:', 'https:'],
+        'media-src': ["'self'", 'blob:'],
+        'connect-src': ["'self'", 'https://accounts.google.com/gsi/', 'http://192.168.33.1'],
+        'frame-src': ['https://accounts.google.com/gsi/'],
+        'form-action': ["'self'", 'http://192.168.33.1'],
+        'worker-src': ["'self'"],
+        'manifest-src': ["'self'"],
+        'object-src': ["'none'"],
+        'base-uri': ["'self'"],
+        'frame-ancestors': ["'self'"],
+      },
+    },
     crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
   }));
   // WhatsApp webhook first: it verifies Meta's HMAC over the RAW body, so it

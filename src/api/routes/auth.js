@@ -6,7 +6,7 @@ import { errors, ApiError } from '../../config/errors.js';
 import { bcryptCompare, bcryptHash, createUser } from '../../services/users.js';
 import { recordFailure, isLockedOut } from '../../services/authFailures.js';
 import { logAction } from '../../services/audit.js';
-import { verifyTotp } from '../../services/totp.js';
+import { consumeTotp } from '../../services/totp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
 import { signUserToken, signAdminToken, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter, onboardPrepareTokenLimiter, onboardCheckLimiter } from '../middleware.js';
 import { env } from '../../config/env.js';
@@ -250,7 +250,7 @@ authRouter.post('/admin/auth/login', adminLoginLimiter, async (req, res, next) =
     // The code may be an authenticator (TOTP) code OR an emailed one-time code.
     if (admin.totp_enabled) {
       if (!code) throw new ApiError(401, 'TWOFA_REQUIRED', 'נדרש קוד אימות דו-שלבי');
-      const totpOk = verifyTotp(admin.totp_secret, code);
+      const totpOk = await consumeTotp(admin, code);
       const emailOk = totpOk ? false : await verifyAdminEmailCode(admin, String(code));
       if (!totpOk && !emailOk) throw new ApiError(401, 'BAD_2FA', 'קוד אימות שגוי');
     }

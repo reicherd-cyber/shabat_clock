@@ -1,6 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom';
-import { api, adminApi, tokens, isImpersonating, registerMutationConfirm } from './api.js';
+import { api, adminApi, tokens, isImpersonating, registerMutationConfirm, adminRole } from './api.js';
 import Login from './user/Login.jsx';
 import Dashboard from './user/Dashboard.jsx';
 import Schedules from './user/Schedules.jsx';
@@ -211,7 +211,7 @@ const ADMIN_NAV = [
   {
     title: 'ניהול',
     items: [
-      { to: '/admin/crm', label: 'מכירות ולידים', Icon: Handshake },
+      { to: '/admin/crm', label: 'מכירות ולידים', Icon: Handshake, superadmin: true },
       { to: '/admin/tasks', label: 'משימות', Icon: ListChecks, badge: 'tasks' },
       { to: '/admin/users', label: 'משתמשים', Icon: UsersIcon },
       { to: '/admin/devices', label: 'מכשירים', Icon: Plug },
@@ -232,17 +232,17 @@ const ADMIN_NAV = [
   {
     title: 'כספים',
     items: [
-      { to: '/admin/finance', label: 'הכנסות והוצאות', Icon: Wallet },
-      { to: '/admin/voice-costs', label: 'עלויות AI וקול', Icon: Mic },
+      { to: '/admin/finance', label: 'הכנסות והוצאות', Icon: Wallet, superadmin: true },
+      { to: '/admin/voice-costs', label: 'עלויות AI וקול', Icon: Mic, superadmin: true },
     ],
   },
   {
     title: 'מערכת',
     items: [
       { to: '/admin/settings', label: 'הגדרות', Icon: SettingsIcon },
-      { to: '/admin/admins', label: 'מנהלים', Icon: ShieldCheck },
+      { to: '/admin/admins', label: 'מנהלים', Icon: ShieldCheck, superadmin: true },
       { to: '/admin/audit', label: 'ביקורת', Icon: ScrollText },
-      { to: '/admin/db', label: 'מסד נתונים', Icon: DatabaseIcon },
+      { to: '/admin/db', label: 'מסד נתונים', Icon: DatabaseIcon, superadmin: true },
     ],
   },
 ];
@@ -263,7 +263,10 @@ function AdminNav({ onNavigate, badges = {} }) {
     `block px-3 py-1.5 rounded-[10px] text-sm font-medium ${isActive ? 'bg-accent text-white' : 'text-ink hover:bg-line/50'}`;
   return (
     <nav className="space-y-4">
-      {ADMIN_NAV.map((sec, i) => (
+      {ADMIN_NAV
+        .map((sec) => ({ ...sec, items: sec.items.filter((it) => !it.superadmin || adminRole() === 'superadmin') }))
+        .filter((sec) => sec.items.length)
+        .map((sec, i) => (
         <div key={i}>
           {sec.title && (
             <button

@@ -63,15 +63,38 @@ function hotp(secret, counter) {
   return String(bin % 1_000_000).padStart(6, '0');
 }
 
-// Verify a 6-digit code with ±`window` steps of clock skew tolerance (default ±1 = ±30s).
-export function verifyTotp(secret, token, window = 1) {
+// The 30-second step a 6-digit code matches, within ±`window` steps of clock
+// skew (default ±1 = ±30s), or null.
+export function totpStep(secret, token, window = 1) {
   const clean = String(token || '').replace(/\D/g, '');
-  if (clean.length !== 6 || !secret) return false;
+  if (clean.length !== 6 || !secret) return null;
   const counter = Math.floor(Date.now() / 1000 / 30);
+  let hit = null;
   for (let i = -window; i <= window; i++) {
-    // timingSafeEqual on equal-length 6-digit strings.
+    // timingSafeEqual on equal-length 6-digit strings; no early exit.
     const candidate = hotp(secret, counter + i);
-    if (crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(clean))) return true;
+    if (crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(clean)) && hit == null) hit = counter + i;
   }
-  return false;
+  return hit;
+}
+
+export function verifyTotp(secret, token, window = 1) {
+  return totpStep(secret, token, window) != null;
+}
+
+// Verify AND consume: a code is accepted once — its step is remembered on the
+// admin row and any code of that step or an earlier one is refused afterwards
+// (RFC 6238 §5.2 replay protection). Returns true when accepted.
+export async function consumeTotp(admin, token) {
+  const { query } = await import('../db/pool.js');
+  const step = totpStep(admin.totp_secret, token);
+  if (step == null) return false;
+  if (admin.totp_last_counter != null && step <= Number(admin.totp_last_counter)) return false;
+  // The conditional UPDATE is the atomic claim: two simultaneous logins with
+  // the same code cannot both win.
+  const r = await query(
+    'UPDATE admins SET totp_last_counter = ? WHERE id = ? AND (totp_last_counter IS NULL OR totp_last_counter < ?)',
+    [step, admin.id, step],
+  );
+  return r.affectedRows > 0;
 }
