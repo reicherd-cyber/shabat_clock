@@ -356,6 +356,8 @@ export default function Devices() {
                               : '—')}
                         </span>
                         <span>fw {d.fw_version || '—'}</span>
+                        <span title="מספר ערוצים (ממסרים) במכשיר">ערוצים: {d.relay_count}</span>
+                        <span title="מועד השיוך ללקוח במערכת">הותקן: {fmtWhen(d.created_at)}</span>
                         <Badge ok={d.sync_status === 'synced'}>{d.sync_status}</Badge>
                         <span className="whitespace-nowrap">v{d.schedule_version} / ack v{d.device_ack_version}</span>
                         <span className="flex gap-1 ms-auto">
