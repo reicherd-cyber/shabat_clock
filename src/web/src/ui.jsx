@@ -563,6 +563,20 @@ export const normalizeMac = (v) => {
   return hex.length === 12 ? hex : null;
 };
 
+// Shelly model code → human name + channel count. The code's 3-digit block ends
+// with the relay count (SPSW-003XE16EU = Pro 3, SPSW-204PE16EU = Pro 4PM v3,
+// SPSW-201XE15UL = Pro 1; verified against relay_count of registered units),
+// 'P' = metered (PM), 'X' = plain switch, then the rating (8 A = Mini).
+// Family letter: P = Pro, N = Plus, a digit = that generation (S3SW… = Gen3).
+export const shellyModelInfo = (code) => {
+  const m = String(code || '').toUpperCase().match(/^S([NP0-9])SW-\d?(\d\d)([PX])E?(\d+)/);
+  if (!m) return null;
+  const channels = Number(m[2]);
+  const family = m[1] === 'P' ? 'Pro' : m[1] === 'N' ? 'Plus' : `Gen${m[1]}`;
+  const mini = m[4] === '8' ? ' Mini' : '';
+  return { name: `${family} ${channels}${m[3] === 'P' ? 'PM' : ''}${mini}`, channels, metered: m[3] === 'P' };
+};
+
 export const fmtInt = (n) => (n == null ? '—' : Number(n).toLocaleString('he-IL'));
 export const fmtBytes = (b) => {
   if (b == null) return '—';
@@ -578,6 +592,42 @@ export const fmtUptime = (s) => {
   if (s >= 3600) return `${Math.floor(s / 3600)} שע׳`;
   return `${Math.floor(s / 60)} דק׳`;
 };
+// Click-to-sort table headers. First click on a column sorts descending, the
+// next ascending, and so on; empty values always sink to the bottom.
+//   const s = useSort();                       // or useSort({ key: 'created', dir: 'desc' })
+//   <SortTh k="name" sort={s}>שם</SortTh>
+//   s.apply(rows, { name: (r) => r.name, created: (r) => Date.parse(r.created_at) })
+export function useSort(initial = null) {
+  const [sort, setSort] = useState(initial);
+  const toggle = (key) => setSort((s) => (s?.key === key ? { key, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' }));
+  const apply = (rows, keys) => {
+    const get = sort && keys[sort.key];
+    if (!get) return rows;
+    const dir = sort.dir === 'desc' ? -1 : 1;
+    const cmp = (a, b) => {
+      const x = get(a); const y = get(b);
+      const xe = x == null || x === '' || Number.isNaN(x); const ye = y == null || y === '' || Number.isNaN(y);
+      if (xe && ye) return 0;
+      if (xe) return 1;
+      if (ye) return -1;
+      const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), 'he', { numeric: true });
+      return c * dir;
+    };
+    return [...rows].sort(cmp);
+  };
+  return { sort, toggle, apply };
+}
+export const SortTh = ({ k, sort, children, className = '', ...props }) => {
+  const active = sort.sort?.key === k;
+  return (
+    <th className={`p-3 cursor-pointer select-none whitespace-nowrap hover:text-ink ${active ? 'text-ink' : ''} ${className}`}
+      aria-sort={active ? (sort.sort.dir === 'desc' ? 'descending' : 'ascending') : 'none'}
+      onClick={() => sort.toggle(k)} {...props}>
+      {children}<span className="text-[10px] ms-1 inline-block w-3">{active ? (sort.sort.dir === 'desc' ? '▼' : '▲') : ''}</span>
+    </th>
+  );
+};
+
 export const fmtWhen = (ts) => (ts ? new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
 
 // Stat tile: big number + label (+ optional sub line). `ok` colors the number,

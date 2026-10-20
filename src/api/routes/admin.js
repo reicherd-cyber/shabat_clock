@@ -16,7 +16,7 @@ const cleanLanIp = (transport, ip) => {
 };
 import { createUser, getUser, setPin, bcryptHash, setUserEmailAdmin } from '../../services/users.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview } from '../../services/devices.js';
+import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview, returnDeviceToStock } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
@@ -120,7 +120,9 @@ adminRouter.get('/users', async (req, res, next) => {
   try {
     res.json(await query(
       `SELECT u.id, u.full_name, u.ivr_code, u.require_pin, u.status, u.notes, u.email, u.created_at,
-              (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.device_type <> 'demo') AS device_count
+              (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.device_type <> 'demo') AS device_count,
+              (SELECT GROUP_CONCAT(p.phone ORDER BY p.is_primary DESC, p.id SEPARATOR ' ')
+                 FROM user_phones p WHERE p.user_id = u.id AND p.deleted_at IS NULL) AS phones_text
        FROM users u ORDER BY u.id DESC`,
     ));
   } catch (e) { next(e); }
@@ -281,7 +283,7 @@ adminRouter.get('/relays', async (req, res, next) => {
   try {
     const all = req.query.all === '1';
     res.json(await query(
-      `SELECT r.id, r.device_id, r.user_id, r.relay_no, r.name, r.is_enabled, (r.deleted_at IS NOT NULL) AS removed
+      `SELECT r.id, r.device_id, r.user_id, r.relay_no, r.name, r.ivr_digit, r.is_enabled, (r.deleted_at IS NOT NULL) AS removed
        FROM relays r JOIN devices d ON d.id = r.device_id
        ${all ? '' : 'WHERE r.deleted_at IS NULL AND d.is_enabled = TRUE'} ORDER BY r.device_id, r.relay_no`,
     ));
@@ -447,6 +449,16 @@ adminRouter.patch('/devices/:id', requireWrite, async (req, res, next) => {
     const recovery = await patchDevice(Number(req.params.id), req.body || {}, { actor: adminActor(req) });
     await audit(req, 'update', 'device', Number(req.params.id), { after: req.body });
     res.json({ ok: true, recovery });
+  } catch (e) { next(e); }
+});
+
+// A customer's Shelly goes back to the prepared-devices inventory (the device
+// row is suspended, restorable; the inventory lists the unit as ready again).
+adminRouter.post('/devices/:id/return-to-stock', requireWrite, async (req, res, next) => {
+  try {
+    const result = await returnDeviceToStock(Number(req.params.id), { actor: adminActor(req) });
+    await audit(req, 'return_to_stock', 'device', Number(req.params.id), { after: result });
+    res.json({ ok: true, ...result });
   } catch (e) { next(e); }
 });
 

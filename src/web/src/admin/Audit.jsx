@@ -36,7 +36,7 @@ const ENTITIES = {
   user_phone: { label: 'טלפון של משתמש', to: (r) => `/admin/users?q=${enc(r.entity_ctx)}` },
   user_email: { label: 'אימייל של משתמש', to: (r) => `/admin/users?q=${enc(r.entity_ctx)}` },
   device: { label: 'מכשיר', to: (r) => `/admin/devices?q=${enc(r.entity_name)}` },
-  prepared_device: { label: 'מכשיר מוכן להתקנה', to: () => '/admin/devices' },
+  prepared_device: { label: 'מכשיר מוכן להתקנה', to: () => '/admin/devices?tab=inventory' },
   relay: { label: 'ערוץ', to: (r) => `/admin/devices?q=${enc(r.entity_ctx)}` },
   schedule: { label: 'תזמון', to: () => '/admin/schedules' },
   admin: { label: 'מנהל', to: () => '/admin/admins' },
@@ -47,7 +47,7 @@ const ENTITIES = {
   crm_order: { label: 'הזמנה', to: () => '/admin/crm' },
   crm_payment: { label: 'תשלום', to: () => '/admin/crm' },
   finance_entry: { label: 'רשומת כספים', to: () => '/admin/finance' },
-  installer_token: { label: 'קובץ התקנה', to: () => '/admin/devices' },
+  installer_token: { label: 'קובץ התקנה', to: () => '/admin/devices?tab=installers' },
   ivr_recording: { label: 'הקלטה', to: () => '/admin/recordings' },
   anthropic_balance: { label: 'יתרת Anthropic', to: () => '/admin/voice-costs' },
   voice_costs_rate: { label: 'תעריף קול', to: () => '/admin/voice-costs' },
@@ -58,7 +58,7 @@ const enc = (s) => encodeURIComponent(s || '');
 // sentence as a link. Nominal forms keep the Hebrew gender-neutral.
 const ACTIONS = {
   create: 'יצירת {e}', update: 'עדכון {e}', delete: 'מחיקת {e}', restore: 'שחזור {e}',
-  verify: 'אימות {e}', transfer: 'העברת {e} ללקוח אחר', provision: 'הקמת {e}', revoke: 'ביטול {e}',
+  verify: 'אימות {e}', transfer: 'העברת {e} ללקוח אחר', return_to_stock: 'החזרת {e} למלאי', provision: 'הקמת {e}', revoke: 'ביטול {e}',
   rotate_secret: 'החלפת סוד ההתחברות של {e}', pin_reset: 'איפוס קוד ל{e}', impersonate: 'כניסה בשם {e}',
   signup: 'הרשמה עצמית של {e}', command: 'פקודה ל{e}', plan_toggle: 'הפעלה/השבתה של תוכנית', plan_delete: 'מחיקת תוכנית',
   register_shelly: 'רישום Shelly', onboard_shelly: 'קליטת Shelly', onboard_shelly_remote: 'קליטת Shelly מרחוק (מתקין)',

@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import QRCode from 'qrcode';
 import { query, withTransaction } from '../db/pool.js';
 import { errors } from '../config/errors.js';
+import { shellyModelChannels } from './shelly-model.js';
 import { env } from '../config/env.js';
 import { bcryptHash } from './users.js';
 import { shellyInfo, shellyGetState, shellySetBootSafe } from './shelly.js';
@@ -199,12 +200,13 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
   let recovery;
   let passwdEntry = null;
   let shellyWipe = null;
+  let device;
   await withTransaction(async (conn) => {
     const [rows] = await conn.query(
       `SELECT * FROM devices WHERE id = ? ${userId != null ? 'AND user_id = ?' : ''} FOR UPDATE`,
       userId != null ? [deviceId, userId] : [deviceId],
     );
-    const device = rows[0];
+    device = rows[0];
     if (!device) throw errors.notFound('NOT_FOUND', 'Device not found');
     const fields = {};
 
@@ -226,7 +228,15 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
         }
       }
       if (recovering) {
+        // A unit returned to stock is not with the customer any more — only the
+        // admin's שחזר (userId == null) undoes the return.
+        if (device.returned_to_stock_at && userId != null) {
+          throw errors.conflict('RETURNED_TO_STOCK', 'המכשיר הוחזר לחברה ואינו ניתן לשחזור מכאן');
+        }
         ({ recovery, passwdEntry } = await recoverRemovedDevice(conn, device));
+        if (device.returned_to_stock_at) {
+          await conn.query('UPDATE devices SET returned_to_stock_at = NULL WHERE id = ?', [deviceId]);
+        }
         // A recovered Shelly's local jobs were wiped (or went stale) — hand it
         // to the scheduler's resync loop.
         if (device.device_type === 'shelly') {
@@ -285,6 +295,19 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
     if (fields.device_uid) writeBrokerPasswdEntry(fields.device_uid, device.mqtt_passwd_hash);
   });
   if (passwdEntry) writeBrokerPasswdEntry(passwdEntry.uid, passwdEntry.hash);
+  // Recovering a Shelly that was "returned to stock" takes it out of the
+  // inventory again — only the row this very return freed (device_id guard),
+  // and not when the unit was activated anew meanwhile (then the UID was
+  // reported lost and the inventory row belongs to that activation).
+  if (recovery?.restored_uid && device?.returned_to_stock_at) {
+    await query(
+      `UPDATE prepared_devices
+       SET status = 'activated', returned_at = NULL, activated_at = COALESCE(activated_at, UTC_TIMESTAMP()),
+           activated_user_id = (SELECT user_id FROM devices WHERE id = ?)
+       WHERE mac = ? AND status = 'prepared' AND device_id = ?`,
+      [deviceId, recovery.restored_uid, deviceId],
+    ).catch((e) => console.error('prepared_devices re-activate:', e.message));
+  }
   if (shellyWipe) {
     // Best-effort, off the request path: unreachable now = ghost jobs keep
     // firing until this hardware is reached again (re-registration syncs a
@@ -295,6 +318,59 @@ export async function patchDevice(deviceId, patch, { userId = null, actor = null
       .catch((e) => console.error(`shelly ${deviceId} local schedule wipe:`, e.message));
   }
   return recovery;
+}
+
+// "Return to stock": the customer's Shelly goes back to the prepared-devices
+// inventory as a unit ready for a new activation. The device row itself is
+// suspended (is_enabled=false — the normal soft removal: UID and IVR digits move
+// to the stash, local Schedule jobs are wiped), so the customer side is fully
+// restorable with שחזר, which also re-activates the inventory row.
+// A device the customer already removed in their panel (suspended, UID in the
+// stash) is returned the same way — only the inventory step remains. Each step
+// is idempotent, so a failure after the suspension leaves the device suspended
+// but NOT stamped, and the button simply offers the return again.
+export async function returnDeviceToStock(deviceId, { actor = null } = {}) {
+  const [d] = await query(
+    'SELECT id, user_id, device_type, device_uid, removed_uid, fw_version, is_enabled, returned_to_stock_at FROM devices WHERE id = ?',
+    [deviceId],
+  );
+  if (!d) throw errors.notFound('NOT_FOUND', 'Device not found');
+  const mac = d.is_enabled ? d.device_uid : (d.removed_uid || d.device_uid);
+  if (d.device_type !== 'shelly' || !mac) throw errors.validation('רק מכשיר Shelly רשום (עם MAC) ניתן להחזיר למלאי');
+  if (d.returned_to_stock_at) throw errors.conflict('CONFLICT', 'המכשיר כבר הוחזר למלאי');
+  // A suspended record's stashed MAC may since have been registered anew to
+  // another customer — that unit is theirs now, not a return of this one.
+  if (!d.is_enabled) {
+    const [owner] = await query('SELECT id, user_id FROM devices WHERE is_enabled = TRUE AND device_uid = ? AND id <> ?', [mac, deviceId]);
+    if (owner) throw errors.conflict('CONFLICT', `היחידה ${mac} כבר רשומה מחדש כמכשיר #${owner.id} של לקוח אחר — אין מה להחזיר מהרשומה הישנה`);
+  }
+  // The devices table carries no model, so a unit registered before the
+  // inventory existed (or by LAN probe) would land in stock as דגם '—'. Ask
+  // the hardware itself while it is still reachable (best-effort, 4 s).
+  const [prep] = await query('SELECT model FROM prepared_devices WHERE mac = ?', [mac]);
+  let model = prep?.model || null;
+  let fw = d.fw_version || null;
+  if (!model) {
+    const { shellyMqttRpc } = await import('../mqtt/client.js');
+    const info = await shellyMqttRpc(mac, 'Shelly.GetDeviceInfo', undefined, 4000).catch(() => null);
+    model = info?.result?.model || info?.result?.app || null;
+    fw = info?.result?.ver || fw;
+  }
+  if (d.is_enabled) await patchDevice(deviceId, { is_enabled: false }, { actor });
+  // The previous activation (who, since when) stays on the row as a second-hand
+  // hint; device_id keeps pointing at the returning device so admin recovery
+  // can tell "its own" freed row from a later prep of the same hardware.
+  await query(
+    `INSERT INTO prepared_devices (mac, model, fw_version, status, prepared_by, activated_user_id, device_id, returned_at)
+     VALUES (?, ?, ?, 'prepared', ?, ?, ?, UTC_TIMESTAMP())
+     ON DUPLICATE KEY UPDATE status = 'prepared', returned_at = UTC_TIMESTAMP(), device_id = VALUES(device_id),
+       model = COALESCE(model, VALUES(model)),
+       activated_user_id = VALUES(activated_user_id),
+       fw_version = COALESCE(VALUES(fw_version), fw_version), prepared_by = COALESCE(prepared_by, VALUES(prepared_by))`,
+    [mac, model, fw, actor, d.user_id, deviceId],
+  );
+  await query('UPDATE devices SET returned_to_stock_at = UTC_TIMESTAMP() WHERE id = ?', [deviceId]);
+  return { mac, device_id: deviceId, previous_user_id: d.user_id };
 }
 
 // ── Shelly wizard (admin panel) ──
@@ -365,11 +441,15 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     if (transport !== 'mqtt') throw errors.validation('רישום ללא חיבור אפשרי רק דרך MQTT');
     const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
     if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה — 12 תווים הקסדצימליים', { mac: 'invalid' });
-    const n = Number(relay_count);
-    if (!Number.isInteger(n) || n < 1 || n > 4) throw errors.validation('מספר ערוצים חייב להיות 1–4', { relay_count: '1-4' });
     const [existing] = await query('SELECT id FROM devices WHERE is_enabled = TRUE AND device_uid = ?', [uid]);
     if (existing) throw errors.conflict('CONFLICT', `מכשיר זה כבר רשום (מספר ${existing.id})`);
+    // The channel count comes from the unit itself — its model code in the
+    // inventory; only a unit the inventory never saw needs the admin's number.
     const [prep] = await query('SELECT model FROM prepared_devices WHERE mac = ?', [uid]);
+    const n = shellyModelChannels(prep?.model) || Number(relay_count);
+    if (!Number.isInteger(n) || n < 1 || n > 4) {
+      throw errors.validation('מספר הערוצים לא ידוע — המכשיר לא נמצא במלאי המכשירים שהוכנו; ציינו אותו ידנית', { relay_count: 'required' });
+    }
     probe = {
       transport, mac: uid, model: prep?.model || null, fw_version: null,
       channels: Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, state: 'unknown' })),
@@ -428,7 +508,7 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     // Inventory: registration is the activation moment for a prepared unit.
     await query(
       `UPDATE prepared_devices
-       SET status = 'activated', activated_at = UTC_TIMESTAMP(), activated_user_id = ?, device_id = ?, model = COALESCE(model, ?)
+       SET status = 'activated', returned_at = NULL, activated_at = UTC_TIMESTAMP(), activated_user_id = ?, device_id = ?, model = COALESCE(model, ?)
        WHERE mac = ?`,
       [userId, result.id, probe.model || null, probe.mac],
     ).catch((e) => console.error('prepared_devices activate:', e.message));
@@ -587,7 +667,7 @@ export async function listAllDevices() {
   return query(
     `SELECT d.id, d.user_id, u.full_name AS owner_name, d.device_uid, d.removed_uid, d.name, d.device_type, d.fw_version, d.timezone,
             d.relay_count, d.is_online, d.first_contact_pending, d.last_seen_at, d.schedule_version, d.device_ack_version,
-            d.sync_status, d.sync_error, d.created_at, d.is_enabled, d.mute_alerts
+            d.sync_status, d.sync_error, d.created_at, d.is_enabled, d.mute_alerts, d.returned_to_stock_at
      FROM devices d JOIN users u ON u.id = d.user_id ORDER BY d.id`,
   );
 }

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Download } from 'lucide-react';
-import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, fmtWhen, normalizeMac } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, SearchSelect, fmtWhen, normalizeMac, shellyModelInfo, useSort, SortTh } from '../ui.jsx';
 
 // Provisioning modal shows the secret + QR EXACTLY ONCE with an explicit
 // "I saved it" confirmation before it can be closed (§7).
@@ -11,14 +11,23 @@ export default function Devices() {
   const [users, setUsers] = useState([]);
   const [shelly, setShelly] = useState(null);         // wizard: {step, ip, user_id, name, probe, relays}
   const [suspending, setSuspending] = useState(null); // device pending suspension confirmation
+  const [returning, setReturning] = useState(null);   // device pending "return to stock" confirmation
   const [showRemoved, setShowRemoved] = useState(false);
   const [fUser, setFUser] = useState('');
   const [fDevice, setFDevice] = useState('');
   const [fOnline, setFOnline] = useState('');
   // ?q= seeds the search box (deep links from the action log) and follows later URL changes.
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(params.get('q') || '');
   useEffect(() => { setQ(params.get('q') || ''); }, [params]);
+  // Four tabs, ?tab= deep-linkable (a ?q= link from the action log lands on the devices tab).
+  const TAB_KEYS = ['devices', 'demo', 'installers', 'inventory'];
+  const tab = TAB_KEYS.includes(params.get('tab')) ? params.get('tab') : 'devices';
+  const setTab = (key) => setParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (key === 'devices') next.delete('tab'); else next.set('tab', key);
+    return next;
+  }, { replace: true });
   const [expanded, setExpanded] = useState(null); // device id with its details row open
   const [transferForm, setTransferForm] = useState(null); // {device, user_id}
   const [diagnosis, setDiagnosis] = useState(null);       // {device, loading} → {device, verdict, text, evidence} | {device, error}
@@ -45,6 +54,12 @@ export default function Devices() {
   const [onboardConfirm, setOnboardConfirm] = useState(null); // {mac, registered:{user_name, device_name}} — re-mint for a live device
   const [reinstall, setReinstall] = useState(null);       // {device, done?} — factory-reset device: re-mint + per-device installer file
   const { busy, error, run, setError } = useAsync();
+  // Column sorting, one state per table (the two device tables share one).
+  const devSort = useSort();
+  const demoSort = useSort();
+  const insSort = useSort();
+  const invSort = useSort();
+  const ts = (v) => (v ? Date.parse(v) : null);
 
   const refresh = async () => {
     const [d, u, inv, ins] = await Promise.all([
@@ -81,6 +96,14 @@ export default function Devices() {
         + recovery.lost_digits.map((x) => `• קוד IVR ${x.digit} (${x.relay})`).join('\n'));
     }
     setSuspending(null);
+    await refresh();
+  });
+
+  // Return to stock = suspend for the customer (restorable with שחזר) + the unit
+  // reappears in the prepared-devices inventory as ready for a new activation.
+  const returnToStock = (d) => run(async () => {
+    await adminApi.post(`/devices/${d.id}/return-to-stock`, {});
+    setReturning(null);
     await refresh();
   });
 
@@ -150,12 +173,22 @@ export default function Devices() {
   const fmtDT = (v) => (v ? String(v).replace('T', ' ').slice(0, 16) : '—');
 
 
+  // IVR codes default to the customer's first free ones (1, 2, 3… skipping
+  // codes their existing channels already use) — the admin may still edit.
+  const freeIvrDigits = async (userId, n) => {
+    const fleet = await adminApi.get('/relays');
+    const taken = new Set(fleet.filter((r) => String(r.user_id) === String(userId) && r.ivr_digit != null).map((r) => Number(r.ivr_digit)));
+    const out = [];
+    for (let d = 1; out.length < n; d++) if (!taken.has(d)) out.push(d);
+    return out;
+  };
   const shellyProbe = () => run(async () => {
     const probe = await adminApi.post('/shelly/probe', { transport: shelly.transport, ip: shelly.ip, mac: shelly.mac });
+    const digits = await freeIvrDigits(shelly.user_id, probe.channels.length);
     setShelly({
       ...shelly, step: 2, probe,
       name: shelly.name || `Shelly (${probe.model})`,
-      relays: probe.channels.map((c) => ({ relay_no: c.relay_no, name: `ערוץ ${c.relay_no}`, ivr_digit: c.relay_no, state: c.state })),
+      relays: probe.channels.map((c, i) => ({ relay_no: c.relay_no, name: `ערוץ ${c.relay_no}`, ivr_digit: digits[i], state: c.state })),
     });
   });
   const shellyRegister = () => run(async () => {
@@ -169,13 +202,20 @@ export default function Devices() {
   });
   // Register without a connection: the admin states the channel count; the
   // hardware side is completed automatically on the device's first hello.
-  const offlineRelays = (n) => Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, name: `ערוץ ${i + 1}`, ivr_digit: i + 1, state: 'unknown' }));
-  const shellyOffline = () => {
+  const offlineRelays = (n, digits = []) => Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, name: `ערוץ ${i + 1}`, ivr_digit: digits[i] ?? i + 1, state: 'unknown' }));
+  // The channel count is the unit's own (model code in the inventory); the
+  // admin only states it for a unit the inventory never saw.
+  const shellyOffline = () => run(async () => {
     const mac = normalizeMac(shelly.mac);
-    if (!mac) { setError(new Error('כתובת MAC לא תקינה — 12 תווים הקסדצימליים')); return; }
-    setError(null);
-    setShelly({ ...shelly, step: 'offline', offline: true, mac, relays: shelly.relays?.length ? shelly.relays : [] });
-  };
+    if (!mac) throw new Error('כתובת MAC לא תקינה — 12 תווים הקסדצימליים');
+    const model = inventory.find((p) => p.mac === mac)?.model || null;
+    const known = shellyModelInfo(model);
+    const digits = await freeIvrDigits(shelly.user_id, 4);
+    setShelly({
+      ...shelly, step: 'offline', offline: true, mac, model, freeDigits: digits,
+      relays: known ? offlineRelays(known.channels, digits) : (shelly.relays?.length ? shelly.relays : []),
+    });
+  });
 
   if (!devices) return <p className="text-muted">טוען…</p>;
   // Removed devices (is_enabled=false) are hidden by default — a toggle reveals
@@ -192,13 +232,15 @@ export default function Devices() {
   // listed apart from the real fleet: they are always "online", never sync,
   // and vanish by themselves once the account gets real hardware.
   const realDevices = visibleDevices.filter((d) => d.device_type !== 'demo');
-  const demoDevices = visibleDevices.filter((d) => d.device_type === 'demo');
+  // The demo tab has no filter controls, so it never inherits the devices tab's.
+  const demoDevices = devices.filter((d) => d.device_type === 'demo' && d.is_enabled);
   // Device options track the user filter, so the two dropdowns stay consistent.
   const deviceOptions = devices.filter((d) => !fUser || String(d.user_id) === fUser);
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center flex-wrap gap-2">
         <h2 className="font-bold text-xl">מכשירים</h2>
+        {tab === 'devices' && (
         <div className="flex gap-2 items-center flex-wrap">
           <Input className="w-44 py-2 text-sm" placeholder="חיפוש שם / לקוח / UID" value={q} onChange={(e) => setQ(e.target.value)} />
           <FilterSelect className="py-2 text-sm w-40" value={fUser} onChange={(e) => { setFUser(e.target.value); setFDevice(''); }}>
@@ -223,8 +265,24 @@ export default function Devices() {
             </Button>
           )}
         </div>
+        )}
+      </div>
+      <div className="flex gap-1 border-b border-line overflow-x-auto" role="tablist">
+        {[
+          { key: 'devices', label: 'מכשירים', count: devices.filter((d) => d.device_type !== 'demo' && d.is_enabled).length },
+          { key: 'demo', label: 'מכשירי הדגמה', count: demoDevices.length },
+          { key: 'installers', label: 'קבצי התקנה', count: installers.filter((t) => t.is_live).length },
+          { key: 'inventory', label: 'מלאי', count: inventory.filter((x) => x.status === 'prepared').length },
+        ].map((t) => (
+          <button key={t.key} type="button" role="tab" aria-selected={tab === t.key}
+            className={`inline-flex items-center gap-1 px-3 py-2 text-sm -mb-px border-b-2 whitespace-nowrap ${tab === t.key ? 'border-accent font-bold' : 'border-transparent text-muted hover:text-ink'}`}
+            onClick={() => setTab(t.key)}>
+            {t.label}<span className="text-muted text-xs font-normal">({t.count})</span>
+          </button>
+        ))}
       </div>
       <ErrorNote error={error} />
+      {tab === 'devices' && (<>
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-muted text-sm">
           {realDevices.length} מכשירים{filtering ? ' (מסונן)' : ''}
@@ -237,7 +295,12 @@ export default function Devices() {
       {[
         { title: 'מחוברים', list: realDevices.filter((d) => d.is_online), withReason: false, dot: true },
         { title: 'מנותקים', list: realDevices.filter((d) => !d.is_online), withReason: true, dot: false },
-      ].map(({ title, list, withReason, dot }) => (
+      ].map(({ title, list: unsorted, withReason, dot }) => {
+        const list = devSort.apply(unsorted, {
+          name: (d) => d.name, owner: (d) => d.owner_name, channels: (d) => Number(d.relay_count), installed: (d) => ts(d.created_at),
+          reason: (d) => (!d.device_uid ? 'לא חובר מעולם' : reasons[d.id]?.verdict || null),
+        });
+        return (
         <div key={title} className="space-y-2">
           <h3 className="font-bold">
             <span className="inline-flex items-center gap-2"><OnlineDot online={dot} />{title}
@@ -247,8 +310,10 @@ export default function Devices() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-3">שם</th><th className="p-3">לקוח</th>
-              {withReason && <th className="p-3">סיבת הניתוק</th>}
+              <SortTh k="name" sort={devSort}>שם</SortTh><SortTh k="owner" sort={devSort}>לקוח</SortTh>
+              <SortTh k="channels" sort={devSort} title="מספר ערוצים (ממסרים) במכשיר">ערוצים</SortTh>
+              <SortTh k="installed" sort={devSort} title="מועד השיוך ללקוח במערכת">הותקן</SortTh>
+              {withReason && <SortTh k="reason" sort={devSort}>סיבת הניתוק</SortTh>}
               <th className="p-3"></th>
             </tr>
           </thead>
@@ -260,12 +325,14 @@ export default function Devices() {
                     {d.name}
                     <span className="text-muted text-xs font-normal ms-2" title="מספר המכשיר במערכת">#{d.id}</span>
                     {!!d.mute_alerts && <span className="ms-1" title="התראות מייל מושתקות למכשיר זה">🔕</span>}
-                    {!d.is_enabled && <span className="ms-1"><Badge ok={false}>מושהה</Badge></span>}
+                    {!d.is_enabled && <span className="ms-1"><Badge ok={false}>{d.returned_to_stock_at ? 'הוחזר למלאי' : 'מושהה'}</Badge></span>}
                     {!!d.first_contact_pending && d.is_enabled && (
                       <span className="ms-1" title="נרשם ללא בדיקת חיבור — ההגדרה תושלם בחיבור הראשון"><Badge ok={false}>ממתין לחיבור ראשון</Badge></span>
                     )}
                   </td>
                   <td className="p-3">{d.owner_name}</td>
+                  <td className="p-3">{d.relay_count}</td>
+                  <td className="p-3 text-xs text-muted whitespace-nowrap">{d.created_at ? new Date(d.created_at).toLocaleDateString('he-IL') : '—'}</td>
                   {withReason && (
                     <td className="p-3 text-xs">
                       {!d.device_uid ? <span className="text-muted">לא חובר מעולם</span>
@@ -295,7 +362,7 @@ export default function Devices() {
                 </tr>
                 {expanded === d.id && (
                   <tr className="border-b border-line last:border-0 bg-surface2/50">
-                    <td colSpan={withReason ? 4 : 3} className="p-3">
+                    <td colSpan={withReason ? 6 : 5} className="p-3">
                       <div className="flex items-center gap-x-5 gap-y-2 flex-wrap text-xs text-muted">
                         <span>מזהה: {d.id}</span>
                         <span dir="ltr">
@@ -305,6 +372,8 @@ export default function Devices() {
                               : '—')}
                         </span>
                         <span>fw {d.fw_version || '—'}</span>
+                        <span title="מספר ערוצים (ממסרים) במכשיר">ערוצים: {d.relay_count}</span>
+                        <span title="מועד השיוך ללקוח במערכת">הותקן: {fmtWhen(d.created_at)}</span>
                         <Badge ok={d.sync_status === 'synced'}>{d.sync_status}</Badge>
                         <span className="whitespace-nowrap">v{d.schedule_version} / ack v{d.device_ack_version}</span>
                         <span className="flex gap-1 ms-auto">
@@ -325,6 +394,11 @@ export default function Devices() {
                           )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             onClick={() => setTransferForm({ device: d, user_id: '' })}>העבר ללקוח</Button>
+                          {d.device_type === 'shelly' && !!(d.is_enabled ? d.device_uid : d.removed_uid) && !d.returned_to_stock_at && (
+                            <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                              title="המכשיר חזר מהלקוח? מושהה אצלו וחוזר למלאי המכשירים שהוכנו"
+                              onClick={() => { setError(null); setReturning(d); }}>החזר למלאי</Button>
+                          )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             title="השתקה עוצרת מיילים על תקלות במכשיר הזה; התקלות עדיין נרשמות ביומן"
                             onClick={() => run(async () => {
@@ -345,18 +419,20 @@ export default function Devices() {
               </Fragment>
             ))}
             {list.length === 0 && (
-              <tr><td colSpan={withReason ? 4 : 3} className="p-6 text-center text-muted">אין מכשירים {title}</td></tr>
+              <tr><td colSpan={withReason ? 6 : 5} className="p-6 text-center text-muted">אין מכשירים {title}</td></tr>
             )}
           </tbody>
         </table>
           </Card>
         </div>
-      ))}
+        );
+      })}
+      </>)}
 
       {/* Demo devices: one block per device-less account (2 simulated 4-channel
           devices each). Read-only here — no transfer/mute/suspend, since the
           demo is rebuilt/deleted automatically by the account's own state. */}
-      {demoDevices.length > 0 && (
+      {tab === 'demo' && (
         <div className="space-y-2">
           <h3 className="font-bold">
             <span className="inline-flex items-center gap-2">🧪 מכשירי הדגמה
@@ -369,11 +445,12 @@ export default function Devices() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-right text-muted border-b border-line">
-                  <th className="p-3">שם</th><th className="p-3">לקוח</th><th className="p-3">ערוצים</th><th className="p-3">נוצר</th>
+                  <SortTh k="name" sort={demoSort}>שם</SortTh><SortTh k="owner" sort={demoSort}>לקוח</SortTh>
+                  <SortTh k="channels" sort={demoSort}>ערוצים</SortTh><SortTh k="created" sort={demoSort}>נוצר</SortTh>
                 </tr>
               </thead>
               <tbody>
-                {demoDevices.map((d) => (
+                {demoSort.apply(demoDevices, { name: (d) => d.name, owner: (d) => d.owner_name, channels: (d) => Number(d.relay_count), created: (d) => ts(d.created_at) }).map((d) => (
                   <tr key={d.id} className="border-b border-line last:border-0">
                     <td className="p-3 font-semibold">{d.name}<span className="text-muted text-xs font-normal ms-2">#{d.id}</span></td>
                     <td className="p-3">{d.owner_name}</td>
@@ -381,6 +458,9 @@ export default function Devices() {
                     <td className="p-3 text-muted text-xs">{new Date(d.created_at).toLocaleDateString('he-IL')}</td>
                   </tr>
                 ))}
+                {demoDevices.length === 0 && (
+                  <tr><td colSpan={4} className="p-6 text-center text-muted">אין מכשירי הדגמה כרגע — לכל החשבונות יש מכשיר אמיתי</td></tr>
+                )}
               </tbody>
             </table>
           </Card>
@@ -389,7 +469,8 @@ export default function Devices() {
 
       {/* Issued universal installer files: each is a revocable token. The download
           button sits here, above the list it appends to. */}
-      <div className="flex items-center justify-between flex-wrap gap-2 mt-6">
+      {tab === 'installers' && (<>
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <h3 className="font-bold">
           קבצי התקנה ל-Shelly חדש
           <span className="text-muted text-sm font-normal ms-2">
@@ -410,12 +491,15 @@ export default function Devices() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-3">נוצר</th><th className="p-3">נמען</th><th className="p-3">הערה</th>
-              <th className="p-3">תוקף עד</th><th className="p-3">שימושים</th><th className="p-3">סטטוס</th><th className="p-3">פעולות</th>
+              <SortTh k="created" sort={insSort}>נוצר</SortTh><SortTh k="audience" sort={insSort}>נמען</SortTh><SortTh k="label" sort={insSort}>הערה</SortTh>
+              <SortTh k="expires" sort={insSort}>תוקף עד</SortTh><SortTh k="uses" sort={insSort}>שימושים</SortTh><SortTh k="status" sort={insSort}>סטטוס</SortTh><th className="p-3">פעולות</th>
             </tr>
           </thead>
           <tbody>
-            {installers.filter((t) => showDeadInstallers || t.is_live).map((t) => (
+            {insSort.apply(installers.filter((t) => showDeadInstallers || t.is_live), {
+              created: (t) => ts(t.created_at), audience: (t) => (t.audience === 'external' ? 'לקוח / גורם חיצוני' : 'מתקין פנימי'), label: (t) => t.label || null,
+              expires: (t) => ts(t.expires_at), uses: (t) => Number(t.use_count), status: (t) => (t.revoked_at ? 0 : t.is_live ? 2 : 1),
+            }).map((t) => (
               <tr key={t.id} className="border-b border-line last:border-0">
                 <td className="p-3 text-xs whitespace-nowrap">{fmtDT(t.created_at)}<div className="text-muted">{t.admin_name || ''}</div></td>
                 <td className="p-3 text-xs">{t.audience === 'external' ? 'לקוח / גורם חיצוני' : 'מתקין פנימי'}</td>
@@ -446,9 +530,11 @@ export default function Devices() {
           </tbody>
         </table>
       </Card>
+      </>)}
 
       {/* Prepared-devices inventory: every unit that completed the prep process. */}
-      <div className="flex items-center justify-between flex-wrap gap-2 mt-6">
+      {tab === 'inventory' && (<>
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <h3 className="font-bold">
           מלאי מכשירים שהוכנו
           <span className="text-muted text-sm font-normal ms-2">
@@ -464,23 +550,46 @@ export default function Devices() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-3">MAC</th><th className="p-3">דגם</th><th className="p-3">fw</th>
-              <th className="p-3">הוכן בתאריך</th><th className="p-3">סטטוס</th><th className="p-3">פעולות</th>
+              <SortTh k="mac" sort={invSort}>MAC</SortTh><SortTh k="model" sort={invSort}>דגם</SortTh><SortTh k="channels" sort={invSort}>ערוצים</SortTh><SortTh k="fw" sort={invSort}>fw</SortTh>
+              <SortTh k="prepared" sort={invSort}>הוכן בתאריך</SortTh><SortTh k="status" sort={invSort}>סטטוס</SortTh><th className="p-3">פעולות</th>
             </tr>
           </thead>
           <tbody>
-            {inventory.filter((p) => showActivated || p.status === 'prepared').map((p) => (
+            {invSort.apply(inventory.filter((p) => showActivated || p.status === 'prepared'), {
+              mac: (p) => p.mac, model: (p) => shellyModelInfo(p.model)?.name || p.model || null, channels: (p) => shellyModelInfo(p.model)?.channels ?? null,
+              fw: (p) => p.fw_version || null, prepared: (p) => ts(p.prepared_at),
+              status: (p) => (p.status === 'prepared' ? `0 ${p.returned_at || ''}` : `1 ${p.activated_user_name || ''} ${p.activated_at || ''}`),
+            }).map((p) => {
+              const info = shellyModelInfo(p.model);
+              const dev = p.device_id ? devices?.find((x) => x.id === p.device_id) : null;
+              return (
               <tr key={p.id} className="border-b border-line last:border-0">
                 <td className="p-3 text-xs" dir="ltr">{p.mac}</td>
-                <td className="p-3 text-xs">{p.model || '—'}</td>
+                <td className="p-3 text-xs">
+                  {info
+                    ? <><b>{info.name}</b> <span className="text-muted" dir="ltr">{p.model}</span></>
+                    : (p.model || '—')}
+                </td>
+                <td className="p-3 text-xs">{info?.channels ?? '—'}</td>
                 <td className="p-3 text-xs text-muted">{p.fw_version || '—'}</td>
                 <td className="p-3 text-xs">{String(p.prepared_at).slice(0, 10)}</td>
                 <td className="p-3">
                   {p.status === 'prepared'
-                    ? <Badge ok>מוכן להפעלה</Badge>
+                    ? <>
+                        <Badge ok>מוכן להפעלה</Badge>
+                        {p.returned_at && (
+                          <div className="text-xs text-muted mt-1" title="יחידה שחזרה מלקוח">
+                            חזר מ{p.activated_user_name || '—'} · {String(p.returned_at).slice(0, 10)}
+                          </div>
+                        )}
+                      </>
                     : <span className="text-xs">הופעל ל{p.activated_user_name || '—'} · {p.activated_at ? String(p.activated_at).slice(0, 10) : ''}</span>}
                 </td>
                 <td className="p-3 whitespace-nowrap space-x-1 space-x-reverse">
+                  {p.status === 'activated' && dev && !dev.returned_to_stock_at && !!(dev.is_enabled ? dev.device_uid : dev.removed_uid) && (
+                    <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                      onClick={() => { setError(null); setReturning(dev); }}>החזר למלאי</Button>
+                  )}
                   {p.status === 'prepared' && (
                     <Button variant="ghost" className="!px-2 !py-1 text-xs"
                       onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: p.mac, user_id: '', name: '' })}>
@@ -495,13 +604,15 @@ export default function Devices() {
                     })}>מחק</Button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
             {inventory.filter((p) => showActivated || p.status === 'prepared').length === 0 && (
-              <tr><td colSpan={6} className="p-6 text-center text-muted">אין מכשירים מוכנים במלאי — הכינו מכשיר עם "הגדרת Shelly חדש"</td></tr>
+              <tr><td colSpan={7} className="p-6 text-center text-muted">אין מכשירים מוכנים במלאי — הכינו מכשיר עם "הגדרת Shelly חדש"</td></tr>
             )}
           </tbody>
         </table>
       </Card>
+      </>)}
 
       <Modal open={!!shelly} onClose={() => setShelly(null)}
         title={{ 1: 'שיוך Shelly ללקוח', prep: 'סקריפטים למכשיר מסוים', 2: 'שיוך Shelly — הגדרת ערוצים', offline: 'שיוך Shelly — ללא חיבור', 3: 'שיוך Shelly — הושלם' }[shelly?.step] || 'Shelly'}>
@@ -510,10 +621,9 @@ export default function Devices() {
             <p className="text-sm text-muted">
               מכשיר שהוגדר ומחובר לשרת — בחרו לקוח, הזינו את ה-MAC ולחצו "בדוק חיבור".
             </p>
-            <Select className="w-full" value={shelly.user_id} onChange={(e) => setShelly({ ...shelly, user_id: e.target.value })}>
-              <option value="">בחרו לקוח…</option>
-              {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-            </Select>
+            <SearchSelect className="w-full" value={shelly.user_id} onChange={(v) => setShelly({ ...shelly, user_id: v })}
+              allLabel={null} placeholder="בחרו לקוח… (חיפוש לפי שם / טלפון)"
+              options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: (u.phones_text || '').split(' ')[0] || `#${u.id}`, search: `${u.phones_text || ''} ${u.email || ''} ${u.ivr_code || ''} #${u.id}` }))} />
             <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל 80f3dac7deec)" value={shelly.mac} onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
             <ErrorNote error={error} />
@@ -536,18 +646,27 @@ export default function Devices() {
               </div>
             </Card>
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
-            <label className="text-sm flex items-center gap-2">מספר ערוצים במכשיר: <span className="text-off">*</span>
-              <div className="flex rounded-[10px] border border-line overflow-hidden">
-                {[1, 2, 3, 4].map((n) => (
-                  <button key={n} type="button"
-                    onClick={() => setShelly({ ...shelly, relays: offlineRelays(n).map((r, i) => shelly.relays[i] ? { ...shelly.relays[i], relay_no: r.relay_no } : r) })}
-                    className={`px-3 py-1 text-sm cursor-pointer ${shelly.relays.length === n ? 'bg-accent text-white font-bold' : 'text-muted hover:text-ink'}`}>
-                    {n}
-                  </button>
-                ))}
-              </div>
-              <span className="text-muted text-xs">(Plus 1 = 1 · Pro 2 = 2 · Pro 4 = 4)</span>
+            {shellyModelInfo(shelly.model) ? (
+              <p className="text-sm">
+                דגם: <b>{shellyModelInfo(shelly.model).name}</b> <span className="text-muted" dir="ltr">{shelly.model}</span>
+                {' · '}<b>{shellyModelInfo(shelly.model).channels}</b> ערוצים <span className="text-muted text-xs">(מהמלאי)</span>
+              </p>
+            ) : (
+            <label className="text-sm flex items-center gap-2 flex-wrap">
+              <span title="המכשיר לא נמצא במלאי המכשירים שהוכנו, לכן הדגם לא ידוע">מספר ערוצים במכשיר (הדגם לא ידוע):</span> <span className="text-off">*</span>
+              <Select className="py-1.5 text-sm" value={shelly.relays.length || ''}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setShelly({ ...shelly, relays: n ? offlineRelays(n, shelly.freeDigits).map((r, i) => shelly.relays[i] ? { ...shelly.relays[i], relay_no: r.relay_no } : r) : [] });
+                }}>
+                <option value="" disabled>בחרו…</option>
+                <option value="1">1 — Pro 1 / Plus 1</option>
+                <option value="2">2 — Pro 2</option>
+                <option value="3">3 — Pro 3</option>
+                <option value="4">4 — Pro 4PM</option>
+              </Select>
             </label>
+            )}
             {shelly.relays.map((r, i) => (
               <div key={r.relay_no} className="flex items-center gap-2">
                 <span className="text-muted text-xs whitespace-nowrap">ערוץ {r.relay_no}</span>
@@ -654,7 +773,7 @@ export default function Devices() {
         {shelly?.step === 2 && (
           <div className="space-y-3">
             <Card className="text-sm">
-              נמצא: <b>{shelly.probe.model}</b> · fw {shelly.probe.fw_version || '?'} · <span dir="ltr">{shelly.probe.mac}</span>
+              נמצא: <b>{shellyModelInfo(shelly.probe.model)?.name || shelly.probe.model}</b> <span dir="ltr">{shellyModelInfo(shelly.probe.model) ? shelly.probe.model : ''}</span> · {shelly.probe.channels?.length ?? shellyModelInfo(shelly.probe.model)?.channels ?? '?'} ערוצים · fw {shelly.probe.fw_version || '?'} · <span dir="ltr">{shelly.probe.mac}</span>
               {shelly.probe.already_registered_as && <div className="text-off mt-1">⚠ המכשיר כבר רשום (מספר {shelly.probe.already_registered_as})</div>}
             </Card>
             <Input placeholder="שם המכשיר" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
@@ -903,6 +1022,28 @@ export default function Devices() {
             <div className="flex gap-2">
               <Button variant="ghost" className="flex-1" onClick={() => setOnboardConfirm(null)}>ביטול</Button>
               <Button variant="danger" className="flex-1" disabled={busy} onClick={() => shellyOnboard(true)}>צור פרטי חיבור חדשים</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!returning} onClose={() => setReturning(null)} title="החזרת מכשיר למלאי">
+        {returning && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              להחזיר את <b>{returning.name}</b>{returning.owner_name ? <> של <b>{returning.owner_name}</b></> : null} למלאי המכשירים שהוכנו?
+            </p>
+            <ul className="text-sm text-muted list-disc ps-5 space-y-1">
+              {returning.is_enabled
+                ? <li>אצל הלקוח המכשיר יושהה — יפסיק להגיב בלוח הבקרה, בתזמונים ובטלפון, וייעלם מרשימת המכשירים שלו. הנתונים נשמרים; רק מנהל יכול לשחזר (ב"שחזר" כאן) כל עוד לא הופעל ללקוח אחר.</li>
+                : <li>המכשיר כבר מושהה אצל הלקוח — הוא ייעלם מרשימת המכשירים שלו והלקוח לא יוכל לשחזרו בעצמו. הנתונים נשמרים; רק מנהל יכול לשחזר כל עוד לא הופעל ללקוח אחר.</li>}
+              <li>היחידה <span dir="ltr">{returning.device_uid || returning.removed_uid}</span> תופיע במלאי כ"מוכן להפעלה" וניתן להפעיל אותה ללקוח חדש.</li>
+              {returning.is_enabled && <li>התזמונים המקומיים שעל המכשיר נמחקים (אם הוא מחובר כעת).</li>}
+            </ul>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setReturning(null)}>ביטול</Button>
+              <Button variant="danger" className="flex-1" disabled={busy} onClick={() => returnToStock(returning)}>החזר למלאי</Button>
             </div>
           </div>
         )}

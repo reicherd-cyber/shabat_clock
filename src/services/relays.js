@@ -21,7 +21,7 @@ export async function listDevicesWithRelays(userId) {
   const devices = await query(
     `SELECT id, name, is_online, last_seen_at, sync_status, fw_version, relay_count, is_enabled,
             device_type, device_uid
-     FROM devices WHERE user_id = ? ORDER BY id`,
+     FROM devices WHERE user_id = ? AND returned_to_stock_at IS NULL ORDER BY id`,
     [userId],
   );
   for (const d of devices) {
