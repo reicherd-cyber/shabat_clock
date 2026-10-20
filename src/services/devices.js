@@ -337,17 +337,30 @@ export async function returnDeviceToStock(deviceId, { actor = null } = {}) {
   const mac = d.is_enabled ? d.device_uid : (d.removed_uid || d.device_uid);
   if (d.device_type !== 'shelly' || !mac) throw errors.validation('רק מכשיר Shelly רשום (עם MAC) ניתן להחזיר למלאי');
   if (d.returned_to_stock_at) throw errors.conflict('CONFLICT', 'המכשיר כבר הוחזר למלאי');
+  // The devices table carries no model, so a unit registered before the
+  // inventory existed (or by LAN probe) would land in stock as דגם '—'. Ask
+  // the hardware itself while it is still reachable (best-effort, 4 s).
+  const [prep] = await query('SELECT model FROM prepared_devices WHERE mac = ?', [mac]);
+  let model = prep?.model || null;
+  let fw = d.fw_version || null;
+  if (!model) {
+    const { shellyMqttRpc } = await import('../mqtt/client.js');
+    const info = await shellyMqttRpc(mac, 'Shelly.GetDeviceInfo', undefined, 4000).catch(() => null);
+    model = info?.result?.model || info?.result?.app || null;
+    fw = info?.result?.ver || fw;
+  }
   if (d.is_enabled) await patchDevice(deviceId, { is_enabled: false }, { actor });
   // The previous activation (who, since when) stays on the row as a second-hand
   // hint; device_id keeps pointing at the returning device so admin recovery
   // can tell "its own" freed row from a later prep of the same hardware.
   await query(
-    `INSERT INTO prepared_devices (mac, fw_version, status, prepared_by, activated_user_id, device_id, returned_at)
-     VALUES (?, ?, 'prepared', ?, ?, ?, UTC_TIMESTAMP())
+    `INSERT INTO prepared_devices (mac, model, fw_version, status, prepared_by, activated_user_id, device_id, returned_at)
+     VALUES (?, ?, ?, 'prepared', ?, ?, ?, UTC_TIMESTAMP())
      ON DUPLICATE KEY UPDATE status = 'prepared', returned_at = UTC_TIMESTAMP(), device_id = VALUES(device_id),
+       model = COALESCE(model, VALUES(model)),
        activated_user_id = VALUES(activated_user_id),
        fw_version = COALESCE(VALUES(fw_version), fw_version), prepared_by = COALESCE(prepared_by, VALUES(prepared_by))`,
-    [mac, d.fw_version || null, actor, d.user_id, deviceId],
+    [mac, model, fw, actor, d.user_id, deviceId],
   );
   await query('UPDATE devices SET returned_to_stock_at = UTC_TIMESTAMP() WHERE id = ?', [deviceId]);
   return { mac, device_id: deviceId, previous_user_id: d.user_id };
