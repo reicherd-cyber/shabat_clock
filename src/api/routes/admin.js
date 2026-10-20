@@ -120,7 +120,9 @@ adminRouter.get('/users', async (req, res, next) => {
   try {
     res.json(await query(
       `SELECT u.id, u.full_name, u.ivr_code, u.require_pin, u.status, u.notes, u.email, u.created_at,
-              (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.device_type <> 'demo') AS device_count
+              (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.device_type <> 'demo') AS device_count,
+              (SELECT GROUP_CONCAT(p.phone ORDER BY p.is_primary DESC, p.id SEPARATOR ' ')
+                 FROM user_phones p WHERE p.user_id = u.id AND p.deleted_at IS NULL) AS phones_text
        FROM users u ORDER BY u.id DESC`,
     ));
   } catch (e) { next(e); }

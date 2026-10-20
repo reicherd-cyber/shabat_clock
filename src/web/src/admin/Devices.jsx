@@ -232,7 +232,8 @@ export default function Devices() {
   // listed apart from the real fleet: they are always "online", never sync,
   // and vanish by themselves once the account gets real hardware.
   const realDevices = visibleDevices.filter((d) => d.device_type !== 'demo');
-  const demoDevices = visibleDevices.filter((d) => d.device_type === 'demo');
+  // The demo tab has no filter controls, so it never inherits the devices tab's.
+  const demoDevices = devices.filter((d) => d.device_type === 'demo' && d.is_enabled);
   // Device options track the user filter, so the two dropdowns stay consistent.
   const deviceOptions = devices.filter((d) => !fUser || String(d.user_id) === fUser);
   return (
@@ -268,7 +269,7 @@ export default function Devices() {
       </div>
       <div className="flex gap-1 border-b border-line overflow-x-auto" role="tablist">
         {[
-          { key: 'devices', label: 'מכשירים', count: realDevices.length },
+          { key: 'devices', label: 'מכשירים', count: devices.filter((d) => d.device_type !== 'demo' && d.is_enabled).length },
           { key: 'demo', label: 'מכשירי הדגמה', count: demoDevices.length },
           { key: 'installers', label: 'קבצי התקנה', count: installers.filter((t) => t.is_live).length },
           { key: 'inventory', label: 'מלאי', count: inventory.filter((x) => x.status === 'prepared').length },
@@ -622,7 +623,7 @@ export default function Devices() {
             </p>
             <SearchSelect className="w-full" value={shelly.user_id} onChange={(v) => setShelly({ ...shelly, user_id: v })}
               allLabel={null} placeholder="בחרו לקוח… (חיפוש לפי שם / טלפון)"
-              options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: u.phones?.[0]?.phone || `#${u.id}`, search: `${(u.phones || []).map((x) => x.phone).join(' ')} ${u.email || ''} ${u.ivr_code || ''} #${u.id}` }))} />
+              options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: (u.phones_text || '').split(' ')[0] || `#${u.id}`, search: `${u.phones_text || ''} ${u.email || ''} ${u.ivr_code || ''} #${u.id}` }))} />
             <Input dir="ltr" placeholder="MAC של המכשיר (12 תווים, למשל 80f3dac7deec)" value={shelly.mac} onChange={(e) => setShelly({ ...shelly, mac: e.target.value })} />
             <Input placeholder="שם המכשיר (אופציונלי)" value={shelly.name} onChange={(e) => setShelly({ ...shelly, name: e.target.value })} />
             <ErrorNote error={error} />

@@ -338,6 +338,12 @@ export async function returnDeviceToStock(deviceId, { actor = null } = {}) {
   const mac = d.is_enabled ? d.device_uid : (d.removed_uid || d.device_uid);
   if (d.device_type !== 'shelly' || !mac) throw errors.validation('רק מכשיר Shelly רשום (עם MAC) ניתן להחזיר למלאי');
   if (d.returned_to_stock_at) throw errors.conflict('CONFLICT', 'המכשיר כבר הוחזר למלאי');
+  // A suspended record's stashed MAC may since have been registered anew to
+  // another customer — that unit is theirs now, not a return of this one.
+  if (!d.is_enabled) {
+    const [owner] = await query('SELECT id, user_id FROM devices WHERE is_enabled = TRUE AND device_uid = ? AND id <> ?', [mac, deviceId]);
+    if (owner) throw errors.conflict('CONFLICT', `היחידה ${mac} כבר רשומה מחדש כמכשיר #${owner.id} של לקוח אחר — אין מה להחזיר מהרשומה הישנה`);
+  }
   // The devices table carries no model, so a unit registered before the
   // inventory existed (or by LAN probe) would land in stock as דגם '—'. Ask
   // the hardware itself while it is still reachable (best-effort, 4 s).
