@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Download } from 'lucide-react';
-import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, SearchSelect, fmtWhen, normalizeMac, shellyModelInfo } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, SearchSelect, fmtWhen, normalizeMac, shellyModelInfo, useSort, SortTh } from '../ui.jsx';
 
 // Provisioning modal shows the secret + QR EXACTLY ONCE with an explicit
 // "I saved it" confirmation before it can be closed (§7).
@@ -54,6 +54,12 @@ export default function Devices() {
   const [onboardConfirm, setOnboardConfirm] = useState(null); // {mac, registered:{user_name, device_name}} — re-mint for a live device
   const [reinstall, setReinstall] = useState(null);       // {device, done?} — factory-reset device: re-mint + per-device installer file
   const { busy, error, run, setError } = useAsync();
+  // Column sorting, one state per table (the two device tables share one).
+  const devSort = useSort();
+  const demoSort = useSort();
+  const insSort = useSort();
+  const invSort = useSort();
+  const ts = (v) => (v ? Date.parse(v) : null);
 
   const refresh = async () => {
     const [d, u, inv, ins] = await Promise.all([
@@ -288,7 +294,12 @@ export default function Devices() {
       {[
         { title: 'מחוברים', list: realDevices.filter((d) => d.is_online), withReason: false, dot: true },
         { title: 'מנותקים', list: realDevices.filter((d) => !d.is_online), withReason: true, dot: false },
-      ].map(({ title, list, withReason, dot }) => (
+      ].map(({ title, list: unsorted, withReason, dot }) => {
+        const list = devSort.apply(unsorted, {
+          name: (d) => d.name, owner: (d) => d.owner_name, channels: (d) => Number(d.relay_count), installed: (d) => ts(d.created_at),
+          reason: (d) => (!d.device_uid ? 'לא חובר מעולם' : reasons[d.id]?.verdict || null),
+        });
+        return (
         <div key={title} className="space-y-2">
           <h3 className="font-bold">
             <span className="inline-flex items-center gap-2"><OnlineDot online={dot} />{title}
@@ -298,10 +309,10 @@ export default function Devices() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-3">שם</th><th className="p-3">לקוח</th>
-              <th className="p-3" title="מספר ערוצים (ממסרים) במכשיר">ערוצים</th>
-              <th className="p-3" title="מועד השיוך ללקוח במערכת">הותקן</th>
-              {withReason && <th className="p-3">סיבת הניתוק</th>}
+              <SortTh k="name" sort={devSort}>שם</SortTh><SortTh k="owner" sort={devSort}>לקוח</SortTh>
+              <SortTh k="channels" sort={devSort} title="מספר ערוצים (ממסרים) במכשיר">ערוצים</SortTh>
+              <SortTh k="installed" sort={devSort} title="מועד השיוך ללקוח במערכת">הותקן</SortTh>
+              {withReason && <SortTh k="reason" sort={devSort}>סיבת הניתוק</SortTh>}
               <th className="p-3"></th>
             </tr>
           </thead>
@@ -413,7 +424,8 @@ export default function Devices() {
         </table>
           </Card>
         </div>
-      ))}
+        );
+      })}
       </>)}
 
       {/* Demo devices: one block per device-less account (2 simulated 4-channel
@@ -432,11 +444,12 @@ export default function Devices() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-right text-muted border-b border-line">
-                  <th className="p-3">שם</th><th className="p-3">לקוח</th><th className="p-3">ערוצים</th><th className="p-3">נוצר</th>
+                  <SortTh k="name" sort={demoSort}>שם</SortTh><SortTh k="owner" sort={demoSort}>לקוח</SortTh>
+                  <SortTh k="channels" sort={demoSort}>ערוצים</SortTh><SortTh k="created" sort={demoSort}>נוצר</SortTh>
                 </tr>
               </thead>
               <tbody>
-                {demoDevices.map((d) => (
+                {demoSort.apply(demoDevices, { name: (d) => d.name, owner: (d) => d.owner_name, channels: (d) => Number(d.relay_count), created: (d) => ts(d.created_at) }).map((d) => (
                   <tr key={d.id} className="border-b border-line last:border-0">
                     <td className="p-3 font-semibold">{d.name}<span className="text-muted text-xs font-normal ms-2">#{d.id}</span></td>
                     <td className="p-3">{d.owner_name}</td>
@@ -477,12 +490,15 @@ export default function Devices() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-3">נוצר</th><th className="p-3">נמען</th><th className="p-3">הערה</th>
-              <th className="p-3">תוקף עד</th><th className="p-3">שימושים</th><th className="p-3">סטטוס</th><th className="p-3">פעולות</th>
+              <SortTh k="created" sort={insSort}>נוצר</SortTh><SortTh k="audience" sort={insSort}>נמען</SortTh><SortTh k="label" sort={insSort}>הערה</SortTh>
+              <SortTh k="expires" sort={insSort}>תוקף עד</SortTh><SortTh k="uses" sort={insSort}>שימושים</SortTh><SortTh k="status" sort={insSort}>סטטוס</SortTh><th className="p-3">פעולות</th>
             </tr>
           </thead>
           <tbody>
-            {installers.filter((t) => showDeadInstallers || t.is_live).map((t) => (
+            {insSort.apply(installers.filter((t) => showDeadInstallers || t.is_live), {
+              created: (t) => ts(t.created_at), audience: (t) => (t.audience === 'external' ? 'לקוח / גורם חיצוני' : 'מתקין פנימי'), label: (t) => t.label || null,
+              expires: (t) => ts(t.expires_at), uses: (t) => Number(t.use_count), status: (t) => (t.revoked_at ? 0 : t.is_live ? 2 : 1),
+            }).map((t) => (
               <tr key={t.id} className="border-b border-line last:border-0">
                 <td className="p-3 text-xs whitespace-nowrap">{fmtDT(t.created_at)}<div className="text-muted">{t.admin_name || ''}</div></td>
                 <td className="p-3 text-xs">{t.audience === 'external' ? 'לקוח / גורם חיצוני' : 'מתקין פנימי'}</td>
@@ -533,12 +549,16 @@ export default function Devices() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-3">MAC</th><th className="p-3">דגם</th><th className="p-3">ערוצים</th><th className="p-3">fw</th>
-              <th className="p-3">הוכן בתאריך</th><th className="p-3">סטטוס</th><th className="p-3">פעולות</th>
+              <SortTh k="mac" sort={invSort}>MAC</SortTh><SortTh k="model" sort={invSort}>דגם</SortTh><SortTh k="channels" sort={invSort}>ערוצים</SortTh><SortTh k="fw" sort={invSort}>fw</SortTh>
+              <SortTh k="prepared" sort={invSort}>הוכן בתאריך</SortTh><SortTh k="status" sort={invSort}>סטטוס</SortTh><th className="p-3">פעולות</th>
             </tr>
           </thead>
           <tbody>
-            {inventory.filter((p) => showActivated || p.status === 'prepared').map((p) => {
+            {invSort.apply(inventory.filter((p) => showActivated || p.status === 'prepared'), {
+              mac: (p) => p.mac, model: (p) => shellyModelInfo(p.model)?.name || p.model || null, channels: (p) => shellyModelInfo(p.model)?.channels ?? null,
+              fw: (p) => p.fw_version || null, prepared: (p) => ts(p.prepared_at),
+              status: (p) => (p.status === 'prepared' ? `0 ${p.returned_at || ''}` : `1 ${p.activated_user_name || ''} ${p.activated_at || ''}`),
+            }).map((p) => {
               const info = shellyModelInfo(p.model);
               const dev = p.device_id ? devices?.find((x) => x.id === p.device_id) : null;
               return (

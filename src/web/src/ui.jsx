@@ -592,6 +592,42 @@ export const fmtUptime = (s) => {
   if (s >= 3600) return `${Math.floor(s / 3600)} שע׳`;
   return `${Math.floor(s / 60)} דק׳`;
 };
+// Click-to-sort table headers. First click on a column sorts descending, the
+// next ascending, and so on; empty values always sink to the bottom.
+//   const s = useSort();                       // or useSort({ key: 'created', dir: 'desc' })
+//   <SortTh k="name" sort={s}>שם</SortTh>
+//   s.apply(rows, { name: (r) => r.name, created: (r) => Date.parse(r.created_at) })
+export function useSort(initial = null) {
+  const [sort, setSort] = useState(initial);
+  const toggle = (key) => setSort((s) => (s?.key === key ? { key, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' }));
+  const apply = (rows, keys) => {
+    const get = sort && keys[sort.key];
+    if (!get) return rows;
+    const dir = sort.dir === 'desc' ? -1 : 1;
+    const cmp = (a, b) => {
+      const x = get(a); const y = get(b);
+      const xe = x == null || x === '' || Number.isNaN(x); const ye = y == null || y === '' || Number.isNaN(y);
+      if (xe && ye) return 0;
+      if (xe) return 1;
+      if (ye) return -1;
+      const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), 'he', { numeric: true });
+      return c * dir;
+    };
+    return [...rows].sort(cmp);
+  };
+  return { sort, toggle, apply };
+}
+export const SortTh = ({ k, sort, children, className = '', ...props }) => {
+  const active = sort.sort?.key === k;
+  return (
+    <th className={`p-3 cursor-pointer select-none whitespace-nowrap hover:text-ink ${active ? 'text-ink' : ''} ${className}`}
+      aria-sort={active ? (sort.sort.dir === 'desc' ? 'descending' : 'ascending') : 'none'}
+      onClick={() => sort.toggle(k)} {...props}>
+      {children}<span className="text-[10px] ms-1 inline-block w-3">{active ? (sort.sort.dir === 'desc' ? '▼' : '▲') : ''}</span>
+    </th>
+  );
+};
+
 export const fmtWhen = (ts) => (ts ? new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
 
 // Stat tile: big number + label (+ optional sub line). `ok` colors the number,
