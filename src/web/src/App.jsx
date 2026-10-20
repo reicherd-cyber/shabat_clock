@@ -248,6 +248,7 @@ const ADMIN_NAV = [
 ];
 
 function AdminNav({ onNavigate, badges = {} }) {
+  const isSuper = adminRole() === 'superadmin';
   // Folded/unfolded state per section title, remembered across reloads (default: all open).
   const [folded, setFolded] = useState(() => {
     try { return JSON.parse(localStorage.getItem('adminNavFolded')) || {}; } catch { return {}; }
@@ -264,7 +265,7 @@ function AdminNav({ onNavigate, badges = {} }) {
   return (
     <nav className="space-y-4">
       {ADMIN_NAV
-        .map((sec) => ({ ...sec, items: sec.items.filter((it) => !it.superadmin || adminRole() === 'superadmin') }))
+        .map((sec) => ({ ...sec, items: sec.items.filter((it) => !it.superadmin || isSuper) }))
         .filter((sec) => sec.items.length)
         .map((sec, i) => (
         <div key={i}>

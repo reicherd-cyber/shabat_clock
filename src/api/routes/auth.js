@@ -6,7 +6,7 @@ import { errors, ApiError } from '../../config/errors.js';
 import { bcryptCompare, bcryptHash, createUser } from '../../services/users.js';
 import { recordFailure, isLockedOut } from '../../services/authFailures.js';
 import { logAction } from '../../services/audit.js';
-import { consumeTotp } from '../../services/totp.js';
+import { consumeTotp, TOTP_REPLAY_MSG } from '../../services/adminTotp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
 import { signUserToken, signAdminToken, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter, onboardPrepareTokenLimiter, onboardCheckLimiter } from '../middleware.js';
 import { env } from '../../config/env.js';
@@ -250,9 +250,10 @@ authRouter.post('/admin/auth/login', adminLoginLimiter, async (req, res, next) =
     // The code may be an authenticator (TOTP) code OR an emailed one-time code.
     if (admin.totp_enabled) {
       if (!code) throw new ApiError(401, 'TWOFA_REQUIRED', 'נדרש קוד אימות דו-שלבי');
-      const totpOk = await consumeTotp(admin, code);
-      const emailOk = totpOk ? false : await verifyAdminEmailCode(admin, String(code));
-      if (!totpOk && !emailOk) throw new ApiError(401, 'BAD_2FA', 'קוד אימות שגוי');
+      const totp = await consumeTotp(admin, code);
+      if (totp === 'replay') throw new ApiError(401, 'BAD_2FA', TOTP_REPLAY_MSG);
+      const emailOk = totp === 'ok' ? false : await verifyAdminEmailCode(admin, String(code));
+      if (totp !== 'ok' && !emailOk) throw new ApiError(401, 'BAD_2FA', 'קוד אימות שגוי');
     }
     await query('UPDATE admins SET last_login_at = UTC_TIMESTAMP() WHERE id = ?', [admin.id]);
     res.json({ token: signAdminToken(admin.id, admin.role), admin: { id: Number(admin.id), name: admin.name, role: admin.role } });

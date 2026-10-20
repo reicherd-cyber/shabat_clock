@@ -26,15 +26,23 @@ export function isEncrypted(v) {
   return typeof v === 'string' && v.startsWith(PREFIX);
 }
 
-// Plaintext of an encrypted value; a value without the prefix is returned as is.
+// Plaintext of an encrypted value; a value without the prefix is returned as
+// is. A value this server cannot open (written under a different JWT_SECRET —
+// local dev shares the database — or after a secret rotation) reads as '' so
+// the caller falls back to "not set" and the admin simply saves it again.
 export function decryptSecret(v) {
   if (v == null || v === '') return '';
   if (!isEncrypted(v)) return String(v);
-  const raw = Buffer.from(v.slice(PREFIX.length), 'base64');
-  const iv = raw.subarray(0, 12);
-  const tag = raw.subarray(12, 28);
-  const ct = raw.subarray(28);
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key(), iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
+  try {
+    const raw = Buffer.from(v.slice(PREFIX.length), 'base64');
+    const iv = raw.subarray(0, 12);
+    const tag = raw.subarray(12, 28);
+    const ct = raw.subarray(28);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key(), iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
+  } catch (e) {
+    console.warn('secretbox: stored value unreadable with this server\'s key — treat as unset:', e.message);
+    return '';
+  }
 }

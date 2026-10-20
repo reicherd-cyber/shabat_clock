@@ -1,7 +1,7 @@
 // Compact admin pages: monitoring, call logs, commands, schedules, settings, admins.
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { adminApi } from '../api.js';
+import { adminApi, adminRole } from '../api.js';
 import { Card, Button, Input, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, Stat, fmtUptime, FilterSelect } from '../ui.jsx';
 import { UserRound, House } from 'lucide-react';
 import { ProviderBalances } from './ProviderBalances.jsx';
@@ -159,7 +159,7 @@ export function Monitoring() {
         <Stat label="ברוקר MQTT" value={m.broker_ok ? 'תקין' : 'מנותק'} ok={m.broker_ok} />
       </div>
       {/* provider balances (Yemot units, Anthropic credit) — moved here from עלויות קול */}
-      <ProviderBalances />
+      {adminRole() === 'superadmin' && <ProviderBalances />}
       <HealthSection h={m.health} />
       {m.sync_errors.length > 0 && (
         <Card>

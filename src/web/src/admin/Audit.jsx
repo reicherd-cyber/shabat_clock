@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ShieldCheck, UserRound, Phone, MessageCircle, Cog, ChevronDown, ChevronUp } from 'lucide-react';
-import { adminApi } from '../api.js';
+import { adminApi, adminRole } from '../api.js';
 import { Card, Button, Input, SearchSelect, Badge, ErrorNote, useAsync, DAY_NAMES, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, ymdLocal, RANGE_LOG, niceCeil, FilterSelect } from '../ui.jsx';
 import { planLines, diffLines } from '../planText.js';
 
@@ -416,7 +416,9 @@ function Row({ r, open, onToggle, tick }) {
                 <>
                   {' '}
                   {ent?.to ? (
-                    <Link to={ent.to(r)} className="font-semibold text-accent-dk hover:underline" onClick={(e) => e.stopPropagation()}>{name}</Link>
+                    (adminRole() === 'superadmin' || !/^\/admin\/(crm|finance|billing|voice-costs|admins|db)(\/|\?|$)/.test(ent.to(r)))
+                      ? <Link to={ent.to(r)} className="font-semibold text-accent-dk hover:underline" onClick={(e) => e.stopPropagation()}>{name}</Link>
+                      : <span className="font-semibold" title="עמוד למנהל־על בלבד">{name}</span>
                   ) : <b>{name}</b>}
                 </>
               )}
