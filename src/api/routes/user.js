@@ -4,7 +4,7 @@ import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireUser, signUserToken, invalidateSession, supportAskLimiter, supportMessageLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, accountsForEmail } from '../../services/users.js';
+import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, accountsForEmail, parseUiPrefs, validateUiPrefs } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { ensureDemoState } from '../../services/demo.js';
@@ -93,13 +93,36 @@ userRouter.patch('/me', async (req, res, next) => {
       if (!REGIONS[region]) throw errors.validation('unknown region', { zmanim_region: Object.keys(REGIONS).join('|') });
       fields.zmanim_region = region;
     }
-    if (!Object.keys(fields).length) throw errors.validation('nothing to update');
+    const prefsPatch = req.body?.ui_prefs;
+    if (!Object.keys(fields).length && prefsPatch === undefined) throw errors.validation('nothing to update');
     fields.updated_by = actorStr(actorOf(req));
-    await query(
-      `UPDATE users SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
-      [...Object.values(fields), req.auth.userId],
-    );
-    await act(req, 'update', 'user', req.auth.userId, { after: fields });
+    // Dashboard view + channel order (migration 72): a partial patch merged
+    // over the stored blob, so saving the order never drops the view choice.
+    // The merge is ONE atomic statement (JSON_MERGE_PATCH on the row itself),
+    // so a view switch and a reorder fired back-to-back from the dashboard
+    // can never read the same stale blob and overwrite each other — no
+    // read-modify-write window exists. The order is pruned to the account's
+    // own relays (removed ones included, so a recovered device keeps its
+    // place). A validation error rolls the whole update back.
+    let mergedPrefs = null;
+    await withTransaction(async (conn) => {
+      if (prefsPatch !== undefined) {
+        const [relays] = await conn.query('SELECT id FROM relays WHERE user_id = ? AND deleted_at IS NULL', [req.auth.userId]);
+        const patch = validateUiPrefs(prefsPatch, {}, new Set(relays.map((r) => r.id))); // validated + pruned keys only
+        await conn.query(
+          `UPDATE users SET ui_prefs = JSON_MERGE_PATCH(CASE WHEN JSON_VALID(ui_prefs) THEN ui_prefs ELSE '{}' END, ?) WHERE id = ?`,
+          [JSON.stringify(patch), req.auth.userId],
+        );
+        const [[row]] = await conn.query('SELECT ui_prefs FROM users WHERE id = ?', [req.auth.userId]);
+        mergedPrefs = parseUiPrefs(row?.ui_prefs);
+      }
+      await conn.query(
+        `UPDATE users SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+        [...Object.values(fields), req.auth.userId],
+      );
+    });
+    // The audit diff carries the object, not the stored JSON string.
+    await act(req, 'update', 'user', req.auth.userId, { after: mergedPrefs ? { ...fields, ui_prefs: mergedPrefs } : fields });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
