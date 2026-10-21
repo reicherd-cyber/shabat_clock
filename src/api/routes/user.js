@@ -98,17 +98,23 @@ userRouter.patch('/me', async (req, res, next) => {
     fields.updated_by = actorStr(actorOf(req));
     // Dashboard view + channel order (migration 72): a partial patch merged
     // over the stored blob, so saving the order never drops the view choice.
-    // Read-merge-write under a row lock — a view switch and a reorder fired
-    // back-to-back from the dashboard must not overwrite each other. The
-    // order is pruned to the account's own relays (removed ones included, so
-    // a recovered device keeps its place). A validation error rolls back.
+    // The merge is ONE atomic statement (JSON_MERGE_PATCH on the row itself),
+    // so a view switch and a reorder fired back-to-back from the dashboard
+    // can never read the same stale blob and overwrite each other — no
+    // read-modify-write window exists. The order is pruned to the account's
+    // own relays (removed ones included, so a recovered device keeps its
+    // place). A validation error rolls the whole update back.
     let mergedPrefs = null;
     await withTransaction(async (conn) => {
       if (prefsPatch !== undefined) {
-        const [[row]] = await conn.query('SELECT ui_prefs FROM users WHERE id = ? FOR UPDATE', [req.auth.userId]);
         const [relays] = await conn.query('SELECT id FROM relays WHERE user_id = ? AND deleted_at IS NULL', [req.auth.userId]);
-        mergedPrefs = validateUiPrefs(prefsPatch, parseUiPrefs(row?.ui_prefs), new Set(relays.map((r) => r.id)));
-        fields.ui_prefs = JSON.stringify(mergedPrefs);
+        const patch = validateUiPrefs(prefsPatch, {}, new Set(relays.map((r) => r.id))); // validated + pruned keys only
+        await conn.query(
+          `UPDATE users SET ui_prefs = JSON_MERGE_PATCH(CASE WHEN JSON_VALID(ui_prefs) THEN ui_prefs ELSE '{}' END, ?) WHERE id = ?`,
+          [JSON.stringify(patch), req.auth.userId],
+        );
+        const [[row]] = await conn.query('SELECT ui_prefs FROM users WHERE id = ?', [req.auth.userId]);
+        mergedPrefs = parseUiPrefs(row?.ui_prefs);
       }
       await conn.query(
         `UPDATE users SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
