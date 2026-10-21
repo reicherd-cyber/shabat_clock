@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, timeFormat, channelColorOf, ChannelDot } from '../ui.jsx';
+import { api, isImpersonating } from '../api.js';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, Toggle, useAsync, timeFormat, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
 import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2, Lock } from 'lucide-react';
 import WifiCard from './WifiCard.jsx';
 
@@ -94,6 +94,33 @@ export default function Settings() {
     await api.patch(`/relays/${relay.id}`, patch);
     await refresh();
   });
+
+  // Live on/off of a channel — the same command path as the dashboard toggle
+  // (ack + ~2s meter read-back). Per-relay busy so one switching channel does
+  // not freeze the rest of the page; the verdict shows under the row for 8s.
+  const [switching, setSwitching] = useState({}); // relayId -> true
+  const [verdicts, setVerdicts] = useState({}); // relayId -> text
+  const switchRelay = async (relay) => {
+    const action = relay.current_state === 'on' ? 'off' : 'on';
+    setSwitching((s) => ({ ...s, [relay.id]: true }));
+    try {
+      const res = await api.post(`/relays/${relay.id}/command`, { action });
+      if (res.status !== 'acked') {
+        setError(new Error(FAIL_HE[res.fail_reason] || 'המכשיר לא הגיב — נסו שוב'));
+      } else if (VERIFY_HE[res.verify]) {
+        const warn = VERIFY_WARN.has(res.verify);
+        if (!warn || isImpersonating()) {
+          setVerdicts((v) => ({ ...v, [relay.id]: `${warn ? '⚠' : '✓'} ${VERIFY_HE[res.verify]}` }));
+          setTimeout(() => setVerdicts((v) => ({ ...v, [relay.id]: null })), 8000);
+        }
+      }
+      setDevices(await api.get('/devices')); // true state, not the optimistic one
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSwitching((s) => ({ ...s, [relay.id]: false }));
+    }
+  };
 
   // "Remove" is a soft disable (is_enabled=false), never a real delete — the relay
   // stays manageable and can be re-enabled later. force=true also disables any
@@ -277,10 +304,21 @@ export default function Settings() {
           </div>
           <div className="space-y-2">
             {d.relays.map((r) => (
-              <div key={r.id} className="grid grid-cols-2 sm:grid-cols-6 gap-2 items-center border border-line rounded-xl px-3 py-2">
+              <div key={r.id} className="grid grid-cols-2 sm:grid-cols-7 gap-2 items-center border border-line rounded-xl px-3 py-2">
                 <span className="flex items-center gap-2 min-w-0">
                   <ChannelDot color={colorOf(r.id)} />
                   <Input defaultValue={r.name} onBlur={(e) => e.target.value !== r.name && patchRelay(r, { name: e.target.value })} />
+                </span>
+                <span className="flex items-center gap-2" title={d.is_online ? (r.current_state === 'on' ? 'כיבוי' : 'הדלקה') : 'המכשיר לא מחובר'}>
+                  <Toggle
+                    checked={r.current_state === 'on'}
+                    busy={!!switching[r.id]}
+                    disabled={!d.is_online || !r.is_enabled}
+                    onChange={() => switchRelay(r)}
+                  />
+                  <span className={`text-[12.5px] font-medium ${verdicts[r.id]?.startsWith('⚠') ? 'text-off' : r.current_state === 'on' ? 'text-on' : 'text-muted'}`}>
+                    {verdicts[r.id] || (r.current_state === 'on' ? 'דולק' : r.current_state === 'off' ? 'כבוי' : 'לא ידוע')}
+                  </span>
                 </span>
                 <label className="text-sm flex items-center gap-1">
                   קוד:
