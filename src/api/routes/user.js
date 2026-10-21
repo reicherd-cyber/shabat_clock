@@ -4,7 +4,7 @@ import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireUser, signUserToken, invalidateSession, supportAskLimiter, supportMessageLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, accountsForEmail } from '../../services/users.js';
+import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, accountsForEmail, parseUiPrefs, validateUiPrefs } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { ensureDemoState } from '../../services/demo.js';
@@ -92,6 +92,12 @@ userRouter.patch('/me', async (req, res, next) => {
       const region = String(req.body.zmanim_region);
       if (!REGIONS[region]) throw errors.validation('unknown region', { zmanim_region: Object.keys(REGIONS).join('|') });
       fields.zmanim_region = region;
+    }
+    if (req.body?.ui_prefs !== undefined) {
+      // Dashboard view + channel order (migration 72): a partial patch merged
+      // over the stored blob, so saving the order never drops the view choice.
+      const [row] = await query('SELECT ui_prefs FROM users WHERE id = ?', [req.auth.userId]);
+      fields.ui_prefs = JSON.stringify(validateUiPrefs(req.body.ui_prefs, parseUiPrefs(row?.ui_prefs)));
     }
     if (!Object.keys(fields).length) throw errors.validation('nothing to update');
     fields.updated_by = actorStr(actorOf(req));

@@ -209,10 +209,51 @@ export async function setUserEmailAdmin({ userId, email, actor = null }) {
 
 export async function getUser(id) {
   const rows = await query(
-    'SELECT id, full_name, ivr_code, require_pin, status, language, zmanim_region, notes, email, created_at FROM users WHERE id = ?',
+    'SELECT id, full_name, ivr_code, require_pin, status, language, zmanim_region, ui_prefs, notes, email, created_at FROM users WHERE id = ?',
     [id],
   );
-  return rows[0] || null;
+  const user = rows[0] || null;
+  if (user) user.ui_prefs = parseUiPrefs(user.ui_prefs);
+  return user;
+}
+
+// users.ui_prefs (migration 72): the dashboard's view choice + channel order.
+// Stored as JSON text; anything unreadable collapses to {} so a corrupt blob can
+// never break the profile. Keys: dashboard_view 'cards'|'list', channel_order
+// [relay_id, …] — unknown keys are dropped on save (validateUiPrefs).
+export function parseUiPrefs(raw) {
+  if (!raw) return {};
+  try {
+    const v = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  } catch { return {}; }
+}
+
+export const UI_PREFS_VIEWS = ['cards', 'list'];
+const UI_PREFS_MAX_ORDER = 500;
+
+// Validate a client-sent patch of ui_prefs and merge it over the stored blob.
+// Returns the merged object; throws a 400 with { field: rule } details.
+export function validateUiPrefs(patch, current = {}) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    throw errors.validation('ui_prefs must be an object', { ui_prefs: 'object' });
+  }
+  const next = { ...current };
+  if (patch.dashboard_view !== undefined) {
+    if (!UI_PREFS_VIEWS.includes(patch.dashboard_view)) {
+      throw errors.validation('unknown dashboard_view', { dashboard_view: UI_PREFS_VIEWS.join('|') });
+    }
+    next.dashboard_view = patch.dashboard_view;
+  }
+  if (patch.channel_order !== undefined) {
+    const list = patch.channel_order;
+    if (!Array.isArray(list) || list.length > UI_PREFS_MAX_ORDER
+      || !list.every((id) => Number.isInteger(id) && id > 0)) {
+      throw errors.validation('channel_order must be a list of relay ids', { channel_order: `int[] ≤ ${UI_PREFS_MAX_ORDER}` });
+    }
+    next.channel_order = [...new Set(list)];
+  }
+  return next;
 }
 
 export async function findUserByPhone(phone) {
