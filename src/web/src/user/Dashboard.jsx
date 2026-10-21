@@ -1,6 +1,6 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
-import { api, isImpersonating } from '../api.js';
-import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, TimeInput, useInterval, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
+import { api } from '../api.js';
+import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, TimeInput, useInterval, channelColorOf, ChannelDot, useRelayCommand } from '../ui.jsx';
 import { House, Timer, TriangleAlert, LayoutGrid, List, GripVertical } from 'lucide-react';
 
 const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
@@ -35,19 +35,15 @@ export default function Dashboard() {
   const [prefs, setPrefs] = useState(null); // ui_prefs from /me; edited locally while dragging
   const [devices, setDevices] = useState(null);
   const [schedCount, setSchedCount] = useState(null);
-  const [busyRelays, setBusyRelays] = useState({});
   const [error, setError] = useState(null);
   // Quick "turn off at…" — a one-sided once-schedule (OFF only) on a lit relay.
   const [quickOff, setQuickOff] = useState(null); // { relayId, time }
-  const [notices, setNotices] = useState({}); // relayId -> confirmation text
-  // One timer per relay: a new notice replaces the old one and restarts its
-  // 8s, so an earlier "done" can't wipe a later warning early.
-  const noticeTimers = useRef({});
-  const flash = (relayId, text) => {
-    clearTimeout(noticeTimers.current[relayId]);
-    setNotices((n) => ({ ...n, [relayId]: text }));
-    noticeTimers.current[relayId] = setTimeout(() => setNotices((n) => ({ ...n, [relayId]: null })), 8000);
-  };
+  // Immediate commands + their 8s verdict notices (shared hook — see ui.jsx);
+  // the quick-off confirmation rides the same per-relay notice slot.
+  const { busy: busyRelays, verdicts: notices, flash, send: toggle } = useRelayCommand({
+    onError: setError,
+    onDone: async () => setDevices(await api.get('/devices')), // true state, not the optimistic one
+  });
 
   useInterval(async () => {
     try {
@@ -68,44 +64,21 @@ export default function Dashboard() {
     }
   }, 10_000);
 
-  const toggle = async (relay) => {
-    const action = relay.current_state === 'on' ? 'off' : 'on';
-    setBusyRelays((b) => ({ ...b, [relay.id]: true }));
-    try {
-      const res = await api.post(`/relays/${relay.id}/command`, { action });
-      if (res.status !== 'acked') {
-        setError(new Error(FAIL_HE[res.fail_reason] || 'המכשיר לא הגיב — נסו שוב'));
-      } else if (VERIFY_HE[res.verify]) {
-        // What the channel meter saw after the command — not just "accepted".
-        // The warning verdicts are diagnostics for admins (impersonating);
-        // a customer whose A/C is simply in standby would read them as a fault.
-        const warn = VERIFY_WARN.has(res.verify);
-        if (!warn || isImpersonating()) {
-          flash(relay.id, `${warn ? '⚠' : '✓'} ${VERIFY_HE[res.verify]}${res.verify === 'flow' && res.verify_ma != null ? ` (${res.verify_ma}mA)` : ''}`);
-        }
-      }
-      setDevices(await api.get('/devices')); // true state, not the optimistic one
-    } catch (e) {
-      setError(e);
-    } finally {
-      setBusyRelays((b) => ({ ...b, [relay.id]: false }));
-    }
-  };
-
+  const [savingOff, setSavingOff] = useState(false);
   const saveQuickOff = async (relay) => {
     const now = new Date();
     const today = localYmd(now);
     // A time at-or-before "now" means tomorrow (you can't turn it off in the past).
     const off_date = quickOff.time > hhmmOf(now) ? today : localYmd(new Date(now.getTime() + 86400000));
-    setBusyRelays((b) => ({ ...b, [relay.id]: true }));
+    setSavingOff(true);
     try {
       await api.post('/schedules', { relay_id: relay.id, repeat_type: 'once', off_time: quickOff.time, off_date });
       setQuickOff(null);
-      flash(relay.id, `✓ יכבה ${off_date === today ? 'היום' : 'מחר'} בשעה ${quickOff.time}`);
+      flash(relay, `✓ יכבה ${off_date === today ? 'היום' : 'מחר'} בשעה ${quickOff.time}`);
     } catch (e) {
       setError(e);
     } finally {
-      setBusyRelays((b) => ({ ...b, [relay.id]: false }));
+      setSavingOff(false);
     }
   };
 
@@ -272,12 +245,12 @@ export default function Dashboard() {
           <span className="text-[13px] text-muted">כיבוי בשעה</span>
           <TimeInput className="!w-28" value={quickOff.time}
             onChange={(e) => setQuickOff({ ...quickOff, time: e.target.value })} />
-          <Button disabled={!!busyRelays[r.id] || !quickOff.time} onClick={() => saveQuickOff(r)}>אישור</Button>
+          <Button disabled={savingOff || !quickOff.time} onClick={() => saveQuickOff(r)}>אישור</Button>
           <Button variant="ghost" onClick={() => setQuickOff(null)}>ביטול</Button>
         </div>
       )}
       {notices[r.id] && (
-        <div className={`${pad} pb-3 text-[12.5px] font-medium ${notices[r.id].startsWith('⚠') ? 'text-off' : 'text-on'}`}>{notices[r.id]}</div>
+        <div className={`${pad} pb-3 text-[12.5px] font-medium ${notices[r.id].warn ? 'text-off' : 'text-on'}`}>{notices[r.id].text}</div>
       )}
     </>
   );
