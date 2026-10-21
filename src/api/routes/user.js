@@ -93,18 +93,24 @@ userRouter.patch('/me', async (req, res, next) => {
       if (!REGIONS[region]) throw errors.validation('unknown region', { zmanim_region: Object.keys(REGIONS).join('|') });
       fields.zmanim_region = region;
     }
-    if (req.body?.ui_prefs !== undefined) {
-      // Dashboard view + channel order (migration 72): a partial patch merged
-      // over the stored blob, so saving the order never drops the view choice.
-      const [row] = await query('SELECT ui_prefs FROM users WHERE id = ?', [req.auth.userId]);
-      fields.ui_prefs = JSON.stringify(validateUiPrefs(req.body.ui_prefs, parseUiPrefs(row?.ui_prefs)));
-    }
-    if (!Object.keys(fields).length) throw errors.validation('nothing to update');
+    const prefsPatch = req.body?.ui_prefs;
+    if (prefsPatch !== undefined) validateUiPrefs(prefsPatch); // shape errors before any DB work
+    if (!Object.keys(fields).length && prefsPatch === undefined) throw errors.validation('nothing to update');
     fields.updated_by = actorStr(actorOf(req));
-    await query(
-      `UPDATE users SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
-      [...Object.values(fields), req.auth.userId],
-    );
+    // Dashboard view + channel order (migration 72): a partial patch merged
+    // over the stored blob, so saving the order never drops the view choice.
+    // Read-merge-write under a row lock — a view switch and a reorder fired
+    // back-to-back from the dashboard must not overwrite each other.
+    await withTransaction(async (conn) => {
+      if (prefsPatch !== undefined) {
+        const [[row]] = await conn.query('SELECT ui_prefs FROM users WHERE id = ? FOR UPDATE', [req.auth.userId]);
+        fields.ui_prefs = JSON.stringify(validateUiPrefs(prefsPatch, parseUiPrefs(row?.ui_prefs)));
+      }
+      await conn.query(
+        `UPDATE users SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+        [...Object.values(fields), req.auth.userId],
+      );
+    });
     await act(req, 'update', 'user', req.auth.userId, { after: fields });
     res.json({ ok: true });
   } catch (e) { next(e); }
