@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, timeFormat, channelColorOf, ChannelDot } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, Toggle, useAsync, useInterval, timeFormat, channelColorOf, ChannelDot, useRelayCommand } from '../ui.jsx';
 import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2, Lock } from 'lucide-react';
 import WifiCard from './WifiCard.jsx';
 
@@ -94,6 +94,20 @@ export default function Settings() {
     await api.patch(`/relays/${relay.id}`, patch);
     await refresh();
   });
+
+  // Live on/off of a channel — the shared command hook (same protocol as the
+  // dashboard toggle and the calendar: ack + ~2s meter read-back, verdict kept
+  // 8s per relay). Per-relay busy, so one switching channel does not freeze
+  // the rest of the page; a fresh attempt clears an earlier failure note.
+  const { busy: switching, verdicts, send } = useRelayCommand({
+    onError: setError,
+    onDone: async () => setDevices(await api.get('/devices')), // true state, not the optimistic one
+  });
+  const switchRelay = (relay) => { setError(null); return send(relay); };
+  // The rows show live state, so keep it fresh like the dashboard does — a
+  // schedule or a phone call may switch a channel while this page is open,
+  // and the toggle must act on what the user actually sees.
+  useInterval(() => api.get('/devices').then(setDevices).catch(() => {}), 10_000);
 
   // "Remove" is a soft disable (is_enabled=false), never a real delete — the relay
   // stays manageable and can be re-enabled later. force=true also disables any
@@ -277,27 +291,45 @@ export default function Settings() {
           </div>
           <div className="space-y-2">
             {d.relays.map((r) => (
-              <div key={r.id} className="grid grid-cols-2 sm:grid-cols-6 gap-2 items-center border border-line rounded-xl px-3 py-2">
-                <span className="flex items-center gap-2 min-w-0">
+              // Wrapping row (not a fixed grid): every control keeps its natural
+              // width and the row folds into as many lines as the viewport needs —
+              // nothing ever covers a neighbour at tablet or phone widths.
+              <div key={r.id} className="flex flex-wrap items-center gap-2 border border-line rounded-xl px-3 py-2">
+                <span className="flex items-center gap-2 min-w-0 flex-1 basis-40">
                   <ChannelDot color={colorOf(r.id)} />
                   <Input defaultValue={r.name} onBlur={(e) => e.target.value !== r.name && patchRelay(r, { name: e.target.value })} />
                 </span>
-                <label className="text-sm flex items-center gap-1">
+                <span className="flex items-center gap-2 shrink-0 min-w-24"
+                  title={!r.is_enabled ? 'הממסר מושבת — סמנו "פעיל" כדי להפעילו' : !d.is_online ? 'המכשיר לא מחובר' : r.current_state === 'on' ? 'כיבוי' : 'הדלקה'}>
+                  <Toggle
+                    checked={r.current_state === 'on'}
+                    busy={!!switching[r.id]}
+                    disabled={!d.is_online || !r.is_enabled}
+                    onChange={() => switchRelay(r)}
+                  />
+                  <span className={`text-[12.5px] font-medium whitespace-nowrap ${r.current_state === 'on' ? 'text-on' : 'text-muted'}`}>
+                    {r.current_state === 'on' ? 'דולק' : r.current_state === 'off' ? 'כבוי' : 'לא ידוע'}
+                  </span>
+                </span>
+                <label className="text-sm flex items-center gap-1 shrink-0">
                   קוד:
-                  <Input className="w-24" inputMode="numeric" defaultValue={r.ivr_digit}
+                  <Input className="!w-20" inputMode="numeric" defaultValue={r.ivr_digit}
                     onBlur={(e) => Number(e.target.value) !== r.ivr_digit && patchRelay(r, { ivr_digit: Number(e.target.value) })} />
                 </label>
-                <Select value={r.boot_behavior} onChange={(e) => patchRelay(r, { boot_behavior: e.target.value })}>
+                <Select className="!w-auto shrink-0" value={r.boot_behavior} onChange={(e) => patchRelay(r, { boot_behavior: e.target.value })}>
                   <option value="schedule">לפי תזמון</option>
                   <option value="last_state">מצב אחרון</option>
                   <option value="off">כבוי</option>
                 </Select>
-                <label className="text-sm flex items-center gap-1">
+                <label className="text-sm flex items-center gap-1 shrink-0">
                   <input type="checkbox" checked={!!r.is_enabled}
                     onChange={(e) => patchRelay(r, { is_enabled: e.target.checked })} /> פעיל
                 </label>
-                <span className="text-muted text-xs">ערוץ {r.relay_no}</span>
-                <Button variant="ghost" className="justify-self-end" onClick={() => setDeleting(r)}>הסר</Button>
+                <span className="text-muted text-xs shrink-0">ערוץ {r.relay_no}</span>
+                <Button variant="ghost" className="ms-auto shrink-0" onClick={() => setDeleting(r)}>הסר</Button>
+                {verdicts[r.id] && (
+                  <div className={`basis-full text-[12.5px] font-medium ${verdicts[r.id].warn ? 'text-off' : 'text-on'}`}>{verdicts[r.id].text}</div>
+                )}
               </div>
             ))}
           </div>

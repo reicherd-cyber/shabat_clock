@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getTimes } from 'suncalc';
 import { HDate, HebrewCalendar, flags, gematriya } from '@hebcal/core';
-import { api, isImpersonating } from '../api.js';
-import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf, Logo, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
+import { api } from '../api.js';
+import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf, Logo, useRelayCommand } from '../ui.jsx';
 import { ChevronRight, ChevronLeft, ChevronDown, House, Check, Plus } from 'lucide-react';
 import { ScheduleFormModal, emptyForm, plusMinutes, rowToForm } from './ScheduleForm.jsx';
 
@@ -468,34 +468,12 @@ export default function Calendar() {
   // Immediate command from a column head; the true state is re-read afterwards.
   // The server verifies the order against the channel meter (services/commands.js
   // verifyCommand) — the verdict is shown for 8s above the grid, not just "accepted".
-  const [busyRelays, setBusyRelays] = useState({});
-  const [notice, setNotice] = useState(null); // { text, warn }
-  const noticeTimer = useRef(null);
-  const flash = (text, warn) => {
-    clearTimeout(noticeTimer.current);
-    setNotice({ text, warn });
-    noticeTimer.current = setTimeout(() => setNotice(null), 8000);
-  };
-  const toggleNow = async (relay) => {
-    const action = relay.current_state === 'on' ? 'off' : 'on';
-    setBusyRelays((b) => ({ ...b, [relay.id]: true }));
-    try {
-      const res = await api.post(`/relays/${relay.id}/command`, { action });
-      if (res.status !== 'acked') {
-        setError(new Error(FAIL_HE[res.fail_reason] || 'המכשיר לא הגיב — נסו שוב'));
-      } else if (VERIFY_HE[res.verify]) {
-        const warn = VERIFY_WARN.has(res.verify);
-        if (!warn || isImpersonating()) { // warning verdicts are admin-only diagnostics (see Dashboard)
-          flash(`${warn ? '⚠' : '✓'} ${relay.name}: ${VERIFY_HE[res.verify]}${res.verify === 'flow' && res.verify_ma != null ? ` (${res.verify_ma}mA)` : ''}`, warn);
-        }
-      }
-      setReload((n) => n + 1); // refetches timeline + relays: the switch is in it, `now` moves with it
-    } catch (e) {
-      setError(e);
-    } finally {
-      setBusyRelays((b) => ({ ...b, [relay.id]: false }));
-    }
-  };
+  // Shared command hook (ui.jsx useRelayCommand): per-relay busy + the newest
+  // verdict as a single notice above the grid.
+  const { busy: busyRelays, last: notice, send: toggleNow } = useRelayCommand({
+    onError: setError,
+    onDone: () => setReload((n) => n + 1), // refetches timeline + relays: the switch is in it, `now` moves with it
+  });
 
   // ±3-day padding keeps cross-boundary intervals pairable; display slices by
   // cells. The day and week views replay STATE, so they look back 35 days —
@@ -962,7 +940,7 @@ export default function Calendar() {
       </div>
       <ErrorNote error={error} />
       {notice && (
-        <div className={`rounded-lg px-4 py-2 text-[13px] font-medium ${notice.warn ? 'bg-off-bg text-off' : 'bg-on-bg text-on'}`}>{notice.text}</div>
+        <div className={`rounded-lg px-4 py-2 text-[13px] font-medium ${notice.warn ? 'bg-off-bg text-off' : 'bg-on-bg text-on'}`}>{notice.name}: {notice.text}</div>
       )}
 
       {view === 'month' ? <MonthGrid /> : view === 'day' ? <DayGrid /> : <WeekGrid />}

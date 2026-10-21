@@ -1,5 +1,6 @@
 import { Children, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { api, isImpersonating } from './api.js';
 
 // Command verification verdicts (services/commands.js verifyCommand) and
 // failure reasons — one wording for the dashboard notice, user/admin history
@@ -646,4 +647,53 @@ export function Stat({ label, value, sub, ok, to }) {
       {to && <div className="text-accent-dk text-xs mt-1 underline underline-offset-2">פרטים ›</div>}
     </Card>
   );
+}
+
+// ── Immediate relay command — ONE implementation of the protocol for the
+// dashboard toggle, the calendar column head and the settings switch:
+// POST /relays/:id/command; a non-ack becomes an error (FAIL_HE); an ack
+// carries the meter read-back verdict (VERIFY_HE), kept 8s per relay with one
+// timer per relay so a later verdict is never wiped by an earlier timer.
+// Warning verdicts are admin-only diagnostics — a customer whose A/C merely
+// sits in standby would read them as a fault. `onDone(relay, res)` re-reads
+// the true state; `onError(e)` surfaces failures. `last` is the newest verdict
+// (with the relay's name) for pages that show a single notice.
+export function useRelayCommand({ onError, onDone } = {}) {
+  const [busy, setBusy] = useState({}); // relayId -> true while the round-trip runs
+  const [verdicts, setVerdicts] = useState({}); // relayId -> { text, warn, name, relayId }
+  const [last, setLast] = useState(null);
+  const timers = useRef({});
+  useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
+  const flash = (relay, text, warn = false) => {
+    clearTimeout(timers.current[relay.id]);
+    const v = { text, warn, name: relay.name, relayId: relay.id };
+    setVerdicts((all) => ({ ...all, [relay.id]: v }));
+    setLast(v);
+    timers.current[relay.id] = setTimeout(() => {
+      setVerdicts((all) => ({ ...all, [relay.id]: null }));
+      setLast((l) => (l?.relayId === relay.id ? null : l));
+    }, 8000);
+  };
+  const send = async (relay, action = relay.current_state === 'on' ? 'off' : 'on') => {
+    setBusy((b) => ({ ...b, [relay.id]: true }));
+    try {
+      const res = await api.post(`/relays/${relay.id}/command`, { action });
+      if (res.status !== 'acked') {
+        onError?.(new Error(FAIL_HE[res.fail_reason] || 'המכשיר לא הגיב — נסו שוב'));
+      } else if (VERIFY_HE[res.verify]) {
+        const warn = VERIFY_WARN.has(res.verify);
+        if (!warn || isImpersonating()) {
+          flash(relay, `${warn ? '⚠' : '✓'} ${VERIFY_HE[res.verify]}${res.verify === 'flow' && res.verify_ma != null ? ` (${res.verify_ma}mA)` : ''}`, warn);
+        }
+      }
+      await onDone?.(relay, res);
+      return res;
+    } catch (e) {
+      onError?.(e);
+      return null;
+    } finally {
+      setBusy((b) => ({ ...b, [relay.id]: false }));
+    }
+  };
+  return { busy, verdicts, last, flash, send };
 }
