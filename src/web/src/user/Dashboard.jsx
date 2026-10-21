@@ -117,13 +117,23 @@ export default function Dashboard() {
   const prefsRef = useRef(null);
   prefsRef.current = prefs;
   // `revertTo` — the pre-edit prefs when the local state already carries the
-  // edit (a drag re-sorts the list live before the drop saves it).
+  // edit (a drag re-sorts the list live before the drop saves it). On failure
+  // only the keys THIS request carried go back to their pre-edit values: a
+  // newer edit to another key that already saved (e.g. a view switch while a
+  // reorder was in flight) is kept.
   const savePrefs = async (patch, revertTo = prefsRef.current || {}) => {
     setPrefs({ ...(prefsRef.current || {}), ...patch });
     try {
       await api.patch('/me', { ui_prefs: patch });
     } catch (e) {
-      setPrefs(revertTo);
+      setPrefs((p) => {
+        const next = { ...(p || {}) };
+        for (const k of Object.keys(patch)) {
+          if (k in revertTo) next[k] = revertTo[k];
+          else delete next[k];
+        }
+        return next;
+      });
       setError(e);
     }
   };
