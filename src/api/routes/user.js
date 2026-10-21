@@ -94,24 +94,29 @@ userRouter.patch('/me', async (req, res, next) => {
       fields.zmanim_region = region;
     }
     const prefsPatch = req.body?.ui_prefs;
-    if (prefsPatch !== undefined) validateUiPrefs(prefsPatch); // shape errors before any DB work
     if (!Object.keys(fields).length && prefsPatch === undefined) throw errors.validation('nothing to update');
     fields.updated_by = actorStr(actorOf(req));
     // Dashboard view + channel order (migration 72): a partial patch merged
     // over the stored blob, so saving the order never drops the view choice.
     // Read-merge-write under a row lock — a view switch and a reorder fired
-    // back-to-back from the dashboard must not overwrite each other.
+    // back-to-back from the dashboard must not overwrite each other. The
+    // order is pruned to the account's own relays (removed ones included, so
+    // a recovered device keeps its place). A validation error rolls back.
+    let mergedPrefs = null;
     await withTransaction(async (conn) => {
       if (prefsPatch !== undefined) {
         const [[row]] = await conn.query('SELECT ui_prefs FROM users WHERE id = ? FOR UPDATE', [req.auth.userId]);
-        fields.ui_prefs = JSON.stringify(validateUiPrefs(prefsPatch, parseUiPrefs(row?.ui_prefs)));
+        const [relays] = await conn.query('SELECT id FROM relays WHERE user_id = ? AND deleted_at IS NULL', [req.auth.userId]);
+        mergedPrefs = validateUiPrefs(prefsPatch, parseUiPrefs(row?.ui_prefs), new Set(relays.map((r) => r.id)));
+        fields.ui_prefs = JSON.stringify(mergedPrefs);
       }
       await conn.query(
         `UPDATE users SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
         [...Object.values(fields), req.auth.userId],
       );
     });
-    await act(req, 'update', 'user', req.auth.userId, { after: fields });
+    // The audit diff carries the object, not the stored JSON string.
+    await act(req, 'update', 'user', req.auth.userId, { after: mergedPrefs ? { ...fields, ui_prefs: mergedPrefs } : fields });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

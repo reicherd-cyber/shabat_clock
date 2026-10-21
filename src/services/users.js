@@ -234,7 +234,9 @@ const UI_PREFS_MAX_ORDER = 500;
 
 // Validate a client-sent patch of ui_prefs and merge it over the stored blob.
 // Returns the merged object; throws a 400 with { field: rule } details.
-export function validateUiPrefs(patch, current = {}) {
+// `allowedRelayIds` (a Set) prunes channel_order to the account's own relays,
+// so stale or foreign ids never accumulate in the blob.
+export function validateUiPrefs(patch, current = {}, allowedRelayIds = null) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
     throw errors.validation('ui_prefs must be an object', { ui_prefs: 'object' });
   }
@@ -251,7 +253,8 @@ export function validateUiPrefs(patch, current = {}) {
       || !list.every((id) => Number.isInteger(id) && id > 0)) {
       throw errors.validation('channel_order must be a list of relay ids', { channel_order: `int[] ≤ ${UI_PREFS_MAX_ORDER}` });
     }
-    next.channel_order = [...new Set(list)];
+    const unique = [...new Set(list)];
+    next.channel_order = allowedRelayIds ? unique.filter((id) => allowedRelayIds.has(id)) : unique;
   }
   return next;
 }

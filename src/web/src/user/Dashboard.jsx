@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef } from 'react';
+import { useMemo, useState, useRef, useEffect } from 'react';
 import { api, isImpersonating } from '../api.js';
 import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, TimeInput, useInterval, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE } from '../ui.jsx';
 import { House, Timer, TriangleAlert, LayoutGrid, List, GripVertical } from 'lucide-react';
@@ -111,12 +111,19 @@ export default function Dashboard() {
 
   // ── preferences (view + channel order) ──
   // Local state first so the UI answers instantly; the PATCH merges the patch
-  // over the stored blob server-side (and asks for confirmation under impersonation).
-  const savePrefs = async (patch) => {
-    setPrefs((p) => ({ ...(p || {}), ...patch }));
+  // over the stored blob server-side (and asks for confirmation under
+  // impersonation). A failed or cancelled request restores what the account
+  // really holds, so the screen never shows an unsaved view/order.
+  const prefsRef = useRef(null);
+  prefsRef.current = prefs;
+  // `revertTo` — the pre-edit prefs when the local state already carries the
+  // edit (a drag re-sorts the list live before the drop saves it).
+  const savePrefs = async (patch, revertTo = prefsRef.current || {}) => {
+    setPrefs({ ...(prefsRef.current || {}), ...patch });
     try {
       await api.patch('/me', { ui_prefs: patch });
     } catch (e) {
+      setPrefs(revertTo);
       setError(e);
     }
   };
@@ -138,16 +145,31 @@ export default function Dashboard() {
   // updates prefs.channel_order locally (so the list re-sorts live). The final
   // order is saved on release — one request per drag, none when nothing moved.
   const rowRefs = useRef({});
-  const orderRef = useRef([]); // the flat list's current id order (set each render)
-  const drag = useRef(null); // { id, before: ids at pick-up }
+  // The flat list's current id order: set on every render AND immediately by
+  // setLocalOrder, so a release that lands before React flushes the last move
+  // still saves the order the user sees.
+  const orderRef = useRef([]);
+  const drag = useRef(null); // { id, before: ids at pick-up, prefs: prefs at pick-up }
   const [dragId, setDragId] = useState(null);
-  const kbSave = useRef(null);
-  const setLocalOrder = (ids) => setPrefs((p) => ({ ...(p || {}), channel_order: ids }));
+  const kbSave = useRef(null); // { timer, before: prefs before the first ↑/↓ }
+  const setLocalOrder = (ids) => {
+    orderRef.current = ids;
+    setPrefs((p) => ({ ...(p || {}), channel_order: ids }));
+  };
+  // A pending keyboard save must not fire on a dead component: on unmount
+  // send it straight away (no state updates), or it would be lost.
+  useEffect(() => () => {
+    const pending = kbSave.current;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    kbSave.current = null;
+    api.patch('/me', { ui_prefs: { channel_order: orderRef.current } }).catch(() => {});
+  }, []);
 
   const onGripDown = (e, id) => {
     if (e.button != null && e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = { id, before: orderRef.current };
+    drag.current = { id, before: orderRef.current, prefs: prefsRef.current || {} };
     setDragId(id);
   };
   const onGripMove = (e) => {
@@ -167,13 +189,13 @@ export default function Dashboard() {
   };
   const onGripUp = () => {
     if (!drag.current) return;
-    const { before } = drag.current;
+    const { before, prefs: prefsBefore } = drag.current;
     drag.current = null;
     setDragId(null);
-    if (!sameList(orderRef.current, before)) savePrefs({ channel_order: orderRef.current });
+    if (!sameList(orderRef.current, before)) savePrefs({ channel_order: orderRef.current }, prefsBefore);
   };
   // Keyboard path: ↑/↓ on the focused grip moves the row one step; a burst of
-  // presses becomes one save.
+  // presses becomes one save (reverting to the pre-burst order on failure).
   const onGripKey = (e, id) => {
     const delta = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
     if (!delta) return;
@@ -185,9 +207,16 @@ export default function Dashboard() {
     const next = [...ids];
     next.splice(i, 1);
     next.splice(j, 0, id);
+    const before = kbSave.current?.before || prefsRef.current || {};
+    clearTimeout(kbSave.current?.timer);
     setLocalOrder(next);
-    clearTimeout(kbSave.current);
-    kbSave.current = setTimeout(() => savePrefs({ channel_order: orderRef.current }), 600);
+    kbSave.current = {
+      before,
+      timer: setTimeout(() => {
+        kbSave.current = null;
+        savePrefs({ channel_order: orderRef.current }, before);
+      }, 600),
+    };
   };
 
   if (!devices) return <p className="text-muted">טוען…</p>;
@@ -224,11 +253,12 @@ export default function Dashboard() {
       />
     </>
   );
-  // Quick-off editor + verdict notice, under the row.
-  const extras = (r) => (
+  // Quick-off editor + verdict notice, under the row — `pad` matches the
+  // row's own horizontal padding so both views line up.
+  const extras = (r, pad) => (
     <>
       {quickOff?.relayId === r.id && (
-        <div className="flex items-center gap-2.5 px-5 pb-3.5 flex-wrap">
+        <div className={`flex items-center gap-2.5 ${pad} pb-3.5 flex-wrap`}>
           <span className="text-[13px] text-muted">כיבוי בשעה</span>
           <TimeInput className="!w-28" value={quickOff.time}
             onChange={(e) => setQuickOff({ ...quickOff, time: e.target.value })} />
@@ -237,7 +267,7 @@ export default function Dashboard() {
         </div>
       )}
       {notices[r.id] && (
-        <div className={`px-5 pb-3 text-[12.5px] font-medium ${notices[r.id].startsWith('⚠') ? 'text-off' : 'text-on'}`}>{notices[r.id]}</div>
+        <div className={`${pad} pb-3 text-[12.5px] font-medium ${notices[r.id].startsWith('⚠') ? 'text-off' : 'text-on'}`}>{notices[r.id]}</div>
       )}
     </>
   );
@@ -318,7 +348,7 @@ export default function Dashboard() {
                 </span>
                 {controls(d, r)}
               </div>
-              {extras(r)}
+              {extras(r, 'px-3 sm:px-4')}
             </div>
           ))}
         </Card>
@@ -343,7 +373,7 @@ export default function Dashboard() {
                     </span>
                     {controls(d, r)}
                   </div>
-                  {extras(r)}
+                  {extras(r, 'px-5')}
                 </div>
               ))}
               {!d.is_online && (
