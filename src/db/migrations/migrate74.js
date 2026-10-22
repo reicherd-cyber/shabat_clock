@@ -16,7 +16,7 @@ const ymd = (v) => (v instanceof Date
 
 export async function migrate74(conn) {
   const [rows] = await conn.query(
-    `SELECT s.id, s.plan_id, s.user_id, s.repeat_type, s.excl_list, s.holidays, s.annual_calendar,
+    `SELECT s.id, s.plan_id, s.user_id, s.repeat_type, s.is_enabled, s.excl_list, s.holidays, s.annual_calendar,
             s.annual_date, s.annual_end_date, s.on_date, s.off_date, r.device_id
        FROM schedules s JOIN relays r ON r.id = s.relay_id
       WHERE s.plan_id IS NOT NULL AND s.deleted_at IS NULL`);
@@ -31,8 +31,10 @@ export async function migrate74(conn) {
   for (const members of plans.values()) {
     const dated = members.filter((m) => m.repeat_type !== 'weekly');
     if (!dated.length) continue;
+    // Only ENABLED dated schedulers carve the weekly ones — a disabled one
+    // replaces nothing, so its days must not be cancelled.
     const derived = new Map(); // JSON → item (one per distinct dated scheduler)
-    for (const m of dated) {
+    for (const m of dated.filter((d) => d.is_enabled)) {
       let item = null;
       if (m.repeat_type === 'holiday') {
         item = { type: 'holiday', holidays: String(m.holidays || '').split(',').filter(Boolean), derived: true };
