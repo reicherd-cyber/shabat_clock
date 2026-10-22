@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fwUpdateBlocker, WINDOW, MIN_UPTIME_S, RETRY_AFTER_MS, BLOCKER_HE } from '../src/monitor/fw-update.js';
+import { fwUpdateBlocker, WINDOW, MIN_UPTIME_S, RETRY_AFTER_MS, REFUSE_BACKOFF_MS, BLOCKER_HE } from '../src/monitor/fw-update.js';
 import { localParts } from '../src/services/time.js';
 import { dayKeysOn } from '../src/services/holidays.js';
 
@@ -63,12 +63,17 @@ test('a unit expecting a reboot, freshly booted, recently tried, or sharing the 
   assert.equal(fwUpdateBlocker({ ...green, inflight: true }), 'another_in_progress');
 });
 
+test('a refused Shelly.Update backs off an hour, not a day', () => {
+  assert.equal(fwUpdateBlocker({ ...green, refusedAt: weekdayNight - REFUSE_BACKOFF_MS + 60_000 }), 'refused_recently');
+  assert.equal(fwUpdateBlocker({ ...green, refusedAt: weekdayNight - REFUSE_BACKOFF_MS - 60_000 }), null);
+});
+
 test('a schedule due on one of the channels in the next minutes postpones the install', () => {
   assert.equal(fwUpdateBlocker({ ...green, dueSoon: true }), 'schedule_due');
 });
 
 test('every blocker has Hebrew for the admin page', () => {
-  for (const why of ['disabled', 'no_update', 'outside_window', 'rest_day', 'reboot_pending', 'just_booted', 'recent_attempt', 'another_in_progress', 'schedule_due']) {
+  for (const why of ['disabled', 'no_update', 'outside_window', 'rest_day', 'reboot_pending', 'just_booted', 'recent_attempt', 'refused_recently', 'another_in_progress', 'schedule_due']) {
     assert.ok(BLOCKER_HE[why], why);
   }
 });

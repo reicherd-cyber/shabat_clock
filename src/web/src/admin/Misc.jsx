@@ -107,11 +107,11 @@ export function DeviceHealth() {
               {d.temps?.length > 0 && <span className="text-muted" dir="ltr">{d.temps.map((t) => `${Math.round(t)}°C`).join(' / ')}</span>}
               {d.fw_auto?.state === 'updating'
                 ? <Badge ok>מתעדכן לקושחה {d.fw_auto.to}…</Badge>
-                : d.fw_update && (
-                  <span title={d.fw_auto?.why_he || ''}>
-                    <Badge ok={false}>עדכון קושחה {d.fw_update}</Badge>
-                  </span>
-                )}
+                : d.fw_update && <>
+                  <Badge ok={false}>עדכון קושחה {d.fw_update}</Badge>
+                  {/* inline, not a tooltip — the page is read on phones */}
+                  {d.fw_auto?.why_he && <span className="text-muted text-xs">{d.fw_auto.why_he}</span>}
+                </>}
               {d.auto_rebooted && <Badge ok={false}>אותחל יזומות</Badge>}
               {d.channels?.map((c) => (
                 <span key={c.ch} className={`text-xs ${(c.dead && d.unit_dead) || c.errors?.length ? 'text-red-600 font-bold' : 'text-muted'}`}

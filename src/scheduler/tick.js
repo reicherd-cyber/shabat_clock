@@ -386,6 +386,11 @@ export function recentlyDueRelays(schedules, from, upTo) {
 export async function scheduleDueBetween(relayId, from, to) {
   return (await relayOccurrences(relayId, from, to)).length > 0;
 }
+// Same question for every channel of one unit, with ONE schedules load
+// (monitor/fw-update.js asks it each minute inside the maintenance window).
+export async function deviceScheduleDueBetween(deviceId, from, to) {
+  return dueOccurrences(await loadActiveSchedules(deviceId), from, to).length > 0;
+}
 // The state each relay SHOULD be in, read from the EXECUTION LOG: the action
 // of the latest recorded occurrence (whatever its status) inside the window.
 // The log, not the live schedule rows — a once-schedule is soft-deleted the

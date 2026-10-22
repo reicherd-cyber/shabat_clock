@@ -17,21 +17,25 @@
 //    the uptime drop as expected, not as an incident;
 //  - the next probes verify the new version, refresh devices.fw_version, write
 //    the diary and email the superadmins — once per hop, success or failure.
+// The diary (device_events) is the source of truth across restarts: a hop that
+// was started but never judged resumes verification after a deploy.
 // Kill switch: settings fleet.fw_auto_update = 'off' (migration 73).
 import { query } from '../db/pool.js';
 import { localParts } from '../services/time.js';
 import { dayKeysOn } from '../services/holidays.js';
 import { getSetting } from '../services/settings.js';
 import { shellyCall } from '../services/shelly.js';
-import { scheduleDueBetween } from '../scheduler/tick.js';
+import { deviceScheduleDueBetween } from '../scheduler/tick.js';
 
 export const FW_SETTING = 'fleet.fw_auto_update';
 export const WINDOW = { fromH: 2, toH: 5 };        // local wall clock, [from, to)
 export const QUIET_BEFORE_MS = 15 * 60_000;         // no schedule due this soon on the unit
 export const MIN_UPTIME_S = 3600;                   // a unit that just booted is not touched
-export const RETRY_AFTER_MS = 24 * 3600_000;        // one attempt per unit per day
+export const RETRY_AFTER_MS = 24 * 3600_000;        // one ACCEPTED attempt per unit per day
+export const REFUSE_BACKOFF_MS = 60 * 60_000;       // a refused/timed-out Shelly.Update is retried after an hour, not a day
 export const INFLIGHT_MAX_MS = 10 * 60_000;         // download + flash + reboot budget before "failed"
 export const VERIFY_AFTER_MS = 90_000;              // don't ask for the version while it is still flashing
+export const LATE_WATCH_MS = 2 * 3600_000;          // a "failed" hop that reboots into the new version later is still recorded
 const STAGE = 'stable';
 
 const hh = (h) => `${String(h).padStart(2, '0')}:00`;
@@ -44,6 +48,7 @@ export const BLOCKER_HE = {
   reboot_pending: 'המכשיר ממתין לאתחול',
   just_booted: 'המכשיר אותחל לפני פחות משעה',
   recent_attempt: 'נוסה ב-24 השעות האחרונות',
+  refused_recently: 'המכשיר לא קיבל את הפקודה — ניסיון חוזר בעוד שעה',
   another_in_progress: 'מכשיר אחר מתעדכן כרגע',
   schedule_due: 'תזמון קרוב על אחד הערוצים',
 };
@@ -52,7 +57,7 @@ export const BLOCKER_HE = {
 // green. `now` is a Date or epoch ms; `inflight` is another unit's update that
 // is still inside its budget.
 export function fwUpdateBlocker({ now, tz = 'Asia/Jerusalem', enabled = true, offered, current = null,
-  uptime_s = null, lastAttemptAt = 0, inflight = false, dueSoon = false, expectReboot = false }) {
+  uptime_s = null, lastAttemptAt = 0, refusedAt = 0, inflight = false, dueSoon = false, expectReboot = false }) {
   if (!enabled) return 'disabled';
   if (!offered || offered === current) return 'no_update';
   const t = new Date(now);
@@ -62,6 +67,7 @@ export function fwUpdateBlocker({ now, tz = 'Asia/Jerusalem', enabled = true, of
   if (expectReboot) return 'reboot_pending';
   if (uptime_s != null && uptime_s < MIN_UPTIME_S) return 'just_booted';
   if (lastAttemptAt && t.getTime() - lastAttemptAt < RETRY_AFTER_MS) return 'recent_attempt';
+  if (refusedAt && t.getTime() - refusedAt < REFUSE_BACKOFF_MS) return 'refused_recently';
   if (inflight) return 'another_in_progress';
   if (dueSoon) return 'schedule_due';
   return null;
@@ -69,22 +75,55 @@ export function fwUpdateBlocker({ now, tz = 'Asia/Jerusalem', enabled = true, of
 
 const blocked = (why, offered) => ({ state: 'blocked', why, why_he: BLOCKER_HE[why] ?? why, offered });
 
-// Fleet-wide: the one update allowed to be in progress. Cleared on verify, on
-// failure, or when its budget ran out (unit never came back → the failure path
-// cannot run because the probe never reaches us; time clears the lock instead).
+// Fleet-wide: the one update allowed to be in progress. Reserved synchronously
+// right before Shelly.Update (the probe runs several units concurrently and the
+// gates above await DB/RPC — a check at the top would let two units flash at
+// once). Cleared on verify, on failure, or when its budget ran out (unit never
+// came back → the failure path cannot run because the probe never reaches us;
+// time clears the lock instead).
 let inflight = null; // { deviceId, at }
 const inflightActive = (now) => Boolean(inflight && now - inflight.at < INFLIGHT_MAX_MS);
 export const fwInflight = () => (inflightActive(Date.now()) ? inflight : null);
 export function _resetForTests() { inflight = null; }
+const release = (deviceId) => { if (inflight?.deviceId === deviceId) inflight = null; };
 
-async function anyScheduleDueSoon(deviceId, now) {
-  const relays = await query('SELECT id FROM relays WHERE device_id = ?', [deviceId]);
-  const from = new Date(now), to = new Date(now + QUIET_BEFORE_MS);
-  for (const r of relays) {
-    // unsure → treat as due: a missed schedule costs more than a night's delay
-    if (await scheduleDueBetween(r.id, from, to).catch(() => true)) return true;
+// Per-unit memory (st.fw) is rebuilt from the diary once per process: the daily
+// attempt gate must survive a deploy (cf. tryReboot), and a hop that was started
+// but never judged (deploy mid-install) resumes verification instead of being
+// forgotten with a stale fw_version and no email.
+async function seed(device, st) {
+  st.fw.seeded = true;
+  const [last] = await query(
+    `SELECT created_at, payload FROM device_events WHERE device_id = ? AND event IN ('config', 'error')
+       AND JSON_EXTRACT(payload, '$.kind') IN ('fw_update_started', 'fw_updated', 'fw_update_failed')
+     ORDER BY id DESC LIMIT 1`, [device.id]).catch(() => []);
+  if (!last) return;
+  const p = typeof last.payload === 'string' ? JSON.parse(last.payload) : (last.payload || {});
+  const at = new Date(last.created_at).getTime();
+  // A judged row sits minutes after the attempt it closed — near enough for a
+  // 24 h gate (conservative by those minutes).
+  st.fw.lastAttemptAt = at;
+  if (p.kind === 'fw_update_started' && Date.now() - at < INFLIGHT_MAX_MS + LATE_WATCH_MS) {
+    st.fw.pending = { from: p.from ?? null, to: p.to, at, resumed: true };
+    inflight ??= { deviceId: device.id, at };
   }
-  return false;
+}
+
+const setVersion = (device, ver) =>
+  query('UPDATE devices SET fw_version = ?, updated_at = updated_at WHERE id = ?', [ver, device.id]).catch(() => {});
+
+async function recordUpdated(device, st, deps, { from, to, late = false }) {
+  await setVersion(device, to);
+  // Ask the unit to look for the next hop now (a 1.2.x unit lands on 1.3.3
+  // first and is offered 2.x only after this check) — it installs next night.
+  const next = await shellyCall(device, 'Shelly.CheckForUpdate').then((r) => r?.[STAGE]?.version ?? null).catch(() => null);
+  await deps.deviceEvent(device.id, 'config', { kind: 'fw_updated', from, to, next, late });
+  deps.recordIncident('fw_updated', device.name, `${from ?? '?'} → ${to}${late ? ' (late)' : ''}${next ? ` (next: ${next})` : ''}`);
+  await deps.alert(`fw:${device.id}:${to}`, `עודכנה קושחה במכשיר "${device.name}"`,
+    `המכשיר "${device.name}" (${device.device_uid}) עודכן אוטומטית בחלון התחזוקה הלילי מקושחה ${from ?? '?'} לקושחה ${to}.\n`
+    + (late ? 'ההתקנה הסתיימה מאוחר מהצפוי (ההורדה הייתה איטית) — ההודעה הקודמת על עדכון שלא הושלם מבוטלת.\n' : '')
+    + 'המכשיר אותחל פעם אחת תוך כדי; הממסרים חזרו למצבם (restore_last) והתזמונים נשמרו.\n'
+    + (next ? `המכשיר כבר מציע עדכון נוסף (${next}) — יותקן בלילה הבא.` : 'זו הקושחה היציבה העדכנית — אין עדכון נוסף.'));
 }
 
 // Called by the health probe once it has a live Sys.GetStatus. `st` is the
@@ -92,40 +131,45 @@ async function anyScheduleDueSoon(deviceId, now) {
 // alert(), deviceEvent() and recordIncident(). Returns what the admin page shows.
 export async function maybeAutoUpdate(device, st, sys, deps) {
   const now = Date.now();
-  st.fw ??= { pending: null, lastAttemptAt: 0, seeded: false };
+  st.fw ??= { pending: null, late: null, lastAttemptAt: 0, refusedAt: 0, seeded: false };
+  if (!st.fw.seeded) await seed(device, st);
   if (st.fw.pending) return verifyPending(device, st, now, deps);
+  if (st.fw.late) await watchLate(device, st, sys, now, deps);
 
   const enabled = (await getSetting(FW_SETTING, 'on')) !== 'off';
   const offered = sys.available_updates?.[STAGE]?.version ?? null;
-  const base = { now, enabled, offered, uptime_s: sys.uptime, expectReboot: st.expectReboot, inflight: inflightActive(now) };
+  const base = {
+    now, enabled, offered, uptime_s: sys.uptime, expectReboot: st.expectReboot,
+    lastAttemptAt: st.fw.lastAttemptAt, refusedAt: st.fw.refusedAt, inflight: inflightActive(now),
+  };
   // Cheap gates first; the DB is asked only when the clock says yes.
-  let why = fwUpdateBlocker({ ...base, lastAttemptAt: st.fw.lastAttemptAt });
+  let why = fwUpdateBlocker(base);
   if (why) return blocked(why, offered);
-
-  if (!st.fw.seeded) { // one attempt per day must survive a deploy (cf. tryReboot)
-    st.fw.seeded = true;
-    const [last] = await query(
-      `SELECT created_at FROM device_events WHERE device_id = ? AND event = 'config'
-         AND JSON_EXTRACT(payload, '$.kind') = 'fw_update_started' ORDER BY id DESC LIMIT 1`, [device.id]).catch(() => []);
-    if (last) st.fw.lastAttemptAt = new Date(last.created_at).getTime();
-  }
-  const dueSoon = await anyScheduleDueSoon(device.id, now);
-  why = fwUpdateBlocker({ ...base, lastAttemptAt: st.fw.lastAttemptAt, dueSoon });
+  const dueSoon = await deviceScheduleDueBetween(device.id, new Date(now), new Date(now + QUIET_BEFORE_MS))
+    .catch(() => true); // unsure → treat as due: a missed schedule costs more than a night's delay
+  why = fwUpdateBlocker({ ...base, dueSoon });
   if (why) return blocked(why, offered);
 
   const info = await shellyCall(device, 'Shelly.GetDeviceInfo').catch(() => null);
   const from = info?.ver ?? null;
   if (from && from === offered) return blocked('no_update', null);
-  st.fw.lastAttemptAt = now;
+  // Reserve the fleet lock NOW, with no await between the check and the write.
+  if (inflightActive(Date.now())) return blocked('another_in_progress', offered);
+  inflight = { deviceId: device.id, at: now };
   const ok = await shellyCall(device, 'Shelly.Update', { stage: STAGE }).then(() => true)
     .catch((e) => { console.error(`[health] fw update ${device.device_uid}:`, e.message); return false; });
   if (!ok) {
+    // Not accepted → nothing is installing: free the lock, keep the daily
+    // attempt unburnt (cf. tryReboot), back off an hour instead.
+    release(device.id);
+    st.fw.refusedAt = now;
     await deps.deviceEvent(device.id, 'error', { kind: 'fw_update_refused', from, to: offered });
-    deps.recordIncident('fw_update_refused', device.name, `${from} → ${offered}: Shelly.Update not accepted`);
-    return blocked('recent_attempt', offered);
+    deps.recordIncident('fw_update_refused', device.name, `${from ?? '?'} → ${offered}: Shelly.Update not accepted`);
+    return blocked('refused_recently', offered);
   }
-  inflight = { deviceId: device.id, at: now };
+  st.fw.lastAttemptAt = now;
   st.fw.pending = { from, to: offered, at: now };
+  st.fw.late = null;
   st.expectReboot = true; // the install's reboot is ours, not an incident
   await deps.deviceEvent(device.id, 'config', { kind: 'fw_update_started', from, to: offered, stage: STAGE });
   deps.recordIncident('fw_update', device.name, `${from ?? '?'} → ${offered} (${STAGE})`);
@@ -137,28 +181,39 @@ async function verifyPending(device, st, now, deps) {
   if (now - p.at < VERIFY_AFTER_MS) return { state: 'updating', from: p.from, to: p.to };
   const info = await shellyCall(device, 'Shelly.GetDeviceInfo').catch(() => null);
   const ver = info?.ver ?? null;
-  if (ver && ver !== p.from) {
+  // Success = the TARGET is running. "Anything but the source" would call a
+  // failed download a success whenever the pre-update version read failed.
+  if (ver === p.to) {
     st.fw.pending = null;
-    if (inflight?.deviceId === device.id) inflight = null;
-    await query('UPDATE devices SET fw_version = ?, updated_at = updated_at WHERE id = ?', [ver, device.id]).catch(() => {});
-    // Ask the unit to look for the next hop now (a 1.2.x unit lands on 1.3.3
-    // first and is offered 2.x only after this check) — it installs next night.
-    const next = await shellyCall(device, 'Shelly.CheckForUpdate').then((r) => r?.[STAGE]?.version ?? null).catch(() => null);
-    await deps.deviceEvent(device.id, 'config', { kind: 'fw_updated', from: p.from, to: ver, next });
-    deps.recordIncident('fw_updated', device.name, `${p.from ?? '?'} → ${ver}${next ? ` (next: ${next})` : ''}`);
-    await deps.alert(`fw:${device.id}:${ver}`, `עודכנה קושחה במכשיר "${device.name}"`,
-      `המכשיר "${device.name}" (${device.device_uid}) עודכן אוטומטית בחלון התחזוקה הלילי מקושחה ${p.from ?? '?'} לקושחה ${ver}.\n`
-      + 'המכשיר אותחל פעם אחת תוך כדי; הממסרים חזרו למצבם (restore_last) והתזמונים נשמרו.\n'
-      + (next ? `המכשיר כבר מציע עדכון נוסף (${next}) — יותקן בלילה הבא.` : 'זו הקושחה היציבה העדכנית — אין עדכון נוסף.'));
+    release(device.id);
+    await recordUpdated(device, st, deps, { from: p.from, to: ver });
     return { state: 'updated', from: p.from, to: ver };
   }
   if (now - p.at < INFLIGHT_MAX_MS) return { state: 'updating', from: p.from, to: p.to };
+  // Budget spent and the old version still answers: no install happened (yet).
+  // The reboot flag goes back to honest — a crash tonight must stay a crash —
+  // and a late finish is still caught by watchLate below.
   st.fw.pending = null;
-  if (inflight?.deviceId === device.id) inflight = null;
+  st.fw.late = { from: p.from, to: p.to, at: now };
+  st.expectReboot = false;
+  release(device.id);
   await deps.deviceEvent(device.id, 'error', { kind: 'fw_update_failed', from: p.from, to: p.to, reports: ver });
   deps.recordIncident('fw_update_failed', device.name, `${p.from ?? '?'} → ${p.to}: still reports ${ver ?? 'nothing'}`);
   await deps.alert(`fw-fail:${device.id}:${p.to}`, `עדכון הקושחה במכשיר "${device.name}" לא הושלם`,
     `המכשיר "${device.name}" (${device.device_uid}) קיבל פקודת עדכון מ-${p.from ?? '?'} ל-${p.to}, אבל ${Math.round(INFLIGHT_MAX_MS / 60_000)} דקות אחרי כן הוא עדיין מדווח ${ver ?? 'ולא עונה על הגרסה'}.\n`
-    + 'המכשיר מגיב, כך שהוא לא נתקע — ייתכן שההורדה נכשלה (אינטרנט מסונן/איטי). ניסיון נוסף יתבצע אוטומטית בלילה הבא; אפשר גם לעדכן ידנית מהממשק של המכשיר.');
+    + 'המכשיר מגיב, כך שהוא לא נתקע — ייתכן שההורדה נכשלה או איטית (אינטרנט מסונן). אם ההתקנה תסתיים בשעתיים הקרובות תגיע הודעה נוספת; אחרת ניסיון נוסף יתבצע אוטומטית בלילה הבא, ואפשר גם לעדכן ידנית מהממשק של המכשיר.');
   return { state: 'failed', from: p.from, to: p.to };
+}
+
+// A hop judged "failed" whose download finished after the budget: the unit
+// reboots into the target later. Only a fresh uptime (it DID just reboot) costs
+// an RPC; the watch ends after LATE_WATCH_MS.
+async function watchLate(device, st, sys, now, deps) {
+  const l = st.fw.late;
+  if (now - l.at > LATE_WATCH_MS) { st.fw.late = null; return; }
+  if (sys.uptime == null || sys.uptime >= MIN_UPTIME_S) return;
+  const ver = await shellyCall(device, 'Shelly.GetDeviceInfo').then((i) => i?.ver ?? null).catch(() => null);
+  if (ver !== l.to) return;
+  st.fw.late = null;
+  await recordUpdated(device, st, deps, { from: l.from, to: ver, late: true });
 }
