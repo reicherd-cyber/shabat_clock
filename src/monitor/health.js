@@ -23,6 +23,7 @@ import { sendImmediateCommand } from '../services/commands.js';
 import { scheduleDueBetween, catchUpDevice } from '../scheduler/tick.js';
 import { sendEmail } from '../services/email.js';
 import { describeReset, RESET_HEADLINE } from './reset-reason.js';
+import { maybeAutoUpdate, fwProbeFailed } from './fw-update.js';
 import { learnOnPower, worthSaving, idleCandidates, judgeLoads, trackDeadOnsets, DEAD_RELAY_PROBES, IDLE_PROBES_TO_LEARN, REBOOT_MIN_WATCHED } from './dead-relay.js';
 
 // The reboot safety net trusts the pre-reboot output snapshot only if it is
@@ -313,6 +314,10 @@ async function verifyLoads(device, st, health, channels, alert) {
 // channel is what makes a reboot safe: the outputs come back as they were.
 async function tryReboot(device, st) {
   if (!active()) return false;
+  // A firmware install is in progress (fw-update.js): a Shelly.Reboot mid-flash
+  // is the one thing that can brick the unit — the install's own reboot clears
+  // the symptom anyway.
+  if (st.fw?.pending) return false;
   // The cooldown used to live only in memory — every deploy reset it, and a
   // unit in a dead streak got rebooted again after each restart. Seed it once
   // from the last automatic reboot the diary recorded.
@@ -347,6 +352,13 @@ async function checkShelly(device) {
   } catch {
     st.failures += 1;
     health.failures = st.failures;
+    // A unit that went silent after a firmware install still gets its verdict
+    // (the deadline, the failure email, the fleet lock) — otherwise a bricked
+    // or stuck unit would hold the lock and the verdict until it answered.
+    if (active()) {
+      await fwProbeFailed(device, st, { alert, deviceEvent, recordIncident })
+        .catch((e) => console.error('[health] fw auto-update (unreachable):', e.message));
+    }
     if (st.failures === UNREACHABLE_AFTER) {
       recordIncident('unreachable', device.name, `no RPC answer x${st.failures}`);
       await deviceEvent(device.id, 'error', { kind: 'health_unreachable', failures: st.failures });
@@ -392,6 +404,12 @@ async function checkShelly(device) {
   health.uptime_s = sys.uptime;
   health.ram_free = sys.ram_free;
   health.fw_update = sys.available_updates?.stable?.version ?? null;
+  // Automatic firmware updates (fw-update.js): nightly window, weekdays only,
+  // one unit at a time; the install's reboot is flagged expected below.
+  if (active()) {
+    health.fw_auto = await maybeAutoUpdate(device, st, sys, { alert, deviceEvent, recordIncident })
+      .catch((e) => { console.error('[health] fw auto-update:', e.message); return null; });
+  }
 
   // Channel outputs + temperatures ride Switch.GetStatus; probe failures on
   // missing channels end the scan quietly (mirrors the registration probe).
@@ -529,7 +547,7 @@ export async function healthTick() {
   // incidents; the broker_down alert already covers them. LAN devices still probe.
   const devices = await query(
     `SELECT d.id, CONCAT(u.full_name, ' — ', d.name) AS name, d.device_uid, d.transport,
-            d.ip_address, d.relay_count, d.is_online, d.mute_alerts
+            d.ip_address, d.relay_count, d.is_online, d.mute_alerts, d.timezone
      FROM devices d JOIN users u ON u.id = d.user_id
      WHERE d.device_type = 'shelly' AND d.is_enabled = TRUE AND d.device_uid IS NOT NULL
        AND d.first_contact_pending = FALSE`,
