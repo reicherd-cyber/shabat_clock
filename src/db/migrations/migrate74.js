@@ -7,8 +7,7 @@
 // here from their own rows: the user's exclusion items are kept, the derived
 // ones rebuilt, plan_mode set to 'replace' on the dated rows, and the
 // devices bumped so the Shelly mirror re-syncs.
-import { parseExclList, hebPickDate } from '../../services/holidays.js';
-import { localParts } from '../../services/time.js';
+import { parseExclList } from '../../services/holidays.js';
 
 const ymd = (v) => (v instanceof Date
   ? `${v.getUTCFullYear()}-${String(v.getUTCMonth() + 1).padStart(2, '0')}-${String(v.getUTCDate()).padStart(2, '0')}`
@@ -17,8 +16,7 @@ const ymd = (v) => (v instanceof Date
 export async function migrate74(conn) {
   const [rows] = await conn.query(
     `SELECT s.id, s.plan_id, s.user_id, s.repeat_type, s.excl_list, s.holidays, s.annual_calendar,
-            s.annual_date, s.annual_end_date, s.annual_heb_day, s.annual_heb_month, s.annual_end_heb_day, s.annual_end_heb_month,
-            s.on_date, s.off_date, r.device_id
+            s.annual_date, s.annual_end_date, s.on_date, s.off_date, r.device_id
        FROM schedules s JOIN relays r ON r.id = s.relay_id
       WHERE s.plan_id IS NOT NULL AND s.deleted_at IS NULL`);
   const plans = new Map();
@@ -27,7 +25,6 @@ export async function migrate74(conn) {
     if (!plans.has(k)) plans.set(k, []);
     plans.get(k).push(r);
   }
-  const p0 = localParts(new Date(), 'Asia/Jerusalem');
   const devices = new Set();
   let recompiled = 0;
   for (const members of plans.values()) {
@@ -39,14 +36,11 @@ export async function migrate74(conn) {
       if (m.repeat_type === 'holiday') {
         item = { type: 'holiday', holidays: String(m.holidays || '').split(',').filter(Boolean), derived: true };
       } else if (m.repeat_type === 'yearly') {
-        const heb = m.annual_calendar === 'heb';
-        let date = ymd(m.annual_date), end = ymd(m.annual_end_date) || date;
-        if (heb && m.annual_heb_day && m.annual_heb_month) {
-          date = hebPickDate(m.annual_heb_day, m.annual_heb_month, p0, 'annual_heb');
-          end = m.annual_end_heb_day && m.annual_end_heb_month
-            ? hebPickDate(m.annual_end_heb_day, m.annual_end_heb_month, p0, 'annual_end_heb') : date;
-        }
-        if (date) item = { type: 'yearly', calendar: heb ? 'heb' : 'greg', date, end_date: end || date, derived: true };
+        // Hebrew yearly rows store REPRESENTATIVE civil dates (annual_date /
+        // annual_end_date, calendar 'heb') — the same shape a saved exclusion
+        // item carries, so they are reused as-is.
+        const date = ymd(m.annual_date), end = ymd(m.annual_end_date) || date;
+        if (date) item = { type: 'yearly', calendar: m.annual_calendar === 'heb' ? 'heb' : 'greg', date, end_date: end, derived: true };
       } else if (m.repeat_type === 'once') {
         const date = ymd(m.on_date) || ymd(m.off_date);
         if (date) item = { type: 'once', calendar: 'greg', date, end_date: date, derived: true };
