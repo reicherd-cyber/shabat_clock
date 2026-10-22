@@ -1,22 +1,14 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { api } from '../api.js';
-import { Card, CardHead, StatusBadge, CodeChip, Toggle, ErrorNote, Button, TimeInput, useInterval, channelColorOf, ChannelDot, useRelayCommand } from '../ui.jsx';
-import { House, Timer, TriangleAlert, LayoutGrid, List, GripVertical } from 'lucide-react';
+import { Card, CardHead, CodeChip, Toggle, ErrorNote, Button, TimeInput, useInterval, channelColorOf, ChannelDot, useRelayCommand } from '../ui.jsx';
+import { House, Timer, LayoutGrid, List, GripVertical } from 'lucide-react';
+import { InspectEye } from './DeviceInspect.jsx';
 
 const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const localYmd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const hhmmOf = (d) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-
-function relativeHe(ts) {
-  const min = Math.round((Date.now() - new Date(ts).getTime()) / 60000);
-  if (min < 1) return 'עכשיו';
-  if (min === 1) return 'לפני דקה';
-  if (min < 60) return `לפני ${min} דקות`;
-  const h = Math.round(min / 60);
-  return h === 1 ? 'לפני שעה' : h < 24 ? `לפני ${h} שעות` : `לפני ${Math.round(h / 24)} ימים`;
-}
 
 const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
@@ -206,8 +198,6 @@ export default function Dashboard() {
   // Removed devices (is_enabled=false) never appear on the dashboard — Settings is
   // where they're restored.
   const visibleDevices = devices.filter((d) => d.is_enabled);
-  const online = visibleDevices.filter((d) => d.is_online).length;
-  const lastSeen = visibleDevices.map((d) => d.last_seen_at).filter(Boolean).sort().pop();
   const relaysOf = (d) => d.relays.filter((r) => r.is_enabled).sort(byOrder);
   // The flat list: every channel of every visible device, in the saved order.
   const rows = visibleDevices.flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => ({ r, d })))
@@ -228,10 +218,12 @@ export default function Dashboard() {
       <span className={`text-[12.5px] font-medium min-w-11 ${r.current_state === 'on' ? 'text-on' : 'text-muted'}`}>
         {STATE_HE[r.current_state] || STATE_HE.unknown}
       </span>
+      {/* Never disabled for connectivity: the customer no longer sees מנותק, so
+          the switch stays live and a failed order explains itself through the
+          command verdict (useRelayCommand) instead of a dead control. */}
       <Toggle
         checked={r.current_state === 'on'}
         busy={!!busyRelays[r.id]}
-        disabled={!d.is_online}
         onChange={() => toggle(r)}
       />
     </>
@@ -265,10 +257,12 @@ export default function Dashboard() {
           <h1 className="font-serif font-bold text-[34px] tracking-tight">
             שלום{me ? `, ${me.user.full_name.split(' ')[0]}` : ''}
           </h1>
+          {/* No connectivity here on purpose (2026-10-22): מחובר/מנותק flapping on
+              filtered lines alarmed customers while the local schedules kept
+              running. The superadmin sees it through the eye icon (DeviceInspect). */}
           <p className="text-muted mt-1">
-            {online === 1 ? 'מכשיר אחד מחובר' : `${online} מכשירים מחוברים`}
+            {visibleDevices.length === 1 ? 'מכשיר אחד' : `${visibleDevices.length} מכשירים`}
             {schedCount != null && <> · {schedCount} תזמונים פעילים</>}
-            {lastSeen && <> · העדכון האחרון {relativeHe(lastSeen)}</>}
           </p>
         </div>
         {visibleDevices.length > 0 && (
@@ -304,7 +298,7 @@ export default function Dashboard() {
               ref={(el) => { rowRefs.current[r.id] = el; }}
               className={`${i > 0 ? 'border-t border-dashed border-line' : ''} ${dragId === r.id ? 'bg-surface2 shadow-card relative z-10' : ''}`}
             >
-              <div className={`flex items-center gap-2.5 sm:gap-3.5 px-3 sm:px-4 py-3 ${d.is_online ? '' : 'opacity-55'}`}>
+              <div className="flex items-center gap-2.5 sm:gap-3.5 px-3 sm:px-4 py-3">
                 <button
                   type="button"
                   className="w-5 shrink-0 -mx-1 px-1 py-2 text-muted hover:text-ink cursor-grab active:cursor-grabbing touch-none rounded focus-visible:outline-2 focus-visible:outline-accent"
@@ -321,13 +315,13 @@ export default function Dashboard() {
                   <span className="font-medium flex items-center gap-2">
                     <ChannelDot color={colorOf(r.id)} /><span className="truncate">{r.name}</span>
                   </span>
-                  <span className="sm:hidden block text-[12px] text-muted truncate">
-                    {d.name}{!d.is_online && <span className="text-off"> · מנותק</span>}
+                  <span className="sm:hidden flex items-center gap-1.5 text-[12px] text-muted min-w-0">
+                    <span className="truncate">{d.name}</span><InspectEye device={d} size={13} />
                   </span>
                 </span>
                 <span className="hidden sm:flex w-40 shrink-0 items-center gap-1.5 text-[13px] text-muted min-w-0">
                   <House size={14} className="text-accent shrink-0" /><span className="truncate">{d.name}</span>
-                  {!d.is_online && <span className="text-off text-[11.5px] shrink-0">· מנותק</span>}
+                  <InspectEye device={d} size={14} />
                 </span>
                 {controls(d, r)}
               </div>
@@ -345,11 +339,11 @@ export default function Dashboard() {
                 <span className="font-serif font-bold text-[17px] flex items-center gap-2">
                   <House size={17} className="text-accent shrink-0" />{d.name}
                 </span>
-                <StatusBadge online={d.is_online}>{d.is_online ? 'מחובר' : 'מנותק'}</StatusBadge>
+                <InspectEye device={d} size={17} />
               </CardHead>
               {relaysOf(d).map((r, i) => (
                 <div key={r.id} className={i > 0 ? 'border-t border-dashed border-line' : ''}>
-                  <div className={`flex items-center gap-3.5 px-5 py-3.5 ${d.is_online ? '' : 'opacity-55'}`}>
+                  <div className="flex items-center gap-3.5 px-5 py-3.5">
                     <CodeChip>{r.ivr_digit}</CodeChip>
                     <span className="flex-1 font-medium inline-flex items-center gap-2">
                       <ChannelDot color={colorOf(r.id)} />{r.name}
@@ -359,12 +353,6 @@ export default function Dashboard() {
                   {extras(r, 'px-5')}
                 </div>
               ))}
-              {!d.is_online && (
-                <div className="px-5 py-3 text-[13px] text-off bg-off-bg border-t border-line flex items-center gap-1.5">
-                  <TriangleAlert size={14} className="shrink-0" />
-                  <span>המכשיר לא מחובר{d.last_seen_at ? ` — דווח לאחרונה ${relativeHe(d.last_seen_at)}` : ''} — התזמונים ממשיכים לפעול מקומית.</span>
-                </div>
-              )}
             </Card>
           ))}
         </div>

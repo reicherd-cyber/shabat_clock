@@ -497,6 +497,16 @@ adminRouter.delete('/shelly/inventory/:id', requireWrite, async (req, res, next)
   } catch (e) { next(e); }
 });
 
+// Everything about one unit — DB state, connectivity edges, reboots, health
+// snapshot, live RPCs (services/device-inspect.js). Same payload the
+// impersonation "eye" shows in the user panel.
+adminRouter.get('/devices/:id/inspect', requireSuperadmin, async (req, res, next) => {
+  try {
+    const { inspectDevice } = await import('../../services/device-inspect.js');
+    res.json(await inspectDevice(Number(req.params.id)));
+  } catch (e) { next(e); }
+});
+
 // Offline-device diagnosis: broker-log + ping evidence → a Hebrew verdict
 // (filter block vs. power/internet outage at the customer's home).
 adminRouter.get('/devices/:id/diagnosis', async (req, res, next) => {

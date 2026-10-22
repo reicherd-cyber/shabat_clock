@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, Toggle, useAsync, useInterval, timeFormat, channelColorOf, ChannelDot, useRelayCommand } from '../ui.jsx';
 import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2, Lock } from 'lucide-react';
 import WifiCard from './WifiCard.jsx';
+import { InspectEye } from './DeviceInspect.jsx';
 
 // Phones (caller-ID) + PIN + relay management — relay names/codes drive the IVR
 // prompts directly (PLAN §3).
@@ -283,6 +284,7 @@ export default function Settings() {
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <span className="font-bold flex items-center gap-1.5 shrink-0"><Plug size={16} className="text-accent" />ממסרים —</span>
             <Input className="flex-1 min-w-[130px]" defaultValue={d.name} onBlur={(e) => e.target.value !== d.name && renameDevice(d, e.target.value)} />
+            <InspectEye device={d} size={16} />
             {d.relays.length > 0 && d.relays.every((r) => !r.is_enabled) && <Badge ok={false}>מושבת</Badge>}
             <span className="flex gap-2 ms-auto">
               <Button variant="ghost" className="shrink-0" onClick={() => setDisablingDevice(d)}>השבת הכל</Button>
@@ -300,11 +302,11 @@ export default function Settings() {
                   <Input defaultValue={r.name} onBlur={(e) => e.target.value !== r.name && patchRelay(r, { name: e.target.value })} />
                 </span>
                 <span className="flex items-center gap-2 shrink-0 min-w-24"
-                  title={!r.is_enabled ? 'הממסר מושבת — סמנו "פעיל" כדי להפעילו' : !d.is_online ? 'המכשיר לא מחובר' : r.current_state === 'on' ? 'כיבוי' : 'הדלקה'}>
+                  title={!r.is_enabled ? 'הממסר מושבת — סמנו "פעיל" כדי להפעילו' : r.current_state === 'on' ? 'כיבוי' : 'הדלקה'}>
                   <Toggle
                     checked={r.current_state === 'on'}
                     busy={!!switching[r.id]}
-                    disabled={!d.is_online || !r.is_enabled}
+                    disabled={!r.is_enabled}
                     onChange={() => switchRelay(r)}
                   />
                   <span className={`text-[12.5px] font-medium whitespace-nowrap ${r.current_state === 'on' ? 'text-on' : 'text-muted'}`}>

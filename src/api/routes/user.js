@@ -313,6 +313,20 @@ userRouter.patch('/devices/:id', async (req, res, next) => {
 // the unit is connected NOW, and its ssid says to which network (a cabled unit
 // stays online with a wrong Wi-Fi password; the cached is_online flag cannot
 // tell). { online:false } when the device does not answer.
+// Superadmin eye while impersonating (services/device-inspect.js): the user
+// panel hides connectivity from customers; the admin running it "בשמו" gets
+// the full picture. The claim alone is not enough — the admin behind it must
+// still be an active superadmin right now.
+userRouter.get('/devices/:id/inspect', async (req, res, next) => {
+  try {
+    if (!req.auth.imp) throw errors.forbidden('זמין למנהל-על בלבד');
+    const [adm] = await query('SELECT role FROM admins WHERE id = ? AND is_active = TRUE', [req.auth.imp]);
+    if (adm?.role !== 'superadmin') throw errors.forbidden('זמין למנהל-על בלבד');
+    const { inspectDevice } = await import('../../services/device-inspect.js');
+    res.json(await inspectDevice(Number(req.params.id), { userId: req.auth.userId }));
+  } catch (e) { next(e); }
+});
+
 userRouter.get('/devices/:id/wifi-status', deviceWifiLimiter, async (req, res, next) => {
   try {
     const [d] = await query(
