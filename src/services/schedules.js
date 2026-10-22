@@ -424,7 +424,18 @@ const sameMoment = (a, b) => {
   if (anchored(a) || anchored(b)) return anchored(a) && anchored(b) && a.anchor === b.anchor && Number(a.offset_min || 0) === Number(b.offset_min || 0);
   return Boolean(a?.time) && String(a.time).slice(0, 5) === String(b?.time || '').slice(0, 5);
 };
-const momentHe = (s) => (s?.anchor && s.anchor !== 'clock' ? `${s.anchor} ${Number(s.offset_min || 0) >= 0 ? '+' : ''}${Number(s.offset_min || 0)}` : String(s?.time || '').slice(0, 5));
+// (anchor ids and holiday keys are not translated here — the editor shows the
+// named version; this text is the backstop for non-editor clients)
+const momentHe = (s) => (s?.anchor && s.anchor !== 'clock' ? 'אותו זמן הלכתי' : String(s?.time || '').slice(0, 5));
+const monthDay = (ymd) => { const [, mo, d] = String(ymd).slice(0, 10).split('-').map(Number); return mo * 100 + d; };
+// yearly month-day spans on a cyclic year (a range may wrap December → January)
+const cyclicOverlap = ([a1, a2], [b1, b2]) => {
+  const CYCLE = 1300;
+  const norm = ([x, y]) => (y < x ? [x, y + CYCLE] : [x, y]);
+  const [x1, y1] = norm([a1, a2]);
+  const [x2, y2] = norm([b1, b2]);
+  return [-CYCLE, 0, CYCLE].some((k) => x1 <= y2 + k && x2 + k <= y1);
+};
 export function schedulerCollisions(schedulers) {
   const out = [];
   const list = Array.isArray(schedulers) ? schedulers.filter((s) => s?.repeat_type) : [];
@@ -438,7 +449,7 @@ export function schedulerCollisions(schedulers) {
         if (hit.length) where = `בימי ${hit.map((d) => DAY_NAMES_HE[d]).join(', ')}`;
       } else if (a.repeat_type === 'holiday' && b.repeat_type === 'holiday') {
         const hit = keysOf(a).filter((k) => keysOf(b).includes(k));
-        if (hit.length) where = `ב${hit.join(', ')}`;
+        if (hit.length) where = hit.length === 1 ? 'באותו יום שבת/חג' : `ב-${hit.length} מימי השבת/החג שנבחרו`;
       } else if (['once', 'yearly'].includes(a.repeat_type) && ['once', 'yearly'].includes(b.repeat_type)
         && a.calendar !== 'heb' && b.calendar !== 'heb' && a.date && b.date) {
         // civil ranges only — Hebrew ranges are compared by the editor, which has the converters
@@ -446,10 +457,10 @@ export function schedulerCollisions(schedulers) {
         const [a1, a2] = span(a), [b1, b2] = span(b);
         const overlap = a.repeat_type === 'once' && b.repeat_type === 'once'
           ? a1 <= b2 && b1 <= a2
-          : a1.slice(5) <= b2.slice(5) && b1.slice(5) <= a2.slice(5); // yearly: month-day
+          : cyclicOverlap([monthDay(a1), monthDay(a2)], [monthDay(b1), monthDay(b2)]);
         if (overlap) where = 'באותם תאריכים';
       }
-      if (where) out.push(`שני תזמונים מתנגשים: הדלקה וכיבוי ב-${momentHe(a)} ${where} — שנו את השעה או את הימים של אחד מהם`);
+      if (where) out.push(`שני תזמונים מתנגשים: הדלקה וכיבוי ב${momentHe(a)} ${where} — שנו את השעה או את הימים של אחד מהם`);
     }
   }
   return out;

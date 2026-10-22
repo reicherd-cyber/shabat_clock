@@ -8,6 +8,7 @@
 // ones rebuilt, plan_mode set to 'replace' on the dated rows, and the
 // devices bumped so the Shelly mirror re-syncs.
 import { parseExclList } from '../../services/holidays.js';
+import { bumpDevices } from '../../services/schedules.js';
 
 const ymd = (v) => (v instanceof Date
   ? `${v.getUTCFullYear()}-${String(v.getUTCMonth() + 1).padStart(2, '0')}-${String(v.getUTCDate()).padStart(2, '0')}`
@@ -59,11 +60,6 @@ export async function migrate74(conn) {
       dated.map((m) => m.id));
     recompiled++;
   }
-  if (devices.size) {
-    const ids = [...devices];
-    await conn.query(
-      `UPDATE devices SET schedule_version = schedule_version + 1, sync_status = IF(device_type = 'demo', 'synced', 'pending')
-        WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
-  }
+  await bumpDevices(conn, [...devices]);
   console.log(`[migrate74] recompiled ${recompiled} plan(s), ${devices.size} device(s) marked for re-sync`);
 }

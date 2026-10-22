@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Download } from 'lucide-react';
-import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, SearchSelect, fmtWhen, normalizeMac, shellyModelInfo, useSort, SortTh } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, SearchSelect, fmtWhen, normalizeMac, shellyModelInfo, useSort, SortTh, agoHe } from '../ui.jsx';
 
 // Provisioning modal shows the secret + QR EXACTLY ONCE with an explicit
 // "I saved it" confirmation before it can be closed (§7).
@@ -1104,11 +1104,8 @@ function DiagRow({ label, value }) {
   return <div className="flex justify-between gap-3"><span>{label}</span><span className="font-semibold text-ink">{value}</span></div>;
 }
 
-function fmtAgo(min) {
-  if (min < 60) return `לפני ${min} דקות`;
-  if (min < 48 * 60) return `לפני ${Math.round(min / 60)} שעות`;
-  return `לפני ${Math.round(min / 1440)} ימים`;
-}
+// One wording for "ago" across the site (ui.jsx agoHe).
+const fmtAgo = (min) => agoHe(min);
 
 // "3 ימים 4 שעות" / "2 שעות 15 דק׳" / "40 שנ׳" — two largest units, for outage lengths.
 function fmtDuration(s) {

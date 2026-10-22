@@ -255,6 +255,14 @@ test('schedulerCollisions: opposite actions at the same moment on shared days co
   const yOff = { action: 'off', repeat_type: 'yearly', calendar: 'greg', date: '2026-08-15', end_date: '2026-09-15', time: '07:00' };
   assert.equal(schedulerCollisions([yOn, yOff]).length, 1);
   assert.equal(schedulerCollisions([yOn, { ...yOff, date: '2026-09-01' }]).length, 0);
+  // a yearly range that wraps the civil year still overlaps a range inside it
+  const wrapOn = { action: 'on', repeat_type: 'yearly', calendar: 'greg', date: '2026-12-20', end_date: '2027-01-05', time: '07:00' };
+  const xmasOff = { action: 'off', repeat_type: 'yearly', calendar: 'greg', date: '2026-12-25', end_date: '2026-12-26', time: '07:00' };
+  assert.equal(schedulerCollisions([wrapOn, xmasOff]).length, 1);
+  assert.equal(schedulerCollisions([wrapOn, { ...xmasOff, date: '2026-02-01', end_date: '2026-02-02' }]).length, 0);
+  // the message never leaks an anchor id or a holiday key
+  const msg = schedulerCollisions([hOn, hOff])[0];
+  assert.doesNotMatch(msg, /sunset|shabbat/);
   // planConflicts carries the collisions too
   assert.equal(planConflicts([on, offSame], []).length, 1);
 });

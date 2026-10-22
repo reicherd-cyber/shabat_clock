@@ -166,35 +166,45 @@ const sameMoment = (a, b) => (a.kind === 'clock' || b.kind === 'clock'
   ? a.kind === 'clock' && b.kind === 'clock' && a.time && a.time === b.time
   : a.kind === b.kind && signedOffset(a) === signedOffset(b));
 const daySet = (s) => (s.daily ? [1, 2, 3, 4, 5, 6, 7] : (s.days || []).map(Number));
+// One pair → the collision record, or null.
+function collisionOf(a, b) {
+  if (!a?.repeat_type || !b?.repeat_type || !a.action || !b.action) return null;
+  if (a.action === b.action || !sameMoment(a, b)) return null;
+  let where = null;
+  if (a.repeat_type === 'weekly' && b.repeat_type === 'weekly') {
+    const hit = daySet(a).filter((d) => daySet(b).includes(d)).sort((x, y) => x - y);
+    if (hit.length) where = `ב${hit.map((d) => DAY_NAMES[d]).join(', ')}`;
+  } else if (a.repeat_type === 'holiday' && b.repeat_type === 'holiday') {
+    const hit = (a.holidays || []).filter((k) => (b.holidays || []).includes(k));
+    if (hit.length) where = `ב${hit.map((k) => HOLIDAY_NAMES[k] || k).join(', ')}`;
+  } else if ((a.repeat_type === 'once' || a.repeat_type === 'yearly') && (b.repeat_type === 'once' || b.repeat_type === 'yearly') && a.calendar === b.calendar) {
+    const x = datedSpan(a, true), y = datedSpan(b, true);
+    if (x && y) {
+      const overlap = x.kind === 'once' && y.kind === 'once' ? x.from <= y.to && y.from <= x.to : cyclicOverlap(x.span, y.span);
+      if (overlap) where = 'באותם תאריכים';
+    }
+  }
+  if (!where) return null;
+  return { a, b, text: `התזמון "${schedulerSummary(a)}" והתזמון "${schedulerSummary(b)}" מתנגשים — הדלקה וכיבוי באותה שעה ${where}. שנו את השעה או את הימים של אחד מהם.` };
+}
+// The draft against the plan's other schedulers (one pass, re-run per keystroke).
+export const collisionsWith = (s, others) => (others || []).map((o) => collisionOf(s, o)).filter(Boolean);
+// Every pair of the plan (the plan view, before saving).
 export function schedulerCollisions(schedulers) {
   const out = [];
-  const list = (schedulers || []).filter((s) => s?.repeat_type && s.action);
+  const list = schedulers || [];
   for (let i = 0; i < list.length; i++) {
     for (let j = i + 1; j < list.length; j++) {
-      const a = list[i], b = list[j];
-      if (a.action === b.action || !sameMoment(a, b)) continue;
-      let where = null;
-      if (a.repeat_type === 'weekly' && b.repeat_type === 'weekly') {
-        const hit = daySet(a).filter((d) => daySet(b).includes(d)).sort((x, y) => x - y);
-        if (hit.length) where = `ב${hit.map((d) => DAY_NAMES[d]).join(', ')}`;
-      } else if (a.repeat_type === 'holiday' && b.repeat_type === 'holiday') {
-        const hit = (a.holidays || []).filter((k) => (b.holidays || []).includes(k));
-        if (hit.length) where = `ב${hit.map((k) => HOLIDAY_NAMES[k] || k).join(', ')}`;
-      } else if ((a.repeat_type === 'once' || a.repeat_type === 'yearly') && (b.repeat_type === 'once' || b.repeat_type === 'yearly') && a.calendar === b.calendar) {
-        const x = datedSpan(a, true), y = datedSpan(b, true);
-        if (x && y) {
-          const overlap = x.kind === 'once' && y.kind === 'once' ? x.from <= y.to && y.from <= x.to : cyclicOverlap(x.span, y.span);
-          if (overlap) where = 'באותם תאריכים';
-        }
-      }
-      if (where) out.push({ a, b, text: `התזמון "${schedulerSummary(a)}" והתזמון "${schedulerSummary(b)}" מתנגשים — הדלקה וכיבוי באותה שעה ${where}. שנו את השעה או את הימים של אחד מהם.` });
+      const c = collisionOf(list[i], list[j]);
+      if (c) out.push(c);
     }
   }
   return out;
 }
 
-export function planConflicts(schedulers, exclusions) {
-  const out = schedulerCollisions(schedulers);
+// Exclusions vs schedulers only — what an exclusion draft is checked against.
+export function exclusionConflicts(schedulers, exclusions) {
+  const out = [];
   for (const x of exclusions || []) {
     if (!x?.type || x.derived) continue;
     for (const s of schedulers || []) {
@@ -228,6 +238,8 @@ export function planConflicts(schedulers, exclusions) {
   }
   return out;
 }
+// Everything that blocks saving the plan (mirror of services/schedules.js planConflicts).
+export const planConflicts = (schedulers, exclusions) => [...schedulerCollisions(schedulers), ...exclusionConflicts(schedulers, exclusions)];
 function ConflictNote({ conflicts }) {
   if (!conflicts.length) return null;
   return (
@@ -443,12 +455,10 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
   const s = draft;
   const set = (patch) => setDraft({ ...s, ...patch });
   const anchored = s.kind !== 'clock';
+  const previous = others.filter((o) => o.uid !== s.uid);
   // the draft against the exclusions, and against the plan's OTHER schedulers
   // (a collision between two already-saved ones is reported on the plan view)
-  const conflicts = [
-    ...schedulerCollisions([...previous, s]).filter((c) => c.a === s || c.b === s),
-    ...planConflicts([s], exclusions),
-  ];
+  const conflicts = [...collisionsWith(s, previous), ...exclusionConflicts([s], exclusions)];
   // Switching to the Hebrew calendar converts the civil date(s) already typed —
   // both ends of a yearly range.
   const convertToHeb = (cur) => {
@@ -473,7 +483,6 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
     || (s.repeat_type === 'yearly' && s.calendar === 'greg' && !s.end_date)
     || (!anchored && !s.time)
     || (anchored && (s.offset === '' || Number.isNaN(Number(s.offset))));
-  const previous = others.filter((o) => o.uid !== s.uid);
   // Shown while editing either side of a שבת pair whose OFF lands on the eve.
   const eveProblem = eveOffProblems([...previous, s]).find((p) => p.off.uid === s.uid || p.on.uid === s.uid) || null;
   return (
@@ -657,7 +666,9 @@ function ExclusionForm({ draft, setDraft, onConfirm, onCancel, isNew, schedulers
   const x = draft;
   const set = (patch) => setDraft({ ...x, ...patch });
   const dated = x.type === 'once' || x.type === 'yearly';
-  const conflicts = planConflicts(schedulers, [x]);
+  // the exclusion draft against the schedulers only — collisions BETWEEN the
+  // plan's schedulers belong to the plan view, not to this form
+  const conflicts = exclusionConflicts(schedulers, [x]);
   const invalid = !x.type
     || (x.type === 'weekly' && !x.days.length)
     || (x.type === 'holiday' && !x.holidays.length)
