@@ -136,9 +136,16 @@ async function handleShellyMessage(topic, buf) {
       return;
     }
     const isOnline = text === 'true';
+    // last_seen_at means "the unit itself was heard". A death (LWT) is the
+    // BROKER speaking — and a retained one is redelivered on every resubscribe,
+    // so stamping it made every deploy look like a fresh report from a unit that
+    // had been dark for weeks (found 2026-10-22: "דווח לאחרונה לפני 10 דקות"
+    // on a unit offline since 8.10).
     await query(
-      'UPDATE devices SET is_online = ?, last_seen_at = UTC_TIMESTAMP() WHERE id = ?',
-      [isOnline ? 1 : 0, device.id],
+      isOnline
+        ? 'UPDATE devices SET is_online = 1, last_seen_at = UTC_TIMESTAMP() WHERE id = ?'
+        : 'UPDATE devices SET is_online = 0 WHERE id = ?',
+      [device.id],
     );
     if (Boolean(device.is_online) !== isOnline) {
       await query(
