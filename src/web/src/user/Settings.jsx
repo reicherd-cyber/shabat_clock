@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, Input, Select, Badge, Modal, ErrorNote, Toggle, useAsync, useInterval, timeFormat, channelColorOf, ChannelDot, useRelayCommand } from '../ui.jsx';
+import { Card, Button, Input, Select, Badge, Modal, ErrorNote, Toggle, useAsync, useInterval, timeFormat, channelColorOf, ChannelDot, useRelayCommand, isStaleOffline } from '../ui.jsx';
 import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2, Lock } from 'lucide-react';
 import WifiCard from './WifiCard.jsx';
 import { InspectEye } from './DeviceInspect.jsx';
@@ -302,11 +302,11 @@ export default function Settings() {
                   <Input defaultValue={r.name} onBlur={(e) => e.target.value !== r.name && patchRelay(r, { name: e.target.value })} />
                 </span>
                 <span className="flex items-center gap-2 shrink-0 min-w-24"
-                  title={!r.is_enabled ? 'הממסר מושבת — סמנו "פעיל" כדי להפעילו' : r.current_state === 'on' ? 'כיבוי' : 'הדלקה'}>
+                  title={!r.is_enabled ? 'הממסר מושבת — סמנו "פעיל" כדי להפעילו' : isStaleOffline(d) ? 'המכשיר לא מחובר' : r.current_state === 'on' ? 'כיבוי' : 'הדלקה'}>
                   <Toggle
                     checked={r.current_state === 'on'}
                     busy={!!switching[r.id]}
-                    disabled={!r.is_enabled}
+                    disabled={!r.is_enabled || isStaleOffline(d)}
                     onChange={() => switchRelay(r)}
                   />
                   <span className={`text-[12.5px] font-medium whitespace-nowrap ${r.current_state === 'on' ? 'text-on' : 'text-muted'}`}>

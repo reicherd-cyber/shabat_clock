@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { getTimes } from 'suncalc';
 import { HDate, HebrewCalendar, flags, gematriya } from '@hebcal/core';
 import { api } from '../api.js';
-import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf, Logo, useRelayCommand } from '../ui.jsx';
+import { Card, Button, Modal, ErrorNote, useAsync, DAY_NAMES, channelColorOf, Logo, useRelayCommand, isStaleOffline } from '../ui.jsx';
 import { ChevronRight, ChevronLeft, ChevronDown, House, Check, Plus } from 'lucide-react';
 import { ScheduleFormModal, emptyForm, plusMinutes, rowToForm } from './ScheduleForm.jsx';
 
@@ -319,13 +319,11 @@ function ChannelSelect({ relays, hidden, onToggle, onAll, colorOf }) {
 const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
 function HeadSwitch({ relay, color, busy, onToggle }) {
   const on = relay.current_state === 'on';
-  // Connectivity is not shown to customers (see DeviceInspect.jsx) — the switch
-  // stays live and a failed order explains itself through the command verdict.
-  const title = on ? 'כיבוי מיידי' : 'הדלקה מיידית';
+  const title = !relay.online ? 'המכשיר לא מחובר — אי אפשר להפעיל' : on ? 'כיבוי מיידי' : 'הדלקה מיידית';
   return (
     <label className={`mark-switch ${busy ? 'busy' : ''}`} title={title}
       style={{ '--switch-color': color }} onClick={(e) => e.stopPropagation()}>
-      <input type="checkbox" checked={on} disabled={busy}
+      <input type="checkbox" checked={on} disabled={!relay.online || busy}
         aria-label={`${title}: ${relay.name}`} onChange={() => onToggle(relay)} />
       <span className="track" />
       <span className="knob"><Logo size={17} /></span>
@@ -391,7 +389,7 @@ function HoverTipCard({ x, y, title, lines }) {
 // name, device + live state, and the immediate switch.
 function ColumnHead({ relay, colorOf, busy, onToggle, tip }) {
   const on = relay.current_state === 'on';
-  const stateHe = STATE_HE[relay.current_state] || STATE_HE.unknown;
+  const stateHe = !relay.online ? 'לא מחובר' : (STATE_HE[relay.current_state] || STATE_HE.unknown);
   return (
     <div className="flex-1 min-w-[96px] py-2 px-2 border-line border-s @container">
       {/* Narrow column (phone, many channels): the switch goes under the text so
@@ -404,7 +402,7 @@ function ColumnHead({ relay, colorOf, busy, onToggle, tip }) {
           </span>
           <div className="text-[11px] text-muted truncate">
             {relay.device}
-            <span className={`ms-1 ${on ? 'text-on' : ''}`}>
+            <span className={`ms-1 ${!relay.online ? 'text-off' : on ? 'text-on' : ''}`}>
               · {stateHe}
             </span>
           </div>
@@ -463,7 +461,9 @@ export default function Calendar() {
   const loadRelays = () => api.get('/devices').then((devices) => {
     setRelays(devices.filter((d) => d.is_enabled)
       .flatMap((d) => d.relays.filter((r) => r.is_enabled)
-        .map((r) => ({ ...r, device: d.name, device_id: d.id, online: !!d.is_online }))));
+        // `online` here = not in a stale outage (ui.jsx isStaleOffline): a short
+        // flap neither greys the column nor disables its switch.
+        .map((r) => ({ ...r, device: d.name, device_id: d.id, online: !isStaleOffline(d) }))));
   });
   useEffect(() => { loadRelays().catch(setError); }, []);
 

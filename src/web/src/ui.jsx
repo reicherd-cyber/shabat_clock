@@ -146,6 +146,23 @@ export const Select = ({ className = '', children, ...props }) => (
 );
 
 // mockup .badge online/offline (glowing dot via index.css)
+// Customer-facing "unavailable" rule (2026-10-22): a device is shown dimmed and
+// its switches disabled only after it has been offline for over an hour. A short
+// flap (filtered line, router hiccup) stays invisible — the local schedules keep
+// running and the word מנותק alarmed customers for nothing. The superadmin sees
+// the raw state through the eye icon (user/DeviceInspect.jsx).
+export const STALE_OFFLINE_MS = 60 * 60_000;
+export const isStaleOffline = (d) => !d.is_online
+  && (!d.last_seen_at || Date.now() - new Date(d.last_seen_at).getTime() > STALE_OFFLINE_MS);
+export function relativeHe(ts) {
+  const min = Math.round((Date.now() - new Date(ts).getTime()) / 60000);
+  if (min < 1) return 'עכשיו';
+  if (min === 1) return 'לפני דקה';
+  if (min < 60) return `לפני ${min} דקות`;
+  const h = Math.round(min / 60);
+  return h === 1 ? 'לפני שעה' : h < 24 ? `לפני ${h} שעות` : `לפני ${Math.round(h / 24)} ימים`;
+}
+
 export const StatusBadge = ({ online, children }) => (
   <span className={`badge ${online ? 'online' : 'offline'}`}>
     <span className="dot" />{children}
