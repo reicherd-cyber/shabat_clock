@@ -18,9 +18,13 @@ export const IVR_DIGIT_MSG = 'קוד IVR חייב להיות מספר שלם ח�
 export const isValidIvrDigit = (d) => Number.isInteger(d) && d >= 1 && d <= IVR_DIGIT_MAX;
 
 export async function listDevicesWithRelays(userId) {
+  // offline_stale: the customer-facing "unavailable" rule (2026-10-22) — offline
+  // AND not heard for over an hour. A shorter flap stays invisible in the panel
+  // (ui.jsx isStaleOffline reads this flag; one clock, the server's).
   const devices = await query(
     `SELECT id, name, is_online, last_seen_at, sync_status, fw_version, relay_count, is_enabled,
-            device_type, device_uid
+            device_type, device_uid,
+            (is_online = FALSE AND (last_seen_at IS NULL OR last_seen_at < UTC_TIMESTAMP() - INTERVAL 60 MINUTE)) AS offline_stale
      FROM devices WHERE user_id = ? AND returned_to_stock_at IS NULL ORDER BY id`,
     [userId],
   );

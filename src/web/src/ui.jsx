@@ -146,6 +146,34 @@ export const Select = ({ className = '', children, ...props }) => (
 );
 
 // mockup .badge online/offline (glowing dot via index.css)
+// Customer-facing "unavailable" rule (2026-10-22): a device is shown dimmed and
+// its switches disabled only after it has been offline for over an hour. A short
+// flap (filtered line, router hiccup) stays invisible — the local schedules keep
+// running and the word מנותק alarmed customers for nothing. The superadmin sees
+// the raw state through the eye icon (user/DeviceInspect.jsx).
+// The server computes it (relays.js listDevicesWithRelays → offline_stale) so
+// every channel and every clock agree; the local arithmetic is only a fallback
+// for a payload that predates the flag.
+export const STALE_OFFLINE_MS = 60 * 60_000;
+export const isStaleOffline = (d) => (d.offline_stale != null ? Boolean(d.offline_stale)
+  : !d.is_online && (!d.last_seen_at || Date.now() - new Date(d.last_seen_at).getTime() > STALE_OFFLINE_MS));
+// "לפני 5 דקות" / "לפני שעתיים" / "לפני 3 ימים" — one wording for every page.
+export function relativeHe(ts) {
+  return agoHe(Math.round((Date.now() - new Date(ts).getTime()) / 60000));
+}
+export function agoHe(min) {
+  if (min < 1) return 'עכשיו';
+  if (min === 1) return 'לפני דקה';
+  if (min === 2) return 'לפני שתי דקות';
+  if (min < 60) return `לפני ${min} דקות`;
+  const h = Math.round(min / 60);
+  if (h === 1) return 'לפני שעה';
+  if (h === 2) return 'לפני שעתיים';
+  if (h < 24) return `לפני ${h} שעות`;
+  const d = Math.round(h / 24);
+  return d === 1 ? 'לפני יום' : d === 2 ? 'לפני יומיים' : `לפני ${d} ימים`;
+}
+
 export const StatusBadge = ({ online, children }) => (
   <span className={`badge ${online ? 'online' : 'offline'}`}>
     <span className="dot" />{children}

@@ -1,7 +1,7 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { api } from '../api.js';
-import { Card, CardHead, CodeChip, Toggle, ErrorNote, Button, TimeInput, useInterval, channelColorOf, ChannelDot, useRelayCommand } from '../ui.jsx';
-import { House, Timer, LayoutGrid, List, GripVertical } from 'lucide-react';
+import { Card, CardHead, CodeChip, Toggle, ErrorNote, Button, TimeInput, useInterval, channelColorOf, ChannelDot, useRelayCommand, isStaleOffline, relativeHe } from '../ui.jsx';
+import { House, Timer, LayoutGrid, List, GripVertical, TriangleAlert } from 'lucide-react';
 import { InspectEye } from './DeviceInspect.jsx';
 
 const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
@@ -218,12 +218,13 @@ export default function Dashboard() {
       <span className={`text-[12.5px] font-medium min-w-11 ${r.current_state === 'on' ? 'text-on' : 'text-muted'}`}>
         {STATE_HE[r.current_state] || STATE_HE.unknown}
       </span>
-      {/* Never disabled for connectivity: the customer no longer sees מנותק, so
-          the switch stays live and a failed order explains itself through the
+      {/* Disabled only for a STALE outage (isStaleOffline, > 1 h): a short flap
+          keeps the switch live and a failed order explains itself through the
           command verdict (useRelayCommand) instead of a dead control. */}
       <Toggle
         checked={r.current_state === 'on'}
         busy={!!busyRelays[r.id]}
+        disabled={isStaleOffline(d)}
         onChange={() => toggle(r)}
       />
     </>
@@ -298,7 +299,7 @@ export default function Dashboard() {
               ref={(el) => { rowRefs.current[r.id] = el; }}
               className={`${i > 0 ? 'border-t border-dashed border-line' : ''} ${dragId === r.id ? 'bg-surface2 shadow-card relative z-10' : ''}`}
             >
-              <div className="flex items-center gap-2.5 sm:gap-3.5 px-3 sm:px-4 py-3">
+              <div className={`flex items-center gap-2.5 sm:gap-3.5 px-3 sm:px-4 py-3 ${isStaleOffline(d) ? 'opacity-55' : ''}`}>
                 <button
                   type="button"
                   className="w-5 shrink-0 -mx-1 px-1 py-2 text-muted hover:text-ink cursor-grab active:cursor-grabbing touch-none rounded focus-visible:outline-2 focus-visible:outline-accent"
@@ -316,11 +317,14 @@ export default function Dashboard() {
                     <ChannelDot color={colorOf(r.id)} /><span className="truncate">{r.name}</span>
                   </span>
                   <span className="sm:hidden flex items-center gap-1.5 text-[12px] text-muted min-w-0">
-                    <span className="truncate">{d.name}</span><InspectEye device={d} size={13} />
+                    <span className="truncate">{d.name}</span>
+                    {isStaleOffline(d) && <span className="text-off shrink-0">· לא מחובר</span>}
+                    <InspectEye device={d} size={13} />
                   </span>
                 </span>
                 <span className="hidden sm:flex w-40 shrink-0 items-center gap-1.5 text-[13px] text-muted min-w-0">
                   <House size={14} className="text-accent shrink-0" /><span className="truncate">{d.name}</span>
+                  {isStaleOffline(d) && <span className="text-off text-[11.5px] shrink-0">· לא מחובר</span>}
                   <InspectEye device={d} size={14} />
                 </span>
                 {controls(d, r)}
@@ -343,7 +347,7 @@ export default function Dashboard() {
               </CardHead>
               {relaysOf(d).map((r, i) => (
                 <div key={r.id} className={i > 0 ? 'border-t border-dashed border-line' : ''}>
-                  <div className="flex items-center gap-3.5 px-5 py-3.5">
+                  <div className={`flex items-center gap-3.5 px-5 py-3.5 ${isStaleOffline(d) ? 'opacity-55' : ''}`}>
                     <CodeChip>{r.ivr_digit}</CodeChip>
                     <span className="flex-1 font-medium inline-flex items-center gap-2">
                       <ChannelDot color={colorOf(r.id)} />{r.name}
@@ -353,6 +357,12 @@ export default function Dashboard() {
                   {extras(r, 'px-5')}
                 </div>
               ))}
+              {isStaleOffline(d) && (
+                <div className="px-5 py-3 text-[13px] text-off bg-off-bg border-t border-line flex items-center gap-1.5">
+                  <TriangleAlert size={14} className="shrink-0" />
+                  <span>המכשיר לא מחובר{d.last_seen_at ? ` — דווח לאחרונה ${relativeHe(d.last_seen_at)}` : ''} — התזמונים ממשיכים לפעול מקומית.</span>
+                </div>
+              )}
             </Card>
           ))}
         </div>
