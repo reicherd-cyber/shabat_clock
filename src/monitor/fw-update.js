@@ -87,6 +87,31 @@ export const fwInflight = () => (inflightActive(Date.now()) ? inflight : null);
 export function _resetForTests() { inflight = null; }
 const release = (deviceId) => { if (inflight?.deviceId === deviceId) inflight = null; };
 
+const parsePayload = (v) => (typeof v === 'string' ? JSON.parse(v) : (v || {}));
+const JUDGED = "('fw_update_started', 'fw_updated', 'fw_update_failed')";
+
+// The fleet lock is rebuilt from the diary once per process, BEFORE any unit
+// may start: a hop started minutes before a deploy whose unit is still flashing
+// (unreachable, so its own probe cannot re-seed it) must still hold the lock.
+let fleetSeeded = null;
+function seedFleet() {
+  return fleetSeeded ??= (async () => {
+    const rows = await query(
+      `SELECT device_id, created_at, payload FROM device_events
+        WHERE event IN ('config', 'error') AND JSON_EXTRACT(payload, '$.kind') IN ${JUDGED}
+          AND created_at > UTC_TIMESTAMP() - INTERVAL ? SECOND ORDER BY id DESC`,
+      [Math.ceil(INFLIGHT_MAX_MS / 1000)]).catch(() => []);
+    const seen = new Set();
+    for (const r of rows) { // newest row per unit decides; the newest open hop takes the lock
+      if (seen.has(r.device_id)) continue;
+      seen.add(r.device_id);
+      if (parsePayload(r.payload).kind !== 'fw_update_started') continue;
+      const at = new Date(r.created_at).getTime();
+      if (!inflight || at > inflight.at) inflight = { deviceId: r.device_id, at };
+    }
+  })();
+}
+
 // Per-unit memory (st.fw) is rebuilt from the diary once per process: the daily
 // attempt gate must survive a deploy (cf. tryReboot), and a hop that was started
 // but never judged (deploy mid-install) resumes verification instead of being
@@ -95,17 +120,18 @@ async function seed(device, st) {
   st.fw.seeded = true;
   const [last] = await query(
     `SELECT created_at, payload FROM device_events WHERE device_id = ? AND event IN ('config', 'error')
-       AND JSON_EXTRACT(payload, '$.kind') IN ('fw_update_started', 'fw_updated', 'fw_update_failed')
+       AND JSON_EXTRACT(payload, '$.kind') IN ${JUDGED}
      ORDER BY id DESC LIMIT 1`, [device.id]).catch(() => []);
   if (!last) return;
-  const p = typeof last.payload === 'string' ? JSON.parse(last.payload) : (last.payload || {});
+  const p = parsePayload(last.payload);
   const at = new Date(last.created_at).getTime();
   // A judged row sits minutes after the attempt it closed — near enough for a
   // 24 h gate (conservative by those minutes).
   st.fw.lastAttemptAt = at;
   if (p.kind === 'fw_update_started' && Date.now() - at < INFLIGHT_MAX_MS + LATE_WATCH_MS) {
     st.fw.pending = { from: p.from ?? null, to: p.to, at, resumed: true };
-    inflight ??= { deviceId: device.id, at };
+    st.expectReboot = true;
+    if (!inflight || inflight.deviceId === device.id) inflight = { deviceId: device.id, at };
   }
 }
 
@@ -131,6 +157,7 @@ async function recordUpdated(device, st, deps, { from, to, late = false }) {
 // alert(), deviceEvent() and recordIncident(). Returns what the admin page shows.
 export async function maybeAutoUpdate(device, st, sys, deps) {
   const now = Date.now();
+  await seedFleet();
   st.fw ??= { pending: null, late: null, lastAttemptAt: 0, refusedAt: 0, seeded: false };
   if (!st.fw.seeded) await seed(device, st);
   if (st.fw.pending) return verifyPending(device, st, now, deps);
@@ -190,24 +217,48 @@ async function verifyPending(device, st, now, deps) {
     return { state: 'updated', from: p.from, to: ver };
   }
   if (now - p.at < INFLIGHT_MAX_MS) return { state: 'updating', from: p.from, to: p.to };
-  // Budget spent and the old version still answers: no install happened (yet).
-  // The reboot flag goes back to honest — a crash tonight must stay a crash —
-  // and a late finish is still caught by watchLate below.
+  return fail(device, st, now, deps, { reports: ver });
+}
+
+// The probe could not reach the unit at all. Called by health.js from its
+// failure branch while a hop is pending: the deadline is judged on the clock,
+// not on the unit's next answer — a stuck unit must not hold the fleet lock.
+export async function fwProbeFailed(device, st, deps) {
+  const now = Date.now();
+  // The unit may have been mid-install when the server restarted and never
+  // answered since — its pending hop lives only in the diary.
+  st.fw ??= { pending: null, late: null, lastAttemptAt: 0, refusedAt: 0, seeded: false };
+  if (!st.fw.seeded) await seed(device, st);
+  const p = st.fw.pending;
+  if (!p || now - p.at < INFLIGHT_MAX_MS) return;
+  await fail(device, st, now, deps, { reports: null, unreachable: true });
+}
+
+// Budget spent without the target version answering: no install happened (yet,
+// or the unit is stuck). The reboot flag goes back to honest — a crash tonight
+// must stay a crash — and a late finish is still caught by watchLate.
+async function fail(device, st, now, deps, { reports, unreachable = false }) {
+  const p = st.fw.pending;
   st.fw.pending = null;
   st.fw.late = { from: p.from, to: p.to, at: now };
   st.expectReboot = false;
   release(device.id);
-  await deps.deviceEvent(device.id, 'error', { kind: 'fw_update_failed', from: p.from, to: p.to, reports: ver });
-  deps.recordIncident('fw_update_failed', device.name, `${p.from ?? '?'} → ${p.to}: still reports ${ver ?? 'nothing'}`);
+  await deps.deviceEvent(device.id, 'error', { kind: 'fw_update_failed', from: p.from, to: p.to, reports, unreachable });
+  deps.recordIncident('fw_update_failed', device.name,
+    `${p.from ?? '?'} → ${p.to}: ${unreachable ? 'unreachable since the update' : `still reports ${reports ?? 'nothing'}`}`);
+  const mins = Math.round(INFLIGHT_MAX_MS / 60_000);
   await deps.alert(`fw-fail:${device.id}:${p.to}`, `עדכון הקושחה במכשיר "${device.name}" לא הושלם`,
-    `המכשיר "${device.name}" (${device.device_uid}) קיבל פקודת עדכון מ-${p.from ?? '?'} ל-${p.to}, אבל ${Math.round(INFLIGHT_MAX_MS / 60_000)} דקות אחרי כן הוא עדיין מדווח ${ver ?? 'ולא עונה על הגרסה'}.\n`
-    + 'המכשיר מגיב, כך שהוא לא נתקע — ייתכן שההורדה נכשלה או איטית (אינטרנט מסונן). אם ההתקנה תסתיים בשעתיים הקרובות תגיע הודעה נוספת; אחרת ניסיון נוסף יתבצע אוטומטית בלילה הבא, ואפשר גם לעדכן ידנית מהממשק של המכשיר.');
+    `המכשיר "${device.name}" (${device.device_uid}) קיבל פקודת עדכון מ-${p.from ?? '?'} ל-${p.to}, `
+    + (unreachable
+      ? `ומאז הוא לא מגיב — גם ${mins} דקות אחרי כן.\nהתקנה רגילה נמשכת כ-2–3 דקות. אם המכשיר לא יחזור בדקות הקרובות, מומלץ לבדוק אותו (חשמל, רשת); במקרה הגרוע נדרש ניתוק וחיבור חשמל. אם יחזור עם הקושחה החדשה תגיע הודעה נוספת.`
+      : `אבל ${mins} דקות אחרי כן הוא עדיין מדווח ${reports ?? 'ולא עונה על הגרסה'}.\nהמכשיר מגיב, כך שהוא לא נתקע — ייתכן שההורדה נכשלה או איטית (אינטרנט מסונן). אם ההתקנה תסתיים בשעתיים הקרובות תגיע הודעה נוספת; אחרת ניסיון נוסף יתבצע אוטומטית בלילה הבא, ואפשר גם לעדכן ידנית מהממשק של המכשיר.`));
   return { state: 'failed', from: p.from, to: p.to };
 }
 
-// A hop judged "failed" whose download finished after the budget: the unit
+// A hop judged "failed" whose install finished after the budget: the unit
 // reboots into the target later. Only a fresh uptime (it DID just reboot) costs
-// an RPC; the watch ends after LATE_WATCH_MS.
+// an RPC; the watch ends after LATE_WATCH_MS. Runs before the probe's reboot
+// detection, so marking the reboot expected here keeps it out of the inbox.
 async function watchLate(device, st, sys, now, deps) {
   const l = st.fw.late;
   if (now - l.at > LATE_WATCH_MS) { st.fw.late = null; return; }
@@ -215,5 +266,6 @@ async function watchLate(device, st, sys, now, deps) {
   const ver = await shellyCall(device, 'Shelly.GetDeviceInfo').then((i) => i?.ver ?? null).catch(() => null);
   if (ver !== l.to) return;
   st.fw.late = null;
+  if (st.lastUptime != null && sys.uptime < st.lastUptime) st.expectReboot = true;
   await recordUpdated(device, st, deps, { from: l.from, to: ver, late: true });
 }
