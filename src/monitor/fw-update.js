@@ -129,7 +129,7 @@ async function seed(device, st) {
   // 24 h gate (conservative by those minutes).
   st.fw.lastAttemptAt = at;
   if (p.kind === 'fw_update_started' && Date.now() - at < INFLIGHT_MAX_MS + LATE_WATCH_MS) {
-    st.fw.pending = { from: p.from ?? null, to: p.to, at, resumed: true };
+    st.fw.pending = { from: p.from ?? null, to: p.to, at, uncertain: Boolean(p.uncertain), resumed: true };
     st.expectReboot = true;
     if (!inflight || inflight.deviceId === device.id) inflight = { deviceId: device.id, at };
   }
@@ -183,11 +183,20 @@ export async function maybeAutoUpdate(device, st, sys, deps) {
   // Reserve the fleet lock NOW, with no await between the check and the write.
   if (inflightActive(Date.now())) return blocked('another_in_progress', offered);
   inflight = { deviceId: device.id, at: now };
-  const ok = await shellyCall(device, 'Shelly.Update', { stage: STAGE }).then(() => true)
-    .catch((e) => { console.error(`[health] fw update ${device.device_uid}:`, e.message); return false; });
-  if (!ok) {
-    // Not accepted → nothing is installing: free the lock, keep the daily
-    // attempt unburnt (cf. tryReboot), back off an hour instead.
+  // Three outcomes, not two: the device said no (explicit error reply), the
+  // device said yes, or the reply was lost (timeout / transport error) — in
+  // which case the install may well be running. Only an explicit no frees the
+  // lock; a lost reply keeps every safeguard until verification settles it.
+  let uncertain = false;
+  const refused = await shellyCall(device, 'Shelly.Update', { stage: STAGE }).then(() => false)
+    .catch((e) => {
+      console.error(`[health] fw update ${device.device_uid}:`, e.message);
+      uncertain = !isRejection(e);
+      return !uncertain;
+    });
+  if (refused) {
+    // Nothing is installing: free the lock, keep the daily attempt unburnt
+    // (cf. tryReboot), back off an hour instead.
     release(device.id);
     st.fw.refusedAt = now;
     await deps.deviceEvent(device.id, 'error', { kind: 'fw_update_refused', from, to: offered });
@@ -195,12 +204,21 @@ export async function maybeAutoUpdate(device, st, sys, deps) {
     return blocked('refused_recently', offered);
   }
   st.fw.lastAttemptAt = now;
-  st.fw.pending = { from, to: offered, at: now };
+  st.fw.pending = { from, to: offered, at: now, uncertain };
   st.fw.late = null;
   st.expectReboot = true; // the install's reboot is ours, not an incident
-  await deps.deviceEvent(device.id, 'config', { kind: 'fw_update_started', from, to: offered, stage: STAGE });
-  deps.recordIncident('fw_update', device.name, `${from ?? '?'} → ${offered} (${STAGE})`);
+  await deps.deviceEvent(device.id, 'config', { kind: 'fw_update_started', from, to: offered, stage: STAGE, uncertain });
+  deps.recordIncident('fw_update', device.name, `${from ?? '?'} → ${offered} (${STAGE})${uncertain ? ' — reply lost, verifying' : ''}`);
   return { state: 'updating', from, to: offered };
+}
+
+// An explicit error reply from the device (shellyCall rethrows its message)
+// versus a reply that never came: MQTT RPC timeout, HTTP abort/timeout, socket
+// errors. Unknown shapes count as uncertain — the safe side keeps the lock.
+export function isRejection(e) {
+  const text = `${e?.name ?? ''} ${e?.message ?? ''}`;
+  if (/timeout|timed out|abort|ECONN|EHOSTUNREACH|ENETUNREACH|fetch failed|socket hang up/i.test(text)) return false;
+  return text.trim().length > 0;
 }
 
 async function verifyPending(device, st, now, deps) {
@@ -243,6 +261,16 @@ async function fail(device, st, now, deps, { reports, unreachable = false }) {
   st.fw.late = { from: p.from, to: p.to, at: now };
   st.expectReboot = false;
   release(device.id);
+  // A lost reply whose unit still answers with the old version: the command
+  // most likely never arrived. That is a refusal in hindsight — no email, the
+  // daily attempt is given back, an hour's backoff like any refusal.
+  if (p.uncertain && !unreachable && (reports == null || reports === p.from)) {
+    st.fw.lastAttemptAt = 0;
+    st.fw.refusedAt = now;
+    await deps.deviceEvent(device.id, 'error', { kind: 'fw_update_refused', from: p.from, to: p.to, reply_lost: true });
+    deps.recordIncident('fw_update_refused', device.name, `${p.from ?? '?'} → ${p.to}: reply lost, nothing installed`);
+    return blocked('refused_recently', p.to);
+  }
   await deps.deviceEvent(device.id, 'error', { kind: 'fw_update_failed', from: p.from, to: p.to, reports, unreachable });
   deps.recordIncident('fw_update_failed', device.name,
     `${p.from ?? '?'} → ${p.to}: ${unreachable ? 'unreachable since the update' : `still reports ${reports ?? 'nothing'}`}`);

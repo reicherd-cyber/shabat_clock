@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fwUpdateBlocker, WINDOW, MIN_UPTIME_S, RETRY_AFTER_MS, REFUSE_BACKOFF_MS, BLOCKER_HE } from '../src/monitor/fw-update.js';
+import { fwUpdateBlocker, isRejection, WINDOW, MIN_UPTIME_S, RETRY_AFTER_MS, REFUSE_BACKOFF_MS, BLOCKER_HE } from '../src/monitor/fw-update.js';
 import { localParts } from '../src/services/time.js';
 import { dayKeysOn } from '../src/services/holidays.js';
 
@@ -70,6 +70,18 @@ test('a refused Shelly.Update backs off an hour, not a day', () => {
 
 test('a schedule due on one of the channels in the next minutes postpones the install', () => {
   assert.equal(fwUpdateBlocker({ ...green, dueSoon: true }), 'schedule_due');
+});
+
+test('a lost reply is uncertain, an explicit device error is a rejection', () => {
+  for (const msg of ['mqtt rpc timeout', 'The operation was aborted due to timeout', 'fetch failed', 'connect ECONNREFUSED 10.0.0.5:80']) {
+    assert.equal(isRejection(new Error(msg)), false, msg);
+  }
+  const abort = new Error('x'); abort.name = 'TimeoutError';
+  assert.equal(isRejection(abort), false);
+  for (const msg of ['Update not available', 'shelly rpc error', 'Shelly Shelly.Update HTTP 500', 'Invalid argument stage']) {
+    assert.equal(isRejection(new Error(msg)), true, msg);
+  }
+  assert.equal(isRejection(new Error('')), false, 'no text at all → uncertain');
 });
 
 test('every blocker has Hebrew for the admin page', () => {
