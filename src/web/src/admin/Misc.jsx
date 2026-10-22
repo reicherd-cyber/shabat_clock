@@ -13,6 +13,7 @@ const INCIDENT_LABELS = {
   broker_down: 'ברוקר מנותק', server_heap: 'זיכרון שרת גבוה',
   relay_not_switching: 'ממסרים דולקים ללא צריכה', relay_hw_fault: 'חשד לתקלת חומרה', switch_errors: 'שגיאת ערוץ (קושחה)',
   reboot_changed_outputs: 'אתחול שינה ממסרים',
+  fw_update: 'עדכון קושחה אוטומטי', fw_updated: 'קושחה עודכנה', fw_update_failed: 'עדכון קושחה לא הושלם', fw_update_refused: 'המכשיר דחה עדכון קושחה',
 };
 
 // Deep-health tiles fed by the server-side monitor (src/monitor/health.js).
@@ -104,7 +105,13 @@ export function DeviceHealth() {
               <span className="text-muted">פעיל {fmtUptime(d.uptime_s)}</span>
               <span className="text-muted" dir="ltr">RAM {Math.round((d.ram_free || 0) / 1024)}KB</span>
               {d.temps?.length > 0 && <span className="text-muted" dir="ltr">{d.temps.map((t) => `${Math.round(t)}°C`).join(' / ')}</span>}
-              {d.fw_update && <Badge ok={false}>עדכון קושחה {d.fw_update}</Badge>}
+              {d.fw_auto?.state === 'updating'
+                ? <Badge ok>מתעדכן לקושחה {d.fw_auto.to}…</Badge>
+                : d.fw_update && (
+                  <span title={d.fw_auto?.why_he || ''}>
+                    <Badge ok={false}>עדכון קושחה {d.fw_update}</Badge>
+                  </span>
+                )}
               {d.auto_rebooted && <Badge ok={false}>אותחל יזומות</Badge>}
               {d.channels?.map((c) => (
                 <span key={c.ch} className={`text-xs ${(c.dead && d.unit_dead) || c.errors?.length ? 'text-red-600 font-bold' : 'text-muted'}`}

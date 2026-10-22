@@ -23,6 +23,7 @@ import { sendImmediateCommand } from '../services/commands.js';
 import { scheduleDueBetween, catchUpDevice } from '../scheduler/tick.js';
 import { sendEmail } from '../services/email.js';
 import { describeReset, RESET_HEADLINE } from './reset-reason.js';
+import { maybeAutoUpdate } from './fw-update.js';
 import { learnOnPower, worthSaving, idleCandidates, judgeLoads, trackDeadOnsets, DEAD_RELAY_PROBES, IDLE_PROBES_TO_LEARN, REBOOT_MIN_WATCHED } from './dead-relay.js';
 
 // The reboot safety net trusts the pre-reboot output snapshot only if it is
@@ -392,6 +393,12 @@ async function checkShelly(device) {
   health.uptime_s = sys.uptime;
   health.ram_free = sys.ram_free;
   health.fw_update = sys.available_updates?.stable?.version ?? null;
+  // Automatic firmware updates (fw-update.js): nightly window, weekdays only,
+  // one unit at a time; the install's reboot is flagged expected below.
+  if (active()) {
+    health.fw_auto = await maybeAutoUpdate(device, st, sys, { alert, deviceEvent, recordIncident })
+      .catch((e) => { console.error('[health] fw auto-update:', e.message); return null; });
+  }
 
   // Channel outputs + temperatures ride Switch.GetStatus; probe failures on
   // missing channels end the scan quietly (mirrors the registration probe).
