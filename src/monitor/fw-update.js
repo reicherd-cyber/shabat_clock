@@ -216,9 +216,9 @@ export async function maybeAutoUpdate(device, st, sys, deps) {
 // versus a reply that never came: MQTT RPC timeout, HTTP abort/timeout, socket
 // errors. Unknown shapes count as uncertain — the safe side keeps the lock.
 export function isRejection(e) {
-  const text = `${e?.name ?? ''} ${e?.message ?? ''}`;
-  if (/timeout|timed out|abort|ECONN|EHOSTUNREACH|ENETUNREACH|fetch failed|socket hang up/i.test(text)) return false;
-  return text.trim().length > 0;
+  const msg = e?.message ?? '';
+  if (/timeout|timed out|abort|ECONN|EHOSTUNREACH|ENETUNREACH|fetch failed|socket hang up/i.test(`${e?.name ?? ''} ${msg}`)) return false;
+  return msg.trim().length > 0; // the device's own words; a bare Error says nothing → uncertain
 }
 
 async function verifyPending(device, st, now, deps) {
