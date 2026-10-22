@@ -210,10 +210,10 @@ test('describeScheduleHe: halachic anchor is called out', () => {
 // ── תוכנית: replace-mode schedulers carve exclusions out of the weekly ones ──
 import { derivedExclusions, exclusionsFor, schedulerMode } from '../src/services/schedules.js';
 
-test('derivedExclusions: only replace-mode dated schedulers produce items, shaped like user exclusions', () => {
+test('derivedExclusions: EVERY dated scheduler produces an item shaped like a user exclusion (mode from old clients is ignored)', () => {
   const schedulers = [
     { action: 'on', repeat_type: 'weekly', daily: true, time: '06:00' },
-    { action: 'on', repeat_type: 'yearly', calendar: 'greg', date: '2026-07-01', end_date: '2026-08-31', time: '07:00', mode: 'replace' },
+    { action: 'on', repeat_type: 'yearly', calendar: 'greg', date: '2026-07-01', end_date: '2026-08-31', time: '07:00' },
     { action: 'off', repeat_type: 'holiday', holidays: ['shabbat'], time: '23:00', mode: 'replace' },
     { action: 'on', repeat_type: 'once', calendar: 'heb', heb_day: 15, heb_month: 11, time: '10:00', mode: 'add' },
   ];
@@ -221,10 +221,42 @@ test('derivedExclusions: only replace-mode dated schedulers produce items, shape
   assert.deepEqual(d, [
     { type: 'yearly', calendar: 'greg', derived: true, date: '2026-07-01', end_date: '2026-08-31' },
     { type: 'holiday', holidays: ['shabbat'], derived: true },
+    { type: 'once', calendar: 'heb', derived: true, heb_day: 15, heb_month: 11, end_heb_day: 15, end_heb_month: 11 },
   ]);
   assert.equal(schedulerMode(schedulers[0]), null);
-  assert.equal(schedulerMode(schedulers[3]), 'add');
-  assert.equal(schedulerMode({ repeat_type: 'yearly' }), 'add'); // missing = add (pre-67 callers)
+  assert.equal(schedulerMode(schedulers[3]), 'replace');
+  assert.equal(schedulerMode({ repeat_type: 'yearly' }), 'replace');
+});
+
+import { schedulerCollisions } from '../src/services/schedules.js';
+
+test('schedulerCollisions: opposite actions at the same moment on shared days collide; dated vs weekly never does', () => {
+  const on = { action: 'on', repeat_type: 'weekly', days: [1, 2, 3], time: '18:00' };
+  const offSame = { action: 'off', repeat_type: 'weekly', days: [3, 4], time: '18:00' };
+  const offLater = { action: 'off', repeat_type: 'weekly', days: [3, 4], time: '18:30' };
+  const offOtherDays = { action: 'off', repeat_type: 'weekly', days: [5], time: '18:00' };
+  const daily = { action: 'off', repeat_type: 'weekly', daily: true, time: '18:00' };
+  assert.equal(schedulerCollisions([on, offSame]).length, 1);
+  assert.match(schedulerCollisions([on, offSame])[0], /מתנגשים/);
+  assert.equal(schedulerCollisions([on, offLater]).length, 0);
+  assert.equal(schedulerCollisions([on, offOtherDays]).length, 0);
+  assert.equal(schedulerCollisions([on, daily]).length, 1);
+  assert.equal(schedulerCollisions([on, { ...on, action: 'on' }]).length, 0, 'same action twice is not a collision');
+  // holiday vs holiday on a shared key, anchored times compared by anchor+offset
+  const hOn = { action: 'on', repeat_type: 'holiday', holidays: ['shabbat', 'pesach_1'], anchor: 'sunset', offset_min: -20 };
+  const hOff = { action: 'off', repeat_type: 'holiday', holidays: ['shabbat'], anchor: 'sunset', offset_min: -20 };
+  assert.equal(schedulerCollisions([hOn, hOff]).length, 1);
+  assert.equal(schedulerCollisions([hOn, { ...hOff, offset_min: -30 }]).length, 0);
+  assert.equal(schedulerCollisions([hOn, { ...hOff, holidays: ['sukkot_1'] }]).length, 0);
+  // a holiday scheduler replaces the weekly one on its days — no collision with it
+  assert.equal(schedulerCollisions([on, { action: 'off', repeat_type: 'holiday', holidays: ['shabbat'], time: '18:00' }]).length, 0);
+  // civil date ranges
+  const yOn = { action: 'on', repeat_type: 'yearly', calendar: 'greg', date: '2026-07-01', end_date: '2026-08-31', time: '07:00' };
+  const yOff = { action: 'off', repeat_type: 'yearly', calendar: 'greg', date: '2026-08-15', end_date: '2026-09-15', time: '07:00' };
+  assert.equal(schedulerCollisions([yOn, yOff]).length, 1);
+  assert.equal(schedulerCollisions([yOn, { ...yOff, date: '2026-09-01' }]).length, 0);
+  // planConflicts carries the collisions too
+  assert.equal(planConflicts([on, offSame], []).length, 1);
 });
 
 test('exclusionsFor: weekly rows get user + derived items, dated rows only the user ones', () => {

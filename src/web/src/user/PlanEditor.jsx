@@ -32,9 +32,8 @@ const newScheduler = () => ({
   // yearly = a date RANGE: the action fires on every day from→to, each year
   // (a single day when the end equals the start)
   end_date: '', heb_day_to: 1, heb_month_to: 7,
-  // dated types only (required, no default): 'add' = alongside the plan's
-  // weekly schedulers on those days, 'replace' = instead of them
-  mode: null,
+  // (a dated scheduler always replaces the plan's weekly ones on its days —
+  // the add/replace choice is gone since 2026-10-22, see derivedExclusions)
 });
 // An exclusion has the same four type choices as a scheduler (no default):
 // weekly days, a one-time date range, a yearly date range, or שבת/חג days.
@@ -120,7 +119,7 @@ export function schedulerSummary(s) {
         ? `כל שנה ${yearlyRangeText(s)}`
         : holidaySummary(s.holidays.join(','));
   const time = s.kind === 'clock' ? s.time : anchorText(s.kind, signedOffset(s));
-  return `${when} · ${time} · ${s.action === 'on' ? 'הדלקה' : 'כיבוי'}${modeMark(s)}`;
+  return `${when} · ${time} · ${s.action === 'on' ? 'הדלקה' : 'כיבוי'}`;
 }
 export function exclusionSummary(x) {
   if (x.type === 'weekly') {
@@ -133,14 +132,11 @@ export function exclusionSummary(x) {
   const range = to !== from ? `${from} עד ${to}` : from;
   return x.type === 'yearly' ? `כל שנה ${range}` : range;
 }
-// The scheduler list marks the ones that push the weekly schedule aside.
-const modeMark = (s) => (s.repeat_type && s.repeat_type !== 'weekly' && s.mode === 'replace' ? ' · במקום הקבוע' : '');
-
 // ── conflicts: an exclusion that cancels days the user explicitly picked for a
 // scheduler (exclude Sunday + a Sun/Mon/Tue scheduler) is contradictory, not a
 // carve-out — shown in red and blocks saving. A daily (כל יום) scheduler
 // carved by an exclusion is the intended use and is never a conflict; derived
-// items (replace-mode schedulers) are never conflicts either.
+// items (dated schedulers carving the weekly ones) are never conflicts either.
 // Dated ranges compare on a cyclic year: Hebrew (month,day) from Tishrei, civil
 // (month,day); a one-time civil range is compared by concrete dates.
 const hebOrd = (d, m) => ((Number(m) >= 7 ? Number(m) - 7 : Number(m) + 6) * 100) + Number(d);
@@ -162,8 +158,43 @@ const datedSpan = (o, isScheduler) => {
   const once = isScheduler ? o.repeat_type === 'once' : o.type === 'once';
   return { kind: once ? 'once' : 'cyc', from: o.date, to: end, span: [gregOrd(o.date), gregOrd(end)] };
 };
-export function planConflicts(schedulers, exclusions) {
+// Two schedulers of the plan contradicting each other: opposite actions at the
+// same moment on days they share. A dated scheduler never collides with a
+// weekly one — it replaces it on its days. Mirror of services/schedules.js
+// schedulerCollisions (same rule, the editor adds Hebrew date-range compare).
+const sameMoment = (a, b) => (a.kind === 'clock' || b.kind === 'clock'
+  ? a.kind === 'clock' && b.kind === 'clock' && a.time && a.time === b.time
+  : a.kind === b.kind && signedOffset(a) === signedOffset(b));
+const daySet = (s) => (s.daily ? [1, 2, 3, 4, 5, 6, 7] : (s.days || []).map(Number));
+export function schedulerCollisions(schedulers) {
   const out = [];
+  const list = (schedulers || []).filter((s) => s?.repeat_type && s.action);
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const a = list[i], b = list[j];
+      if (a.action === b.action || !sameMoment(a, b)) continue;
+      let where = null;
+      if (a.repeat_type === 'weekly' && b.repeat_type === 'weekly') {
+        const hit = daySet(a).filter((d) => daySet(b).includes(d)).sort((x, y) => x - y);
+        if (hit.length) where = `ב${hit.map((d) => DAY_NAMES[d]).join(', ')}`;
+      } else if (a.repeat_type === 'holiday' && b.repeat_type === 'holiday') {
+        const hit = (a.holidays || []).filter((k) => (b.holidays || []).includes(k));
+        if (hit.length) where = `ב${hit.map((k) => HOLIDAY_NAMES[k] || k).join(', ')}`;
+      } else if ((a.repeat_type === 'once' || a.repeat_type === 'yearly') && (b.repeat_type === 'once' || b.repeat_type === 'yearly') && a.calendar === b.calendar) {
+        const x = datedSpan(a, true), y = datedSpan(b, true);
+        if (x && y) {
+          const overlap = x.kind === 'once' && y.kind === 'once' ? x.from <= y.to && y.from <= x.to : cyclicOverlap(x.span, y.span);
+          if (overlap) where = 'באותם תאריכים';
+        }
+      }
+      if (where) out.push({ a, b, text: `התזמון "${schedulerSummary(a)}" והתזמון "${schedulerSummary(b)}" מתנגשים — הדלקה וכיבוי באותה שעה ${where}. שנו את השעה או את הימים של אחד מהם.` });
+    }
+  }
+  return out;
+}
+
+export function planConflicts(schedulers, exclusions) {
+  const out = schedulerCollisions(schedulers);
   for (const x of exclusions || []) {
     if (!x?.type || x.derived) continue;
     for (const s of schedulers || []) {
@@ -242,18 +273,16 @@ export function planFromMembers(members) {
         heb_day: yFrom.hd, heb_month: yFrom.hm,
         end_date: m.repeat_type === 'yearly' ? yTo.date : '',
         heb_day_to: yTo.hd, heb_month_to: yTo.hm,
-        // pre-migration-67 dated rows carry no mode — they always behaved as 'add'
-        mode: m.repeat_type === 'weekly' ? null : (m.plan_mode === 'replace' ? 'replace' : 'add'),
       };
       const key = JSON.stringify([sch.action, sch.repeat_type, sch.kind, sch.time, sch.offset, sch.dir, sch.daily,
-        sch.holidays, sch.calendar, sch.date, sch.heb_day, sch.heb_month, sch.end_date, sch.heb_day_to, sch.heb_month_to, sch.mode]);
+        sch.holidays, sch.calendar, sch.date, sch.heb_day, sch.heb_month, sch.end_date, sch.heb_day_to, sch.heb_month_to]);
       if (map.has(key)) map.get(key).days = [...new Set([...map.get(key).days, ...sch.days])].sort((a, b) => a - b);
       else map.set(key, { uid: uid(), ...sch });
     }
   }
   // The exclusion list is read from the plan's WEEKLY rows when it has any
   // (they carry the user's items plus the derived ones; dated rows carry only
-  // the user's) — derived items are rebuilt from the schedulers' modes, not shown.
+  // the user's) — derived items are rebuilt from the dated schedulers, not shown.
   const exclSrc = members.find((m) => m.repeat_type === 'weekly' && Array.isArray(m.excl_list) && m.excl_list.length) || repr;
   let exclusions = (Array.isArray(exclSrc.excl_list) ? exclSrc.excl_list : []).filter((x) => !x?.derived).map((x) => ({
     uid: uid(),
@@ -296,7 +325,6 @@ const schedulerToApi = (s) => ({
       ? { end_heb_day: Number(s.heb_day_to || s.heb_day), end_heb_month: Number(s.heb_month_to || s.heb_month) }
       : { end_date: s.end_date || s.date })
     : {}),
-  ...(s.repeat_type && s.repeat_type !== 'weekly' ? { mode: s.mode === 'replace' ? 'replace' : 'add' } : {}),
 });
 const exclusionToApi = (x) => {
   if (x.derived) return x; // already API-shaped (see derivedExclusions)
@@ -310,9 +338,10 @@ const exclusionToApi = (x) => {
   };
 };
 // Client mirror of services/schedules.js derivedExclusions — what the plan's
-// replace-mode schedulers carve out of the weekly ones (for the preview).
+// dated schedulers carve out of the weekly ones (every dated scheduler does;
+// for the preview).
 const derivedExclusions = (schedulers) => schedulers
-  .filter((s) => s.repeat_type && s.repeat_type !== 'weekly' && s.mode === 'replace')
+  .filter((s) => s.repeat_type && s.repeat_type !== 'weekly')
   .map((s) => {
     const api = schedulerToApi(s);
     if (s.repeat_type === 'holiday') return { type: 'holiday', holidays: api.holidays, derived: true };
@@ -414,7 +443,12 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
   const s = draft;
   const set = (patch) => setDraft({ ...s, ...patch });
   const anchored = s.kind !== 'clock';
-  const conflicts = planConflicts([s], exclusions);
+  // the draft against the exclusions, and against the plan's OTHER schedulers
+  // (a collision between two already-saved ones is reported on the plan view)
+  const conflicts = [
+    ...schedulerCollisions([...previous, s]).filter((c) => c.a === s || c.b === s),
+    ...planConflicts([s], exclusions),
+  ];
   // Switching to the Hebrew calendar converts the civil date(s) already typed —
   // both ends of a yearly range.
   const convertToHeb = (cur) => {
@@ -437,7 +471,6 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
     || ((s.repeat_type === 'once' || s.repeat_type === 'yearly') && s.calendar === 'greg' && !s.date)
     // the yearly range may wrap the year (end before start = next year's date); only an empty end is a gap
     || (s.repeat_type === 'yearly' && s.calendar === 'greg' && !s.end_date)
-    || (s.repeat_type !== 'weekly' && !s.mode) // add/replace is a required choice on dated types
     || (!anchored && !s.time)
     || (anchored && (s.offset === '' || Number.isNaN(Number(s.offset))));
   const previous = others.filter((o) => o.uid !== s.uid);
@@ -541,22 +574,10 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
         </div>
       )}
 
-      {/* dated types: alongside or instead of the plan's weekly schedulers on those days (required) */}
+      {/* a dated scheduler always replaces the plan's weekly ones on its days —
+          a holiday behaves like a holiday, never like the weekday it falls on */}
       {s.repeat_type && s.repeat_type !== 'weekly' && (
-        <div className="space-y-1">
-          <span className="text-sm text-muted">בימים אלו, התזמון הזה פועל:</span>
-          <div className="flex flex-col gap-1">
-            {[
-              { v: 'add', label: 'בנוסף לתזמון הקבוע של התוכנית' },
-              { v: 'replace', label: 'במקום התזמון הקבוע — התזמונים השבועיים לא יפעלו בימים אלו' },
-            ].map((o) => (
-              <label key={o.v} className="flex items-start gap-1.5 text-sm">
-                <input type="radio" name="sch_mode" className="mt-1" checked={s.mode === o.v} onChange={() => set({ mode: o.v })} />
-                <span>{o.label}</span>
-              </label>
-            ))}
-          </div>
-        </div>
+        <p className="text-xs text-muted">בימים אלו התזמון הזה מחליף את התזמונים השבועיים של התוכנית — הם לא יפעלו בהם.</p>
       )}
 
       {/* the single action — shown once a type is chosen */}
@@ -616,7 +637,7 @@ function SchedulerForm({ draft, setDraft, region, setRegion, onConfirm, onCancel
           </Select>
         </label>
       )}
-      {/* a weekly draft is also carved by the plan's replace-mode schedulers (same rule as the server) */}
+      {/* a weekly draft is also carved by the plan's dated schedulers (same rule as the server) */}
       <NextPreview draft={s} exclusions={s.repeat_type === 'weekly' ? [...exclusions, ...derivedExclusions(previous)] : exclusions}
         region={region} relayId={relayId} invalid={invalid} />
       <ConflictNote conflicts={conflicts} />

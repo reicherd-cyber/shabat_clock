@@ -384,14 +384,15 @@ export async function createSchedule({ userId, relayId, createdVia, actingUserId
 //   { action:'on'|'off', repeat_type, time | anchor+offset_min,
 //     days:[1..7] | daily, holidays:[keys], calendar:'heb'|'greg',
 //     date (once/yearly civil), heb_day+heb_month (once/yearly Hebrew) }
-// A dated scheduler's `mode` ('add' | 'replace'): whether it runs alongside
-// the plan's all-year (weekly) schedulers on its days or instead of them.
-// 'replace' compiles into derived exclusions on the WEEKLY rows (one item per
-// replace-mode scheduler, same shape as a user exclusion), so the engine,
-// the calendar and the Shelly mirror need no new rule. Weekly schedulers
-// have no mode (they ARE the all-year schedule).
-export const schedulerMode = (sch) => (sch?.repeat_type && sch.repeat_type !== 'weekly'
-  ? (sch.mode === 'replace' ? 'replace' : 'add') : null);
+// A dated scheduler (holiday / yearly / once) ALWAYS replaces the plan's
+// all-year (weekly) schedulers on its days — a holiday behaves like a holiday,
+// never like the Sunday it falls on (user decision 2026-10-22; the add/replace
+// choice of migration 67 is gone, migration 74 recompiled existing plans).
+// It compiles into derived exclusions on the WEEKLY rows (one item per dated
+// scheduler, same shape as a user exclusion), so the engine, the calendar and
+// the Shelly mirror need no new rule. Weekly schedulers have no mode (they ARE
+// the all-year schedule). `sch.mode` from old clients is ignored.
+export const schedulerMode = (sch) => (sch?.repeat_type && sch.repeat_type !== 'weekly' ? 'replace' : null);
 export function derivedExclusions(schedulers) {
   const out = [];
   for (const sch of Array.isArray(schedulers) ? schedulers : []) {
@@ -411,14 +412,58 @@ export function derivedExclusions(schedulers) {
   }
   return out;
 }
+// Two schedulers of one plan that contradict each other: opposite actions at
+// the SAME moment on days they share (ON and OFF both at 18:00 on Sunday; ON
+// at sunset−20 and OFF at sunset−20 on שבת). A dated scheduler never collides
+// with a weekly one — it replaces it on its days (schedulerMode). Pure; the
+// editor mirrors it (PlanEditor.jsx schedulerCollisions). Hebrew messages.
+const daysOf = (s) => (s?.daily ? [1, 2, 3, 4, 5, 6, 7] : (Array.isArray(s?.days) ? s.days : String(s?.days || '').split(',')).map(Number).filter(Boolean));
+const keysOf = (s) => (Array.isArray(s?.holidays) ? s.holidays : String(s?.holidays || '').split(',')).filter(Boolean);
+const sameMoment = (a, b) => {
+  const anchored = (s) => s?.anchor && s.anchor !== 'clock';
+  if (anchored(a) || anchored(b)) return anchored(a) && anchored(b) && a.anchor === b.anchor && Number(a.offset_min || 0) === Number(b.offset_min || 0);
+  return Boolean(a?.time) && String(a.time).slice(0, 5) === String(b?.time || '').slice(0, 5);
+};
+const momentHe = (s) => (s?.anchor && s.anchor !== 'clock' ? `${s.anchor} ${Number(s.offset_min || 0) >= 0 ? '+' : ''}${Number(s.offset_min || 0)}` : String(s?.time || '').slice(0, 5));
+export function schedulerCollisions(schedulers) {
+  const out = [];
+  const list = Array.isArray(schedulers) ? schedulers.filter((s) => s?.repeat_type) : [];
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const a = list[i], b = list[j];
+      if ((a.action === 'off') === (b.action === 'off') || !sameMoment(a, b)) continue;
+      let where = null;
+      if (a.repeat_type === 'weekly' && b.repeat_type === 'weekly') {
+        const hit = daysOf(a).filter((d) => daysOf(b).includes(d)).sort((x, y) => x - y);
+        if (hit.length) where = `בימי ${hit.map((d) => DAY_NAMES_HE[d]).join(', ')}`;
+      } else if (a.repeat_type === 'holiday' && b.repeat_type === 'holiday') {
+        const hit = keysOf(a).filter((k) => keysOf(b).includes(k));
+        if (hit.length) where = `ב${hit.join(', ')}`;
+      } else if (['once', 'yearly'].includes(a.repeat_type) && ['once', 'yearly'].includes(b.repeat_type)
+        && a.calendar !== 'heb' && b.calendar !== 'heb' && a.date && b.date) {
+        // civil ranges only — Hebrew ranges are compared by the editor, which has the converters
+        const span = (s) => [String(s.date).slice(0, 10), String(s.end_date || s.date).slice(0, 10)];
+        const [a1, a2] = span(a), [b1, b2] = span(b);
+        const overlap = a.repeat_type === 'once' && b.repeat_type === 'once'
+          ? a1 <= b2 && b1 <= a2
+          : a1.slice(5) <= b2.slice(5) && b1.slice(5) <= a2.slice(5); // yearly: month-day
+        if (overlap) where = 'באותם תאריכים';
+      }
+      if (where) out.push(`שני תזמונים מתנגשים: הדלקה וכיבוי ב-${momentHe(a)} ${where} — שנו את השעה או את הימים של אחד מהם`);
+    }
+  }
+  return out;
+}
+
 // Contradictions the editor refuses too (PlanEditor.jsx planConflicts): an
 // exclusion that cancels days a scheduler was explicitly given — weekday
 // items vs a weekly scheduler's picked days (a daily one is a carve-out, not
-// a conflict), holiday items vs a holiday scheduler's keys. Date ranges are
-// checked by the editor only (Hebrew/civil comparison needs its converters).
+// a conflict), holiday items vs a holiday scheduler's keys — plus two
+// schedulers colliding (schedulerCollisions). Date ranges are checked by the
+// editor only (Hebrew/civil comparison needs its converters).
 // Returns Hebrew messages; empty = fine.
 export function planConflicts(schedulers, exclusions) {
-  const out = [];
+  const out = schedulerCollisions(schedulers);
   for (const x of Array.isArray(exclusions) ? exclusions : []) {
     if (!x || x.derived) continue;
     for (const s of Array.isArray(schedulers) ? schedulers : []) {
@@ -943,7 +988,8 @@ export function describeScheduleHe(row) {
     if (first) excl = `, עם החרגה ${first}${user.length > 1 ? ` ועוד ${user.length - 1}` : ''}`;
     if (derived) excl += `, ולא פועל בימי ${derived === 1 ? 'התזמון המיוחד' : 'התזמונים המיוחדים'} של התוכנית`;
   }
-  const modeNote = row.plan_mode === 'replace' ? ', במקום התזמון הקבוע' : '';
+  // every dated scheduler of a תוכנית replaces the weekly ones on its days (schedulerMode)
+  const modeNote = row.plan_id && row.repeat_type !== 'weekly' ? ', במקום התזמון הקבוע' : '';
   const type = row.repeat_type === 'once' ? 'חד פעמי'
     : row.repeat_type === 'yearly' ? 'שנתי'
     : row.repeat_type === 'holiday' ? 'לחגים'
