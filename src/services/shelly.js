@@ -28,7 +28,7 @@ export async function shellyCall({ device_uid, transport, ip_address }, method, 
     const { shellyMqttRpc } = await import('../mqtt/client.js');
     const reply = await shellyMqttRpc(device_uid, method, params);
     if (!reply) throw new Error('mqtt rpc timeout');
-    if (reply.error) throw new Error(reply.error.message || 'shelly rpc error');
+    if (reply.error) throw rpcError(reply.error);
     return reply.result;
   }
   const res = await fetch(`http://${ip_address}/rpc`, {
@@ -39,8 +39,18 @@ export async function shellyCall({ device_uid, transport, ip_address }, method, 
   });
   if (!res.ok) throw new Error(`Shelly ${method} HTTP ${res.status}`);
   const d = await res.json(); // POST /rpc returns the JSON-RPC envelope
-  if (d.error) throw new Error(d.error.message || 'shelly rpc error');
+  if (d.error) throw rpcError(d.error);
   return d.result;
+}
+
+// The device's OWN "no" (a JSON-RPC error object) keeps its structure on the
+// thrown Error (`rpc: {code, message}`) — callers that must tell "the device
+// refused" from "the reply never came / could not be parsed" (fw-update.js)
+// check the property, never the message text.
+function rpcError(error) {
+  const e = new Error(error.message || 'shelly rpc error');
+  e.rpc = { code: error.code ?? null, message: error.message ?? null };
+  return e;
 }
 
 // Absolute on/off — single source for both immediate commands and the scheduler.

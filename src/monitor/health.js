@@ -547,7 +547,7 @@ export async function healthTick() {
   // incidents; the broker_down alert already covers them. LAN devices still probe.
   const devices = await query(
     `SELECT d.id, CONCAT(u.full_name, ' — ', d.name) AS name, d.device_uid, d.transport,
-            d.ip_address, d.relay_count, d.is_online, d.mute_alerts
+            d.ip_address, d.relay_count, d.is_online, d.mute_alerts, d.timezone
      FROM devices d JOIN users u ON u.id = d.user_id
      WHERE d.device_type = 'shelly' AND d.is_enabled = TRUE AND d.device_uid IS NOT NULL
        AND d.first_contact_pending = FALSE`,

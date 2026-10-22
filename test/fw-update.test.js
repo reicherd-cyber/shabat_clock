@@ -72,16 +72,30 @@ test('a schedule due on one of the channels in the next minutes postpones the in
   assert.equal(fwUpdateBlocker({ ...green, dueSoon: true }), 'schedule_due');
 });
 
-test('a lost reply is uncertain, an explicit device error is a rejection', () => {
-  for (const msg of ['mqtt rpc timeout', 'The operation was aborted due to timeout', 'fetch failed', 'connect ECONNREFUSED 10.0.0.5:80']) {
-    assert.equal(isRejection(new Error(msg)), false, msg);
+test('only a structured JSON-RPC error from the device is a rejection; lost, truncated or HTTP-level failures are uncertain', () => {
+  for (const msg of ['mqtt rpc timeout', 'The operation was aborted due to timeout', 'fetch failed',
+    'connect ECONNREFUSED 10.0.0.5:80', 'Unexpected end of JSON input', 'Shelly Shelly.Update HTTP 500', 'Update not available', '']) {
+    assert.equal(isRejection(new Error(msg)), false, msg || '(empty)');
   }
   const abort = new Error('x'); abort.name = 'TimeoutError';
   assert.equal(isRejection(abort), false);
-  for (const msg of ['Update not available', 'shelly rpc error', 'Shelly Shelly.Update HTTP 500', 'Invalid argument stage']) {
-    assert.equal(isRejection(new Error(msg)), true, msg);
-  }
-  assert.equal(isRejection(new Error('')), false, 'no text at all → uncertain');
+  const rpc = new Error('Update not available'); rpc.rpc = { code: -105, message: 'Update not available' };
+  assert.equal(isRejection(rpc), true);
+  const bareRpc = new Error('shelly rpc error'); bareRpc.rpc = { code: null, message: null };
+  assert.equal(isRejection(bareRpc), true, 'an error object without text is still the device saying no');
+});
+
+test('the window and rest day follow the device timezone', () => {
+  // Sunday 2026-10-25 03:00 Jerusalem = Saturday 2026-10-24 21:00 New York: green for Israel, שבת for New York.
+  const sundayNightIL = Date.UTC(2026, 9, 25, 1, 0);
+  assert.equal(fwUpdateBlocker({ ...green, now: sundayNightIL }), null);
+  assert.equal(fwUpdateBlocker({ ...green, now: sundayNightIL, tz: 'America/New_York' }), 'outside_window');
+  // Monday 2026-10-26 03:00 New York = 09:00 Jerusalem: green only for New York.
+  const mondayNightNY = Date.UTC(2026, 9, 26, 7, 0);
+  assert.equal(fwUpdateBlocker({ ...green, now: mondayNightNY, tz: 'America/New_York' }), null);
+  assert.equal(fwUpdateBlocker({ ...green, now: mondayNightNY }), 'outside_window');
+  // Saturday 2026-10-24 03:00 New York is still שבת there.
+  assert.equal(fwUpdateBlocker({ ...green, now: Date.UTC(2026, 9, 24, 7, 0), tz: 'America/New_York' }), 'rest_day');
 });
 
 test('every blocker has Hebrew for the admin page', () => {

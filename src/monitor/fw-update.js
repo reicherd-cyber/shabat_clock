@@ -166,7 +166,8 @@ export async function maybeAutoUpdate(device, st, sys, deps) {
   const enabled = (await getSetting(FW_SETTING, 'on')) !== 'off';
   const offered = sys.available_updates?.[STAGE]?.version ?? null;
   const base = {
-    now, enabled, offered, uptime_s: sys.uptime, expectReboot: st.expectReboot,
+    now, tz: device.timezone || 'Asia/Jerusalem', // the unit's own night and rest day, not the server's
+    enabled, offered, uptime_s: sys.uptime, expectReboot: st.expectReboot,
     lastAttemptAt: st.fw.lastAttemptAt, refusedAt: st.fw.refusedAt, inflight: inflightActive(now),
   };
   // Cheap gates first; the DB is asked only when the clock says yes.
@@ -212,13 +213,13 @@ export async function maybeAutoUpdate(device, st, sys, deps) {
   return { state: 'updating', from, to: offered };
 }
 
-// An explicit error reply from the device (shellyCall rethrows its message)
-// versus a reply that never came: MQTT RPC timeout, HTTP abort/timeout, socket
-// errors. Unknown shapes count as uncertain — the safe side keeps the lock.
+// An explicit error reply from the device — shellyCall keeps the JSON-RPC error
+// object on the thrown Error as `rpc` — versus everything else: a reply that
+// never came, a transport error, an HTTP status, a truncated body that failed
+// to parse. Only the structured "no" is a rejection; any other shape is
+// uncertain, the safe side that keeps the lock.
 export function isRejection(e) {
-  const msg = e?.message ?? '';
-  if (/timeout|timed out|abort|ECONN|EHOSTUNREACH|ENETUNREACH|fetch failed|socket hang up/i.test(`${e?.name ?? ''} ${msg}`)) return false;
-  return msg.trim().length > 0; // the device's own words; a bare Error says nothing → uncertain
+  return Boolean(e?.rpc && typeof e.rpc === 'object');
 }
 
 async function verifyPending(device, st, now, deps) {
