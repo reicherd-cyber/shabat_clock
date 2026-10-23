@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { Card, Button, ErrorNote, FilterSelect, RangeFilter, RANGE_AHEAD, rangeBounds, ymdLocal, DAY_NAMES, ChannelDot } from '../ui.jsx';
+import { Card, Button, ErrorNote, FilterSelect, RangeFilter, RANGE_AHEAD, ymdLocal, DAY_NAMES, ChannelDot } from '../ui.jsx';
 import { CalendarClock } from 'lucide-react';
 
 // "מועדים קרובים": the plans' next firing times as one list, grouped per device.
@@ -55,25 +55,54 @@ export default function Upcoming({ relays, schedules, colorOf }) {
   // Plan name per schedule row — the calendar events carry only the schedule id.
   const planName = useMemo(() => new Map((schedules || []).map((s) => [s.id, s.name])), [schedules]);
 
-  // Period → the calendar window (from day + day count). The past is never
-  // listed, so a custom range that starts earlier is clamped to today — the
-  // 92-day cap must count from today, not from a from-date months back. An
-  // open custom side falls back to today / the endpoint's maximum.
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  // "Now" for everything on this page: the server's clock (device-local),
+  // advanced by the minutes the page has been open. The browser's zone is only
+  // the fallback before the first response — a viewer abroad for whom it is
+  // already tomorrow must still see Israel's remaining firings for today.
+  const clock = useMemo(() => {
+    if (now) return advancedNow(now, nowTick);
+    const d = new Date(nowTick);
+    return { date: ymdLocal(d), key: `${ymdLocal(d)}T${pad2(d.getHours())}:${pad2(d.getMinutes())}` };
+  }, [now, nowTick]);
+
+  // Period → the calendar window (from day + day count), counted from the
+  // clock's today. The past is never listed, so a custom range that starts
+  // earlier is clamped to today — the 92-day cap must count from today, not
+  // from a from-date months back. An open custom side falls back to today /
+  // the endpoint's maximum.
   const window_ = useMemo(() => {
-    const b = rangeBounds(range, custom);
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    let from = b.from && !Number.isNaN(b.from.getTime()) ? new Date(b.from.getFullYear(), b.from.getMonth(), b.from.getDate()) : today;
-    if (from < today) from = today;
-    const to = b.to && !Number.isNaN(b.to.getTime()) ? b.to : new Date(from.getFullYear(), from.getMonth(), from.getDate() + MAX_DAYS - 1);
-    const days = Math.min(Math.max(Math.round((new Date(to.getFullYear(), to.getMonth(), to.getDate()) - from) / 86400e3) + 1, 1), MAX_DAYS);
-    return { from: ymdLocal(from), days, toStr: ymdLocal(new Date(from.getFullYear(), from.getMonth(), from.getDate() + days - 1)) };
-  }, [range, custom]);
+    const today = dayOf(clock.date);
+    const shift = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+    let from = today;
+    let to = null;
+    const ahead = /^next(\d+)d$/.exec(range);
+    if (ahead) to = shift(today, Number(ahead[1]) - 1);
+    else if (range === 'custom') {
+      const f = custom.fromDate ? dayOf(custom.fromDate) : null;
+      if (f && !Number.isNaN(f.getTime()) && f > today) from = f;
+      const t = custom.toDate ? dayOf(custom.toDate) : null;
+      if (t && !Number.isNaN(t.getTime())) to = t;
+    }
+    if (!to) to = shift(from, MAX_DAYS - 1);
+    const days = Math.min(Math.max(Math.round((to - from) / 86400e3) + 1, 1), MAX_DAYS);
+    return { from: ymdLocal(from), days, toStr: ymdLocal(shift(from, days - 1)) };
+  }, [range, custom, clock.date]);
 
   // Keyed on the derived window strings, not the object: a half-typed custom
-  // date that resolves to the same window must not refetch.
+  // date that resolves to the same window must not refetch. `schedules` is the
+  // parent's list — it changes exactly when a plan was saved / toggled /
+  // deleted while this view is open, and the firings must follow. Only a
+  // window change blanks the list; a schedule change swaps it in place.
+  const lastWindow = useRef(null);
   useEffect(() => {
     let alive = true;
-    setEvents(null);
+    const key = `${window_.from}/${window_.days}`;
+    if (lastWindow.current !== key) { lastWindow.current = key; setEvents(null); }
     setError(null);
     api.get(`/schedules/calendar?from=${window_.from}&days=${window_.days}`)
       .then((r) => {
@@ -83,21 +112,7 @@ export default function Upcoming({ relays, schedules, colorOf }) {
       })
       .catch((e) => { if (alive) setError(e); });
     return () => { alive = false; };
-  }, [window_.from, window_.days]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const t = setInterval(() => setNowTick(Date.now()), 60000);
-    return () => clearInterval(t);
-  }, []);
-
-  // Only what is still ahead: today's past firings are history, not "next".
-  // The cutoff is the server's clock (device-local), advanced by the minutes
-  // this page has been open; the browser's own zone never enters.
-  const clock = useMemo(() => {
-    if (now) return advancedNow(now, nowTick);
-    const d = new Date(nowTick);
-    return { date: ymdLocal(d), key: `${ymdLocal(d)}T${pad2(d.getHours())}:${pad2(d.getMinutes())}` };
-  }, [now, nowTick]);
+  }, [window_.from, window_.days, schedules]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = useMemo(() => {
     if (!events) return null;
     return events
