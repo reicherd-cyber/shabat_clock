@@ -158,6 +158,13 @@ authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, onboardPrepareT
     // Revoked / expired / pre-registry files stop here — for the poll too.
     const { liveInstallerToken } = await import('../../services/shellyOnboard.js');
     await liveInstallerToken(claims.jti);
+    // candidates=1: no minting — the MACs (and model prefixes) of units awaiting
+    // an install, so the page can find a cabled unit on the home LAN by its
+    // .local name instead of asking the helper for a MAC.
+    if (String(req.query.candidates || '') === '1') {
+      const { installCandidates } = await import('../../services/shellyOnboard.js');
+      return res.json({ candidates: await installCandidates() });
+    }
     // check=1: no minting — just "is this device connected to the broker right
     // now?", so the installer can validate a seemingly-provisioned unit before
     // trusting its stored config (stale credentials look identical on-device).
