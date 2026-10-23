@@ -3,11 +3,12 @@ import { api } from '../api.js';
 import { Card, Button, ErrorNote, FilterSelect, RangeFilter, RANGE_AHEAD, ymdLocal, DAY_NAMES, ChannelDot } from '../ui.jsx';
 import { CalendarClock } from 'lucide-react';
 
-// "מועדים קרובים": the plans' next firing times as one list, grouped per device.
-// Same source as the לוח (GET /schedules/calendar — anchors, holidays and
-// exclusions already resolved server-side), so what is listed here is exactly
-// what the calendar draws. Filters mirror the devices page: a period (default
-// the coming 7 days) and a device (default all).
+// "מועדים קרובים": the plans' next firing times as one list, grouped per channel
+// (user's call 2026-10-23: "divide by channel not device"). Same source as the
+// לוח (GET /schedules/calendar — anchors, holidays and exclusions already
+// resolved server-side), so what is listed here is exactly what the calendar
+// draws. Filters mirror the devices page: a period (default the coming 7 days)
+// and a channel (default all).
 const EMPTY_CUSTOM = { fromDate: '', toDate: '' };
 const MAX_DAYS = 92; // the endpoint's cap
 
@@ -39,19 +40,17 @@ function advancedNow(now, atMs) {
 export default function Upcoming({ relays, schedules, colorOf }) {
   const [range, setRange] = useState('next7d');
   const [custom, setCustom] = useState(EMPTY_CUSTOM);
-  const [deviceId, setDeviceId] = useState('');
+  const [relayId, setRelayId] = useState('');
   const [events, setEvents] = useState(null);
   const [now, setNow] = useState(null); // { date, time, fetchedAt } — server clock
   const [nowTick, setNowTick] = useState(Date.now());
   const [error, setError] = useState(null);
-  const filtering = range !== 'next7d' || deviceId !== '';
+  const filtering = range !== 'next7d' || relayId !== '';
 
-  // Devices in the order their channels appear (dashboard order).
-  const devices = useMemo(() => {
-    const seen = new Map();
-    for (const r of relays) if (!seen.has(r.device_id)) seen.set(r.device_id, { id: r.device_id, name: r.device });
-    return [...seen.values()];
-  }, [relays]);
+  // Channels in dashboard order; the device name only matters when there is
+  // more than one device (same rule as the history page's channel filter).
+  const multiDevice = useMemo(() => new Set(relays.map((r) => r.device_id)).size > 1, [relays]);
+  const channels = useMemo(() => relays.map((r) => ({ id: r.id, name: r.name, device: r.device })), [relays]);
   // Plan name per schedule row — the calendar events carry only the schedule id.
   const planName = useMemo(() => new Map((schedules || []).map((s) => [s.id, s.name])), [schedules]);
 
@@ -117,31 +116,31 @@ export default function Upcoming({ relays, schedules, colorOf }) {
     if (!events) return null;
     return events
       .filter((e) => !e.manual && e.time && `${e.date}T${e.time}` >= clock.key && e.date <= window_.toStr)
-      .filter((e) => !deviceId || String(e.device_id) === deviceId);
-  }, [events, deviceId, window_, clock]);
+      .filter((e) => !relayId || String(e.relay_id) === relayId);
+  }, [events, relayId, window_, clock]);
 
   const groups = useMemo(() => {
     if (!rows) return [];
-    const byDevice = new Map();
+    const byRelay = new Map();
     for (const e of rows) {
-      if (!byDevice.has(e.device_id)) byDevice.set(e.device_id, { id: e.device_id, name: e.device_name, items: [] });
-      byDevice.get(e.device_id).items.push(e);
+      if (!byRelay.has(e.relay_id)) byRelay.set(e.relay_id, { id: e.relay_id, name: e.relay_name, device: e.device_name, items: [] });
+      byRelay.get(e.relay_id).items.push(e);
     }
-    // Device order as on the dashboard; a device with no firings is listed empty
-    // so "nothing scheduled" is visible per device, not silently missing.
-    const ordered = devices.filter((d) => !deviceId || String(d.id) === deviceId)
-      .map((d) => byDevice.get(d.id) || { id: d.id, name: d.name, items: [] });
-    for (const [id, g] of byDevice) if (!ordered.some((o) => o.id === id)) ordered.push(g);
+    // Channel order as on the dashboard; a channel with no firings is listed
+    // empty so "nothing scheduled" is visible per channel, not silently missing.
+    const ordered = channels.filter((c) => !relayId || String(c.id) === relayId)
+      .map((c) => byRelay.get(c.id) || { ...c, items: [] });
+    for (const [id, g] of byRelay) if (!ordered.some((o) => o.id === id)) ordered.push(g);
     return ordered;
-  }, [rows, devices, deviceId]);
+  }, [rows, channels, relayId]);
 
   const total = rows ? rows.length : 0;
   return (
     <>
       <div className="flex gap-2 items-center flex-wrap mb-3">
-        <FilterSelect className="py-2 text-sm flex-1 min-w-[10rem]" value={deviceId} onChange={(e) => setDeviceId(e.target.value)} aria-label="מכשיר">
-          <option value="">כל המכשירים</option>
-          {devices.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        <FilterSelect className="py-2 text-sm flex-1 min-w-[10rem]" value={relayId} onChange={(e) => setRelayId(e.target.value)} aria-label="ערוץ">
+          <option value="">כל הערוצים</option>
+          {channels.map((c) => <option key={c.id} value={c.id}>{c.name}{multiDevice ? ` (${c.device})` : ''}</option>)}
         </FilterSelect>
         <RangeFilter value={range} onChange={setRange} keys={RANGE_AHEAD} className="flex-1 min-w-[10rem]"
           custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />
@@ -157,23 +156,21 @@ export default function Upcoming({ relays, schedules, colorOf }) {
             <span className="text-muted text-sm ms-auto">{total === 0 ? '' : total === 1 ? 'מועד אחד' : `${total} מועדים`}</span>
           </div>
           {groups.length === 0 && (
-            <p className="text-muted text-sm px-5 py-6 text-center">אין מכשירים פעילים בחשבון.</p>
+            <p className="text-muted text-sm px-5 py-6 text-center">אין ערוצים פעילים בחשבון.</p>
           )}
           {groups.map((g) => (
             <div key={g.id}>
-              <div className="px-5 py-2 bg-surface2 text-[13px] font-bold border-t border-line">
-                {g.name}
-                <span className="text-muted font-normal ms-2">{g.items.length === 0 ? 'אין מועדים בתקופה' : g.items.length === 1 ? 'מועד אחד' : `${g.items.length} מועדים`}</span>
+              <div className="flex items-center gap-2 px-5 py-2 bg-surface2 text-[13px] font-bold border-t border-line flex-wrap">
+                <ChannelDot color={colorOf(g.id)} size={10} />
+                <span>{g.name}</span>
+                {multiDevice && g.device && <span className="text-muted font-normal">· {g.device}</span>}
+                <span className="text-muted font-normal ms-auto">{g.items.length === 0 ? 'אין מועדים בתקופה' : g.items.length === 1 ? 'מועד אחד' : `${g.items.length} מועדים`}</span>
               </div>
               {g.items.map((e, i) => (
                 <div key={`${e.schedule_id}:${e.date}:${e.time}:${e.action}:${i}`}
                   className="flex items-center gap-3 px-5 py-[11px] text-sm border-t border-line flex-wrap">
                   <time className="font-medium whitespace-nowrap min-w-[8.5rem]">{whenText(e.date, e.time, clock.date)}</time>
                   <span className={`pill ${e.action === 'on' ? 'on-p' : 'off-p'}`}>{e.action === 'on' ? 'הדלקה' : 'כיבוי'}</span>
-                  <span className="inline-flex items-center gap-1.5 min-w-0">
-                    <ChannelDot color={colorOf(e.relay_id)} size={9} />
-                    <b className="truncate">{e.relay_name}</b>
-                  </span>
                   {planName.get(e.schedule_id) && <span className="text-muted text-[12.5px] truncate">{planName.get(e.schedule_id)}</span>}
                 </div>
               ))}
