@@ -356,7 +356,11 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
    רשת ביתית (ב-Wi-Fi או בכבל — לא משנה) ולחצו "התחל התקנה" — הדף סורק את הרשת
    ומוצא את המכשיר לבד. לא נמצא? ברשימת המכשירים המחוברים בנתב הוא מופיע בשם כמו
    <span dir="ltr">ShellyPro4PM-XXXXXX</span> עם כתובת IP — הקלידו את השם או את הכתובת
-   בשדה שנפתח.</li>
+   בשדה שנפתח.
+   <div id="androidHint" class="hidden" style="margin-top:4px;color:#a06a00">
+    <b>בטלפון אנדרואיד</b> הדפדפן לא מוצא מכשירים לפי שם ברשת הביתית: פתחו את רשימת
+    המכשירים בנתב והקלידו את כתובת ה-IP של המכשיר בשדה שייפתח (או השתמשו במחשב / אייפון).
+   </div></li>
   <li>השאירו את שם הרשת והסיסמה ריקים ולחצו "חבר לרשת הביתית" — הדף מזהה שהכבל
    מחובר וממשיך בלי Wi-Fi.</li>
   <li>לחצו "השלם התקנה" — המחשב או הטלפון כבר ברשת עם אינטרנט, אז יצירת פרטי החיבור,
@@ -367,6 +371,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
   for(const t of document.querySelectorAll('.itab')){const on=t.dataset.k===k;t.classList.toggle('sel',on);t.setAttribute('aria-selected',on?'true':'false')}
   for(const p of document.querySelectorAll('.ipanel'))p.classList.toggle('hidden',p.dataset.k!==k)
  }
+ if(/Android/i.test(navigator.userAgent))document.getElementById('androidHint').classList.remove('hidden');
  </script>
  <div style="margin-top:8px;font-size:14px;color:#b3372f">
   ⚠ <b>חשוב:</b> אל תחברו את הנתב (ראוטר) לחשמל דרך ערוצי המכשיר — כל כיבוי של
@@ -414,6 +419,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
 let UID=${inject.uid}, STATUS_URL=${inject.statusUrl}, B=${inject.bodies};
 const PREPARE_URL=${inject.prepareUrl}, BROKER=${inject.broker};
 let IP='', sntpIdx=0, PROVISIONED=false, DEVIP='', STA_IP='';
+const ANDROID=/Android/i.test(navigator.userAgent); // no mDNS in Android Chrome — .local lookups fail there
 // Model word of the unit ('shellypro1'…), learned from its device id over the
 // hotspot or from the network name the installer typed. Known → the LAN lookup
 // asks for that one name instead of walking every model prefix (~4 s each).
@@ -476,10 +482,14 @@ async function lanSweep(){
   try{
    const r=await fetch(PREPARE_URL+'&candidates=1',{cache:'no-store',signal:AbortSignal.timeout(6000)});
    const j=r.ok?await r.json():null;
-   for(const c of (j&&j.candidates)||[]){for(const p of (c.prefix?[c.prefix]:ALL_PREFIXES))names.push(p+'-'+c.uid+'.local')}
+   // Known-model units first (one name each) so an unknown-model unit's nine
+   // guesses never crowd a real candidate out of the cap.
+   const cs=(j&&j.candidates)||[];
+   for(const c of cs)if(c.prefix)names.push(c.prefix+'-'+c.uid+'.local');
+   for(const c of cs)if(!c.prefix)for(const p of ALL_PREFIXES)names.push(p+'-'+c.uid+'.local');
   }catch(e){}
  }
- names=names.slice(0,60);
+ names=names.slice(0,100);
  if(!names.length)return null;
  log('סורק את הרשת הביתית ('+names.length+' שמות)...');
  const hits=await Promise.all(names.map(async(n)=>{const m=await wsMac(n);return m?{mac:m,host:n}:null}));
@@ -657,8 +667,15 @@ async function stageDetect(){
    // Not on the hotspot (no typed address either): the unit may be on the home
    // LAN by cable — sweep its .local names once before the hotspot retries.
    if(mac.length!==12&&round===0&&!manual0){
-    const hit=await lanSweep();
-    if(hit){mac=hit.mac;$('mac').value=mac;DEVIP=hit.host;log('המכשיר נמצא ברשת הביתית ✓ ('+hit.host+')','ok');break}
+    // Android Chrome has no mDNS resolver — .local names never resolve there, so
+    // the sweep is pointless; open the IP field at once instead of after 5 s.
+    if(ANDROID){
+     $('macFold').open=true;$('ip').classList.remove('hidden');
+     log('בטלפון אנדרואיד הדפדפן לא מוצא מכשירים לפי שם ברשת הביתית — אם המכשיר מחובר בכבל, הקלידו את כתובת ה-IP שלו מרשימת המכשירים בנתב (או השתמשו במחשב / אייפון)','warn');
+    } else {
+     const hit=await lanSweep();
+     if(hit){mac=hit.mac;$('mac').value=mac;DEVIP=hit.host;log('המכשיר נמצא ברשת הביתית ✓ ('+hit.host+')','ok');break}
+    }
    }
    if(mac.length!==12){$('macFold').open=true;mac=parseMac($('mac').value)} // typed meanwhile?
   }
