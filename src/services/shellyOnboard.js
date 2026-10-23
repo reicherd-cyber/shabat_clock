@@ -326,6 +326,9 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
  .verdict{font-size:18px;font-weight:700;border-radius:12px;padding:12px;margin-top:10px}
  .verdict.ok{background:#e5f2e7;color:#3a7d44}.verdict.bad{background:#f7e5e3;color:#b3372f}.verdict.warn{background:#f7efdc;color:#a06a00}
  .hidden{display:none}
+ .itabs{display:flex;gap:6px;margin:8px 0 10px}
+ .itab{width:auto;flex:1;font-size:15px;padding:8px 10px;margin:0;background:#fff;color:#2b2620;border:1px solid #cfc9bb}
+ .itab.sel{background:#b3654a;color:#fff;border-color:#b3654a}
 </style></head><body>
 <h1>חיבור מכשיר Shelly לשעון שבת</h1>
 <div>מכשיר: <span class="mac" id="uid">—</span></div>
@@ -334,8 +337,12 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
  יש להוריד את הקובץ ולפתוח אותו מתיקיית ההורדות של הטלפון.
 </div>
 <div class="box">
- <b>איך מתקינים:</b>
- <ol style="margin:6px 0 0;padding-inline-start:18px">
+ <b>איך מתקינים:</b> <span style="font-weight:normal;color:#8a8377">איך המכשיר יתחבר לרשת הביתית?</span>
+ <div class="itabs" role="tablist">
+  <button type="button" class="itab sel" data-k="wifi" role="tab" aria-selected="true" onclick="instTab('wifi')">ב-Wi-Fi</button>
+  <button type="button" class="itab" data-k="cable" role="tab" aria-selected="false" onclick="instTab('cable')">בכבל רשת מהנתב</button>
+ </div>
+ <ol class="ipanel" data-k="wifi" style="margin:6px 0 0;padding-inline-start:18px">
   <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly) ולחצו "התחל התקנה" —
    הדף מזהה את המכשיר לבד. (אם הטלפון שואל אם להישאר ברשת בלי אינטרנט — הישארו.)</li>
   <li>מלאו את פרטי ה-Wi-Fi הביתי ולחצו "חבר לרשת הביתית" — הדף מוודא במקום
@@ -344,6 +351,28 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
    החיבור, שליחת ההגדרות והבדיקה מול השרת רצות כולן משם. מעבר אחד לכל כיוון,
    בלי לחזור לרשת המכשיר.</li>
  </ol>
+ <ol class="ipanel hidden" data-k="cable" style="margin:6px 0 0;padding-inline-start:18px">
+  <li>חברו את המכשיר בכבל רשת לנתב. פתחו את הדף הזה במחשב או בטלפון שמחובר לאותה
+   רשת ביתית (ב-Wi-Fi או בכבל — לא משנה) ולחצו "התחל התקנה" — הדף סורק את הרשת
+   ומוצא את המכשיר לבד. לא נמצא? ברשימת המכשירים המחוברים בנתב הוא מופיע בשם כמו
+   <span dir="ltr">ShellyPro4PM-XXXXXX</span> עם כתובת IP — הקלידו את השם או את הכתובת
+   בשדה שנפתח.
+   <div id="androidHint" class="hidden" style="margin-top:4px;color:#a06a00">
+    <b>בטלפון אנדרואיד</b> הדפדפן לא מוצא מכשירים לפי שם ברשת הביתית: פתחו את רשימת
+    המכשירים בנתב והקלידו את כתובת ה-IP של המכשיר בשדה שייפתח (או השתמשו במחשב / אייפון).
+   </div></li>
+  <li>השאירו את שם הרשת והסיסמה ריקים ולחצו "חבר לרשת הביתית" — הדף מזהה שהכבל
+   מחובר וממשיך בלי Wi-Fi.</li>
+  <li>לחצו "השלם התקנה" — המחשב או הטלפון כבר ברשת עם אינטרנט, אז יצירת פרטי החיבור,
+   שליחת ההגדרות והבדיקה מול השרת רצות ישר משם.</li>
+ </ol>
+ <script>
+ function instTab(k){
+  for(const t of document.querySelectorAll('.itab')){const on=t.dataset.k===k;t.classList.toggle('sel',on);t.setAttribute('aria-selected',on?'true':'false')}
+  for(const p of document.querySelectorAll('.ipanel'))p.classList.toggle('hidden',p.dataset.k!==k)
+ }
+ if(/Android/i.test(navigator.userAgent))document.getElementById('androidHint').classList.remove('hidden');
+ </script>
  <div style="margin-top:8px;font-size:14px;color:#b3372f">
   ⚠ <b>חשוב:</b> אל תחברו את הנתב (ראוטר) לחשמל דרך ערוצי המכשיר — כל כיבוי של
   הערוץ ינתק את הבית מהאינטרנט ואת המכשיר מהשרת. בסוף ההתקנה יש כפתור בדיקה לזה.
@@ -360,9 +389,10 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
   <details id="macFold" class="hidden" style="font-size:14px;margin-bottom:8px">
    <summary style="cursor:pointer"><b>לא מחוברים לרשת שהמכשיר משדר? לחצו כאן ›</b></summary>
    <div style="margin-top:6px">
-    הקלידו את שם הרשת המלא שהמכשיר משדר (למשל <b dir="ltr">ShellyPro1-8C4F00D91928</b>) —
-    כך נדע גם את הדגם ונמצא אותו ברשת הביתית מיד. אפשר גם רק את הקוד
-    (<b dir="ltr">8C4F00D91928</b>) או את ה-MAC מהמדבקה, ואז נחפש לפי כל הדגמים.
+    הדף סורק את הרשת הביתית ומוצא את המכשיר לבד. לא נמצא? ברשימת המכשירים המחוברים
+    בנתב הוא מופיע בשם כמו <b dir="ltr">ShellyPro4PM-E08CFE955D44</b> ולידו כתובת IP —
+    הקלידו כאן את השם המלא (כך נדע גם את הדגם), או רק את הקוד שאחרי המקף
+    (<b dir="ltr">E08CFE955D44</b>), ואז נחפש לפי כל הדגמים.
    </div>
    <input id="mac" placeholder="שם הרשת שהמכשיר משדר או קוד המכשיר (MAC)" style="margin-top:6px">
   </details>
@@ -389,6 +419,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
 let UID=${inject.uid}, STATUS_URL=${inject.statusUrl}, B=${inject.bodies};
 const PREPARE_URL=${inject.prepareUrl}, BROKER=${inject.broker};
 let IP='', sntpIdx=0, PROVISIONED=false, DEVIP='', STA_IP='';
+const ANDROID=/Android/i.test(navigator.userAgent); // no mDNS in Android Chrome — .local lookups fail there
 // Model word of the unit ('shellypro1'…), learned from its device id over the
 // hotspot or from the network name the installer typed. Known → the LAN lookup
 // asks for that one name instead of walking every model prefix (~4 s each).
@@ -439,6 +470,31 @@ function wsRpc(ip,method,timeoutMs){return new Promise((res)=>{
   clearTimeout(t);fin(m.error?null:(m.result||null))};
  ws.onerror=()=>{clearTimeout(t);fin(null)};
 })}
+// LAN auto-discovery (no hotspot, nothing typed): the device announces
+// <model>-<mac>.local on the home network. A per-device file knows its MAC; the
+// universal file asks the server which units are awaiting install (prepared
+// stock + offline-assigned) and probes all their names in parallel — one ~5 s
+// wait instead of reading a MAC off a sticker that is not there.
+async function lanSweep(){
+ let names=[];
+ if(UID)names=mdnsNames(UID);
+ else if(PREPARE_URL){
+  try{
+   const r=await fetch(PREPARE_URL+'&candidates=1',{cache:'no-store',signal:AbortSignal.timeout(6000)});
+   const j=r.ok?await r.json():null;
+   // Known-model units first (one name each) so an unknown-model unit's nine
+   // guesses never crowd a real candidate out of the cap.
+   const cs=(j&&j.candidates)||[];
+   for(const c of cs)if(c.prefix)names.push(c.prefix+'-'+c.uid+'.local');
+   for(const c of cs)if(!c.prefix)for(const p of ALL_PREFIXES)names.push(p+'-'+c.uid+'.local');
+  }catch(e){}
+ }
+ names=names.slice(0,100);
+ if(!names.length)return null;
+ log('סורק את הרשת הביתית ('+names.length+' שמות)...');
+ const hits=await Promise.all(names.map(async(n)=>{const m=await wsMac(n);return m?{mac:m,host:n}:null}));
+ return hits.find(Boolean)||null;
+}
 async function wsMac(ip){const r=await wsRpc(ip,'Shelly.GetDeviceInfo');if(!r)return null;const m=String(r.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');if(m.length!==12)return null;MODEL=parseModel(String(r.id||''))||MODEL;return m}
 // ── Wi-Fi scan, shared: one in-flight scan at a time, result reused for 90 s ──
 // (the picker and the send step would otherwise scan twice back to back, and the
@@ -608,11 +664,25 @@ async function stageDetect(){
     const m=await wsMac(c);
     if(m){mac=m;$('mac').value=m;DEVIP=c;break}
    }
+   // Not on the hotspot (no typed address either): the unit may be on the home
+   // LAN by cable — sweep its .local names once before the hotspot retries.
+   if(mac.length!==12&&round===0&&!manual0){
+    // Android Chrome has no mDNS resolver — .local names never resolve there, so
+    // the sweep is pointless; open the IP field at once instead of after 5 s.
+    if(ANDROID){
+     $('macFold').open=true;$('ip').classList.remove('hidden');
+     log('בטלפון אנדרואיד הדפדפן לא מוצא מכשירים לפי שם ברשת הביתית — אם המכשיר מחובר בכבל, הקלידו את כתובת ה-IP שלו מרשימת המכשירים בנתב (או השתמשו במחשב / אייפון)','warn');
+    } else {
+     const hit=await lanSweep();
+     if(hit){mac=hit.mac;$('mac').value=mac;DEVIP=hit.host;log('המכשיר נמצא ברשת הביתית ✓ ('+hit.host+')','ok');break}
+    }
+   }
    if(mac.length!==12){$('macFold').open=true;mac=parseMac($('mac').value)} // typed meanwhile?
   }
  }
  if(mac.length!==12){
   $('macFold').open=true;
+  $('ip').classList.remove('hidden'); // a cabled unit's address from the router list is the other way in
   // Tell apart "nothing at that address" from "answers HTTP but not the WebSocket
   // RPC" — the second means the unit is there and only the readable channel
   // failed, so typing the code is the whole fix. Probe the address actually tried.
@@ -623,7 +693,7 @@ async function stageDetect(){
    ?'המכשיר נמצא אך לא ניתן לקרוא ממנו את הקוד. הקלידו את הקוד ידנית בשדה שנפתח למעלה (האותיות והספרות שאחרי המקף בשם הרשת Shelly...) ולחצו שוב.'
    :$('ip').value.trim()
     ?'הכתובת '+probe+' לא עונה. בדקו אותה ברשימת המכשירים של הנתב, ודאו שהטלפון על אותה רשת — או הקלידו את שם הרשת שהמכשיר משדר בשדה שנפתח למעלה.'
-    :'לא נמצא מכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הקלידו את הקוד ידנית בשדה שנפתח למעלה.','warn');
+    :'לא נמצא מכשיר — לא ברשת שהוא משדר ולא ברשת הביתית. בהתקנה ב-Wi-Fi: ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב. בהתקנה בכבל: ודאו שהמחשב/הטלפון על אותה רשת כמו המכשיר, או הקלידו למעלה את שמו (ShellyPro...) או את כתובת ה-IP שלו מרשימת המכשירים בנתב.','warn');
   return}
  // Pre-provisioned unit (configured for our broker in advance, e.g. at the
  // seller's desk): the on-site visit collapses to Wi-Fi-only — one network,
@@ -873,6 +943,32 @@ async function stageInstall(){
 // A unit registered offline (assigned to a customer before it ever connected,
 // first_contact_pending) has no working credentials to lose — the installer file
 // is exactly how it gets its first ones, so it is not "registered" here.
+// Model code (SPSW-204PE16EU …) → the mDNS prefix that unit announces, or null
+// when the family is not in MDNS_PREFIXES (the page then walks every prefix).
+export function mdnsPrefixForModel(code) {
+  const m = /^S([NP])SW-\d?(\d\d)([PX])/.exec(String(code || '').toUpperCase());
+  if (!m) return null;
+  const p = `shelly${m[1] === 'P' ? 'pro' : 'plus'}${Number(m[2])}${m[3] === 'P' ? 'pm' : ''}`;
+  return MDNS_PREFIXES.includes(p) ? p : null;
+}
+
+// Units awaiting an install — prepared stock plus devices assigned offline that
+// never connected. The universal installer page probes their <prefix>-<mac>.local
+// names on the home LAN so a cabled unit is found without typing anything
+// (there is no MAC sticker the helper can read). MACs only, no customer data:
+// the same file may already mint credentials for any MAC.
+export async function installCandidates() {
+  const rows = await query(
+    `SELECT p.mac AS uid, p.model FROM prepared_devices p WHERE p.status = 'prepared'
+     UNION
+     SELECT d.device_uid AS uid, p2.model FROM devices d
+       LEFT JOIN prepared_devices p2 ON p2.mac = d.device_uid
+       WHERE d.is_enabled = TRUE AND d.first_contact_pending = TRUE AND d.device_type = 'shelly'
+     LIMIT 40`);
+  return rows.filter((r) => /^[0-9a-f]{12}$/.test(String(r.uid || '')))
+    .map((r) => ({ uid: r.uid, prefix: mdnsPrefixForModel(r.model) }));
+}
+
 export async function registeredDevice(uid) {
   const [row] = await query(
     `SELECT d.id, d.name, u.full_name AS user_name

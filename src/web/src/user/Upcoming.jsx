@@ -2,6 +2,34 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, ErrorNote, FilterSelect, RangeFilter, RANGE_AHEAD, ymdLocal, DAY_NAMES, ChannelDot } from '../ui.jsx';
 import { CalendarClock } from 'lucide-react';
+import { planFromMembers, schedulerSummary } from './PlanEditor.jsx';
+
+// The scheduler behind a firing, worded like the pills on the plans list
+// ("ראשון, שני · 06:33" / "כל יום · שקיעה − 20 דק׳" / "כל שנה …"), without the
+// trailing action (the row's pill already says it). A plan's weekly days are
+// stored one row per day: the row's own scheduler is matched back into the
+// plan-level merge so the text names all the days, not just this firing's.
+const schKey = (s) => JSON.stringify([s.action, s.repeat_type, s.kind, s.time, s.offset, s.dir, s.daily,
+  s.holidays, s.calendar, s.date, s.heb_day, s.heb_month, s.end_date, s.heb_day_to, s.heb_month_to]);
+function schedulerTexts(schedules) {
+  const out = new Map(); // `${schedule_id}:${action}` → text
+  const byPlan = new Map();
+  for (const s of schedules || []) {
+    const k = s.plan_id || `s${s.id}`;
+    if (!byPlan.has(k)) byPlan.set(k, []);
+    byPlan.get(k).push(s);
+  }
+  for (const members of byPlan.values()) {
+    const merged = new Map(planFromMembers(members).schedulers.map((x) => [schKey(x), x]));
+    for (const m of members) {
+      for (const sch of planFromMembers([m]).schedulers) {
+        const full = merged.get(schKey(sch)) || sch;
+        out.set(`${m.id}:${sch.action}`, schedulerSummary(full).replace(/ · (הדלקה|כיבוי)$/, ''));
+      }
+    }
+  }
+  return out;
+}
 
 // "מועדים קרובים": the plans' next firing times as one list, grouped per channel
 // (user's call 2026-10-23: "divide by channel not device"). Same source as the
@@ -53,6 +81,7 @@ export default function Upcoming({ relays, schedules, colorOf }) {
   const channels = useMemo(() => relays.map((r) => ({ id: r.id, name: r.name, device: r.device })), [relays]);
   // Plan name per schedule row — the calendar events carry only the schedule id.
   const planName = useMemo(() => new Map((schedules || []).map((s) => [s.id, s.name])), [schedules]);
+  const schedText = useMemo(() => schedulerTexts(schedules), [schedules]);
 
   useEffect(() => {
     const t = setInterval(() => setNowTick(Date.now()), 60000);
@@ -166,12 +195,21 @@ export default function Upcoming({ relays, schedules, colorOf }) {
                 {multiDevice && g.device && <span className="text-muted font-normal">· {g.device}</span>}
                 <span className="text-muted font-normal ms-auto">{g.items.length === 0 ? 'אין מועדים בתקופה' : g.items.length === 1 ? 'מועד אחד' : `${g.items.length} מועדים`}</span>
               </div>
+              {g.items.length > 0 && (
+                <div className="hidden sm:grid grid-cols-[8.5rem_5rem_1fr_1fr] gap-3 px-5 py-1.5 text-[11.5px] text-muted border-t border-line">
+                  <span>מועד</span><span>פעולה</span><span>תזמון</span><span>תוכנית</span>
+                </div>
+              )}
               {g.items.map((e, i) => (
                 <div key={`${e.schedule_id}:${e.date}:${e.time}:${e.action}:${i}`}
-                  className="flex items-center gap-3 px-5 py-[11px] text-sm border-t border-line flex-wrap">
-                  <time className="font-medium whitespace-nowrap min-w-[8.5rem]">{whenText(e.date, e.time, clock.date)}</time>
-                  <span className={`pill ${e.action === 'on' ? 'on-p' : 'off-p'}`}>{e.action === 'on' ? 'הדלקה' : 'כיבוי'}</span>
-                  {planName.get(e.schedule_id) && <span className="text-muted text-[12.5px] truncate">{planName.get(e.schedule_id)}</span>}
+                  className="grid grid-cols-[8.5rem_5rem] sm:grid-cols-[8.5rem_5rem_1fr_1fr] items-center gap-x-3 gap-y-1 px-5 py-[11px] text-sm border-t border-line">
+                  <time className="font-medium whitespace-nowrap">{whenText(e.date, e.time, clock.date)}</time>
+                  <span className={`pill ${e.action === 'on' ? 'on-p' : 'off-p'} w-fit`}>{e.action === 'on' ? 'הדלקה' : 'כיבוי'}</span>
+                  {/* phone: the two text columns drop under the time/pill line */}
+                  <span className="col-span-2 sm:col-span-1 text-[12.5px] truncate" title={schedText.get(`${e.schedule_id}:${e.action}`) || ''}>
+                    {schedText.get(`${e.schedule_id}:${e.action}`) || '—'}
+                  </span>
+                  <span className="col-span-2 sm:col-span-1 text-muted text-[12.5px] truncate">{planName.get(e.schedule_id) || ''}</span>
                 </div>
               ))}
             </div>
