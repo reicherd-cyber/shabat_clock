@@ -1,9 +1,11 @@
 # Shabat Clock (TelTech) — line check for smart-device connectivity.
 # Run on the suspect internet line:  irm https://kosher-teltech.com/linecheck.ps1 | iex
-# Tests TCP reachability of the device broker (port 8883) and completes a real TLS
-# handshake to detect filter-provider interception (NetFree / Etrog / Rimon style).
+# Tests TCP reachability of the device broker (mqtt2.kosher-teltech.com, port 443 —
+# the filter-proof address every installer file writes since 2026-10-23) and
+# completes a real TLS handshake to detect filter-provider interception
+# (NetFree / Etrog / Rimon style).
 # English output on purpose — RTL text renders garbled in the Windows console.
-$h = '188.166.29.235'; $p = 8883
+$h = 'mqtt2.kosher-teltech.com'; $p = 443
 Write-Host ''
 Write-Host '=== Shabat Clock line check ===' -ForegroundColor Cyan
 $t = Test-NetConnection $h -Port $p -WarningAction SilentlyContinue
@@ -16,7 +18,7 @@ if (-not $t.TcpTestSucceeded) {
   try {
     $tcp = New-Object Net.Sockets.TcpClient($h, $p)
     $ssl = New-Object Net.Security.SslStream($tcp.GetStream(), $false, { $true })
-    $ssl.AuthenticateAsClient('mqtt.kosher-teltech.com')
+    $ssl.AuthenticateAsClient($h)
     $c = New-Object Security.Cryptography.X509Certificates.X509Certificate2($ssl.RemoteCertificate)
     Write-Host "[2] Certificate subject : $($c.Subject)"
     Write-Host "    Certificate issuer  : $($c.Issuer)"
