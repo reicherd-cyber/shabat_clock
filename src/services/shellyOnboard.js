@@ -326,6 +326,9 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
  .verdict{font-size:18px;font-weight:700;border-radius:12px;padding:12px;margin-top:10px}
  .verdict.ok{background:#e5f2e7;color:#3a7d44}.verdict.bad{background:#f7e5e3;color:#b3372f}.verdict.warn{background:#f7efdc;color:#a06a00}
  .hidden{display:none}
+ .itabs{display:flex;gap:6px;margin:8px 0 10px}
+ .itab{width:auto;flex:1;font-size:15px;padding:8px 10px;margin:0;background:#fff;color:#2b2620;border:1px solid #cfc9bb}
+ .itab.sel{background:#b3654a;color:#fff;border-color:#b3654a}
 </style></head><body>
 <h1>חיבור מכשיר Shelly לשעון שבת</h1>
 <div>מכשיר: <span class="mac" id="uid">—</span></div>
@@ -334,21 +337,36 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
  יש להוריד את הקובץ ולפתוח אותו מתיקיית ההורדות של הטלפון.
 </div>
 <div class="box">
- <b>איך מתקינים:</b> <span style="font-weight:normal;color:#8a8377">(המכשיר יכול להתחבר לרשת הביתית ב-Wi-Fi או בכבל רשת מהנתב — שני המסלולים כאן)</span>
- <ol style="margin:6px 0 0;padding-inline-start:18px">
-  <li><b>מציאת המכשיר.</b> הדרך הפשוטה: חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly)
-   ולחצו "התחל התקנה" — הדף מזהה את המכשיר לבד. (אם הטלפון שואל אם להישאר ברשת בלי
-   אינטרנט — הישארו.)<br>
-   <b>המכשיר כבר מחובר בכבל רשת לנתב?</b> אפשר להישאר על ה-Wi-Fi הביתי: לחצו "התחל התקנה",
-   ובשדה שנפתח הקלידו את שם הרשת שעל המדבקה (למשל ShellyPro4PM-XXXXXX) או את כתובת
-   ה-IP של המכשיר מהנתב.</li>
-  <li><b>הרשת הביתית.</b> חיבור ב-Wi-Fi: מלאו שם רשת וסיסמה ולחצו "חבר לרשת הביתית" —
-   הדף מוודא במקום שהמכשיר באמת התחבר (סיסמה שגויה מתגלה מיד, כשקל לתקן).<br>
-   חיבור בכבל: השאירו את שני השדות ריקים ולחצו — הדף מזהה שהכבל מחובר וממשיך בלי Wi-Fi.</li>
-  <li><b>השלמת ההתקנה.</b> ודאו שלטלפון יש אינטרנט (אם עברתם לרשת המכשיר — חזרו ל-Wi-Fi
-   הביתי) ולחצו "השלם התקנה" — יצירת פרטי החיבור, שליחת ההגדרות והבדיקה מול השרת רצות
-   כולן משם. מעבר אחד לכל כיוון, בלי לחזור לרשת המכשיר.</li>
+ <b>איך מתקינים:</b> <span style="font-weight:normal;color:#8a8377">איך המכשיר יתחבר לרשת הביתית?</span>
+ <div class="itabs" role="tablist">
+  <button type="button" class="itab sel" data-k="wifi" role="tab" aria-selected="true" onclick="instTab('wifi')">ב-Wi-Fi</button>
+  <button type="button" class="itab" data-k="cable" role="tab" aria-selected="false" onclick="instTab('cable')">בכבל רשת מהנתב</button>
+ </div>
+ <ol class="ipanel" data-k="wifi" style="margin:6px 0 0;padding-inline-start:18px">
+  <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly) ולחצו "התחל התקנה" —
+   הדף מזהה את המכשיר לבד. (אם הטלפון שואל אם להישאר ברשת בלי אינטרנט — הישארו.)</li>
+  <li>מלאו את פרטי ה-Wi-Fi הביתי ולחצו "חבר לרשת הביתית" — הדף מוודא במקום
+   שהמכשיר באמת התחבר (סיסמה שגויה מתגלה מיד, כשקל לתקן).</li>
+  <li>חברו את הטלפון בחזרה ל-Wi-Fi הביתי ולחצו "השלם התקנה" — יצירת פרטי
+   החיבור, שליחת ההגדרות והבדיקה מול השרת רצות כולן משם. מעבר אחד לכל כיוון,
+   בלי לחזור לרשת המכשיר.</li>
  </ol>
+ <ol class="ipanel hidden" data-k="cable" style="margin:6px 0 0;padding-inline-start:18px">
+  <li>חברו את המכשיר בכבל רשת לנתב והשאירו את הטלפון על ה-Wi-Fi הביתי (אותה רשת).
+   לחצו "התחל התקנה", ובשדה שנפתח הקלידו את שם הרשת שעל המדבקה (למשל
+   <span dir="ltr">ShellyPro4PM-XXXXXX</span>) או את כתובת ה-IP של המכשיר מהנתב.
+   (אפשר גם כמו ב-Wi-Fi: להתחבר לרשת שהמכשיר משדר — הדף ימצא אותו לבד.)</li>
+  <li>השאירו את שם הרשת והסיסמה ריקים ולחצו "חבר לרשת הביתית" — הדף מזהה שהכבל
+   מחובר וממשיך בלי Wi-Fi.</li>
+  <li>לחצו "השלם התקנה" — הטלפון כבר ברשת עם אינטרנט, אז יצירת פרטי החיבור,
+   שליחת ההגדרות והבדיקה מול השרת רצות ישר משם.</li>
+ </ol>
+ <script>
+ function instTab(k){
+  for(const t of document.querySelectorAll('.itab')){const on=t.dataset.k===k;t.classList.toggle('sel',on);t.setAttribute('aria-selected',on?'true':'false')}
+  for(const p of document.querySelectorAll('.ipanel'))p.classList.toggle('hidden',p.dataset.k!==k)
+ }
+ </script>
  <div style="margin-top:8px;font-size:14px;color:#b3372f">
   ⚠ <b>חשוב:</b> אל תחברו את הנתב (ראוטר) לחשמל דרך ערוצי המכשיר — כל כיבוי של
   הערוץ ינתק את הבית מהאינטרנט ואת המכשיר מהשרת. בסוף ההתקנה יש כפתור בדיקה לזה.
