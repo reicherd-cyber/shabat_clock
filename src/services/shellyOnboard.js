@@ -349,9 +349,9 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
   הערוץ ינתק את הבית מהאינטרנט ואת המכשיר מהשרת. בסוף ההתקנה יש כפתור בדיקה לזה.
  </div>
  <div style="margin-top:8px;font-size:14px;color:#a06a00">
-  ⚠ <b>קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> המכשיר מתחבר לשרת בפורט 443, שרוב
-  הסינונים מעבירים. אם בכל זאת לא התחבר בסוף ההתקנה — בדקו רגע על נקודה חמה של טלפון, ואם שם זה
-  עובד בקשו מספק הסינון להחריג את mqtt2.kosher-teltech.com (167.99.19.11) פורט 443.
+  ⚠ <b>קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> המכשיר מתחבר לשרת בכתובת
+  <span dir="ltr">${broker}</span>, שרוב הסינונים מעבירים. אם בכל זאת לא התחבר בסוף ההתקנה — בדקו רגע על
+  נקודה חמה של טלפון, ואם שם זה עובד בקשו מספק הסינון להחריג את הכתובת הזו.
  </div>
  <div style="margin-top:10px">
   <div id="macHelp" class="hidden" style="font-size:14px;margin-bottom:6px">
@@ -573,7 +573,7 @@ async function finish(){
   verdict('המכשיר עדיין לא התחבר — וזה קורה: חיבור ראשון לוקח לפעמים עד כ-4 דקות (המכשיר מסנכרן שעון ומתחבר מוצפן). לחצו "בדוק שוב מול השרת" — הבדיקה הבאה תמתין עד 4 דקות. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו קודם ל-Wi-Fi רגיל.','warn');
   actionBtn('בדוק שוב מול השרת (עד 4 דקות)',async()=>{await finish()},true);
   return}
- verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> המכשיר מתחבר לשרת בפורט 443, שרוב הסינונים מעבירים — אבל יש קווים שחוסמים גם אותו. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את mqtt2.kosher-teltech.com (167.99.19.11) פורט 443 (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.<br><br>בדיקה מלאה ממחשב Windows על אותו קו — הדביקו שורה אחת ב-PowerShell (בודקת פורט + יירוט הצפנה ומדפיסה פסק דין):<br><code dir="ltr" style="display:block;background:#efe9df;border-radius:8px;padding:6px 8px;margin-top:4px;text-align:left">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>','warn');
+ verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> המכשיר מתחבר לשרת בכתובת <span dir="ltr">'+BROKER+'</span>, שרוב הסינונים מעבירים — אבל יש קווים שחוסמים גם אותה. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את הכתובת הזו (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.<br><br>בדיקה מלאה ממחשב Windows על אותו קו — הדביקו שורה אחת ב-PowerShell (בודקת פורט + יירוט הצפנה ומדפיסה פסק דין):<br><code dir="ltr" style="display:block;background:#efe9df;border-radius:8px;padding:6px 8px;margin-top:4px;text-align:left">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>','warn');
  actionBtn('בדוק שוב מול השרת',async()=>{await finish()},true);
  if(sntpIdx<B.sntp.length-1){actionBtn('נסה שרת זמן אחר (בעיית שעון נפוצה)',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true)}
  actionBtn('נסה חיבור ללא אימות תעודה (עדיין מוצפן)',async()=>{log('מגדיר חיבור ללא אימות תעודה ומאתחל...');await rpc(B.noVerify);await rpc(B.reboot).catch(()=>{});await waitBack();const r2=await serverCheck(90);if(r2==='ok'){verdict('מחובר — אבל ללא אימות תעודה. דווחו על כך למנהל המערכת.','warn')}else{verdict('אין חיבור גם ללא אימות תעודה. צלמו מסך ודווחו.','bad')}},true);

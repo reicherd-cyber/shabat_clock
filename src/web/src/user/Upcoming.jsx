@@ -12,17 +12,28 @@ const EMPTY_CUSTOM = { fromDate: '', toDate: '' };
 const MAX_DAYS = 92; // the endpoint's cap
 
 const fmtHM = (t) => String(t).slice(0, 5);
+const pad2 = (n) => String(n).padStart(2, '0');
+const dayOf = (ymd) => new Date(`${ymd}T00:00:00`);
 // "היום 17:30" / "מחר" / weekday within the week / d.m beyond — same wording as
-// the plan chips on the תוכניות list.
-function whenText(dateStr, time) {
-  const d = new Date(`${dateStr}T00:00:00`);
-  const now = new Date();
-  const days = Math.round((d - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400e3);
+// the plan chips on the תוכניות list. `todayStr` is the server's (Israel) date,
+// not the browser's: a viewer abroad still reads the device's own "today".
+function whenText(dateStr, time, todayStr) {
+  const d = dayOf(dateStr);
+  const today = dayOf(todayStr);
+  const days = Math.round((d - today) / 86400e3);
   if (days === 0) return `היום ${fmtHM(time)}`;
   if (days === 1) return `מחר ${fmtHM(time)}`;
   if (days < 7) return `${DAY_NAMES[d.getDay() + 1]} ${fmtHM(time)}`;
-  const year = d.getFullYear() !== now.getFullYear() ? `.${d.getFullYear()}` : '';
+  const year = d.getFullYear() !== today.getFullYear() ? `.${d.getFullYear()}` : '';
   return `${DAY_NAMES[d.getDay() + 1]} ${d.getDate()}.${d.getMonth() + 1}${year} ${fmtHM(time)}`;
+}
+
+// The server's clock (device-local date/time at fetch) advanced by the time this
+// page has been open since — the list keeps moving without a refetch.
+function advancedNow(now, atMs) {
+  const base = new Date(`${now.date}T${now.time}:00`);
+  const d = new Date(base.getTime() + Math.max(0, atMs - now.fetchedAt));
+  return { date: ymdLocal(d), key: `${ymdLocal(d)}T${pad2(d.getHours())}:${pad2(d.getMinutes())}` };
 }
 
 export default function Upcoming({ relays, schedules, colorOf }) {
@@ -30,6 +41,8 @@ export default function Upcoming({ relays, schedules, colorOf }) {
   const [custom, setCustom] = useState(EMPTY_CUSTOM);
   const [deviceId, setDeviceId] = useState('');
   const [events, setEvents] = useState(null);
+  const [now, setNow] = useState(null); // { date, time, fetchedAt } — server clock
+  const [nowTick, setNowTick] = useState(Date.now());
   const [error, setError] = useState(null);
   const filtering = range !== 'next7d' || deviceId !== '';
 
@@ -42,35 +55,55 @@ export default function Upcoming({ relays, schedules, colorOf }) {
   // Plan name per schedule row — the calendar events carry only the schedule id.
   const planName = useMemo(() => new Map((schedules || []).map((s) => [s.id, s.name])), [schedules]);
 
-  // Period → the calendar window (from day + day count). An open custom side
-  // falls back to today / the endpoint's maximum.
+  // Period → the calendar window (from day + day count). The past is never
+  // listed, so a custom range that starts earlier is clamped to today — the
+  // 92-day cap must count from today, not from a from-date months back. An
+  // open custom side falls back to today / the endpoint's maximum.
   const window_ = useMemo(() => {
     const b = rangeBounds(range, custom);
     const today = new Date(); today.setHours(0, 0, 0, 0);
-    const from = b.from && !Number.isNaN(b.from.getTime()) ? new Date(b.from.getFullYear(), b.from.getMonth(), b.from.getDate()) : today;
+    let from = b.from && !Number.isNaN(b.from.getTime()) ? new Date(b.from.getFullYear(), b.from.getMonth(), b.from.getDate()) : today;
+    if (from < today) from = today;
     const to = b.to && !Number.isNaN(b.to.getTime()) ? b.to : new Date(from.getFullYear(), from.getMonth(), from.getDate() + MAX_DAYS - 1);
     const days = Math.min(Math.max(Math.round((new Date(to.getFullYear(), to.getMonth(), to.getDate()) - from) / 86400e3) + 1, 1), MAX_DAYS);
     return { from: ymdLocal(from), days, toStr: ymdLocal(new Date(from.getFullYear(), from.getMonth(), from.getDate() + days - 1)) };
   }, [range, custom]);
 
+  // Keyed on the derived window strings, not the object: a half-typed custom
+  // date that resolves to the same window must not refetch.
   useEffect(() => {
     let alive = true;
     setEvents(null);
+    setError(null);
     api.get(`/schedules/calendar?from=${window_.from}&days=${window_.days}`)
-      .then((r) => { if (alive) setEvents(r.events); })
+      .then((r) => {
+        if (!alive) return;
+        setEvents(r.events);
+        setNow(r.now ? { ...r.now, fetchedAt: Date.now() } : null);
+      })
       .catch((e) => { if (alive) setError(e); });
     return () => { alive = false; };
-  }, [window_]);
+  }, [window_.from, window_.days]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, []);
 
   // Only what is still ahead: today's past firings are history, not "next".
+  // The cutoff is the server's clock (device-local), advanced by the minutes
+  // this page has been open; the browser's own zone never enters.
+  const clock = useMemo(() => {
+    if (now) return advancedNow(now, nowTick);
+    const d = new Date(nowTick);
+    return { date: ymdLocal(d), key: `${ymdLocal(d)}T${pad2(d.getHours())}:${pad2(d.getMinutes())}` };
+  }, [now, nowTick]);
   const rows = useMemo(() => {
     if (!events) return null;
-    const now = new Date();
-    const nowKey = `${ymdLocal(now)}T${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     return events
-      .filter((e) => !e.manual && e.time && `${e.date}T${e.time}` >= nowKey && e.date <= window_.toStr)
+      .filter((e) => !e.manual && e.time && `${e.date}T${e.time}` >= clock.key && e.date <= window_.toStr)
       .filter((e) => !deviceId || String(e.device_id) === deviceId);
-  }, [events, deviceId, window_]);
+  }, [events, deviceId, window_, clock]);
 
   const groups = useMemo(() => {
     if (!rows) return [];
@@ -120,7 +153,7 @@ export default function Upcoming({ relays, schedules, colorOf }) {
               {g.items.map((e, i) => (
                 <div key={`${e.schedule_id}:${e.date}:${e.time}:${e.action}:${i}`}
                   className="flex items-center gap-3 px-5 py-[11px] text-sm border-t border-line flex-wrap">
-                  <time className="font-medium whitespace-nowrap min-w-[8.5rem]">{whenText(e.date, e.time)}</time>
+                  <time className="font-medium whitespace-nowrap min-w-[8.5rem]">{whenText(e.date, e.time, clock.date)}</time>
                   <span className={`pill ${e.action === 'on' ? 'on-p' : 'off-p'}`}>{e.action === 'on' ? 'הדלקה' : 'כיבוי'}</span>
                   <span className="inline-flex items-center gap-1.5 min-w-0">
                     <ChannelDot color={colorOf(e.relay_id)} size={9} />

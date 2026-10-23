@@ -5,15 +5,31 @@
 # completes a real TLS handshake to detect filter-provider interception
 # (NetFree / Etrog / Rimon style).
 # English output on purpose — RTL text renders garbled in the Windows console.
-$h = 'mqtt2.kosher-teltech.com'; $p = 443
+$name = 'mqtt2.kosher-teltech.com'; $fallbackIp = '167.99.19.11'; $p = 443
 Write-Host ''
 Write-Host '=== Shabat Clock line check ===' -ForegroundColor Cyan
+# [0] DNS first: a filter that sinkholes the name would otherwise read as a
+# blocked port, and the provider would open the port while the name stays dead.
+$h = $name
+try {
+  $ips = [Net.Dns]::GetHostAddresses($name) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | ForEach-Object { $_.IPAddressToString }
+  if (-not $ips -or $ips -contains '0.0.0.0' -or $ips -contains '127.0.0.1') { throw 'sinkholed' }
+  Write-Host "[0] DNS $name -> $($ips -join ', ')" -ForegroundColor Green
+  if ($ips -notcontains $fallbackIp) {
+    Write-Host "    WARNING: expected $fallbackIp - the name resolves elsewhere on this line (filter DNS?)" -ForegroundColor Yellow
+  }
+} catch {
+  Write-Host "[0] DNS $name : FAILED on this line ($($_.Exception.Message))" -ForegroundColor Red
+  Write-Host "    ACTION: ask the filter provider to allow the name $name (it must resolve to $fallbackIp)" -ForegroundColor Yellow
+  Write-Host "    continuing the port test against $fallbackIp directly..."
+  $h = $fallbackIp
+}
 $t = Test-NetConnection $h -Port $p -WarningAction SilentlyContinue
 if (-not $t.TcpTestSucceeded) {
-  Write-Host "[1] Port $p : BLOCKED on this line" -ForegroundColor Red
-  Write-Host "    ACTION: ask the filter provider to OPEN $h port $p" -ForegroundColor Yellow
+  Write-Host "[1] Port $p : BLOCKED on this line (target $h)" -ForegroundColor Red
+  Write-Host "    ACTION: ask the filter provider to OPEN $name ($fallbackIp) port $p" -ForegroundColor Yellow
 } else {
-  Write-Host "[1] Port $p : open" -ForegroundColor Green
+  Write-Host "[1] Port $p : open (target $h)" -ForegroundColor Green
   $tcp = $null; $ssl = $null
   try {
     $tcp = New-Object Net.Sockets.TcpClient($h, $p)
