@@ -144,7 +144,7 @@ export default function Upcoming({ relays, schedules, colorOf }) {
         </FilterSelect>
         <RangeFilter value={range} onChange={setRange} keys={RANGE_AHEAD} className="flex-1 min-w-[10rem]"
           custom={custom} onCustom={(p) => setCustom((c) => ({ ...c, ...p }))} />
-        {filtering && <Button variant="ghost" onClick={() => { setRange('next7d'); setCustom(EMPTY_CUSTOM); setDeviceId(''); }}>נקה סינון</Button>}
+        {filtering && <Button variant="ghost" onClick={() => { setRange('next7d'); setCustom(EMPTY_CUSTOM); setRelayId(''); }}>נקה סינון</Button>}
       </div>
       <ErrorNote error={error} />
       {rows == null && !error && <p className="text-muted">טוען…</p>}
