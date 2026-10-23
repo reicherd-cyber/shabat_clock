@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, SectionHead, ErrorNote, useAsync, DAY_NAMES, Toggle, SyncNote, channelColorOf } from '../ui.jsx';
-import { Layers, Trash2, Plus, Check, RefreshCw, Pencil } from 'lucide-react';
+import { Layers, Trash2, Plus, Check, RefreshCw, Pencil, List, CalendarClock } from 'lucide-react';
 import { PlanEditorModal, planFromMembers, schedulerSummary, exclusionSummary, emptyPlan } from './PlanEditor.jsx';
+import Upcoming from './Upcoming.jsx';
 
 // תוכניות (redesign 2026-08-30): the page is ONE list of plans. A plan = channels
 // × single-action schedulers (+ exclusions) sharing a plan_id; standalone rows
@@ -13,6 +14,9 @@ export default function Schedules() {
   const [schedules, setSchedules] = useState(null);
   const [relays, setRelays] = useState([]);
   const [planInit, setPlanInit] = useState(null); // the תוכנית editor (PlanEditor.jsx)
+  // Two views: the plans themselves, or their coming firing times as one list
+  // per device (Upcoming.jsx) — the same toggle the dashboard has.
+  const [view, setView] = useState('plans');
   const { busy, error, run, setError } = useAsync();
   // Channel identity color (shared app-wide assignment — same as the calendar).
   const colorOf = useMemo(() => channelColorOf(relays.map((r) => r.id)), [relays]);
@@ -22,7 +26,7 @@ export default function Schedules() {
     setSchedules(s);
     // Removed devices (is_enabled=false) offer no relays — same rule as the dashboard.
     setRelays(devices.filter((d) => d.is_enabled)
-      .flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => ({ ...r, device: d.name }))));
+      .flatMap((d) => d.relays.filter((r) => r.is_enabled).map((r) => ({ ...r, device: d.name, device_id: d.id }))));
   };
   useEffect(() => { refresh().catch(setError); }, []);
 
@@ -142,15 +146,32 @@ export default function Schedules() {
   }, [schedules]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!schedules) return <p className="text-muted">טוען…</p>;
+  const segBtn = (active) => `inline-flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-[13px] font-medium cursor-pointer transition ${
+    active ? 'bg-accent text-white' : 'text-muted hover:text-ink'}`;
   return (
     <>
       <SectionHead title="תוכניות">
-        <Button disabled={busy} onClick={() => setPlanInit({ ...emptyPlan })}>
-          <span className="inline-flex items-center gap-1"><Plus size={15} />הוסף תוכנית</span>
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="inline-flex rounded-[10px] border border-line bg-surface p-0.5 shrink-0" role="group" aria-label="תצוגה">
+            <button type="button" className={segBtn(view === 'plans')} aria-pressed={view === 'plans'} title="רשימת התוכניות"
+              onClick={() => setView('plans')}>
+              <List size={15} />תוכניות
+            </button>
+            <button type="button" className={segBtn(view === 'upcoming')} aria-pressed={view === 'upcoming'} title="המועדים הקרובים לפי מכשיר"
+              onClick={() => setView('upcoming')}>
+              <CalendarClock size={15} />מועדים קרובים
+            </button>
+          </div>
+          <Button disabled={busy} onClick={() => setPlanInit({ ...emptyPlan })}>
+            <span className="inline-flex items-center gap-1"><Plus size={15} />הוסף תוכנית</span>
+          </Button>
+        </div>
       </SectionHead>
       <ErrorNote error={error} />
 
+      {view === 'upcoming' && <Upcoming relays={relays} schedules={schedules} colorOf={colorOf} />}
+
+      {view === 'plans' && (
       <Card flush className="overflow-hidden border-accent/30">
         <div className="flex items-center gap-2.5 px-5 py-3 bg-[#E4EFFE]/70 border-b-2 border-accent/40">
           <span className="w-8 h-8 rounded-[10px] bg-accent text-white grid place-items-center shrink-0"><Layers size={16} /></span>
@@ -207,6 +228,7 @@ export default function Schedules() {
           );
         })}
       </Card>
+      )}
 
       <PlanEditorModal initial={planInit} relays={relays}
         onClose={() => setPlanInit(null)}

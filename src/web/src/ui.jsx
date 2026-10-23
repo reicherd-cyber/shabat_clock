@@ -395,10 +395,14 @@ export const RANGE_LABELS = {
   today: 'היום', yesterday: 'אתמול', '7d': '7 ימים אחרונים', '30d': '30 ימים אחרונים', '90d': '90 ימים אחרונים',
   month: 'החודש', '3m': '3 חודשים אחרונים', '6m': '6 חודשים אחרונים', '12m': '12 חודשים אחרונים', year: 'השנה',
   all: 'הכל', custom: 'בין תאריכים…',
+  // Forward-looking presets (upcoming schedule times): today through N days ahead.
+  next1d: 'היום', next3d: '3 הימים הקרובים', next7d: '7 הימים הקרובים', next14d: '14 הימים הקרובים', next30d: '30 הימים הקרובים',
 };
 export const RANGE_HOURS = ['1h', '3h', '6h', '12h', '24h'];
 export const RANGE_DAYS = ['today', 'yesterday', '7d', '30d', '90d'];
 export const RANGE_DEFAULT = [...RANGE_HOURS, ...RANGE_DAYS, 'month', 'year', 'all', 'custom'];
+// Presets for lists that look AHEAD (upcoming firings) — custom still allows any window.
+export const RANGE_AHEAD = ['next1d', 'next3d', 'next7d', 'next14d', 'next30d', 'custom'];
 
 // Preset (+ custom inputs) → { from: Date|null, to: Date|null } in LOCAL time;
 // a null side is open. Custom hours: none = whole day (00:00 → 23:59:59).
@@ -407,6 +411,12 @@ export function rangeBounds(key, { fromDate = '', toDate = '', fromHour = '', to
   const [y, mo, d] = [now.getFullYear(), now.getMonth(), now.getDate()];
   // Day presets use calendar arithmetic (Date rolls the day field), never
   // 86400e3 ms — a DST day is 23 or 25 hours and ms math lands an hour off.
+  // Ahead presets: today 00:00 through the (n-1)th day ahead, end of day.
+  const ahead = /^next(\d+)d$/.exec(key || '');
+  if (ahead) {
+    const n = Number(ahead[1]);
+    return { from: new Date(y, mo, d), to: new Date(y, mo, d + (n - 1), 23, 59, 59) };
+  }
   const m = /^(\d+)([hdm])$/.exec(key || '');
   if (m) {
     const n = Number(m[1]);
