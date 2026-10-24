@@ -193,9 +193,32 @@ export function resolveDeleteTargets(schedules, a, plans = []) {
     if (day != null && !sides.some(([, , d]) => d == null || Number(d) === day)) return false;
     return true;
   };
-  const all = schedules.filter(matches);
+  const exactDay = (s) => [s.on_day_of_week, s.off_day_of_week].some((d) => d != null && Number(d) === day);
+  let all = schedules.filter(matches);
+  // "של יום שישי" means the Friday row; an every-day row is deleted for that
+  // only when no row names the day (a daily row covers six other days too).
+  if (day != null && all.some(exactDay)) all = all.filter(exactDay);
   const live = all.filter((s) => s.is_enabled);
   return live.length ? live : all;
+}
+
+// How many rows one unspecified deletion may take. "תמחק את התזמון של הדוד" on
+// a relay with two rows is the whole story; on a synagogue relay with 14 rows
+// in three plans one "כן" must not wipe them all — the caller is asked for a
+// time or a plan instead.
+export const DELETE_FANOUT_MAX = 3;
+export function pickDeleteTargets(schedules, a, plans, relayName) {
+  const rows = resolveDeleteTargets(schedules, a, plans);
+  const narrowed = HHMM.test(a.time || '') || Number.isInteger(a.on_day) || a.action === 'on' || a.action === 'off' || Boolean(a.plan_key);
+  if (!narrowed && rows.length > DELETE_FANOUT_MAX) {
+    const planCount = new Set(rows.map((s) => s.plan_id || `s${s.id}`)).size;
+    return { rows: [], note: `לממסר ${relayName} יש ${rows.length} תזמונים ב-${planCount} תוכניות, ציינו שעה או שם תוכנית` };
+  }
+  if (!rows.length) {
+    const when = HHMM.test(a.time || '') ? ` בשעה ${a.time}` : '';
+    return { rows: [], note: `לא מצאתי תזמון לממסר ${relayName}${when}` };
+  }
+  return { rows, note: null };
 }
 
 
@@ -311,16 +334,14 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
       // the rows come from the user's own list — nothing else can be named.
       const relay = byId.get(Number(a.relay_id));
       if (!relay) continue;
-      const targets = resolveDeleteTargets(schedules, a, plans);
-      for (const sched of targets) {
+      const { rows, note } = pickDeleteTargets(schedules, a, plans, relay.name);
+      for (const sched of rows) {
         actions.push({ kind: 'delete_schedule', schedule_id: sched.id, summary: `מחיקת ${describeScheduleHe(sched)}` });
       }
-      // Understood, but no such row: say so instead of the generic "didn't
-      // understand" — the caller then rephrases the time, not the whole order.
-      if (!targets.length) {
-        const when = HHMM.test(a.time || '') ? ` בשעה ${a.time}` : '';
-        missed.push(`לא מצאתי תזמון לממסר ${relay.name}${when}`);
-      }
+      // Understood but nothing to do (no such row, or too many to take on one
+      // "כן"): say exactly that instead of the generic "didn't understand" —
+      // the caller then adds a time or a plan, not the whole order again.
+      if (note) missed.push(note);
       continue;
     }
     const relay = byId.get(Number(a.relay_id));

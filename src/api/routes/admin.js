@@ -7,6 +7,7 @@ import { isIP } from 'node:net';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 // The Shelly LAN wizard fetches http://<ip>/rpc — only a literal IP address may
 // get there (never a hostname/path the server would then request on the
@@ -1777,9 +1778,17 @@ adminRouter.get('/docs/:key', requireSuperadmin, async (req, res, next) => {
     const d = DOCS.find((x) => x.key === req.params.key);
     if (!d) throw errors.notFound();
     const full = path.join(DOCS_ROOT, d.file);
-    const [text, st] = await Promise.all([fs.readFile(full, 'utf8'), fs.stat(full)]);
+    const text = await fs.readFile(full, 'utf8');
     const n = Number(req.query.section);
     const markdown = Number.isInteger(n) && n > 0 ? docSection(text, n) : text;
-    res.json({ key: d.key, file: d.file, title: d.title, markdown, mtime: st.mtime.toISOString() });
+    // The file's mtime is the checkout time (deploy.sh resets the tree), so the
+    // edit date comes from git: the last commit that touched this file. The
+    // running build's commit is what the GitHub link must point at.
+    const { appVersion } = await import('../../config/version.js');
+    let edited = null;
+    try {
+      edited = execFileSync('git', ['log', '-1', '--format=%cd', '--date=format:%d.%m.%Y %H:%M', '--', d.file], { cwd: DOCS_ROOT, timeout: 5000 }).toString().trim() || null;
+    } catch { /* no git on this host — the page shows the build only */ }
+    res.json({ key: d.key, file: d.file, title: d.title, markdown, commit: appVersion.commit, edited });
   } catch (e) { next(e); }
 });

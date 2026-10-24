@@ -11,7 +11,9 @@ import { BookOpen, ExternalLink } from 'lucide-react';
 import { adminApi } from '../api.js';
 import { Card, ErrorNote } from '../ui.jsx';
 
-const REPO = 'https://github.com/reicherd-cyber/shabat_clock/blob/dev/';
+// The link opens the file at the running build's commit — what the page shows,
+// on staging and on production alike.
+const REPO = 'https://github.com/reicherd-cyber/shabat_clock/blob/';
 const segBtn = (on) => `inline-flex items-center rounded-[8px] px-2.5 py-1.5 text-[13px] font-medium cursor-pointer transition border border-line ${
   on ? 'bg-accent text-white border-accent' : 'bg-surface2 text-muted hover:text-ink'}`;
 
@@ -70,8 +72,8 @@ export function Docs() {
       <Card className="overflow-hidden">
         {doc && (
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted mb-3" dir="rtl">
-            <span>{doc.file} · עודכן {new Date(doc.mtime).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' })}</span>
-            <a className="inline-flex items-center gap-1 underline" href={`${REPO}${doc.file}`} target="_blank" rel="noreferrer">
+            <span>{doc.file}{doc.edited ? ` · נערך לאחרונה ${doc.edited}` : ''} · גרסה <span dir="ltr">{doc.commit}</span></span>
+            <a className="inline-flex items-center gap-1 underline" href={`${REPO}${doc.commit && doc.commit !== 'unknown' ? doc.commit : 'master'}/${doc.file}`} target="_blank" rel="noreferrer">
               פתיחה ב-GitHub <ExternalLink size={12} />
             </a>
           </div>

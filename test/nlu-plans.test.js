@@ -1,7 +1,7 @@
 import './helpers/env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groupPlans, buildSystemPrompt, resolveDeleteTargets } from '../src/services/nlu.js';
+import { groupPlans, buildSystemPrompt, resolveDeleteTargets, pickDeleteTargets, DELETE_FANOUT_MAX } from '../src/services/nlu.js';
 
 // listSchedules-shaped rows: a two-member named plan, and one standalone row.
 const row = (over = {}) => ({
@@ -85,9 +85,27 @@ test('resolveDeleteTargets: relay + time + day + side narrow the rows; live rows
   assert.deepEqual(ids({ relay_id: 10, time: '18:00' }), [1, 2]);                  // any day
   assert.deepEqual(ids({ relay_id: 10, time: '20:00', action: 'off' }), [1]);      // the off side
   assert.deepEqual(ids({ relay_id: 10, time: '20:00', action: 'on' }), []);        // no such on side
-  assert.deepEqual(ids({ relay_id: 10, on_day: 6 }), [1, 5]);                      // daily rows match every weekday
+  assert.deepEqual(ids({ relay_id: 10, on_day: 6 }), [1]);                         // the Friday row, not the daily one
+  assert.deepEqual(ids({ relay_id: 10, on_day: 2 }), [5]);                         // no Monday row → the daily row
   assert.deepEqual(ids({ relay_id: 10 }), [1, 2, 5]);                              // everything live on the relay
   assert.deepEqual(ids({ relay_id: 10, plan_key: 'p' }), [5]);
   assert.deepEqual(ids({ relay_id: 99 }), []);
   assert.deepEqual(ids({ relay_id: 10, time: '25:99' }).length, 3);                // bad time is ignored, not fatal
+});
+
+test('pickDeleteTargets: an unspecified delete takes a few rows, but a relay with many rows asks for a time or a plan', () => {
+  const few = [row({ id: 1, relay_id: 10 }), row({ id: 2, relay_id: 10, on_day_of_week: 3 })];
+  assert.deepEqual(pickDeleteTargets(few, { relay_id: 10 }, groupPlans(few), 'דוד').rows.map((s) => s.id), [1, 2]);
+  const many = Array.from({ length: DELETE_FANOUT_MAX + 11 }, (_, i) => row({ id: i + 1, relay_id: 10, plan_id: `p${i % 3}`, on_day_of_week: (i % 7) + 1, on_time: '18:00' }));
+  const plans = groupPlans(many);
+  const vague = pickDeleteTargets(many, { relay_id: 10 }, plans, 'תאורה חוץ');
+  assert.deepEqual(vague.rows, []);
+  assert.equal(vague.note, `לממסר תאורה חוץ יש 14 תזמונים ב-3 תוכניות, ציינו שעה או שם תוכנית`);
+  assert.doesNotMatch(vague.note, /[."?]/); // Yemot-safe
+  // Any detail narrows and is honoured even when it still matches many rows (a plan, a day)
+  assert.equal(pickDeleteTargets(many, { relay_id: 10, plan_key: 'p0' }, plans, 'x').rows.length, 5);
+  assert.equal(pickDeleteTargets(many, { relay_id: 10, on_day: 1 }, plans, 'x').rows.length, 2);
+  assert.equal(pickDeleteTargets(many, { relay_id: 10, time: '18:00' }, plans, 'x').rows.length, 14);
+  // Nothing matches → a note with the time, no rows
+  assert.deepEqual(pickDeleteTargets(many, { relay_id: 10, time: '06:30' }, plans, 'תאורה חוץ'), { rows: [], note: 'לא מצאתי תזמון לממסר תאורה חוץ בשעה 06:30' });
 });
