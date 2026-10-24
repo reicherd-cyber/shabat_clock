@@ -9,7 +9,7 @@ import { useSearchParams } from 'react-router-dom';
 import { marked } from 'marked';
 import { BookOpen, ExternalLink } from 'lucide-react';
 import { adminApi } from '../api.js';
-import { Card, ErrorNote, useAsync } from '../ui.jsx';
+import { Card, ErrorNote } from '../ui.jsx';
 
 const REPO = 'https://github.com/reicherd-cyber/shabat_clock/blob/dev/';
 const segBtn = (on) => `inline-flex items-center rounded-[8px] px-2.5 py-1.5 text-[13px] font-medium cursor-pointer transition border border-line ${
@@ -20,23 +20,30 @@ export function Docs() {
   const key = sp.get('doc') || 'tree';
   // The spec is long; §10 is the part the desk is run by. "whole" shows all of it.
   const whole = sp.get('whole') === '1';
-  const list = useAsync(() => adminApi.get('/docs'), []);
+  const [docs, setDocs] = useState([]);
+  const [listError, setListError] = useState(null);
   const [doc, setDoc] = useState(null);
   const [error, setError] = useState(null);
 
+  // The list once; it names the files and which one opens on a single section.
   useEffect(() => {
+    adminApi.get('/docs').then((r) => setDocs(r.docs || [])).catch(setListError);
+  }, []);
+
+  const entry = docs.find((d) => d.key === key);
+  useEffect(() => {
+    if (!docs.length) return undefined; // wait for the list: the section flag comes from it
     let alive = true;
     setError(null);
-    const entry = list.data?.docs?.find((d) => d.key === key);
+    setDoc(null);
     const q = entry?.section && !whole ? `?section=${entry.section}` : '';
     adminApi.get(`/docs/${key}${q}`)
       .then((d) => { if (alive) setDoc(d); })
       .catch((e) => { if (alive) setError(e); });
     return () => { alive = false; };
-  }, [key, whole, list.data]);
+  }, [key, whole, docs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const html = useMemo(() => (doc?.markdown ? marked.parse(doc.markdown, { gfm: true, breaks: false }) : ''), [doc]);
-  const entry = list.data?.docs?.find((d) => d.key === key);
   const pick = (k) => setSp((p) => { const n = new URLSearchParams(p); n.set('doc', k); n.delete('whole'); return n; });
 
   return (
@@ -45,9 +52,9 @@ export function Docs() {
         <h1 className="text-xl font-bold flex items-center gap-2"><BookOpen size={20} /> תיעוד</h1>
         <span className="text-muted text-sm">המסמכים של המערכת, כפי שהם במאגר — לקריאה בלבד</span>
       </div>
-      {list.error && <ErrorNote error={list.error} />}
+      {listError && <ErrorNote error={listError} />}
       <div className="flex flex-wrap gap-2">
-        {(list.data?.docs || []).map((d) => (
+        {docs.map((d) => (
           <button key={d.key} type="button" className={segBtn(d.key === key)} onClick={() => pick(d.key)}>{d.title}</button>
         ))}
       </div>
