@@ -178,26 +178,26 @@ ${planList}`;
 export function resolveDeleteTargets(schedules, a, plans = []) {
   const relayId = Number(a.relay_id);
   if (!Number.isInteger(relayId)) return [];
+  // A plan key the model made up (or a stale one) must not silently widen the
+  // search to the whole relay — it names nothing, so nothing matches.
   const plan = a.plan_key ? plans.find((p) => p.key === String(a.plan_key)) : null;
+  if (a.plan_key && !plan) return [];
   const inPlan = plan ? new Set(plan.schedule_ids) : null;
   const time = HHMM.test(a.time || '') ? a.time : null;
   const day = Number.isInteger(a.on_day) && a.on_day >= 1 && a.on_day <= 7 ? a.on_day : null;
   const side = a.action === 'on' || a.action === 'off' ? a.action : null;
-  const matches = (s) => {
-    if (Number(s.relay_id) !== relayId) return false;
-    if (inPlan && !inPlan.has(s.id)) return false;
-    const sides = [['on', s.on_time, s.on_day_of_week], ['off', s.off_time, s.off_day_of_week]]
-      .filter(([k, t]) => t && (!side || k === side));
-    if (!sides.length) return !side; // a one-sided row cannot match the other side
-    if (time && !sides.some(([, t]) => String(t).slice(0, 5) === time)) return false;
-    if (day != null && !sides.some(([, , d]) => d == null || Number(d) === day)) return false;
-    return true;
-  };
-  const exactDay = (s) => [s.on_day_of_week, s.off_day_of_week].some((d) => d != null && Number(d) === day);
+  // Every detail the caller gave must hold on ONE event of the row: "שבת 18:00"
+  // is the Saturday event at 18:00, never Friday's 18:00 plus Saturday's 20:00.
+  const eventHits = (s, exact) => [['on', s.on_time, s.on_day_of_week], ['off', s.off_time, s.off_day_of_week]]
+    .filter(([k, t, d]) => t
+      && (!side || k === side)
+      && (!time || String(t).slice(0, 5) === time)
+      && (day == null || (exact ? Number(d) === day : d == null || Number(d) === day)));
+  const matches = (s) => Number(s.relay_id) === relayId && (!inPlan || inPlan.has(s.id)) && eventHits(s, false).length > 0;
   let all = schedules.filter(matches);
   // "של יום שישי" means the Friday row; an every-day row is deleted for that
   // only when no row names the day (a daily row covers six other days too).
-  if (day != null && all.some(exactDay)) all = all.filter(exactDay);
+  if (day != null && all.some((s) => eventHits(s, true).length)) all = all.filter((s) => eventHits(s, true).length);
   const live = all.filter((s) => s.is_enabled);
   return live.length ? live : all;
 }
@@ -208,6 +208,9 @@ export function resolveDeleteTargets(schedules, a, plans = []) {
 // time or a plan instead.
 export const DELETE_FANOUT_MAX = 3;
 export function pickDeleteTargets(schedules, a, plans, relayName) {
+  if (a.plan_key && !plans.some((p) => p.key === String(a.plan_key))) {
+    return { rows: [], note: `לא מצאתי תוכנית כזאת לממסר ${relayName}, ציינו שעה או שם תוכנית מהרשימה` };
+  }
   const rows = resolveDeleteTargets(schedules, a, plans);
   const narrowed = HHMM.test(a.time || '') || Number.isInteger(a.on_day) || a.action === 'on' || a.action === 'off' || Boolean(a.plan_key);
   if (!narrowed && rows.length > DELETE_FANOUT_MAX) {

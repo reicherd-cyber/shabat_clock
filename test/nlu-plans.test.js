@@ -91,6 +91,13 @@ test('resolveDeleteTargets: relay + time + day + side narrow the rows; live rows
   assert.deepEqual(ids({ relay_id: 10, plan_key: 'p' }), [5]);
   assert.deepEqual(ids({ relay_id: 99 }), []);
   assert.deepEqual(ids({ relay_id: 10, time: '25:99' }).length, 3);                // bad time is ignored, not fatal
+  // Day and time must hit the SAME event: row 1 is ON Friday 18:00 / OFF Saturday 20:00
+  assert.deepEqual(ids({ relay_id: 10, time: '18:00', on_day: 7 }), []);           // "Saturday 18:00" is nothing
+  assert.deepEqual(ids({ relay_id: 10, time: '20:00', on_day: 7 }), [1]);          // Saturday 20:00 is the OFF event
+  assert.deepEqual(ids({ relay_id: 10, time: '20:00', on_day: 6 }), []);           // Friday 20:00 is nothing
+  assert.deepEqual(ids({ relay_id: 10, time: '18:00', action: 'off' }), []);       // 18:00 is never an OFF
+  // An unknown plan key names nothing — it must not widen to the whole relay
+  assert.deepEqual(ids({ relay_id: 10, plan_key: 'nope' }), []);
 });
 
 test('pickDeleteTargets: an unspecified delete takes a few rows, but a relay with many rows asks for a time or a plan', () => {
@@ -108,4 +115,9 @@ test('pickDeleteTargets: an unspecified delete takes a few rows, but a relay wit
   assert.equal(pickDeleteTargets(many, { relay_id: 10, time: '18:00' }, plans, 'x').rows.length, 14);
   // Nothing matches → a note with the time, no rows
   assert.deepEqual(pickDeleteTargets(many, { relay_id: 10, time: '06:30' }, plans, 'תאורה חוץ'), { rows: [], note: 'לא מצאתי תזמון לממסר תאורה חוץ בשעה 06:30' });
+  // A made-up plan key does not count as "narrowed" and does not bypass the guard
+  const bogus = pickDeleteTargets(many, { relay_id: 10, plan_key: 'made-up' }, plans, 'תאורה חוץ');
+  assert.deepEqual(bogus.rows, []);
+  assert.match(bogus.note, /לא מצאתי תוכנית כזאת/);
+  assert.doesNotMatch(bogus.note, /[."?]/);
 });
