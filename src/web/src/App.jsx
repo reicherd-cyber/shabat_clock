@@ -26,11 +26,12 @@ import { Crm } from './admin/Crm.jsx';
 import { Tasks } from './admin/Tasks.jsx';
 import { WhatsappAdmin } from './admin/Whatsapp.jsx';
 import { Emails } from './admin/Emails.jsx';
+import { Docs } from './admin/Docs.jsx';
 import { Logo, Wordmark, useInterval, Modal, Button } from './ui.jsx';
 import {
   LayoutGrid, CalendarClock, CalendarDays, History as HistoryIcon, Settings as SettingsIcon,
   Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
-  ShieldCheck, ScrollText, Database as DatabaseIcon, ChevronDown, AudioLines, LifeBuoy, Inbox, Handshake, ListChecks, MessageCircle, Mail,
+  ShieldCheck, ScrollText, Database as DatabaseIcon, ChevronDown, AudioLines, LifeBuoy, Inbox, Handshake, ListChecks, MessageCircle, Mail, BookOpen,
 } from 'lucide-react';
 
 // While impersonating, api.js blocks every mutation until this modal approves it
@@ -243,6 +244,7 @@ const ADMIN_NAV = [
       { to: '/admin/admins', label: 'מנהלים', Icon: ShieldCheck, superadmin: true },
       { to: '/admin/audit', label: 'ביקורת', Icon: ScrollText },
       { to: '/admin/db', label: 'מסד נתונים', Icon: DatabaseIcon, superadmin: true },
+      { to: '/admin/docs', label: 'תיעוד', Icon: BookOpen, superadmin: true },
     ],
   },
 ];
@@ -435,6 +437,7 @@ export default function App() {
           <Route path="admins" element={<Admins />} />
           <Route path="audit" element={<Audit />} />
           <Route path="db" element={<Database />} />
+          <Route path="docs" element={<Docs />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

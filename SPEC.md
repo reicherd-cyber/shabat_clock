@@ -717,7 +717,8 @@ is all green, plus these spec-level additions:
 One service desk, three doors: the site's "פניות" page, the WhatsApp bot on 04-3131481 and
 the phone IVR on the same number. Every door walks the **same numbered menu tree**; the
 full tree, node by node, lives in `SERVICE-TREE.md` (the single place it is maintained —
-the spec below states the rules, the tree file states the content).
+the spec below states the rules, the tree file states the content). Both are readable
+inside the admin panel: מערכת → תיעוד (superadmin, read-only, straight from the repo).
 
 ### 10.1 Principles (decisions)
 
