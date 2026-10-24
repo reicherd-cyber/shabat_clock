@@ -49,8 +49,11 @@ export async function addRate({ kind, units, ils }) {
 }
 
 // Average measured cost of one interpretation — used only for orders made before
-// usage logging existed (marked estimated in the response).
+// usage logging existed (marked estimated in the response). Since logging began
+// a call with no usage row had NO model call (no speech recognised, a rules-only
+// answer before rules were logged, a hang-up) — its cost is 0, not a guess.
 const EST_ANTHROPIC_USD = 0.0086;
+const LOGGING_SINCE = new Date('2026-07-17T00:00:00Z');
 const MATCH_WINDOW_MS = 3 * 60 * 1000;
 
 // Yemot timestamps ('YYYY-MM-DD HH:MM:SS') are Israel local time; convert to UTC
@@ -150,8 +153,8 @@ export async function getVoiceCosts({ from, to, userId, phone, q, source, kind }
       text: s.text || best?.text || '',
       seconds: s.seconds,
       yemot_units: s.yemot_units,
-      anthropic_usd: best ? Number(best.cost_usd) : EST_ANTHROPIC_USD,
-      anthropic_estimated: !best,
+      anthropic_usd: best ? Number(best.cost_usd) : (s.when < LOGGING_SINCE ? EST_ANTHROPIC_USD : 0),
+      anthropic_estimated: !best && s.when < LOGGING_SINCE,
       input_tokens: best?.input_tokens ?? null,
       output_tokens: best?.output_tokens ?? null,
     };
