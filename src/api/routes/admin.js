@@ -4,6 +4,10 @@ import { query, withTransaction, pool, poolStats } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireAdmin, requireWrite, requireSuperadmin, signUserToken, invalidateSession } from '../middleware.js';
 import { isIP } from 'node:net';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 // The Shelly LAN wizard fetches http://<ip>/rpc — only a literal IP address may
 // get there (never a hostname/path the server would then request on the
@@ -1745,5 +1749,46 @@ adminRouter.delete('/crm/payments/:id', requireWrite, async (req, res, next) => 
     if (!r.affectedRows) throw errors.notFound();
     audit(req, 'crm_payment_delete', 'crm_payment', Number(req.params.id));
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ── תיעוד: the repository's own documents, read-only, for the admin panel ──
+// A fixed whitelist of files at the repo root; `section` returns one "## N."
+// section of a document (the spec is long — the desk is run by §10 alone).
+const DOCS_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const DOCS = [
+  { key: 'tree', file: 'SERVICE-TREE.md', title: 'מוקד שירות — העץ המלא' },
+  { key: 'spec', file: 'SPEC.md', title: 'מפרט (SPEC)', section: 10 },
+  { key: 'plan', file: 'PLAN.md', title: 'תוכנית (PLAN)' },
+  { key: 'readme', file: 'README.md', title: 'README' },
+];
+function docSection(markdown, n) {
+  const lines = markdown.split(/\r?\n/);
+  const start = lines.findIndex((l) => new RegExp('^## ' + n + '[.]').test(l));
+  if (start < 0) return markdown;
+  let end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+  if (end < 0) end = lines.length;
+  return lines.slice(start, end).join('\n');
+}
+adminRouter.get('/docs', requireSuperadmin, (req, res) => {
+  res.json({ docs: DOCS.map(({ key, file, title, section }) => ({ key, file, title, section: section || null })) });
+});
+adminRouter.get('/docs/:key', requireSuperadmin, async (req, res, next) => {
+  try {
+    const d = DOCS.find((x) => x.key === req.params.key);
+    if (!d) throw errors.notFound();
+    const full = path.join(DOCS_ROOT, d.file);
+    const text = await fs.readFile(full, 'utf8');
+    const n = Number(req.query.section);
+    const markdown = Number.isInteger(n) && n > 0 ? docSection(text, n) : text;
+    // The file's mtime is the checkout time (deploy.sh resets the tree), so the
+    // edit date comes from git: the last commit that touched this file. The
+    // running build's commit is what the GitHub link must point at.
+    const { appVersion } = await import('../../config/version.js');
+    let edited = null;
+    try {
+      edited = execFileSync('git', ['log', '-1', '--format=%cd', '--date=format:%d.%m.%Y %H:%M', '--', d.file], { cwd: DOCS_ROOT, timeout: 5000 }).toString().trim() || null;
+    } catch { /* no git on this host — the page shows the build only */ }
+    res.json({ key: d.key, file: d.file, title: d.title, markdown, commit: appVersion.commit, edited });
   } catch (e) { next(e); }
 });

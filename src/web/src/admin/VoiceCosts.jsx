@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { Phone, Globe, MessageCircle, HelpCircle } from 'lucide-react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_HOURS, RANGE_DAYS, FilterSelect } from '../ui.jsx';
+import { Card, Button, Input, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_HOURS, RANGE_DAYS, FilterSelect, useSort, SortTh } from '../ui.jsx';
 
 const C_EXPENSE = '#e11d48'; // money-color convention: costs are red
 
@@ -91,7 +91,19 @@ export default function VoiceCosts() {
 
   const filtering = userId || phone || search || source || kind || period !== 'month';
 
-  const rows = data?.rows || [];
+  // Every column sorts: click a header, click again to flip. No choice = the
+  // server's order (newest first).
+  const sort = useSort();
+  const rows = sort.apply(data?.rows || [], {
+    when: (r) => new Date(r.when).getTime(),
+    user: (r) => r.user_name || r.phone || '',
+    source: (r) => `${r.source || ''} ${r.kind || ''}`,
+    text: (r) => r.text || '',
+    seconds: (r) => (r.seconds == null ? null : Number(r.seconds)),
+    units: (r) => Number(r.yemot_units),
+    yemot: (r) => Number(r.yemot_ils),
+    anthropic: (r) => Number(r.anthropic_ils),
+  });
   const t = data?.totals;
   const hasEstimates = rows.some((r) => r.anthropic_estimated);
   const rate = data?.rate;
@@ -216,8 +228,10 @@ export default function VoiceCosts() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
-              <th className="p-2">מתי</th><th className="p-2">משתמש</th><th className="p-2">מקור</th><th className="p-2">הטקסט</th>
-              <th className="p-2">אורך (שנ׳)</th><th className="p-2">ימות (יחידות)</th><th className="p-2">ימות (₪)</th><th className="p-2">Anthropic (₪)</th>
+              <SortTh k="when" sort={sort} className="p-2!">מתי</SortTh><SortTh k="user" sort={sort} className="p-2!">משתמש</SortTh>
+              <SortTh k="source" sort={sort} className="p-2!">מקור</SortTh><SortTh k="text" sort={sort} className="p-2!">הטקסט</SortTh>
+              <SortTh k="seconds" sort={sort} className="p-2!">אורך (שנ׳)</SortTh><SortTh k="units" sort={sort} className="p-2!">ימות (יחידות)</SortTh>
+              <SortTh k="yemot" sort={sort} className="p-2!">ימות (₪)</SortTh><SortTh k="anthropic" sort={sort} className="p-2!">Anthropic (₪)</SortTh>
             </tr>
           </thead>
           <tbody>
