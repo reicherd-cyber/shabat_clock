@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import mqtt from 'mqtt';
 import { env } from '../config/env.js';
 import { isPrimary } from '../config/role.js';
-import { replyIsFrom } from './reply-src.js';
+import { replyIsFrom, replyTopicUid, replySrcFor } from './reply-src.js';
 import { query } from '../db/pool.js';
 import { buildWirePayload } from '../services/schedulePayload.js';
 import { ingestExecReport, reconcileDevice } from '../services/executions.js';
@@ -15,9 +15,8 @@ const ackWaiters = new Map();      // cmd_id → resolve
 const scheduleAckTimers = new Map(); // device_id → timeout
 const lastExecDropped = new Map(); // device_id → last seen exec_dropped counter
 const shellyRpcWaiters = new Map(); // rpc id → {prefix, uid, resolve}
-// Every server on the broker (production, staging, a local dev) shares the
-// reply topic — the device ACL lets a Shelly write to shabat-server/rpc and
-// nothing else — so each one hears every reply. Ids used to count from 1 in
+// Every server on the broker (production, staging, a local dev) hears every
+// reply (all subscribe the same reply topics). Ids used to count from 1 in
 // every process, so two servers could hold the same id at once and a probe of
 // device A could resolve with device B's status. Start each process at a random
 // point in the id space, and (below) match a reply on its src as well as its id.
@@ -28,7 +27,14 @@ const nextRpcId = () => { let id; do { id = crypto.randomInt(1, 0x7fffffff); } w
 
 // Shelly Gen2 topics: <prefix>/online (LWT), <prefix>/status/switch:N (state
 // notifications), <prefix>/rpc (requests in), replies land on <src>/rpc.
+// Since 2026-10-25 every request carries src = shabat-server/shelly-<mac>, so a
+// unit answers on its OWN reply topic, and the broker ACL (pattern write
+// shabat-server/%u/rpc — %u is the authenticated username shelly-<mac>) lets it
+// write that one topic only: a unit's credentials can no longer forge a reply
+// for another unit. The shared topic stays subscribed through the transition
+// (a server still sending the old src, or a broker file not yet finalized).
 const SHELLY_REPLY_TOPIC = 'shabat-server/rpc';
+const SHELLY_REPLY_TOPICS = 'shabat-server/+/rpc';
 
 export function connectMqtt() {
   if (client) return client;
@@ -41,7 +47,7 @@ export function connectMqtt() {
     console.log('MQTT connected');
     client.subscribe([
       'dev/+/ack', 'dev/+/status', 'dev/+/exec', 'dev/+/schedule_ack',
-      SHELLY_REPLY_TOPIC, '+/online', '+/status/#',
+      SHELLY_REPLY_TOPIC, SHELLY_REPLY_TOPICS, '+/online', '+/status/#',
     ], { qos: 1 });
   });
   client.on('error', (e) => console.error('MQTT error:', e.message));
@@ -88,18 +94,21 @@ async function shellyDeviceByPrefix(prefix) {
 async function handleShellyMessage(topic, buf) {
   const text = buf.toString('utf8');
 
-  if (topic === SHELLY_REPLY_TOPIC) {
+  const topicUid = replyTopicUid(topic); // per-unit reply topic → its mac; the shared one → null
+  if (topic === SHELLY_REPLY_TOPIC || topicUid) {
     let payload;
     try { payload = JSON.parse(text); } catch { return; }
     const waiter = shellyRpcWaiters.get(Number(payload?.id));
     if (!waiter) return;
-    // A reply carries src = the answering device's name. One that names a
-    // different device than we asked is another server's conversation that
-    // happens to share our id — never let it stand in for our answer. The name
-    // is NOT always our prefix (fw 1.6.x answers 'shellypro4pm-<mac>'), so
-    // compare the mac only — see reply-src.js.
-    if (!replyIsFrom(payload.src, waiter.uid)) {
-      console.warn(`MQTT rpc reply id ${payload.id} from ${payload.src} while waiting on ${waiter.prefix} — ignored`);
+    // On a per-unit topic the broker vouches for the sender (only the unit
+    // authenticated as shelly-<mac> may write shabat-server/shelly-<mac>/rpc), so
+    // the topic's mac must be the unit we asked. The reply's src is checked as
+    // well: one that names a different device than we asked is another server's
+    // conversation that happens to share our id — never let it stand in for our
+    // answer. The name is NOT always our prefix (fw 1.6.x answers
+    // 'shellypro4pm-<mac>'), so compare the mac only — see reply-src.js.
+    if ((topicUid && topicUid !== waiter.uid) || !replyIsFrom(payload.src, waiter.uid)) {
+      console.warn(`MQTT rpc reply id ${payload.id} on ${topic} from ${payload.src} while waiting on ${waiter.prefix} — ignored`);
       return;
     }
     waiter.resolve(payload);
@@ -202,7 +211,7 @@ export function shellyMqttRpc(deviceUid, method, params = undefined, timeoutMs =
   const prefix = `shellypro2-${deviceUid}`;
   const id = nextRpcId();
   return new Promise((resolve, reject) => {
-    const req = { id, src: 'shabat-server', method, ...(params ? { params } : {}) };
+    const req = { id, src: replySrcFor(deviceUid), method, ...(params ? { params } : {}) };
     const timer = setTimeout(() => {
       shellyRpcWaiters.delete(id);
       resolve(null);

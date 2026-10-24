@@ -16,3 +16,16 @@ export function replyIsFrom(src, uid) {
   if (typeof src !== 'string') return true; // no src at all — nothing to check against
   return src.toLowerCase().endsWith(String(uid).toLowerCase());
 }
+
+// Per-unit reply topics (since 2026-10-25). The server asks with
+// src = shabat-server/shelly-<mac>; the unit answers on <src>/rpc, and the
+// broker ACL (pattern write shabat-server/%u/rpc) allows exactly that topic for
+// the username shelly-<mac> — a credential can speak for its own unit only.
+export const replySrcFor = (uid) => `shabat-server/shelly-${String(uid).toLowerCase()}`;
+
+// 'shabat-server/shelly-<mac>/rpc' → '<mac>'; anything else (including the
+// legacy shared 'shabat-server/rpc') → null.
+export function replyTopicUid(topic) {
+  const m = /^shabat-server\/shelly-([0-9a-f]{12})\/rpc$/i.exec(String(topic || ''));
+  return m ? m[1].toLowerCase() : null;
+}
