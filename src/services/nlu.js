@@ -214,17 +214,29 @@ export function ruleInterpret(text, relays) {
     used[i] = true;
   });
   if (action !== 'on' && action !== 'off') return null;
-  // Longest relay names first so "תאורה חוץ" is not eaten by a relay named "תאורה".
+  // Two relays with one name (across devices) cannot be told apart here — the
+  // read-back names the relay only. The model at least sees the device names.
+  const nameCount = new Map();
+  for (const r of relays) { const k = tokens(r.name).join(' '); nameCount.set(k, (nameCount.get(k) || 0) + 1); }
+  // Longest relay names first so "תאורה חוץ" is not eaten by a relay named
+  // "תאורה"; and an EXACT word match before one reached by stripping a prefix
+  // letter, so "מאור" is the relay מאור and not the relay אור with a מ in front.
   const spans = [];
-  for (const r of [...relays].sort((a, b) => tokens(b.name).length - tokens(a.name).length)) {
-    const name = tokens(r.name);
-    if (!name.length) continue;
-    for (let i = 0; i + name.length <= words.length; i++) {
-      if (used.slice(i, i + name.length).some(Boolean)) continue;
-      if (name.every((n, k) => wordIs(words[i + k], n))) {
-        spans.push({ relay: r, at: i });
-        for (let k = 0; k < name.length; k++) used[i + k] = true;
-        break; // one mention per relay is enough
+  const byLength = [...relays].sort((a, b) => tokens(b.name).length - tokens(a.name).length);
+  for (const exact of [true, false]) {
+    for (const r of byLength) {
+      if (spans.some((s) => s.relay === r)) continue;
+      const name = tokens(r.name);
+      if (!name.length) continue;
+      const hit = (w, n) => (exact ? w === n : wordIs(w, n));
+      for (let i = 0; i + name.length <= words.length; i++) {
+        if (used.slice(i, i + name.length).some(Boolean)) continue;
+        if (name.every((n, k) => hit(words[i + k], n))) {
+          if (nameCount.get(name.join(' ')) > 1) return null; // ambiguous name → the model
+          spans.push({ relay: r, at: i });
+          for (let k = 0; k < name.length; k++) used[i + k] = true;
+          break; // one mention per relay is enough
+        }
       }
     }
   }
@@ -307,18 +319,13 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
   // few hundred chars, so the guard only needs to stop runaway garbage.
   if (clean.length > 1000) throw errors.validation('הטקסט ארוך מדי');
 
-  // Both lookups feed the prompt — run them together so the caller waits one
-  // DB round-trip, not two, before the model call.
-  const [relays, schedules] = await Promise.all([
-    query(
-      `SELECT r.id, r.name, r.current_state, d.name AS device_name, d.timezone
-         FROM relays r JOIN devices d ON d.id = r.device_id
-        WHERE r.user_id = ? AND r.is_enabled = TRUE AND r.deleted_at IS NULL AND d.is_enabled = TRUE
-        ORDER BY r.sort_order, r.id`,
-      [userId],
-    ),
-    listSchedules({ userId }),
-  ]);
+  const relays = await query(
+    `SELECT r.id, r.name, r.current_state, d.name AS device_name, d.timezone
+       FROM relays r JOIN devices d ON d.id = r.device_id
+      WHERE r.user_id = ? AND r.is_enabled = TRUE AND r.deleted_at IS NULL AND d.is_enabled = TRUE
+      ORDER BY r.sort_order, r.id`,
+    [userId],
+  );
   if (relays.length === 0) throw errors.validation('אין ממסרים פעילים לחשבון זה');
 
   // Half of all real commands are a plain "turn X on/off" naming a relay in
@@ -332,6 +339,10 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
       .catch((e) => console.error('nlu_usage log failed:', e.message));
     return { understood: true, clarification: null, actions: ruled, tz: tz0 };
   }
+
+  // Only the model path needs the schedules (plans in the prompt, deletion
+  // matching) — hundreds of rows on a busy account, not fetched for a rules answer.
+  const schedules = await listSchedules({ userId });
 
   const plans = groupPlans(schedules);
   const tz = relays[0].timezone || 'Asia/Jerusalem';

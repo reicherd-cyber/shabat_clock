@@ -30,6 +30,17 @@ test('ruleInterpret: anything the rules cannot fully explain goes to the model',
   assert.equal(ruled(''), null);
 });
 
+test('ruleInterpret: an exact name beats a prefix-stripped one; a name shared by two relays goes to the model', () => {
+  const r = (t, relays) => ruleInterpret(t, relays)?.map((a) => `${a.action}:${a.relay_id}`) ?? null;
+  for (const order of [[{ id: 1, name: 'אור' }, { id: 2, name: 'מאור' }], [{ id: 2, name: 'מאור' }, { id: 1, name: 'אור' }]]) {
+    assert.deepEqual(r('תדליק מאור', order), ['on:2']);   // whatever the relay order
+    assert.deepEqual(r('תדליק את האור', order), ['on:1']);
+  }
+  const twins = [{ id: 7, name: 'מזגן' }, { id: 8, name: 'מזגן' }, { id: 9, name: 'דוד' }];
+  assert.equal(r('תכבה את המזגן', twins), null);
+  assert.deepEqual(r('תכבה את הדוד', twins), ['off:9']);
+});
+
 // listSchedules-shaped rows: a two-member named plan, and one standalone row.
 const row = (over = {}) => ({
   id: 1, name: null, plan_id: null, relay_id: 10, relay_name: 'סלון', is_enabled: 1,
