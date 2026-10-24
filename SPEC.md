@@ -712,6 +712,119 @@ is all green, plus these spec-level additions:
 
 ---
 
+## 10. Customer Service — מוקד שירות (added 2026-10-25)
+
+One service desk, three doors: the site's "פניות" page, the WhatsApp bot on 04-3131481 and
+the phone IVR on the same number. Every door walks the **same numbered menu tree**; the
+full tree, node by node, lives in `SERVICE-TREE.md` (the single place it is maintained —
+the spec below states the rules, the tree file states the content).
+
+### 10.1 Principles (decisions)
+
+- **[CS1] One engine, every channel.** `services/serviceMenu.js` is the only place a
+  service conversation is defined. State `{node, data}` is serialisable and
+  channel-agnostic; each channel persists it (web: in the page, WhatsApp:
+  `whatsapp_sessions`, phone: the IVR session) and hands it back with the next input.
+  Side effects go through an injected `io` so the tree is unit-tested with a fake.
+- **[CS2] Numbers first.** Every question is answered with a digit. Free text is asked
+  only where a digit cannot carry the answer (name, city, a description) and only inside
+  the הזמנה and שירות לקוחות branches. **No menu node ever calls a model** — a paid call
+  is never the default path of a conversation (user decision 2026-10-22).
+  `9` = main menu everywhere, `0` on the main menu = a person.
+- **[CS3] AI in exactly four places, each metered, none of them in control.**
+  1. **Free-text router** — when a customer types words where a digit was expected, a
+     small model maps the text to a menu node plus slots (relay, on/off, time) and the
+     engine *jumps there and asks the usual confirmation*. The router cannot execute,
+     cannot invent nodes (node ids are a whitelist) and relay ids are re-scoped to the
+     user server-side, exactly like `nlu.js` does today.
+  2. **One-question assistant** — offered only *after* the menu failed ("לא עזר" /
+     "משהו אחר"), as a numbered option ("1 לשאול את העוזר, 2 לנציג"). It is the existing
+     knowledge-base answer bot (`services/support.js`): rules → 30-day reuse → cached
+     prompt → model; `can_answer=false` turns straight into a ticket carrying the
+     question. One question per escalation, daily cap per customer.
+  3. **Voice interpretation** — phone only (`nlu.js`): garbled STT → structured actions →
+     spoken confirmation. Unchanged; it is the one place a strong model is justified.
+  4. **Agent-side enrichment** — on the admin inbox, *asynchronous and out of the
+     customer's path*: thread summary, suggested reply draft, urgency, the device
+     diagnosis attached. The agent sends; the model never writes to a customer.
+- **[CS4] Cost ladder and budgets.** Every AI touchpoint goes through the same ladder:
+  fixed rules → exact-question reuse (30 days) → cached-prefix prompt → the cheapest model
+  that passes the eval set for that job (router: Haiku-class; assistant: `SUPPORT_MODEL`;
+  voice: Opus-class — see `aiPricing.js`). Settings `ai.enabled` (kill switch),
+  `ai.budget.daily_usd` (global) and `ai.budget.user_daily` (per customer) are checked
+  before any call; over budget = the numbered path without the AI option, never an
+  error to the customer. Every call is logged in `nlu_usage` with source, kind, cost and
+  outcome, and shown in admin → פניות → "שיחות עם הבוט".
+- **[CS5] Actions over WhatsApp.** A registered customer (the WhatsApp number is a
+  **verified** phone on the account, [D34]) can act from the chat: switch a channel,
+  read the status, schedule a one-off on/off for today, stop/start a plan, see the
+  coming week's firings and run the device check. Every action is **confirmed before
+  it runs** (reply buttons אישור/ביטול, or 1/2 as text), executed through
+  `services/nluExec.js` (the same path as the phone), verified by the channel meter
+  (§command verification) and read back honestly ("הודלק" / "המכשיר לא אישר"). Audit:
+  `commands.source='whatsapp'`, `audit_log.actor_type='whatsapp'`. An unregistered
+  number gets the guest tree only (הזמנה, מידע, נציג) — never device data.
+- **[CS6] Escalation and the promise.** Every path that does not end in a resolution
+  ends in a `support_messages` row with a `topic` and machine-readable `details`
+  (device id, diagnosis verdict, relay, order) so the agent opens the ticket already
+  knowing the facts. The customer hears one promise everywhere:
+  callback **within 3 hours inside 9:00–18:00, otherwise the next working day**. A
+  ticket from WhatsApp is answered in the chat (24h window) or by a template after it;
+  from the site, in "הפניות שלי" plus email; from the phone, by a call.
+- **[CS7] Outbound only by consent and by template.** Proactive messages (device offline
+  for N hours, firmware updated, order delivered, plan reminder before שבת) are sent
+  only to customers who opted in per event type, only through Meta-approved templates,
+  with a one-tap "stop". Phase 2 — the templates are not approved yet.
+- **[CS8] Honest about the machine.** The bot introduces itself as the service desk,
+  never pretends to be a person, and a person is always one digit away (0).
+
+### 10.2 Surfaces
+
+| Door | Entry | Identity | Carries state in | Executes actions |
+|---|---|---|---|---|
+| Site "פניות" (`/help`) | `POST /support/menu {state,input}` | JWT | the page | the route itself (the site is the customer's own panel) |
+| WhatsApp | Meta webhook → `whatsapp/bot.js` | sender = verified phone → user, else guest | `whatsapp_sessions.pending` | `nluExec.runNluActions` after the confirm button |
+| Phone IVR | Yemot → `/ivr` | caller-ID (+PIN when required) | IVR session | existing IVR command path (§4) |
+| Admin inbox | `/admin/support` (+ "שיחות עם הבוט", `/admin/whatsapp`) | admin JWT | — | replies, status, enrichment |
+
+The **phone** keeps its own digit map for registered callers (1 voice command, 2 on,
+3 off, 4 schedules, 5 status) because those digits are recorded and known; the
+unregistered caller's sales menu and every *service* branch reachable from the phone
+follow the shared tree node for node.
+
+### 10.3 Limits and safety
+
+- Rate limits: menu 40 taps/min/customer; assistant 6/min and the daily cap; tickets
+  5/10 min; WhatsApp inbound quota per phone (`overQuota`). Over a limit = the
+  numbered path, never a stack trace.
+- Free text reaching a model is data, not instructions: structured-output schemas,
+  whitelisted node ids, server-side relay scoping, no tool use. A model answer is
+  never executed; it is shown and confirmed.
+- Nothing a guest can reach discloses whether a phone or a customer exists.
+- Hebrew texts of every node are editable settings (`menu.*`, `whatsapp.*`, `ivr.*`)
+  with seeded defaults; a text change needs no deploy.
+
+### 10.4 What the admin sees
+
+Inbox with topics and the attached details; bot conversations with outcome
+(answered / declined / escalated) and cost per conversation; WhatsApp threads; the
+CRM lead created by the order branch. Weekly numbers the desk is run by:
+**containment** (conversations ended without a ticket), **escalations by topic**,
+**cost per conversation**, **time to first human reply** against the 3-hour promise.
+
+### 10.5 Acceptance additions
+
+| # | Test | Expected |
+|---|---|---|
+| 17 | Guest walks every branch of the tree (unit test with fake io) | No node asks a model; free text only in הזמנה/שירות; 9 always returns to main |
+| 18 | WhatsApp: verified number switches a channel | Confirm buttons shown; nothing runs before אישור; command row source `whatsapp`; read-back matches the meter verdict |
+| 19 | WhatsApp: unverified number asks for status | Guest menu, no device data, no hint whether the number is known |
+| 20 | Free-text router on "תכבה את הסלון" | Jumps to switch_action for the right relay and still asks confirmation; a text naming another user's relay yields "לא מצאתי" |
+| 21 | Budget exhausted | The "לשאול את העוזר" option disappears; the ticket path still works |
+| 22 | Every escalation | A `support_messages` row with topic + details; the customer heard the 3-hour promise |
+
+---
+
 ## Open items (tracked, not blocking)
 
 - Verify exact Yemot response-command syntax + webhook timeout (Phase 1 spike) — decides
