@@ -19,14 +19,22 @@ const generatePassword = (len = 24) =>
 
 // Idempotent: an existing block for this device is left as-is (password rewrites are
 // fine — passwd entry is replaced wholesale by writeBrokerPasswdEntry).
+// A unit may write its OWN reply topic only. The global pattern line (%u = the
+// authenticated username shelly-<mac>) covers every unit, present and future, so
+// a per-unit block grants just its command/status prefix. The pattern line is
+// (re)asserted here so a fresh broker file is complete; the one-time migration
+// of the live file is deploy/mqtt-reply-acl.sh.
+export const REPLY_ACL_PATTERN = 'pattern write shabat-server/%u/rpc';
 function ensureAclEntry(uid) {
   if (!env.deviceBroker.aclFile) return;
   const user = `shelly-${uid}`;
   let text = '';
   try { text = fs.readFileSync(env.deviceBroker.aclFile, 'utf8'); } catch { /* new file */ }
-  if (new RegExp(`^user ${user}$`, 'm').test(text)) return;
-  const block = `\nuser ${user}\ntopic readwrite shellypro2-${uid}/#\ntopic write shabat-server/rpc\n`;
-  fs.appendFileSync(env.deviceBroker.aclFile, block);
+  const lines = text.split(/\r?\n/).map((l) => l.trim());
+  let add = '';
+  if (!lines.includes(REPLY_ACL_PATTERN)) add += `\n${REPLY_ACL_PATTERN}\n`;
+  if (!lines.includes(`user ${user}`)) add += `\nuser ${user}\ntopic readwrite shellypro2-${uid}/#\n`;
+  if (add) fs.appendFileSync(env.deviceBroker.aclFile, add);
 }
 
 function reloadBroker() {

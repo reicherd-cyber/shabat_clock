@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { replyIsFrom } from '../src/mqtt/reply-src.js';
+import { replyIsFrom, replySrcFor, replyTopicUid } from '../src/mqtt/reply-src.js';
 
 const MAC = 'e08cfe955c64';
 
@@ -25,4 +25,19 @@ test('a reply from another unit is rejected under any naming', () => {
 
 test('a reply without src is accepted (nothing to check against)', () => {
   assert.equal(replyIsFrom(undefined, MAC), true);
+});
+
+test('per-unit reply topic: src names the unit and the topic parses back to its mac', () => {
+  assert.equal(replySrcFor(MAC), `shabat-server/shelly-${MAC}`);
+  assert.equal(replySrcFor(MAC.toUpperCase()), `shabat-server/shelly-${MAC}`);
+  assert.equal(replyTopicUid(`${replySrcFor(MAC)}/rpc`), MAC);
+  assert.equal(replyTopicUid(`shabat-server/shelly-${MAC.toUpperCase()}/rpc`), MAC);
+});
+
+test('the legacy shared topic and anything else is not a per-unit topic', () => {
+  assert.equal(replyTopicUid('shabat-server/rpc'), null);
+  assert.equal(replyTopicUid('shabat-server/shelly-e08cfe955c6/rpc'), null);      // 11 hex chars
+  assert.equal(replyTopicUid('shabat-server/shellypro2-e08cfe955c64/rpc'), null); // client id, not username
+  assert.equal(replyTopicUid(`shabat-server/shelly-${MAC}/status`), null);
+  assert.equal(replyTopicUid(undefined), null);
 });
