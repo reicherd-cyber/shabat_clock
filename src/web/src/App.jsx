@@ -240,11 +240,11 @@ const ADMIN_NAV = [
   {
     title: 'מערכת',
     items: [
+      { to: '/admin/docs', label: 'תיעוד', Icon: BookOpen, superadmin: true },
       { to: '/admin/settings', label: 'הגדרות', Icon: SettingsIcon },
       { to: '/admin/admins', label: 'מנהלים', Icon: ShieldCheck, superadmin: true },
       { to: '/admin/audit', label: 'ביקורת', Icon: ScrollText },
       { to: '/admin/db', label: 'מסד נתונים', Icon: DatabaseIcon, superadmin: true },
-      { to: '/admin/docs', label: 'תיעוד', Icon: BookOpen, superadmin: true },
     ],
   },
 ];
