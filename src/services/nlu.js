@@ -46,7 +46,10 @@ const SCHEMA = {
           on_time: { type: ['string', 'null'] },
           off_day: { type: ['integer', 'null'] },
           off_time: { type: ['string', 'null'] },
-          // delete_schedule only: an id from the existing-schedules list.
+          // Kept in the schema (always null) so the schema stays byte-identical —
+          // a changed schema pays a one-time server compile of up to ~17 s on
+          // the first call. delete_schedule is resolved server-side from
+          // relay_id + time + on_day + action + plan_key (resolveDeleteTargets).
           schedule_id: { type: ['integer', 'null'] },
           // plan_toggle only: a key from the plans list; action on = start the
           // plan (enable all its schedules), off = stop it (disable them).
@@ -80,6 +83,10 @@ export function groupPlans(schedules) {
   const byPlan = new Map();
   const loose = [];
   for (const s of schedules) {
+    // A standalone one-off that already fired (auto-disabled) is history, not a
+    // plan anyone would start or stop — and a busy account keeps hundreds of
+    // them (found 2026-10-25: 79 on one synagogue account, all in the prompt).
+    if (!s.plan_id && !s.is_enabled && s.repeat_type === 'once') continue;
     if (!s.plan_id) { loose.push(s); continue; }
     if (!byPlan.has(s.plan_id)) byPlan.set(s.plan_id, []);
     byPlan.get(s.plan_id).push(s);
@@ -106,7 +113,7 @@ export function groupPlans(schedules) {
 // previous attempt) follows as a second, uncached block. Order matters: one
 // changed byte invalidates everything after it, so nothing volatile may
 // precede the cache breakpoint. Returns the two blocks for the system array.
-const STATIC_RULES = `אתה מפרש פקודות בעברית עבור מערכת "שעון שבת" ששולטת בממסרים (relays) של משתמש. בהמשך ההנחיות תקבל את הנתונים של המשתמש: השעה המקומית, רשימת הממסרים, התזמונים והתוכניות שלו.
+const STATIC_RULES = `אתה מפרש פקודות בעברית עבור מערכת "שעון שבת" ששולטת בממסרים (relays) של משתמש. בהמשך ההנחיות תקבל את הנתונים של המשתמש: רשימת הממסרים והתוכניות שלו, ואחריהן השעה המקומית ומצב הממסרים כרגע.
 
 הטקסט מגיע מזיהוי דיבור טלפוני באיכות ירודה — מילים עשויות להגיע משובשות אך דומות פונטית לבקשה האמיתית (למשל "אבל זה כלום עכשיו" הוא שיבוש של "כבה את הסלון עכשיו"). לפני שאתה מוותר, נסה לשחזר את הבקשה הסבירה ביותר לפי דמיון צלילי לשמות הממסרים ולפעולות הדלקה/כיבוי/תזמון. אם השחזור ברור מספיק — פרש אותו כרגיל.
 
@@ -114,7 +121,7 @@ const STATIC_RULES = `אתה מפרש פקודות בעברית עבור מער�
 - "immediate" = הדלקה/כיבוי מיד (action: on/off).
 - "timed" = הדלקה/כיבוי חד פעמי בשעה עתידית. חשב את השעה בפורמט HH:MM (24 שעות) ואת היום (today/tomorrow) לפי השעה הנוכחית. "בעוד N דקות/שעות" = הוסף לשעה הנוכחית; אם התוצאה אחרי חצות, day=tomorrow.
 - "recurring" = תזמון קבוע שחוזר: "כל יום ב..." → on_day/off_day = null; "כל יום שלישי" → יום בשבוע (1=ראשון, 2=שני, 3=שלישי, 4=רביעי, 5=חמישי, 6=שישי, 7=שבת). מלא on_time/off_time בפורמט HH:MM. מותר צד אחד בלבד (רק הדלקה או רק כיבוי) — השאר את הצד השני null. ההבחנה: "מחר בשמונה" = timed; "כל יום בשמונה" / "בכל שבת" = recurring.
-- "delete_schedule" = מחיקת תזמון קיים: בחר schedule_id מרשימת התזמונים של המשתמש לפי ההתאמה הטובה ביותר לתיאור המשתמש (ממסר, סוג, שעות). אם הבקשה מכוונת לכמה תזמונים ("תמחק את כל התזמונים של הדוד") — החזר פעולת מחיקה לכל אחד מהם.
+- "delete_schedule" = מחיקת תזמון קיים. אין לפניך רשימת תזמונים — ציין את הממסר (relay_id), ואם המשתמש אמר אותם: את השעה (time, בפורמט HH:MM), את היום בשבוע (on_day, 1=ראשון…7=שבת), את הצד (action: on = ההדלקה, off = הכיבוי) ואת התוכנית (plan_key) — והמערכת תאתר את התזמונים המתאימים. "תמחק את כל התזמונים של הדוד" = relay_id של הדוד ושאר השדות null. schedule_id תמיד null.
 - "plan_toggle" = עצירה או הפעלה של תוכנית קיימת, בלי למחוק אותה: בחר plan_key מרשימת התוכניות של המשתמש לפי שם התוכנית או הממסרים שבה; action off = עצירה/השבתה ("עצור", "תפסיק", "השבת", "בטל זמנית", "כבה את התוכנית"), action on = הפעלה/חידוש ("הפעל", "תתחיל", "החזר", "הדלק את התוכנית"). ההבחנה מממסר: המילים תוכנית/תזמונים ("עצור את התוכנית של הסלון", "תפסיק את תוכנית שבת") = plan_toggle; "כבה את הסלון" בלי המילה תוכנית = immediate. "עצור את כל התוכניות" = פעולת plan_toggle לכל תוכנית ברשימה. גם תוכנית שכבר במצב המבוקש — החזר אותה (המערכת תציין זאת).
 - בחר relay_id רק מרשימת הממסרים של המשתמש. התאם לפי שם הממסר (למשל "סלון", "מטבח") גם אם הניסוח חלקי.
 - שעה עמומה בלי ציון בוקר/ערב — בחר את הפירוש הסביר בבית: "בשעה שלוש" לתזמון של פלטה או דוד לשבת = 15:00 ולא 03:00 בלילה; "בשמונה" בערב שישי = 20:00. שעות לילה קטנות (00:00–05:00) רק כשהמשתמש אמר במפורש לילה או לפנות בוקר.
@@ -124,35 +131,71 @@ const STATIC_RULES = `אתה מפרש פקודות בעברית עבור מער�
 - קבע understood=false רק כשאין שום פירוש סביר. במקרה כזה ה-clarification חייב להדריך את המשתמש לאפשרות הקרובה ביותר, לא רק לבקש לנסות שוב: ציין מה כן נקלט אם נקלט משהו, הזכר את שם הממסר הקרוב ביותר למה שנשמע, ותן דוגמת ניסוח קצרה ומלאה עם שם ממסר אמיתי מהרשימה, למשל, אפשר לומר, הדלק את הדוד בשש בערב. המשפט יוקרא בטלפון והמערכת תקשיב שוב מיד — בלי סימני שאלה, בלי גרשיים, בלי נקודתיים ובלי נקודות (פסיקים במקום).
 - שדות שאינם רלוונטיים לסוג הפעולה — השאר null.`;
 
-function buildSystemPrompt(relays, schedules, plans, tz, nowParts, prevText) {
+// Three blocks, from the most stable to the most volatile, because a cache
+// breakpoint covers everything BEFORE it and one changed byte invalidates all
+// that follows:
+//   1. the rules — identical for everyone, cached;
+//   2. the user's relays (names only) and plans — identical from one command to
+//      the next unless the user edited something, cached too (a second
+//      breakpoint; blocks under the model's minimum are simply not cached);
+//   3. the clock, the relays' current states and the previous attempt — change
+//      every call, never cached.
+// The per-row schedule list that used to sit here is gone: it was the whole
+// cost (1,421 rows → 29k tokens on one account, ₪0.47 a command) and served only
+// delete_schedule, which the server now resolves from relay + time + day.
+export function buildSystemPrompt(relays, plans, tz, nowParts, prevText) {
   const list = relays
-    .map((r) => `- relay_id ${r.id}: "${r.name}" (מכשיר: "${r.device_name}", מצב נוכחי: ${r.current_state === 'on' ? 'דולק' : 'כבוי'})`)
+    .map((r) => `- relay_id ${r.id}: "${r.name}" (מכשיר: "${r.device_name}")`)
     .join('\n');
-  const schedList = schedules.length
-    ? schedules.map((s) => `- schedule_id ${s.id}: ${describeScheduleHe(s)}`).join('\n')
-    : '(אין תזמונים)';
   const planList = plans.length
     ? plans.map((p) => `- plan_key ${p.key}: "${p.name}" (${p.enabled ? 'פעילה' : 'מושבתת'}; ממסרים: ${p.channels.join(', ')}; ${p.schedule_ids.length} תזמונים)`).join('\n')
     : '(אין תוכניות)';
+  const states = relays.map((r) => `relay_id ${r.id} ${r.current_state === 'on' ? 'דולק' : 'כבוי'}`).join(', ');
   const hhmm = `${String(nowParts.hh).padStart(2, '0')}:${String(nowParts.mm).padStart(2, '0')}`;
-  const userData = `הנתונים של המשתמש:
-השעה המקומית הנוכחית של המשתמש: ${hhmm} (אזור זמן ${tz}).
+  const userData = `הנתונים של המשתמש (אזור זמן ${tz}):
 
 הממסרים הזמינים למשתמש זה:
 ${list}
 
-התזמונים הקיימים של המשתמש:
-${schedList}
-
 התוכניות של המשתמש (תוכנית = קבוצת תזמונים בשם, שאפשר להפעיל או לעצור כיחידה):
-${planList}
-${prevText ? `
-בניסיון קודם באותה שיחה המשתמש אמר (תמלול משובש שלא הובן): «${prevText}». הבקשה הנוכחית היא ניסוח מחדש של אותה כוונה — השתמש בשני התמלולים יחד כדי לשחזר אותה.
-` : ''}`;
+${planList}`;
+  const volatile = `השעה המקומית הנוכחית של המשתמש: ${hhmm}.
+מצב נוכחי של הממסרים: ${states}.${prevText ? `
+
+בניסיון קודם באותה שיחה המשתמש אמר (תמלול משובש שלא הובן): «${prevText}». הבקשה הנוכחית היא ניסוח מחדש של אותה כוונה — השתמש בשני התמלולים יחד כדי לשחזר אותה.` : ''}`;
   return [
     { type: 'text', text: STATIC_RULES, cache_control: { type: 'ephemeral' } },
-    { type: 'text', text: userData },
+    { type: 'text', text: userData, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: volatile },
   ];
+}
+
+// delete_schedule without a schedule list in the prompt: the model names the
+// relay and, when the caller said them, the plan, the time (HH:MM), the weekday
+// and which side (on/off); the server picks the rows. Enabled rows first — a
+// stopped schedule is deleted only when nothing live matches. No time, day or
+// side = every candidate of that relay ("תמחק את כל התזמונים של הדוד").
+export function resolveDeleteTargets(schedules, a, plans = []) {
+  const relayId = Number(a.relay_id);
+  if (!Number.isInteger(relayId)) return [];
+  const plan = a.plan_key ? plans.find((p) => p.key === String(a.plan_key)) : null;
+  const inPlan = plan ? new Set(plan.schedule_ids) : null;
+  const time = HHMM.test(a.time || '') ? a.time : null;
+  const day = Number.isInteger(a.on_day) && a.on_day >= 1 && a.on_day <= 7 ? a.on_day : null;
+  const side = a.action === 'on' || a.action === 'off' ? a.action : null;
+  const matches = (s) => {
+    if (Number(s.relay_id) !== relayId) return false;
+    if (inPlan && !inPlan.has(s.id)) return false;
+    const sides = [['on', s.on_time, s.on_day_of_week], ['off', s.off_time, s.off_day_of_week]]
+      .filter(([k, t]) => t && (!side || k === side));
+    if (!sides.length) return !side; // a one-sided row cannot match the other side
+    if (time && !sides.some(([, t]) => String(t).slice(0, 5) === time)) return false;
+    if (day != null && !sides.some(([, , d]) => d == null || Number(d) === day)) return false;
+    return true;
+  };
+  const all = schedules.filter(matches);
+  const live = all.filter((s) => s.is_enabled);
+  return live.length ? live : all;
 }
 
 
@@ -198,7 +241,7 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
     // (Sonnet 5 default) thinking tokens can eat the budget before the JSON.
     thinking: { type: 'disabled' },
     output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-    system: buildSystemPrompt(relays, schedules, plans, tz, nowParts, prevText),
+    system: buildSystemPrompt(relays, plans, tz, nowParts, prevText),
     messages: [{ role: 'user', content: clean }],
   };
 
@@ -233,6 +276,9 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
     return { understood: false, clarification: 'לא הבנתי את הבקשה, נסו שוב', actions: [], tz };
   }
   const block = response.content.find((b) => b.type === 'text');
+  // NLU_DEBUG=1 prints the raw model JSON and the usage — the only way to see
+  // why an action was dropped by the re-checks below.
+  if (process.env.NLU_DEBUG === '1') console.error('NLU raw:', block?.text, JSON.stringify(response.usage));
   let parsed;
   try {
     parsed = JSON.parse(block.text);
@@ -241,9 +287,9 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
   }
 
   const byId = new Map(relays.map((r) => [r.id, r]));
-  const schedById = new Map(schedules.map((s) => [s.id, s]));
   const planByKey = new Map(plans.map((p) => [p.key, p]));
   const actions = [];
+  const missed = []; // deletions the model understood but nothing on file matched
   for (const a of parsed.actions || []) {
     if (a.kind === 'plan_toggle') {
       const plan = planByKey.get(String(a.plan_key ?? ''));
@@ -261,9 +307,20 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
     // Ids are re-checked against the lists we offered — anything else is dropped
     // defensively, as are recurring shapes the schedule validator would reject.
     if (a.kind === 'delete_schedule') {
-      const sched = schedById.get(Number(a.schedule_id));
-      if (!sched) continue;
-      actions.push({ kind: 'delete_schedule', schedule_id: sched.id, summary: `מחיקת ${describeScheduleHe(sched)}` });
+      // The relay must be one of the user's (the model only ever saw those), and
+      // the rows come from the user's own list — nothing else can be named.
+      const relay = byId.get(Number(a.relay_id));
+      if (!relay) continue;
+      const targets = resolveDeleteTargets(schedules, a, plans);
+      for (const sched of targets) {
+        actions.push({ kind: 'delete_schedule', schedule_id: sched.id, summary: `מחיקת ${describeScheduleHe(sched)}` });
+      }
+      // Understood, but no such row: say so instead of the generic "didn't
+      // understand" — the caller then rephrases the time, not the whole order.
+      if (!targets.length) {
+        const when = HHMM.test(a.time || '') ? ` בשעה ${a.time}` : '';
+        missed.push(`לא מצאתי תזמון לממסר ${relay.name}${when}`);
+      }
       continue;
     }
     const relay = byId.get(Number(a.relay_id));
@@ -305,9 +362,10 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
   // the request only partially understood. clarification then rides along as a note
   // ("לא מצאתי ממסר בשם...") that the IVR reads before the confirmation items.
   const understood = actions.length > 0;
+  const note = [parsed.clarification, ...missed].filter(Boolean).join(', ') || null;
   return {
     understood,
-    clarification: parsed.clarification || (understood ? null : 'לא הבנתי את הבקשה. נסו לנסח אחרת.'),
+    clarification: note || (understood ? null : 'לא הבנתי את הבקשה. נסו לנסח אחרת.'),
     actions,
     tz, // device-local zone, so callers (e.g. the IVR) can resolve today/tomorrow dates
   };
