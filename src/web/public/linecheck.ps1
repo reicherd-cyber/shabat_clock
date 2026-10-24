@@ -49,7 +49,11 @@ foreach ($t in $targets) {
     $c = New-Object Security.Cryptography.X509Certificates.X509Certificate2($ssl.RemoteCertificate)
     Write-Host "[2] Certificate subject : $($c.Subject)"
     Write-Host "    Certificate issuer  : $($c.Issuer)"
-    if ($c.Issuer -match 'Shabat Clock Device CA') {
+    if ($c.Issuer -match 'Shabat Clock Device CA' -and $h -ne $name) {
+      # Reached by IP only: the name is dead on this line, and devices dial the name.
+      Write-Host "[3] Server answers by IP with our certificate, but $name does not resolve here." -ForegroundColor Yellow
+      Write-Host "    Devices dial the NAME, so this address is NOT usable until the provider fixes DNS." -ForegroundColor Yellow
+    } elseif ($c.Issuer -match 'Shabat Clock Device CA') {
       Write-Host "[3] CLEAN - devices configured for $name port $p can connect." -ForegroundColor Green
       $clean += "$name port $p"
     } elseif ($c.Issuer -eq $c.Subject) {
