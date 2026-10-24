@@ -25,16 +25,25 @@ const generatePassword = (len = 24) =>
 // (re)asserted here so a fresh broker file is complete; the one-time migration
 // of the live file is deploy/mqtt-reply-acl.sh.
 export const REPLY_ACL_PATTERN = 'pattern write shabat-server/%u/rpc';
-function ensureAclEntry(uid) {
-  if (!env.deviceBroker.aclFile) return;
+export const LEGACY_REPLY_ACL = 'topic write shabat-server/rpc';
+export function ensureAclEntry(uid, aclFile = env.deviceBroker.aclFile) {
+  if (!aclFile) return;
   const user = `shelly-${uid}`;
   let text = '';
-  try { text = fs.readFileSync(env.deviceBroker.aclFile, 'utf8'); } catch { /* new file */ }
+  try { text = fs.readFileSync(aclFile, 'utf8'); } catch { /* new file */ }
   const lines = text.split(/\r?\n/).map((l) => l.trim());
+  // Transition (deploy/mqtt-reply-acl.sh add … finalize): while the file still
+  // carries legacy shared-topic lines, a server on the old build may be asking
+  // this unit with src 'shabat-server' — so a NEW unit gets the legacy line too,
+  // or its replies to that server would be denied. Once finalize has stripped
+  // the legacy lines, new blocks omit it; the file is the single source of truth.
+  const transition = lines.includes(LEGACY_REPLY_ACL) || lines.includes('topic write shabat-server/#');
   let add = '';
   if (!lines.includes(REPLY_ACL_PATTERN)) add += `\n${REPLY_ACL_PATTERN}\n`;
-  if (!lines.includes(`user ${user}`)) add += `\nuser ${user}\ntopic readwrite shellypro2-${uid}/#\n`;
-  if (add) fs.appendFileSync(env.deviceBroker.aclFile, add);
+  if (!lines.includes(`user ${user}`)) {
+    add += `\nuser ${user}\ntopic readwrite shellypro2-${uid}/#\n${transition ? `${LEGACY_REPLY_ACL}\n` : ''}`;
+  }
+  if (add) fs.appendFileSync(aclFile, add);
 }
 
 function reloadBroker() {
