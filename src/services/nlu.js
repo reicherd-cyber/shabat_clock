@@ -5,7 +5,7 @@
 // disable-confirm: nothing acts without an explicit confirm]. Claude only maps
 // intent → relay id + action/time; all validation stays server-side.
 import Anthropic from '@anthropic-ai/sdk';
-import { costUsd, totalInputTokens } from './aiPricing.js';
+import { costUsd, totalInputTokens, quickAnswerParams } from './aiPricing.js';
 import { query } from '../db/pool.js';
 import { errors } from '../config/errors.js';
 import { env } from '../config/env.js';
@@ -46,16 +46,18 @@ const SCHEMA = {
           on_time: { type: ['string', 'null'] },
           off_day: { type: ['integer', 'null'] },
           off_time: { type: ['string', 'null'] },
-          // Kept in the schema (always null) so the schema stays byte-identical —
-          // a changed schema pays a one-time server compile of up to ~17 s on
-          // the first call. delete_schedule is resolved server-side from
-          // relay_id + time + on_day + action + plan_key (resolveDeleteTargets).
-          schedule_id: { type: ['integer', 'null'] },
           // plan_toggle only: a key from the plans list; action on = start the
           // plan (enable all its schedules), off = stop it (disable them).
+          // delete_schedule: relay_id + time + on_day + action + plan_key, the
+          // server picks the rows (resolveDeleteTargets).
           plan_key: { type: ['string', 'null'] },
         },
-        required: ['kind', 'relay_id', 'action', 'time', 'day', 'on_day', 'on_time', 'off_day', 'off_time', 'schedule_id', 'plan_key'],
+        // Only `kind` is required: the model writes the fields that apply and
+        // omits the rest (the server reads a missing field as null). Output
+        // tokens are the dearest; 8 explicit nulls per action were ~40% of them.
+        // NOTE: any change to this schema costs a one-time server-side compile
+        // (up to ~17 s) on the first call — run a test call right after deploy.
+        required: ['kind'],
       },
     },
   },
@@ -113,23 +115,31 @@ export function groupPlans(schedules) {
 // previous attempt) follows as a second, uncached block. Order matters: one
 // changed byte invalidates everything after it, so nothing volatile may
 // precede the cache breakpoint. Returns the two blocks for the system array.
-const STATIC_RULES = `אתה מפרש פקודות בעברית עבור מערכת "שעון שבת" ששולטת בממסרים (relays) של משתמש. בהמשך ההנחיות תקבל את הנתונים של המשתמש: רשימת הממסרים והתוכניות שלו, ואחריהן השעה המקומית ומצב הממסרים כרגע.
+// Written tight on purpose: this block is re-written to the cache on every
+// cold call (58% of calls in 10/2026) at 1.25× the input price — every token
+// here is paid for again and again. Trimmed 2026-10-25 from ~2,300 tokens
+// without dropping a rule; the quality guard is a round of real calls after
+// each change (see memory nlu-command-box).
+const STATIC_RULES = `אתה מפרש פקודות בעברית למערכת "שעון שבת" ששולטת בממסרים של משתמש. אחרי ההנחיות: רשימת הממסרים והתוכניות שלו, ואז השעה המקומית ומצב הממסרים.
 
-הטקסט מגיע מזיהוי דיבור טלפוני באיכות ירודה — מילים עשויות להגיע משובשות אך דומות פונטית לבקשה האמיתית (למשל "אבל זה כלום עכשיו" הוא שיבוש של "כבה את הסלון עכשיו"). לפני שאתה מוותר, נסה לשחזר את הבקשה הסבירה ביותר לפי דמיון צלילי לשמות הממסרים ולפעולות הדלקה/כיבוי/תזמון. אם השחזור ברור מספיק — פרש אותו כרגיל.
+הטקסט הוא זיהוי דיבור טלפוני באיכות ירודה: מילים מגיעות משובשות אך דומות פונטית ("אבל זה כלום עכשיו" = "כבה את הסלון עכשיו"). שחזר את הבקשה הסבירה ביותר לפי דמיון צלילי לשמות הממסרים ולפעלי הדלקה/כיבוי/תזמון, ופרש אותה.
 
-המר את בקשת המשתמש לפעולות מובנות:
-- "immediate" = הדלקה/כיבוי מיד (action: on/off).
-- "timed" = הדלקה/כיבוי חד פעמי בשעה עתידית. חשב את השעה בפורמט HH:MM (24 שעות) ואת היום (today/tomorrow) לפי השעה הנוכחית. "בעוד N דקות/שעות" = הוסף לשעה הנוכחית; אם התוצאה אחרי חצות, day=tomorrow.
-- "recurring" = תזמון קבוע שחוזר: "כל יום ב..." → on_day/off_day = null; "כל יום שלישי" → יום בשבוע (1=ראשון, 2=שני, 3=שלישי, 4=רביעי, 5=חמישי, 6=שישי, 7=שבת). מלא on_time/off_time בפורמט HH:MM. מותר צד אחד בלבד (רק הדלקה או רק כיבוי) — השאר את הצד השני null. ההבחנה: "מחר בשמונה" = timed; "כל יום בשמונה" / "בכל שבת" = recurring.
-- "delete_schedule" = מחיקת תזמון קיים. אין לפניך רשימת תזמונים — ציין את הממסר (relay_id), ואם המשתמש אמר אותם: את השעה (time, בפורמט HH:MM), את היום בשבוע (on_day, 1=ראשון…7=שבת), את הצד (action: on = ההדלקה, off = הכיבוי) ואת התוכנית (plan_key) — והמערכת תאתר את התזמונים המתאימים. "תמחק את כל התזמונים של הדוד" = relay_id של הדוד ושאר השדות null. schedule_id תמיד null.
-- "plan_toggle" = עצירה או הפעלה של תוכנית קיימת, בלי למחוק אותה: בחר plan_key מרשימת התוכניות של המשתמש לפי שם התוכנית או הממסרים שבה; action off = עצירה/השבתה ("עצור", "תפסיק", "השבת", "בטל זמנית", "כבה את התוכנית"), action on = הפעלה/חידוש ("הפעל", "תתחיל", "החזר", "הדלק את התוכנית"). ההבחנה מממסר: המילים תוכנית/תזמונים ("עצור את התוכנית של הסלון", "תפסיק את תוכנית שבת") = plan_toggle; "כבה את הסלון" בלי המילה תוכנית = immediate. "עצור את כל התוכניות" = פעולת plan_toggle לכל תוכנית ברשימה. גם תוכנית שכבר במצב המבוקש — החזר אותה (המערכת תציין זאת).
-- בחר relay_id רק מרשימת הממסרים של המשתמש. התאם לפי שם הממסר (למשל "סלון", "מטבח") גם אם הניסוח חלקי.
-- שעה עמומה בלי ציון בוקר/ערב — בחר את הפירוש הסביר בבית: "בשעה שלוש" לתזמון של פלטה או דוד לשבת = 15:00 ולא 03:00 בלילה; "בשמונה" בערב שישי = 20:00. שעות לילה קטנות (00:00–05:00) רק כשהמשתמש אמר במפורש לילה או לפנות בוקר.
-- בקשה אחת יכולה להכיל כמה פעולות — פרק משפט מורכב לכל חלקיו והחזר פעולה נפרדת לכל חלק. למשל "תדליק את הדוד בשש ותכבה את הסלון בעוד עשר דקות" = שתי פעולות; "תדליק את הדוד מעכשיו עד שמונה" = הדלקה מיידית + כיבוי timed בשעה 20:00; "כל יום שישי תדליק את הפלטה בארבע ותכבה במוצאי שבת בעשר" = recurring אחד עם שני צדדים.
-- אל תוותר על חלק מהבקשה: אם הבנת רק חלק — החזר את הפעולות שהבנת עם understood=true, וב-clarification ציין בקצרה ובלי לשאול מה מהבקשה לא הובן או לא נמצא (למשל, שים לב, לא מצאתי ממסר בשם דוד). המשפט הזה יוקרא לפני הקראת הפעולות לאישור. אם הכל הובן — clarification=null.
-- המשתמש תמיד מאשר את הפעולה לפני ביצוע, לכן עדיף ניחוש סביר שיוצג לאישור מאשר שאלה. אם יש פירוש סביר אחד — החזר אותו כפעולה עם understood=true. לעולם אל תשאל "האם התכוונת ל..." ב-clarification.
-- קבע understood=false רק כשאין שום פירוש סביר. במקרה כזה ה-clarification חייב להדריך את המשתמש לאפשרות הקרובה ביותר, לא רק לבקש לנסות שוב: ציין מה כן נקלט אם נקלט משהו, הזכר את שם הממסר הקרוב ביותר למה שנשמע, ותן דוגמת ניסוח קצרה ומלאה עם שם ממסר אמיתי מהרשימה, למשל, אפשר לומר, הדלק את הדוד בשש בערב. המשפט יוקרא בטלפון והמערכת תקשיב שוב מיד — בלי סימני שאלה, בלי גרשיים, בלי נקודתיים ובלי נקודות (פסיקים במקום).
-- שדות שאינם רלוונטיים לסוג הפעולה — השאר null.`;
+סוגי פעולה:
+- immediate: הדלקה/כיבוי עכשיו (action on/off).
+- timed: הדלקה/כיבוי חד-פעמי בשעה עתידית. time בפורמט HH:MM, day today/tomorrow לפי השעה הנוכחית; "בעוד N דקות/שעות" = השעה הנוכחית + N, אחרי חצות = tomorrow.
+- recurring: תזמון קבוע. "כל יום" → on_day/off_day null; יום בשבוע 1=ראשון…7=שבת. on_time/off_time HH:MM; מותר צד אחד בלבד. "מחר בשמונה" = timed, "כל יום בשמונה" / "בכל שבת" = recurring.
+- delete_schedule: מחיקת תזמון קיים. אין לפניך רשימת תזמונים: ציין relay_id, ואם נאמרו גם time (HH:MM), on_day (1–7), action (on = ההדלקה, off = הכיבוי) ו-plan_key; המערכת תאתר את השורות. "תמחק את כל התזמונים של הדוד" = relay_id בלבד.
+- plan_toggle: עצירה/הפעלה של תוכנית בלי למחוק. plan_key מרשימת התוכניות לפי שם או ממסרים; action off = "עצור/תפסיק/השבת/בטל זמנית/כבה את התוכנית", on = "הפעל/תתחיל/החזר/הדלק את התוכנית". המילים תוכנית/תזמונים = plan_toggle; "כבה את הסלון" בלי "תוכנית" = immediate. "עצור את כל התוכניות" = plan_toggle לכל תוכנית. תוכנית שכבר במצב המבוקש: החזר אותה בכל זאת.
+
+כללים:
+- relay_id רק מרשימת הממסרים; התאם לפי שם גם בניסוח חלקי.
+- שעה עמומה: הפירוש הסביר בבית. "בשלוש" לפלטה/דוד לשבת = 15:00; "בשמונה" בערב שישי = 20:00. 00:00–05:00 רק כשנאמר במפורש לילה/לפנות בוקר.
+- משפט מורכב = כמה פעולות, אחת לכל חלק. "תדליק את הדוד מעכשיו עד שמונה" = immediate on + timed off 20:00; "כל שישי תדליק את הפלטה בארבע ותכבה במוצאי שבת בעשר" = recurring אחד עם שני צדדים.
+- הבנת רק חלק: החזר את מה שהבנת עם understood=true, וב-clarification ציין בקצרה ובלי לשאול מה לא הובן או לא נמצא (למשל: שים לב, לא מצאתי ממסר בשם דוד). הכל הובן: clarification null.
+- המשתמש מאשר כל פעולה לפני ביצוע, לכן ניחוש סביר עדיף על שאלה. לעולם אל תשאל "האם התכוונת".
+- understood=false רק בלי שום פירוש סביר, ואז clarification חובה (לעולם לא null): מה כן נקלט, הממסר הקרוב ביותר למה שנשמע, ודוגמת ניסוח מלאה עם ממסר אמיתי (אפשר לומר, הדלק את הדוד בשש בערב). המשפט יוקרא בטלפון והמערכת תקשיב שוב מיד.
+- clarification נקרא בקול: בלי סימני שאלה, גרשיים, נקודתיים ונקודות (פסיקים במקום).
+- כתוב רק את השדות הרלוונטיים לסוג הפעולה; השמט את השאר.`;
 
 // Three blocks, from the most stable to the most volatile, because a cache
 // breakpoint covers everything BEFORE it and one changed byte invalidates all
@@ -168,6 +178,75 @@ ${planList}`;
     { type: 'text', text: userData, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: volatile },
   ];
+}
+
+// ── Rules before the model ─────────────────────────────────────────────
+// A plain immediate order — one on/off verb, every relay named in FULL, and
+// nothing else but filler — is answered without a model call. Conservative on
+// purpose: a time word, a number, a plan word, two kinds of verb, a partial or
+// garbled relay name, or any unexplained word sends the text to the model. The
+// confirm step still guards the result like every other interpretation.
+const ON_VERBS = /^(תדליק|תדליקי|תדליקו|הדלק|הדליקו|להדליק|דלק)$/;
+const OFF_VERBS = /^(תכבה|תכבי|תכבו|כבה|כבו|לכבות)$/;
+const FILLER = /^(את|מיד|מידי|מיידי|מיידית|עכשיו|בבקשה|תודה|רק|גם|נא|אנא|לי|לנו|ו|בבית|בחדר)$/;
+// Words the rules never handle: times, numbers, plans, schedules, days.
+const NOT_SIMPLE = /\d|בשעה|בעוד|מחר|היום|בערב|בבוקר|בצהריים|בלילה|כל |שבת|שישי|ראשון|שני|שלישי|רביעי|חמישי|תוכנית|תזמון|מחק|תמחק|עצור|תפסיק|הפעל|שעה|שעות|דקות|דקה|חצי|רבע|אחת|שתיים|שלוש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|עד /;
+const PREFIX = /^(כשה|וה|שה|ול|ומ|וב|ו|ש|כ|ב|ל|מ|ה)/; // longest first: "והסלון" → "סלון"
+const tokens = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
+// Does the word, with or without a one-letter Hebrew prefix, equal the target?
+const wordIs = (w, target) => w === target || (PREFIX.test(w) && PREFIX.exec(w)[0].length < w.length && w.replace(PREFIX, '') === target);
+
+export function ruleInterpret(text, relays) {
+  const raw = String(text || '').trim();
+  if (!raw || NOT_SIMPLE.test(raw)) return null;
+  const words = tokens(raw);
+  if (!words.length) return null;
+  const used = new Array(words.length).fill(false);
+  let action = null;
+  words.forEach((w, i) => {
+    const bare = w.replace(PREFIX, '');
+    const on = ON_VERBS.test(w) || ON_VERBS.test(bare);
+    const off = OFF_VERBS.test(w) || OFF_VERBS.test(bare);
+    if (!on && !off) return;
+    const a = on ? 'on' : 'off';
+    if (action && action !== a) action = 'mixed';
+    else action = action || a;
+    used[i] = true;
+  });
+  if (action !== 'on' && action !== 'off') return null;
+  // Two relays with one name (across devices) cannot be told apart here — the
+  // read-back names the relay only. The model at least sees the device names.
+  const nameCount = new Map();
+  for (const r of relays) { const k = tokens(r.name).join(' '); nameCount.set(k, (nameCount.get(k) || 0) + 1); }
+  // Longest relay names first so "תאורה חוץ" is not eaten by a relay named
+  // "תאורה"; and an EXACT word match before one reached by stripping a prefix
+  // letter, so "מאור" is the relay מאור and not the relay אור with a מ in front.
+  const spans = [];
+  const byLength = [...relays].sort((a, b) => tokens(b.name).length - tokens(a.name).length);
+  for (const exact of [true, false]) {
+    for (const r of byLength) {
+      if (spans.some((s) => s.relay === r)) continue;
+      const name = tokens(r.name);
+      if (!name.length) continue;
+      const hit = (w, n) => (exact ? w === n : wordIs(w, n));
+      for (let i = 0; i + name.length <= words.length; i++) {
+        if (used.slice(i, i + name.length).some(Boolean)) continue;
+        if (name.every((n, k) => hit(words[i + k], n))) {
+          if (nameCount.get(name.join(' ')) > 1) return null; // ambiguous name → the model
+          spans.push({ relay: r, at: i });
+          for (let k = 0; k < name.length; k++) used[i + k] = true;
+          break; // one mention per relay is enough
+        }
+      }
+    }
+  }
+  if (!spans.length) return null;
+  // An unexplained word → the model ("ואת" counts as filler like "את").
+  if (words.some((w, i) => !used[i] && !FILLER.test(w) && !FILLER.test(w.replace(PREFIX, '')))) return null;
+  return spans.sort((a, b) => a.at - b.at).map(({ relay }) => ({
+    relay_id: relay.id, relay_name: relay.name, kind: 'immediate', action, time: null, day: null,
+    summary: `${action === 'on' ? 'הדלקה' : 'כיבוי'} מיידי של "${relay.name}"`,
+  }));
 }
 
 // delete_schedule without a schedule list in the prompt: the model names the
@@ -240,19 +319,30 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
   // few hundred chars, so the guard only needs to stop runaway garbage.
   if (clean.length > 1000) throw errors.validation('הטקסט ארוך מדי');
 
-  // Both lookups feed the prompt — run them together so the caller waits one
-  // DB round-trip, not two, before the model call.
-  const [relays, schedules] = await Promise.all([
-    query(
-      `SELECT r.id, r.name, r.current_state, d.name AS device_name, d.timezone
-         FROM relays r JOIN devices d ON d.id = r.device_id
-        WHERE r.user_id = ? AND r.is_enabled = TRUE AND r.deleted_at IS NULL AND d.is_enabled = TRUE
-        ORDER BY r.sort_order, r.id`,
-      [userId],
-    ),
-    listSchedules({ userId }),
-  ]);
+  const relays = await query(
+    `SELECT r.id, r.name, r.current_state, d.name AS device_name, d.timezone
+       FROM relays r JOIN devices d ON d.id = r.device_id
+      WHERE r.user_id = ? AND r.is_enabled = TRUE AND r.deleted_at IS NULL AND d.is_enabled = TRUE
+      ORDER BY r.sort_order, r.id`,
+    [userId],
+  );
   if (relays.length === 0) throw errors.validation('אין ממסרים פעילים לחשבון זה');
+
+  // Half of all real commands are a plain "turn X on/off" naming a relay in
+  // full. Those need no model: answered here at once and at no cost, logged
+  // as model 'rules' so the costs page shows the ₪0. Anything the rules do not
+  // fully explain goes to the model exactly as before.
+  const ruled = ruleInterpret(clean, relays);
+  if (ruled) {
+    const tz0 = relays[0].timezone || 'Asia/Jerusalem';
+    logUsage({ userId, phone, source, text: clean, model: 'rules', usage: { input_tokens: 0, output_tokens: 0 } })
+      .catch((e) => console.error('nlu_usage log failed:', e.message));
+    return { understood: true, clarification: null, actions: ruled, tz: tz0 };
+  }
+
+  // Only the model path needs the schedules (plans in the prompt, deletion
+  // matching) — hundreds of rows on a busy account, not fetched for a rules answer.
+  const schedules = await listSchedules({ userId });
 
   const plans = groupPlans(schedules);
   const tz = relays[0].timezone || 'Asia/Jerusalem';
@@ -263,10 +353,11 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
     model: env.anthropic.model,
     // Compound orders return several actions — 1024 could truncate the JSON mid-array.
     max_tokens: 2048,
-    // Thinking off: the caller is waiting on a live phone line, and with it on
-    // (Sonnet 5 default) thinking tokens can eat the budget before the JSON.
-    thinking: { type: 'disabled' },
-    output_config: { format: { type: 'json_schema', schema: SCHEMA } },
+    // Thinking off (or the lowest effort where it cannot be switched off): the
+    // caller is waiting on a live phone line, and thinking tokens could eat the
+    // budget before the JSON. quickAnswerParams knows each model's switch.
+    ...quickAnswerParams(env.anthropic.model),
+    output_config: { ...(quickAnswerParams(env.anthropic.model).output_config || {}), format: { type: 'json_schema', schema: SCHEMA } },
     system: buildSystemPrompt(relays, plans, tz, nowParts, prevText),
     messages: [{ role: 'user', content: clean }],
   };

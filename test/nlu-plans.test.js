@@ -1,7 +1,45 @@
 import './helpers/env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groupPlans, buildSystemPrompt, resolveDeleteTargets, pickDeleteTargets, DELETE_FANOUT_MAX } from '../src/services/nlu.js';
+import { groupPlans, buildSystemPrompt, resolveDeleteTargets, pickDeleteTargets, DELETE_FANOUT_MAX, ruleInterpret } from '../src/services/nlu.js';
+
+const RELAYS = [
+  { id: 1, name: 'סלון' }, { id: 2, name: 'תאורה' }, { id: 3, name: 'תאורה חוץ' }, { id: 4, name: 'דוד' },
+  { id: 5, name: 'תאורה עזרת נשים' }, { id: 6, name: 'מזגן 1' },
+];
+const ruled = (t) => ruleInterpret(t, RELAYS)?.map((a) => `${a.action}:${a.relay_name}`) ?? null;
+
+test('ruleInterpret: a plain on/off naming a relay in full is answered without a model', () => {
+  assert.deepEqual(ruled('לכבות תאורה חוץ מידי'), ['off:תאורה חוץ']);          // real transcript
+  assert.deepEqual(ruled('כבה את הסלון'), ['off:סלון']);                        // ה prefix
+  assert.deepEqual(ruled('תדליק את הדוד ואת הסלון בבקשה'), ['on:דוד', 'on:סלון']); // two relays, one verb
+  assert.deepEqual(ruled('תדליק תאורה'), ['on:תאורה']);                         // the short name alone
+  assert.deepEqual(ruled('להדליק את תאורה עזרת נשים, תודה'), ['on:תאורה עזרת נשים']);
+});
+
+test('ruleInterpret: anything the rules cannot fully explain goes to the model', () => {
+  assert.equal(ruled('תחרות תאורה חוץ'), null);                                 // garbled verb
+  assert.equal(ruled('להדליק מיידי את עזרת נשים'), null);                        // partial relay name
+  assert.equal(ruled('לכבות בית-המדרש תאורה ופרוזדור תאורה מידי תודה'), null);   // unexplained words
+  assert.equal(ruled('תדליק את הדוד בשש'), null);                               // a time word
+  assert.equal(ruled('תדליק את הדוד בעוד עשר דקות'), null);
+  assert.equal(ruled('תדליק את הדוד ותכבה את הסלון'), null);                    // two verbs
+  assert.equal(ruled('עצור את התוכנית של הסלון'), null);                        // a plan
+  assert.equal(ruled('תדליק מזגן 1'), null);                                    // a digit
+  assert.equal(ruled('מה המצב'), null);                                         // no verb
+  assert.equal(ruled(''), null);
+});
+
+test('ruleInterpret: an exact name beats a prefix-stripped one; a name shared by two relays goes to the model', () => {
+  const r = (t, relays) => ruleInterpret(t, relays)?.map((a) => `${a.action}:${a.relay_id}`) ?? null;
+  for (const order of [[{ id: 1, name: 'אור' }, { id: 2, name: 'מאור' }], [{ id: 2, name: 'מאור' }, { id: 1, name: 'אור' }]]) {
+    assert.deepEqual(r('תדליק מאור', order), ['on:2']);   // whatever the relay order
+    assert.deepEqual(r('תדליק את האור', order), ['on:1']);
+  }
+  const twins = [{ id: 7, name: 'מזגן' }, { id: 8, name: 'מזגן' }, { id: 9, name: 'דוד' }];
+  assert.equal(r('תכבה את המזגן', twins), null);
+  assert.deepEqual(r('תכבה את הדוד', twins), ['off:9']);
+});
 
 // listSchedules-shaped rows: a two-member named plan, and one standalone row.
 const row = (over = {}) => ({
