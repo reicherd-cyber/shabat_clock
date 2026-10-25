@@ -74,22 +74,23 @@ export async function createRequest({ userId, identity }) {
     sendEmail({
       to: owner.email,
       subject: 'TelTech — בקשת צפייה בחשבון לדוגמה',
-      text: `שלום ${owner.full_name || ''},\n\n${identity} ביקש/ה לצפות בחשבון שלך כחשבון לדוגמה (צפייה בלבד — בלי אפשרות לשנות או להפעיל דבר).\n\nלאישור או דחייה: האתר → הגדרות → בקשות צפייה.\n\nTelTech`,
+      text: `שלום ${owner.full_name || ''},\n\n${identity} ביקש/ה גישה לחשבון שלך כחשבון לדוגמה.\n\nלאישור (גישה מלאה, או צפייה בלבד אם תסמן) או דחייה: האתר → הגדרות → בקשות גישה.\n\nTelTech`,
       kind: 'other', userId: target, ref: `access_request:${r.insertId}`,
     }).catch(() => {});
   }
   return { id: Number(r.insertId), status: 'pending', existed: false };
 }
 
-// The owner's decision. Approve = a read_only invitation for the requester's
-// address (an address that already has full access keeps it). Both ways the
-// requester is told by email.
-export async function decideRequest({ id, ownerId, approve, actor = null }) {
+// The owner's decision. Approve = an invitation for the requester's address,
+// FULL access like any address the owner adds (user decision 2026-10-25),
+// unless the owner ticks "צפייה בלבד" (readOnly). An address already on the
+// account keeps what it has. Both ways the requester is told by email.
+export async function decideRequest({ id, ownerId, approve, readOnly = false, actor = null }) {
   const [row] = await query("SELECT * FROM access_requests WHERE id = ? AND status = 'new'", [id]);
   if (!row || Number(row.target_user_id) !== Number(ownerId)) throw errors.notFound();
   if (approve) {
     try {
-      await addUserEmail({ userId: ownerId, email: row.requester_email, actor, readOnly: true });
+      await addUserEmail({ userId: ownerId, email: row.requester_email, actor, readOnly: Boolean(readOnly) });
     } catch (e) {
       if (e?.code !== 'CONFLICT') throw e; // already on the account — nothing to add
     }
@@ -103,8 +104,8 @@ export async function decideRequest({ id, ownerId, approve, actor = null }) {
     to: row.requester_email,
     subject: approve ? 'TelTech — אושרה צפייה בחשבון לדוגמה' : 'TelTech — בקשת הצפייה לא אושרה',
     text: approve
-      ? 'הבקשה אושרה. היכנסו לאתר kosher-teltech.com ובחרו את החשבון לדוגמה בתפריט החשבונות שבראש הדף. זו צפייה בלבד — אי אפשר לשנות או להפעיל דבר.\n\nTelTech'
-      : 'בעל החשבון לא אישר את הבקשה לצפייה הפעם.\n\nTelTech',
+      ? `הבקשה אושרה. היכנסו לאתר kosher-teltech.com ובחרו את החשבון לדוגמה בתפריט החשבונות שבראש הדף.${readOnly ? ' זו צפייה בלבד — אי אפשר לשנות או להפעיל דבר.' : ''}\n\nTelTech`
+      : 'בעל החשבון לא אישר את הבקשה הפעם.\n\nTelTech',
     kind: 'other', userId: row.requester_user_id, ref: `access_request:${id}`,
   }).catch(() => {});
   return { status: approve ? 'approved' : 'declined' };

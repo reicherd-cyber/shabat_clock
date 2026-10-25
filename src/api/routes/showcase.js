@@ -32,6 +32,9 @@ showcaseRouter.post('/showcase/requests/:id/:decision', async (req, res, next) =
     if (req.auth.imp) throw errors.forbidden('לא במצב התחזות');
     const approve = req.params.decision === 'approve';
     if (!approve && req.params.decision !== 'decline') throw errors.notFound();
-    res.json(await decideRequest({ id: Number(req.params.id), ownerId: req.auth.userId, approve, actor: `user:${req.auth.userId}` }));
+    res.json(await decideRequest({
+      id: Number(req.params.id), ownerId: req.auth.userId, approve,
+      readOnly: req.body?.read_only === true, actor: `user:${req.auth.userId}`,
+    }));
   } catch (e) { next(e); }
 });
