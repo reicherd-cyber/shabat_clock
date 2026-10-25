@@ -81,6 +81,23 @@ export async function createRequest({ userId, identity }) {
   return { id: Number(r.insertId), status: 'pending', existed: false };
 }
 
+// The owner changes an invited address's level at any time: full access or
+// read-only. Never the primary (it is the owner), never an address that is not
+// on this account. The read-only cache is dropped so the change bites at once.
+export async function setMemberLevel({ ownerId, emailId, readOnly, actor = null }) {
+  const [row] = await query(
+    'SELECT id, email, is_primary FROM user_emails WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
+    [emailId, ownerId],
+  );
+  if (!row) throw errors.notFound();
+  if (row.is_primary) throw errors.conflict('CONFLICT', 'הכתובת הראשית היא בעל החשבון');
+  await query('UPDATE user_emails SET read_only = ?, updated_by = ? WHERE id = ?', [readOnly ? 1 : 0, actor, row.id]);
+  const { forgetReadOnly } = await import('../api/readOnly.js');
+  forgetReadOnly(ownerId, row.email);
+  await logAction({ type: 'user', id: ownerId }, 'update', 'user_email', row.id, { after: { email: row.email, read_only: Boolean(readOnly) } }).catch(() => {});
+  return { id: Number(row.id), email: row.email, read_only: Boolean(readOnly) };
+}
+
 // The owner's decision. Approve = an invitation for the requester's address,
 // FULL access like any address the owner adds (user decision 2026-10-25),
 // unless the owner ticks "צפייה בלבד" (readOnly). An address already on the

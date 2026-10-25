@@ -195,7 +195,16 @@ export default function Settings() {
                 </>
               ) : (
                 <>
-                  <Badge>{em.read_only ? 'צפייה בלבד' : 'גישה לחשבון'}</Badge>
+                  {/* The owner picks the level of every invited address (showcase, 2026-10-25) */}
+                  <select value={em.read_only ? 'ro' : 'full'} disabled={busy} title="רמת הגישה של הכתובת לחשבון"
+                    className="border border-line rounded-[10px] px-2 py-1 bg-surface text-xs text-ink cursor-pointer"
+                    onChange={async (e) => {
+                      setError(null);
+                      try { await api.patch(`/me/emails/${em.id}/level`, { read_only: e.target.value === 'ro' }); await refresh(); } catch (err) { setError(err); }
+                    }}>
+                    <option value="full">שליטה מלאה</option>
+                    <option value="ro">צפייה בלבד</option>
+                  </select>
                   <button disabled={busy} title="הסרת הכתובת — בעליה לא יוכל יותר להיכנס לחשבון הזה"
                     className={`ms-auto text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
                     onClick={() => setRemovingEmail(em)}><Trash2 size={15} /></button>

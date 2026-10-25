@@ -5,7 +5,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { requireUser } from '../middleware.js';
 import { errors } from '../../config/errors.js';
-import { showcaseState, createRequest, decideRequest } from '../../services/showcase.js';
+import { showcaseState, createRequest, decideRequest, setMemberLevel } from '../../services/showcase.js';
 
 export const showcaseRouter = Router();
 showcaseRouter.use(requireUser);
@@ -23,6 +23,17 @@ showcaseRouter.post('/showcase/request', requestLimiter, async (req, res, next) 
   try {
     if (req.auth.imp) throw errors.forbidden('לא במצב התחזות');
     res.json(await createRequest({ userId: req.auth.userId, identity: identityOf(req) }));
+  } catch (e) { next(e); }
+});
+
+// The owner sets an invited address's level: { read_only: true|false }.
+showcaseRouter.patch('/me/emails/:id/level', async (req, res, next) => {
+  try {
+    if (req.auth.imp) throw errors.forbidden('לא במצב התחזות');
+    res.json(await setMemberLevel({
+      ownerId: req.auth.userId, emailId: Number(req.params.id),
+      readOnly: req.body?.read_only === true, actor: `user:${req.auth.userId}`,
+    }));
   } catch (e) { next(e); }
 });
 

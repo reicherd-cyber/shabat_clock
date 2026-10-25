@@ -99,10 +99,18 @@ export function ShowcaseRequests() {
                 : <>לדחות את הבקשה של <b dir="ltr">{deciding.row.requester_email}</b>? המבקש יקבל הודעה במייל.</>}
             </p>
             {deciding.approve && (
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />
-                צפייה בלבד — בלי אפשרות לשנות או להפעיל דבר
-              </label>
+              <div className="space-y-1.5 border border-line rounded-xl p-3">
+                <div className="text-sm font-semibold">איזו רמת גישה לתת?</div>
+                <label className="flex items-start gap-2 text-sm cursor-pointer">
+                  <input type="radio" name="level" className="mt-1" checked={!readOnly} onChange={() => setReadOnly(false)} />
+                  <span><b>שליטה מלאה</b> — כמו בעל החשבון: הדלקה וכיבוי, עריכת תוכניות והגדרות.</span>
+                </label>
+                <label className="flex items-start gap-2 text-sm cursor-pointer">
+                  <input type="radio" name="level" className="mt-1" checked={readOnly} onChange={() => setReadOnly(true)} />
+                  <span><b>צפייה בלבד</b> — רואה תוכניות, לוח ומצב ערוצים; לא יכול לשנות או להפעיל דבר.</span>
+                </label>
+                <p className="text-xs text-muted">אפשר לשנות את הרמה בכל עת ברשימת כתובות האימייל.</p>
+              </div>
             )}
             <ErrorNote error={error} />
             <div className="flex gap-2">
