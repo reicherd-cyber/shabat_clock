@@ -54,8 +54,13 @@ export async function readOnlyGuard(req, res, next) {
     if (d === 'block_write') throw new ApiError(403, 'READ_ONLY', 'תצוגה בלבד — בחשבון לדוגמה אי אפשר לשנות או להפעיל דבר');
     if (d === 'block_read') throw new ApiError(403, 'READ_ONLY', 'המידע הזה אינו זמין בתצוגה בלבד');
     if (req.method === 'GET' && req.path === '/me') {
+      // No addresses, no phones, and no phone-login code (ivr_code + PIN = control by phone).
       const json = res.json.bind(res);
-      res.json = (body) => json(body && typeof body === 'object' ? { ...body, phones: [], emails: [], read_only: true } : body);
+      res.json = (body) => {
+        if (!body || typeof body !== 'object') return json(body);
+        const { ivr_code, require_pin, ...user } = body.user || {};
+        return json({ ...body, user, phones: [], emails: [], read_only: true });
+      };
     }
     next();
   } catch (e) { next(e); }

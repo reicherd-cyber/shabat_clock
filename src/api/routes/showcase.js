@@ -31,7 +31,7 @@ showcaseRouter.patch('/me/emails/:id/level', async (req, res, next) => {
   try {
     if (req.auth.imp) throw errors.forbidden('לא במצב התחזות');
     res.json(await setMemberLevel({
-      ownerId: req.auth.userId, emailId: Number(req.params.id),
+      ownerId: req.auth.userId, identity: identityOf(req), emailId: Number(req.params.id),
       readOnly: req.body?.read_only === true, actor: `user:${req.auth.userId}`,
     }));
   } catch (e) { next(e); }
@@ -44,7 +44,7 @@ showcaseRouter.post('/showcase/requests/:id/:decision', async (req, res, next) =
     const approve = req.params.decision === 'approve';
     if (!approve && req.params.decision !== 'decline') throw errors.notFound();
     res.json(await decideRequest({
-      id: Number(req.params.id), ownerId: req.auth.userId, approve,
+      id: Number(req.params.id), ownerId: req.auth.userId, identity: identityOf(req), approve,
       readOnly: req.body?.read_only === true, actor: `user:${req.auth.userId}`,
     }));
   } catch (e) { next(e); }

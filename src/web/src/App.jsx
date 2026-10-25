@@ -75,6 +75,10 @@ function UserLayout() {
   const nav = useNavigate();
   const [name, setName] = useState('');
   const [demo, setDemo] = useState(false);
+  // A read-only (showcase) session: the server refuses היסטוריה and the private
+  // parts of הגדרות, so those tabs are not offered at all.
+  const [readOnly, setReadOnly] = useState(false);
+  const tabs = readOnly ? TABS.filter((t) => t.to !== '/history' && t.to !== '/settings') : TABS;
   // Shared accounts: every account this login's address may enter (own first).
   // More than one → the name in the header becomes a select box.
   const [accounts, setAccounts] = useState([]);
@@ -83,6 +87,7 @@ function UserLayout() {
   useEffect(() => {
     if (tokens.user) api.get('/me').then((r) => {
       setName(r.user.full_name); setDemo(Boolean(r.demo)); setAccounts(r.accounts || []); setMe(Number(r.user.id));
+      setReadOnly(Boolean(r.read_only));
       setIdentity(r.identity_email || null);
     }).catch(() => {});
   }, []);
@@ -152,7 +157,7 @@ function UserLayout() {
           <Wordmark size={21} tagline />
         </div>
         <nav className="hidden md:flex gap-1 items-center">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <NavLink key={t.to} to={t.to} end={t.end} className={deskCls}>
               <span className="flex items-center gap-1.5"><t.Icon size={15} strokeWidth={2} />{t.label}</span>
             </NavLink>
@@ -191,7 +196,7 @@ function UserLayout() {
         <Outlet />
       </main>
       <nav className="fixed bottom-0 inset-x-0 z-20 flex bg-surface border-t border-line px-2.5 pt-2 pb-[calc(8px+env(safe-area-inset-bottom))] md:hidden">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <NavLink key={t.to} to={t.to} end={t.end} className={tabCls}>
             <t.Icon size={20} strokeWidth={1.9} className="mx-auto mb-0.5" />{t.label}
           </NavLink>

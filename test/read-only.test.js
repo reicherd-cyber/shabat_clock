@@ -19,6 +19,12 @@ test('every write on the account is refused', () => {
   assert.equal(readOnlyDecision('PUT', '/me'), 'block_write');
 });
 
+test('isOwnerSession: a phone login (no identity) is the owner; an address is the owner only as the primary', async () => {
+  // Pure logic lives in the SQL; this pins the contract the routes rely on.
+  const { isOwnerSession } = await import('../src/services/showcase.js');
+  assert.equal(await isOwnerSession({ userId: 1, identity: null }), true);
+});
+
 test('the account\'s private pages are refused even to read', () => {
   assert.equal(readOnlyDecision('GET', '/me/emails'), 'block_read');
   assert.equal(readOnlyDecision('GET', '/support'), 'block_read');

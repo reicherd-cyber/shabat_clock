@@ -26,6 +26,19 @@ export async function hasRealDevice(userId) {
   return rows.length > 0;
 }
 
+// Owner-level decisions (approving visitors, setting levels) belong to the
+// account's owner: the session's identity is the account's primary address —
+// or the session has no identity at all, which is a phone login, and only the
+// owner can log in by phone (invited addresses enter with an identity).
+export async function isOwnerSession({ userId, identity }) {
+  if (!identity) return true;
+  const [row] = await query(
+    'SELECT 1 AS ok FROM user_emails WHERE user_id = ? AND email = ? AND is_primary = 1 AND deleted_at IS NULL LIMIT 1',
+    [userId, identity],
+  );
+  return Boolean(row);
+}
+
 // What the panel shows this session: can it ask, has it asked, is it already
 // in, is it the owner (then: the pending requests), is this session read-only.
 export async function showcaseState({ userId, identity, readOnly = false }) {
@@ -36,10 +49,14 @@ export async function showcaseState({ userId, identity, readOnly = false }) {
   if (!t) return out;
   out.target = { id: Number(t.id), full_name: t.full_name };
   if (Number(userId) === Number(t.id)) {
-    out.requests = await query(
-      "SELECT id, requester_user_id, requester_email, created_at FROM access_requests WHERE target_user_id = ? AND status = 'new' ORDER BY id",
-      [target],
-    );
+    // Only the owner sees (and decides) the requests — not an invited address
+    // that switched into the account.
+    if (await isOwnerSession({ userId, identity })) {
+      out.requests = await query(
+        "SELECT id, requester_user_id, requester_email, created_at FROM access_requests WHERE target_user_id = ? AND status = 'new' ORDER BY id",
+        [target],
+      );
+    }
     return out;
   }
   const [member] = identity
@@ -84,7 +101,8 @@ export async function createRequest({ userId, identity }) {
 // The owner changes an invited address's level at any time: full access or
 // read-only. Never the primary (it is the owner), never an address that is not
 // on this account. The read-only cache is dropped so the change bites at once.
-export async function setMemberLevel({ ownerId, emailId, readOnly, actor = null }) {
+export async function setMemberLevel({ ownerId, identity, emailId, readOnly, actor = null }) {
+  if (!(await isOwnerSession({ userId: ownerId, identity }))) throw errors.forbidden('רק בעל החשבון יכול לשנות רמות גישה');
   const [row] = await query(
     'SELECT id, email, is_primary FROM user_emails WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
     [emailId, ownerId],
@@ -102,7 +120,8 @@ export async function setMemberLevel({ ownerId, emailId, readOnly, actor = null 
 // FULL access like any address the owner adds (user decision 2026-10-25),
 // unless the owner ticks "צפייה בלבד" (readOnly). An address already on the
 // account keeps what it has. Both ways the requester is told by email.
-export async function decideRequest({ id, ownerId, approve, readOnly = false, actor = null }) {
+export async function decideRequest({ id, ownerId, identity, approve, readOnly = false, actor = null }) {
+  if (!(await isOwnerSession({ userId: ownerId, identity }))) throw errors.forbidden('רק בעל החשבון יכול לאשר בקשות גישה');
   const [row] = await query("SELECT * FROM access_requests WHERE id = ? AND status = 'new'", [id]);
   if (!row || Number(row.target_user_id) !== Number(ownerId)) throw errors.notFound();
   if (approve) {
