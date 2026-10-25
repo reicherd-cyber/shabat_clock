@@ -31,14 +31,32 @@ export async function readOnlyMembership(userId, email) {
 export const forgetReadOnly = (userId, email) => cache.delete(`${userId}|${email}`);
 
 const ALLOWED_WRITES = new Set(['/me/switch']);
-const HIDDEN_READS = [/^\/me\/emails/, /^\/support(\/|$)/, /^\/devices\/\d+\/(wifi|inspect)/, /^\/history(\/|$)/];
+// Everything under /me/ (addresses, phones, preferences…), support threads,
+// device Wi-Fi / inspection and the history are the owner's business.
+const HIDDEN_READS = [/^\/me\/./, /^\/support(\/|$)/, /^\/devices\/\d+\/(wifi|inspect)/, /^\/history(\/|$)/];
+
+// Express matches routes case-insensitively and with or without a trailing
+// slash, so the decision must see the same path the router will: lower-case,
+// single slashes, no trailing slash.
+export const normalizePath = (p) => (String(p || '').toLowerCase().replace(/\/{2,}/g, '/').replace(/\/+$/, '') || '/');
 
 // Pure: what a read-only session may do with this request.
-export function readOnlyDecision(method, path) {
+export function readOnlyDecision(method, rawPath) {
+  const path = normalizePath(rawPath);
   if (path.startsWith('/auth/')) return 'allow';
   if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') return ALLOWED_WRITES.has(path) ? 'allow' : 'block_write';
   if (HIDDEN_READS.some((r) => r.test(path))) return 'block_read';
   return 'allow';
+}
+
+// The /me payload a read-only session may see: the account's name and
+// preferences, none of its contact details or phone-login data.
+const PRIVATE_USER_FIELDS = ['email', 'ivr_code', 'require_pin', 'phone', 'max_devices', 'totp_enabled'];
+export function sanitizeMe(body) {
+  if (!body || typeof body !== 'object') return body;
+  const user = { ...(body.user || {}) };
+  for (const k of PRIVATE_USER_FIELDS) delete user[k];
+  return { ...body, user, phones: [], emails: [], read_only: true };
 }
 
 export async function readOnlyGuard(req, res, next) {
@@ -50,17 +68,13 @@ export async function readOnlyGuard(req, res, next) {
     if (t.role !== 'user' || !t.em || t.imp) return next();
     if (!(await readOnlyMembership(Number(t.sub), String(t.em)))) return next();
     req.readOnly = true;
-    const d = readOnlyDecision(req.method, req.path);
+    const path = normalizePath(req.path);
+    const d = readOnlyDecision(req.method, path);
     if (d === 'block_write') throw new ApiError(403, 'READ_ONLY', 'תצוגה בלבד — בחשבון לדוגמה אי אפשר לשנות או להפעיל דבר');
     if (d === 'block_read') throw new ApiError(403, 'READ_ONLY', 'המידע הזה אינו זמין בתצוגה בלבד');
-    if (req.method === 'GET' && req.path === '/me') {
-      // No addresses, no phones, and no phone-login code (ivr_code + PIN = control by phone).
+    if (req.method === 'GET' && path === '/me') {
       const json = res.json.bind(res);
-      res.json = (body) => {
-        if (!body || typeof body !== 'object') return json(body);
-        const { ivr_code, require_pin, ...user } = body.user || {};
-        return json({ ...body, user, phones: [], emails: [], read_only: true });
-      };
+      res.json = (body) => json(sanitizeMe(body));
     }
     next();
   } catch (e) { next(e); }
