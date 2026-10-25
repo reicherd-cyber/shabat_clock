@@ -76,7 +76,7 @@ function asConflict(e) {
 
 export async function listUserEmails(userId) {
   return query(
-    'SELECT id, email, is_primary FROM user_emails WHERE user_id = ? AND deleted_at IS NULL ORDER BY is_primary DESC, id',
+    'SELECT id, email, is_primary, read_only FROM user_emails WHERE user_id = ? AND deleted_at IS NULL ORDER BY is_primary DESC, id',
     [userId],
   );
 }
@@ -88,13 +88,15 @@ export async function accountsForEmail(email) {
   const clean = normalizeEmail(email);
   if (!clean) return [];
   const rows = await query(
-    `SELECT u.id, u.full_name, e.is_primary AS is_home FROM user_emails e
+    `SELECT u.id, u.full_name, e.is_primary AS is_home, e.read_only FROM user_emails e
      JOIN users u ON u.id = e.user_id
      WHERE e.email = ? AND e.deleted_at IS NULL AND u.status = 'active'
      ORDER BY e.is_primary DESC, u.id`,
     [clean],
   );
-  return rows.map((r) => ({ id: Number(r.id), full_name: r.full_name, is_home: !!r.is_home }));
+  // read_only: a showcase invitation — the panel labels it "(צפייה)" and the
+  // server (api/readOnly.js) refuses every write from such a session.
+  return rows.map((r) => ({ id: Number(r.id), full_name: r.full_name, is_home: !!r.is_home, read_only: !!r.read_only }));
 }
 
 // Inside a transaction: is `email` the live primary of another account?
@@ -106,7 +108,9 @@ async function primaryTakenElsewhere(conn, email, userId) {
   return !!row;
 }
 
-export async function addUserEmail({ userId, email, actor = null }) {
+// readOnly: a showcase invitation (services/showcase.js) — the address may look
+// at the account and nothing more. The owner's own additions are full access.
+export async function addUserEmail({ userId, email, actor = null, readOnly = false }) {
   const clean = normalizeEmail(email);
   if (!clean) throw errors.validation('כתובת אימייל לא תקינה', { email: 'required' });
   return withTransaction(async (conn) => {
@@ -126,14 +130,14 @@ export async function addUserEmail({ userId, email, actor = null }) {
     let id;
     if (existing) { // own removed row revives
       await conn.query(
-        'UPDATE user_emails SET deleted_at = NULL, is_primary = ?, updated_by = ? WHERE id = ?',
-        [primary ? 1 : 0, actor, existing.id],
+        'UPDATE user_emails SET deleted_at = NULL, is_primary = ?, read_only = ?, updated_by = ? WHERE id = ?',
+        [primary ? 1 : 0, readOnly && !primary ? 1 : 0, actor, existing.id],
       );
       id = existing.id;
     } else {
       const [r] = await conn.query(
-        'INSERT INTO user_emails (user_id, email, is_primary, created_by) VALUES (?,?,?,?)',
-        [userId, clean, primary ? 1 : 0, actor],
+        'INSERT INTO user_emails (user_id, email, is_primary, read_only, created_by) VALUES (?,?,?,?,?)',
+        [userId, clean, primary ? 1 : 0, readOnly && !primary ? 1 : 0, actor],
       );
       id = r.insertId;
     }

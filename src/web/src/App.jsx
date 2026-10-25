@@ -10,6 +10,7 @@ const Calendar = lazy(() => import('./user/Calendar.jsx'));
 import History from './user/History.jsx';
 import Settings from './user/Settings.jsx';
 import Help from './user/Help.jsx';
+import { ReadOnlyBanner } from './user/Showcase.jsx';
 import AdminLogin from './admin/AdminLogin.jsx';
 import Users from './admin/Users.jsx';
 import Devices from './admin/Devices.jsx';
@@ -74,6 +75,10 @@ function UserLayout() {
   const nav = useNavigate();
   const [name, setName] = useState('');
   const [demo, setDemo] = useState(false);
+  // A read-only (showcase) session: the server refuses היסטוריה and the private
+  // parts of הגדרות, so those tabs are not offered at all.
+  const [readOnly, setReadOnly] = useState(false);
+  const tabs = readOnly ? TABS.filter((t) => t.to !== '/history' && t.to !== '/settings') : TABS;
   // Shared accounts: every account this login's address may enter (own first).
   // More than one → the name in the header becomes a select box.
   const [accounts, setAccounts] = useState([]);
@@ -82,6 +87,7 @@ function UserLayout() {
   useEffect(() => {
     if (tokens.user) api.get('/me').then((r) => {
       setName(r.user.full_name); setDemo(Boolean(r.demo)); setAccounts(r.accounts || []); setMe(Number(r.user.id));
+      setReadOnly(Boolean(r.read_only));
       setIdentity(r.identity_email || null);
     }).catch(() => {});
   }, []);
@@ -103,7 +109,7 @@ function UserLayout() {
       className={`border border-line rounded-[10px] px-2 py-1.5 bg-surface text-sm text-ink cursor-pointer ${cls}`}
       onChange={(e) => switchAccount(Number(e.target.value))}>
       {accounts.map((a) => (
-        <option key={a.id} value={a.id}>{a.full_name}{a.is_home ? '' : ' (גישה)'}</option>
+        <option key={a.id} value={a.id}>{a.full_name}{a.is_home ? '' : a.read_only ? ' (צפייה)' : ' (גישה)'}</option>
       ))}
     </select>
   );
@@ -143,6 +149,7 @@ function UserLayout() {
           מצב הדגמה — בחשבון שלכם מכשיר לדוגמה כדי להתנסות במערכת. כשמכשיר אמיתי יצורף לחשבון, מכשיר הדוגמה יוסר אוטומטית.
         </div>
       )}
+      {!impersonating && <ReadOnlyBanner accounts={accounts} onHome={switchAccount} />}
       <header className="flex items-center justify-between px-6 py-3.5 border-b border-line bg-bg sticky top-0 z-10">
         <div className="flex items-center gap-2 cursor-pointer select-none"
           onClick={() => nav('/')} role="button" title="לדף הבית">
@@ -150,7 +157,7 @@ function UserLayout() {
           <Wordmark size={21} tagline />
         </div>
         <nav className="hidden md:flex gap-1 items-center">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <NavLink key={t.to} to={t.to} end={t.end} className={deskCls}>
               <span className="flex items-center gap-1.5"><t.Icon size={15} strokeWidth={2} />{t.label}</span>
             </NavLink>
@@ -189,7 +196,7 @@ function UserLayout() {
         <Outlet />
       </main>
       <nav className="fixed bottom-0 inset-x-0 z-20 flex bg-surface border-t border-line px-2.5 pt-2 pb-[calc(8px+env(safe-area-inset-bottom))] md:hidden">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <NavLink key={t.to} to={t.to} end={t.end} className={tabCls}>
             <t.Icon size={20} strokeWidth={1.9} className="mx-auto mb-0.5" />{t.label}
           </NavLink>
