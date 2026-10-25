@@ -247,7 +247,7 @@ export default function Finance() {
           <Button onClick={() => setForm({ ...EMPTY_FORM, admin_id: data?.me ?? '' })}>+ הוספה</Button>
         </div>
       </div>
-      <Card flush className="overflow-x-auto">
+      <Card flush className="table-scroll">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">

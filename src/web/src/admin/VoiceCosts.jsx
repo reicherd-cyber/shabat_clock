@@ -224,13 +224,9 @@ export default function VoiceCosts() {
         </div>
       )}
 
-      {/* The table scrolls inside a viewport-high box: the sideways scrollbar is
-          always on screen (it used to sit under hundreds of rows) and the
-          header stays put while scrolling down. */}
-      <Card flush>
-        <div className="max-h-[calc(100vh-13rem)] overflow-auto">
+      <Card flush className="table-scroll">
         <table className="w-full text-sm">
-          <thead className="sticky top-0 z-10 bg-surface shadow-[0_1px_0_var(--color-line)]">
+          <thead>
             <tr className="text-right text-muted">
               <SortTh k="when" sort={sort} className="p-2!">מתי</SortTh><SortTh k="user" sort={sort} className="p-2!">משתמש</SortTh>
               <SortTh k="source" sort={sort} className="p-2!">מקור</SortTh><SortTh k="text" sort={sort} className="p-2!">הטקסט</SortTh>
@@ -258,7 +254,6 @@ export default function VoiceCosts() {
             )}
           </tbody>
         </table>
-        </div>
       </Card>
       {hasEstimates && (
         <p className="text-muted text-xs">* הערכה (‎$0.0086 ממוצע) — פקודות שבוצעו לפני שהמערכת החלה לרשום שימוש מדויק.</p>
