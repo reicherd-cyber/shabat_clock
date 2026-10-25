@@ -12,6 +12,7 @@ import { sendImmediateCommand } from '../services/commands.js';
 import { createSchedule, deleteSchedule, listSchedules, describeScheduleHe, validateScheduleRules } from '../services/schedules.js';
 import { logAction } from '../services/audit.js';
 import { startCall, setCallUser, appendPath, finishCall } from '../services/callLogs.js';
+import { query } from '../db/pool.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, createSession, endSession } from './session.js';
 import { ask, askVoice, askRecord, say, sayAndHangup } from './responses.js';
@@ -99,8 +100,21 @@ export const ivrRouter = Router();
 // The voice-order prompt — one continuous message (instruction + "לחץ סולמית
 // לסיום"), played on first listen and replayed on no-speech. The # hint is part
 // of the recording, so the TTS fallback here carries it too.
-const nluListenSpec = () => speak('ivr.nlu_listen', {},
-  'אמרו את הבקשה לאחר הצפצוף, למשל: כבה את הסלון בעוד חמש דקות. לחץ סולמית לסיום');
+// The worked example ("למשל, כבה את הסלון בעוד חמש דקות") is for a caller who
+// has never completed a voice order; once one went through (nlu_done in any
+// earlier call) they hear the short form (user request 2026-10-25). Decided
+// once per call and kept on the session so the no-speech replay matches.
+async function nluListenSpec(session) {
+  if (session.data.nluShort == null) {
+    const [row] = session.userId
+      ? await query("SELECT 1 AS seen FROM call_logs WHERE user_id = ? AND menu_path LIKE '%nlu_done%' LIMIT 1", [session.userId])
+      : [];
+    session.data.nluShort = Boolean(row);
+  }
+  return session.data.nluShort
+    ? speak('ivr.nlu_listen_short', {}, 'אמרו את הבקשה לאחר הצפצוף. לחץ סולמית לסיום')
+    : speak('ivr.nlu_listen', {}, 'אמרו את הבקשה לאחר הצפצוף, למשל: כבה את הסלון בעוד חמש דקות. לחץ סולמית לסיום');
+}
 
 async function speak(key, vars = {}, fallback = null) {
   const audio = await getSetting(key.replace(/^ivr\./, 'ivr.audio.'));
@@ -580,7 +594,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
             // recording (one continuous sentence, one voice) — no separate TTS
             // item. maxSilence 3s (one timer governs both the after-speech pause and the no-speech wait; # ends instantly): returns after ~3s and
             // we replay the same message (see the empty-nlu branch below).
-            return res.send(askVoice(await nluListenSpec(), { maxSilence: 3 }));
+            return res.send(askVoice(await nluListenSpec(session), { maxSilence: 3 }));
           }
           if (input === '2' || input === '3') {
             await appendPath(session.callLogId, input === '2' ? 'immediate_on' : 'immediate_off');
@@ -617,7 +631,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           // the user's request), up to 2 times, then fall back to the main menu.
           session.data.nluRetries = (session.data.nluRetries || 0) + 1;
           if (session.data.nluRetries <= 2) {
-            return res.send(askVoice(await nluListenSpec(), { maxSilence: 3 }));
+            return res.send(askVoice(await nluListenSpec(session), { maxSilence: 3 }));
           }
           return res.send(await mainMenu(session, await speak('ivr.nlu_giveup', {}, 'לא זוהה דיבור, חוזרים לתפריט הראשי')));
         }
