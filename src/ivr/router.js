@@ -100,14 +100,19 @@ export const ivrRouter = Router();
 // The voice-order prompt — one continuous message (instruction + "לחץ סולמית
 // לסיום"), played on first listen and replayed on no-speech. The # hint is part
 // of the recording, so the TTS fallback here carries it too.
-// The worked example ("למשל, כבה את הסלון בעוד חמש דקות") is for a caller who
-// has never completed a voice order; once one went through (nlu_done in any
-// earlier call) they hear the short form (user request 2026-10-25). Decided
-// once per call and kept on the session so the no-speech replay matches.
+// The worked example ("למשל, כבה את הסלון בעוד חמש דקות") is heard ONCE: a
+// caller who entered the voice command in any earlier call (that call's path
+// carries 'nlu') hears the short form from then on, whether or not an order
+// went through (user decision 2026-10-25). The current call already has its
+// 'nlu' step appended before the prompt plays, so it is excluded. Decided once
+// per call and kept on the session so the no-speech replay matches.
 async function nluListenSpec(session) {
   if (session.data.nluShort == null) {
     const [row] = session.userId
-      ? await query("SELECT 1 AS seen FROM call_logs WHERE user_id = ? AND menu_path LIKE '%nlu_done%' LIMIT 1", [session.userId])
+      ? await query(
+        "SELECT 1 AS seen FROM call_logs WHERE user_id = ? AND id <> ? AND menu_path LIKE '%nlu%' LIMIT 1",
+        [session.userId, session.callLogId ?? 0],
+      )
       : [];
     session.data.nluShort = Boolean(row);
   }
