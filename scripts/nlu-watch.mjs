@@ -51,6 +51,9 @@ async function stats(from, to) {
   return {
     rows,
     calls: n,
+    // Counted directly: done AND no retry in that call (not "done minus retried",
+    // which also subtracted retries that never succeeded).
+    first_try_rate: n ? sum((r) => (r.done && !r.fails ? 1 : 0)) / n : null,
     done_rate: n ? sum((r) => (r.done ? 1 : 0)) / n : null,
     retry_rate: n ? sum((r) => (r.fails ? 1 : 0)) / n : null,
     gave_up: sum((r) => (r.verdict.startsWith('gave up') ? 1 : 0)),
@@ -71,7 +74,7 @@ for (const r of now.rows) {
   for (const u of r.said) console.log(`   "${u.text}"  → ${u.model === 'rules' ? 'rules ₪0' : `${u.model} $${Number(u.cost_usd).toFixed(4)}`}`);
 }
 console.log('\n                 since release   30-day baseline');
-console.log(`done on first try  ${pct(now.done_rate && now.done_rate - (now.retry_rate || 0))}            ${pct(base.done_rate - base.retry_rate)}`);
+console.log(`done on first try  ${pct(now.first_try_rate)}            ${pct(base.first_try_rate)}`);
 console.log(`done (any)         ${pct(now.done_rate)}            ${pct(base.done_rate)}`);
 console.log(`needed a retry     ${pct(now.retry_rate)}            ${pct(base.retry_rate)}`);
 console.log(`gave up            ${now.gave_up}               ${base.gave_up} of ${base.calls}`);
