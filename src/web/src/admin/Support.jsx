@@ -20,8 +20,6 @@ const TOPIC_LABELS = {
   phone: 'מענה קולי', app: 'שימוש באפליקציה', other: 'אחר',
   // הודעות קוליות מתפריט המכירות (מתקשר לא רשום): 1 = מתעניין בהזמנה, 2 = הזמנה בתהליך
   order: 'מתעניין בהזמנה', order_status: 'הזמנה בתהליך',
-  // מוקד השירות הממוספר (serviceMenu.js)
-  feature: 'בקשה לשיפור', agent: 'נציג', info: 'מידע', service_other: 'שירות — אחר',
 };
 const fmtTs = (ts) => new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
 // פנייה טלפונית אין לה משתמש — מציגים את המספר (או "מספר חסוי") במקום שם.
