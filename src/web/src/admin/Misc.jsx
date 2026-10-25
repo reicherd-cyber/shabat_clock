@@ -280,7 +280,7 @@ export function CallLogs() {
       </div>
       <ErrorNote error={error} />
       {logs && <p className="text-muted text-sm">{shown.length} שיחות{filtering ? ' (מסונן)' : ''}</p>}
-      <Card flush className="overflow-x-auto">
+      <Card flush className="table-scroll">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
@@ -321,7 +321,7 @@ export function Commands() {
     <div className="space-y-4">
       <h2 className="font-bold text-xl">{title}</h2>
       <ErrorNote error={error} />
-      <Card flush className="overflow-x-auto">
+      <Card flush className="table-scroll">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">

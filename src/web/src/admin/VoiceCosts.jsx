@@ -224,10 +224,10 @@ export default function VoiceCosts() {
         </div>
       )}
 
-      <Card flush className="overflow-x-auto">
+      <Card flush className="table-scroll">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-right text-muted border-b border-line">
+            <tr className="text-right text-muted">
               <SortTh k="when" sort={sort} className="p-2!">מתי</SortTh><SortTh k="user" sort={sort} className="p-2!">משתמש</SortTh>
               <SortTh k="source" sort={sort} className="p-2!">מקור</SortTh><SortTh k="text" sort={sort} className="p-2!">הטקסט</SortTh>
               <SortTh k="seconds" sort={sort} className="p-2!">אורך (שנ׳)</SortTh><SortTh k="units" sort={sort} className="p-2!">ימות (יחידות)</SortTh>

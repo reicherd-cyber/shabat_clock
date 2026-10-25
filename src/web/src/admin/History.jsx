@@ -131,7 +131,7 @@ export default function AdminHistory() {
       <ErrorNote error={error} />
       {items && <p className="text-muted text-sm">{items.length} רשומות{cursor ? '+' : ''}{filtering ? ' (מסונן)' : ''}</p>}
 
-      <Card flush className="overflow-x-auto">
+      <Card flush className="table-scroll">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">

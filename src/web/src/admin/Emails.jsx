@@ -134,7 +134,7 @@ export function Emails() {
 
       {data && <p className="text-muted text-sm">{data.rows.length} הודעות{data.rows.length >= 1000 ? '+' : ''}{filtering ? ' (מסונן)' : ''}</p>}
 
-      <Card flush className="overflow-x-auto">
+      <Card flush className="table-scroll">
         <table className="w-full text-sm">
           <thead className="text-xs text-muted">
             <tr className="border-b border-line">

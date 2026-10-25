@@ -71,6 +71,8 @@ const PROMPTS = {
   cmd_stuck_on: 'שימו לב, המכשיר לא כובה בפועל, החשמל עדיין זורם אליו',
   cmd_not_switched: 'אירעה שגיאה, המכשיר לא ביצע את הפקודה',
   cmd_closed: 'הפקודה בוצעה, המכשיר מקבל חשמל אך כמעט אינו צורך, ייתכן שהוא כבוי במתג שלו',
+  // — voice order, after the first successful use: no example (2026-10-25) —
+  nlu_listen_short: 'אמרו את הבקשה לאחר הצפצוף, לְחַץ סולמית לסיום',
 };
 
 async function synthToMp3(text, outFile) {

@@ -186,7 +186,7 @@ export default function Database() {
         </div>
       )}
 
-      <Card flush className="overflow-x-auto">
+      <Card flush className="table-scroll">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">

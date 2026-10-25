@@ -121,7 +121,7 @@ export default function Users() {
         <p className="text-muted text-sm">{shown.length} משתמשים{filtering ? ' (מסונן)' : ''}</p>
         <Button onClick={() => setCreateForm({ full_name: '', pin: '', phone: '', email: '', require_pin: false })}>+ משתמש חדש</Button>
       </div>
-      <Card flush className="overflow-x-auto">
+      <Card flush className="table-scroll">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
