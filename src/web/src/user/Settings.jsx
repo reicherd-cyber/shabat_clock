@@ -4,6 +4,7 @@ import { Card, Button, Input, Select, Badge, Modal, ErrorNote, Toggle, useAsync,
 import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2, Lock } from 'lucide-react';
 import WifiCard from './WifiCard.jsx';
 import { InspectEye } from './DeviceInspect.jsx';
+import { ShowcaseRequests } from './Showcase.jsx';
 
 // Phones (caller-ID) + PIN + relay management — relay names/codes drive the IVR
 // prompts directly (PLAN §3).
@@ -156,6 +157,7 @@ export default function Settings() {
   if (!me) return <p className="text-muted">טוען…</p>;
   return (
     <div className="space-y-5">
+      <ShowcaseRequests />
       <Card>
         <h3 className="font-bold mb-1 flex items-center gap-1.5"><UserRound size={16} className="text-accent" />פרטי חשבון</h3>
         <div className="flex items-center gap-2 flex-wrap">
@@ -193,7 +195,7 @@ export default function Settings() {
                 </>
               ) : (
                 <>
-                  <Badge>גישה לחשבון</Badge>
+                  <Badge>{em.read_only ? 'צפייה בלבד' : 'גישה לחשבון'}</Badge>
                   <button disabled={busy} title="הסרת הכתובת — בעליה לא יוכל יותר להיכנס לחשבון הזה"
                     className={`ms-auto text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
                     onClick={() => setRemovingEmail(em)}><Trash2 size={15} /></button>

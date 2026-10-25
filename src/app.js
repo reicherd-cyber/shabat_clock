@@ -9,6 +9,8 @@ import { whatsappRouter } from './whatsapp/router.js';
 import { authRouter } from './api/routes/auth.js';
 import { userRouter } from './api/routes/user.js';
 import { adminRouter } from './api/routes/admin.js';
+import { showcaseRouter } from './api/routes/showcase.js';
+import { readOnlyGuard } from './api/readOnly.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -95,6 +97,10 @@ export function createApp() {
   // adminRouter's specific /api/v1/admin prefix MUST be mounted before the catch-all
   // userRouter — userRouter.use(requireUser) would otherwise 403 every admin request.
   app.use('/api/v1/admin', adminRouter);
+  // Read-only (showcase) sessions: decided from the membership row on every
+  // request, before any user route can act — see api/readOnly.js.
+  app.use('/api/v1', readOnlyGuard);
+  app.use('/api/v1', showcaseRouter);
   app.use('/api/v1', userRouter);
 
   // Web panels (React RTL) served same-origin — no CORS [D27].
