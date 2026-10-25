@@ -11,6 +11,13 @@ test('path variants Express would still route are judged like the plain path', (
   assert.equal(readOnlyDecision('GET', '/me/phones'), 'block_read');
   assert.equal(readOnlyDecision('GET', '/ME/Emails/'), 'block_read');
   assert.equal(readOnlyDecision('POST', '/me/switch/'), 'allow');
+  // Device ids the handler would coerce to a real id must not slip past
+  assert.equal(readOnlyDecision('GET', '/devices/%31/wifi-status'), 'block_read');
+  assert.equal(readOnlyDecision('GET', '/devices/01e0/wifi-status'), 'block_read');
+  assert.equal(readOnlyDecision('GET', '/devices/abc/inspect'), 'block_read');
+  assert.equal(readOnlyDecision('GET', '/%6De/phones'), 'block_read');
+  assert.equal(readOnlyDecision('GET', '/devices/3'), 'allow');
+  assert.equal(normalizePath('/bad%zz'), '/bad%zz'); // malformed escape judged as sent
 });
 
 test('a read-only /me keeps the name and preferences, drops every contact and phone-login field', () => {

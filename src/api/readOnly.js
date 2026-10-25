@@ -33,12 +33,19 @@ export const forgetReadOnly = (userId, email) => cache.delete(`${userId}|${email
 const ALLOWED_WRITES = new Set(['/me/switch']);
 // Everything under /me/ (addresses, phones, preferences…), support threads,
 // device Wi-Fi / inspection and the history are the owner's business.
-const HIDDEN_READS = [/^\/me\/./, /^\/support(\/|$)/, /^\/devices\/\d+\/(wifi|inspect)/, /^\/history(\/|$)/];
+// The device id is ANY segment, not \d+: the handler coerces it (Number('01e0')
+// is 1, and '%31' decodes to '1'), so the guard must not be stricter than it.
+const HIDDEN_READS = [/^\/me\/./, /^\/support(\/|$)/, /^\/devices\/[^/]+\/(wifi|inspect)/, /^\/history(\/|$)/];
 
-// Express matches routes case-insensitively and with or without a trailing
-// slash, so the decision must see the same path the router will: lower-case,
-// single slashes, no trailing slash.
-export const normalizePath = (p) => (String(p || '').toLowerCase().replace(/\/{2,}/g, '/').replace(/\/+$/, '') || '/');
+// Express matches routes case-insensitively, with or without a trailing slash,
+// and hands handlers DECODED params — so the decision must see the path the way
+// the router and the handler will: percent-decoded, lower-case, single slashes,
+// no trailing slash.
+export const normalizePath = (p) => {
+  let s = String(p || '');
+  try { s = decodeURIComponent(s); } catch { /* malformed escape: judge it as sent */ }
+  return s.toLowerCase().replace(/\/{2,}/g, '/').replace(/\/+$/, '') || '/';
+};
 
 // Pure: what a read-only session may do with this request.
 export function readOnlyDecision(method, rawPath) {
