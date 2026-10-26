@@ -189,8 +189,11 @@ ${planList}`;
 const ON_VERBS = /^(תדליק|תדליקי|תדליקו|הדלק|הדליקו|להדליק|דלק)$/;
 const OFF_VERBS = /^(תכבה|תכבי|תכבו|כבה|כבו|לכבות)$/;
 const FILLER = /^(את|מיד|מידי|מיידי|מיידית|עכשיו|בבקשה|תודה|רק|גם|נא|אנא|לי|לנו|ו|בבית|בחדר)$/;
-// Words the rules never handle: times, numbers, plans, schedules, days.
-const NOT_SIMPLE = /\d|בשעה|בעוד|מחר|היום|בערב|בבוקר|בצהריים|בלילה|כל |שבת|שישי|ראשון|שני|שלישי|רביעי|חמישי|תוכנית|תזמון|מחק|תמחק|עצור|תפסיק|הפעל|שעה|שעות|דקות|דקה|חצי|רבע|אחת|שתיים|שלוש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|עד /;
+// Words the rules never handle: times, number words, plans, schedules, days.
+// Digits are NOT listed: a digit that is part of a relay's own name ("ערוץ 2",
+// "מזגן 1") is fine; any digit left unexplained after the relay match sends
+// the text to the model like every other unexplained word (2026-10-26).
+const NOT_SIMPLE = /בשעה|בעוד|מחר|היום|בערב|בבוקר|בצהריים|בלילה|כל |שבת|שישי|ראשון|שני|שלישי|רביעי|חמישי|תוכנית|תזמון|מחק|תמחק|עצור|תפסיק|הפעל|שעה|שעות|דקות|דקה|חצי|רבע|אחת|שתיים|שלוש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|עד /;
 const PREFIX = /^(כשה|וה|שה|ול|ומ|וב|ו|ש|כ|ב|ל|מ|ה)/; // longest first: "והסלון" → "סלון"
 const tokens = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
 // Does the word, with or without a one-letter Hebrew prefix, equal the target?
