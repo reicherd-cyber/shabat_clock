@@ -80,13 +80,13 @@ export default function Settings() {
   // identity (no change / removal here); every further address invites its
   // owner into this account — they switch in from their own account's header.
   // The owner picks the level while adding: full control (as always) or צפייה
-  // בלבד — set right after the row exists (the add route is unchanged).
+  // בלבד — written with the row in one step, so a failure never leaves full
+  // control where view-only was chosen.
   const [emailLevel, setEmailLevel] = useState('full');
+  const closeEmailForm = () => { setEmailAdd(null); setEmailLevel('full'); };
   const addEmail = () => run(async () => {
-    const row = await api.post('/me/emails', { email: emailAdd.trim() });
-    if (emailLevel === 'ro' && row?.id) await api.patch(`/me/emails/${row.id}/level`, { read_only: true });
-    setEmailAdd(null);
-    setEmailLevel('full');
+    await api.post('/me/emails/with-level', { email: emailAdd.trim(), read_only: emailLevel === 'ro' });
+    closeEmailForm();
     await refresh();
   });
 
@@ -225,7 +225,7 @@ export default function Settings() {
                 value={emailAdd} onChange={(e) => setEmailAdd(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') addEmail();
-                  if (e.key === 'Escape') setEmailAdd(null);
+                  if (e.key === 'Escape') closeEmailForm();
                 }} />
               <select value={emailLevel} onChange={(e) => setEmailLevel(e.target.value)} title="רמת הגישה של הכתובת לחשבון"
                 className="border border-line rounded-[10px] px-2 py-1.5 bg-surface text-sm text-ink cursor-pointer">
@@ -233,7 +233,7 @@ export default function Settings() {
                 <option value="ro">צפייה בלבד</option>
               </select>
               <Button disabled={busy || !emailAdd.trim()} onClick={addEmail}>הוסף</Button>
-              <Button variant="ghost" onClick={() => setEmailAdd(null)}>ביטול</Button>
+              <Button variant="ghost" onClick={closeEmailForm}>ביטול</Button>
             </div>
           )}
           {emailAdd != null && <ErrorNote error={error} />}
