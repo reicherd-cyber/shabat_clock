@@ -146,6 +146,9 @@ export const adminLoginLimiter = limited({ windowMs: 15 * 60_000, limit: 5 });
 const perUser = (req) => String(req.auth?.userId || req.ip);
 export const supportAskLimiter = limited({ windowMs: 60_000, limit: 6, keyGenerator: perUser });
 export const supportMessageLimiter = limited({ windowMs: 10 * 60_000, limit: 5, keyGenerator: perUser });
+// The numbered service menu: one request per tap, so a whole conversation is
+// a few dozen calls; the model/ticket steps inside it keep their own caps.
+export const supportMenuLimiter = limited({ windowMs: 60_000, limit: 40, keyGenerator: perUser });
 export const phoneAddLimiter = limited({ windowMs: 15 * 60_000, limit: 5, keyGenerator: perUser });
 // The editor's live preview is debounced client-side (~3/s at most while typing);
 // a holiday scheduler fans out to one calendar expansion per selected day.

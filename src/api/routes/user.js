@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
-import { requireUser, signUserToken, invalidateSession, supportAskLimiter, supportMessageLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
+import { requireUser, signUserToken, invalidateSession, supportAskLimiter, supportMessageLimiter, supportMenuLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, accountsForEmail, parseUiPrefs, validateUiPrefs } from '../../services/users.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
@@ -520,6 +520,34 @@ userRouter.get('/history', async (req, res, next) => {
 // ── תמיכה: self-help bot + escalation to a human ──
 
 // Free-text question → bot guide. Stateless: the client counts its own tries.
+// מוקד שירות — the numbered menu (services/serviceMenu.js), the same tree the
+// WhatsApp bot walks. Body: { state, input } — no state starts at the main
+// menu. The page keeps the returned state and sends it back with each tap.
+// A "switch" or "status" leaf is executed here (the site is already the
+// customer's own panel) and reported in the reply text.
+userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
+  try {
+    const { menuStart, step } = await import('../../services/serviceMenu.js');
+    const user = await getUser(req.auth.userId);
+    const [primary] = await query(
+      'SELECT phone FROM user_phones WHERE user_id = ? AND deleted_at IS NULL ORDER BY is_primary DESC, id LIMIT 1', [req.auth.userId]);
+    const ctx = { user, phone: primary?.phone ?? null, source: 'web', actor: actorStr(actorOf(req)), actorObj: actorOf(req) };
+    const state = req.body?.state && typeof req.body.state === 'object' ? req.body.state : null;
+    let r = state ? await step(ctx, state, String(req.body?.input ?? '').slice(0, 2000)) : menuStart(ctx);
+    if (r.action?.kind === 'immediate') {
+      const { runNluActions } = await import('../../services/nluExec.js');
+      const { results } = await runNluActions({ userId: req.auth.userId, actions: [r.action], tz: 'Asia/Jerusalem', source: 'web' });
+      const ok = results[0]?.status === 'acked';
+      r = { ...r, action: undefined, text: ok ? `✅ ${r.action.relay_name} ${r.action.action === 'on' ? 'הודלק' : 'כובה'}` : `⚠️ ${r.action.relay_name} — המכשיר לא אישר (${results[0]?.fail_reason || 'לא ידוע'})` };
+    } else if (r.action?.kind === 'status') {
+      const relays = await listDevicesWithRelays(req.auth.userId);
+      const lines = relays.filter((d) => d.is_enabled).flatMap((d) => d.relays.filter((x) => x.is_enabled).map((x) => `${x.current_state === 'on' ? '🟢' : '⚪'} ${x.name} – ${x.current_state === 'on' ? 'דולק' : 'כבוי'}`));
+      r = { ...r, action: undefined, text: lines.join('\n') || 'אין ערוצים פעילים.' };
+    }
+    res.json(r);
+  } catch (e) { next(e); }
+});
+
 userRouter.post('/support/ask', supportAskLimiter, async (req, res, next) => {
   try {
     const text = String(req.body?.text || '').trim();
