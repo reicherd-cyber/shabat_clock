@@ -39,6 +39,10 @@ test('ruleInterpret: digits inside a relay name are fine (ישראל קפלן na
   assert.deepEqual(r('כבה את ערוץ 1'), ['off:ערוץ 1']);
   assert.equal(r('כבה ערוץ 23'), null);                                         // garbled "2, 3" → the model
   assert.equal(r('כבאי ערוץ 23'), null);                                        // garbled verb too
+  // A number with a prefix letter is a time ("ב1" = at 1 o'clock), never the name's digit
+  assert.equal(ruled('תדליק את המזגן ב1'), null);
+  assert.equal(r('תדליק את ערוץ ב2'), null);
+  assert.deepEqual(ruled('תדליק את מזגן 1'), ['on:מזגן 1']);                   // the plain digit still is the name
 });
 
 test('ruleInterpret: an exact name beats a prefix-stripped one; a name shared by two relays goes to the model', () => {
