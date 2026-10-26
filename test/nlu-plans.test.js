@@ -25,9 +25,20 @@ test('ruleInterpret: anything the rules cannot fully explain goes to the model',
   assert.equal(ruled('תדליק את הדוד בעוד עשר דקות'), null);
   assert.equal(ruled('תדליק את הדוד ותכבה את הסלון'), null);                    // two verbs
   assert.equal(ruled('עצור את התוכנית של הסלון'), null);                        // a plan
-  assert.equal(ruled('תדליק מזגן 1'), null);                                    // a digit
+  assert.equal(ruled('תדליק את הדוד 6'), null);                                 // a digit that is not a relay's
+  assert.equal(ruled('תדליק את הדוד ב 7:20'), null);
   assert.equal(ruled('מה המצב'), null);                                         // no verb
   assert.equal(ruled(''), null);
+});
+
+test('ruleInterpret: digits inside a relay name are fine (ישראל קפלן names his channels ערוץ 1/2/3)', () => {
+  assert.deepEqual(ruled('תדליק מזגן 1'), ['on:מזגן 1']);
+  const ch = [{ id: 1, name: 'ערוץ 1' }, { id: 2, name: 'ערוץ 2' }, { id: 3, name: 'ערוץ 3' }];
+  const r = (t) => ruleInterpret(t, ch)?.map((a) => `${a.action}:${a.relay_name}`) ?? null;
+  assert.deepEqual(r('הדלק ערוץ 2 וערוץ 3'), ['on:ערוץ 2', 'on:ערוץ 3']);     // real transcript 26.10
+  assert.deepEqual(r('כבה את ערוץ 1'), ['off:ערוץ 1']);
+  assert.equal(r('כבה ערוץ 23'), null);                                         // garbled "2, 3" → the model
+  assert.equal(r('כבאי ערוץ 23'), null);                                        // garbled verb too
 });
 
 test('ruleInterpret: an exact name beats a prefix-stripped one; a name shared by two relays goes to the model', () => {
