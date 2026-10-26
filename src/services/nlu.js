@@ -197,7 +197,11 @@ const NOT_SIMPLE = /בשעה|בעוד|מחר|היום|בערב|בבוקר|בצה
 const PREFIX = /^(כשה|וה|שה|ול|ומ|וב|ו|ש|כ|ב|ל|מ|ה)/; // longest first: "והסלון" → "סלון"
 const tokens = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
 // Does the word, with or without a one-letter Hebrew prefix, equal the target?
-const wordIs = (w, target) => w === target || (PREFIX.test(w) && PREFIX.exec(w)[0].length < w.length && w.replace(PREFIX, '') === target);
+// A NUMERIC name token must match exactly: "ב1" is "at 1 o'clock", not the "1"
+// of a relay named "מזגן 1" with a ב in front — it stays unexplained and the
+// order goes to the model.
+const wordIs = (w, target) => w === target
+  || (!/^\d+$/.test(target) && PREFIX.test(w) && PREFIX.exec(w)[0].length < w.length && w.replace(PREFIX, '') === target);
 
 export function ruleInterpret(text, relays) {
   const raw = String(text || '').trim();
