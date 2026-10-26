@@ -10,7 +10,7 @@ const Calendar = lazy(() => import('./user/Calendar.jsx'));
 import History from './user/History.jsx';
 import Settings from './user/Settings.jsx';
 import Help from './user/Help.jsx';
-import { ReadOnlyBanner } from './user/Showcase.jsx';
+import { ReadOnlyBanner } from './user/ReadOnlyBanner.jsx';
 import AdminLogin from './admin/AdminLogin.jsx';
 import Users from './admin/Users.jsx';
 import Devices from './admin/Devices.jsx';
@@ -149,7 +149,7 @@ function UserLayout() {
           מצב הדגמה — בחשבון שלכם מכשיר לדוגמה כדי להתנסות במערכת. כשמכשיר אמיתי יצורף לחשבון, מכשיר הדוגמה יוסר אוטומטית.
         </div>
       )}
-      {!impersonating && <ReadOnlyBanner accounts={accounts} onHome={switchAccount} />}
+      {!impersonating && <ReadOnlyBanner readOnly={readOnly} accounts={accounts} onHome={switchAccount} />}
       <header className="flex items-center justify-between px-6 py-3.5 border-b border-line bg-bg sticky top-0 z-10">
         <div className="flex items-center gap-2 cursor-pointer select-none"
           onClick={() => nav('/')} role="button" title="לדף הבית">

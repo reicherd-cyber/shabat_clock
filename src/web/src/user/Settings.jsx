@@ -4,7 +4,6 @@ import { Card, Button, Input, Select, Badge, Modal, ErrorNote, Toggle, useAsync,
 import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2, Lock } from 'lucide-react';
 import WifiCard from './WifiCard.jsx';
 import { InspectEye } from './DeviceInspect.jsx';
-import { ShowcaseRequests } from './Showcase.jsx';
 
 // Phones (caller-ID) + PIN + relay management — relay names/codes drive the IVR
 // prompts directly (PLAN §3).
@@ -80,9 +79,14 @@ export default function Settings() {
   // Emails (shared accounts): the primary address is the account's fixed
   // identity (no change / removal here); every further address invites its
   // owner into this account — they switch in from their own account's header.
+  // The owner picks the level while adding: full control (as always) or צפייה
+  // בלבד — set right after the row exists (the add route is unchanged).
+  const [emailLevel, setEmailLevel] = useState('full');
   const addEmail = () => run(async () => {
-    await api.post('/me/emails', { email: emailAdd.trim() });
+    const row = await api.post('/me/emails', { email: emailAdd.trim() });
+    if (emailLevel === 'ro' && row?.id) await api.patch(`/me/emails/${row.id}/level`, { read_only: true });
     setEmailAdd(null);
+    setEmailLevel('full');
     await refresh();
   });
 
@@ -157,7 +161,6 @@ export default function Settings() {
   if (!me) return <p className="text-muted">טוען…</p>;
   return (
     <div className="space-y-5">
-      <ShowcaseRequests />
       <Card>
         <h3 className="font-bold mb-1 flex items-center gap-1.5"><UserRound size={16} className="text-accent" />פרטי חשבון</h3>
         <div className="flex items-center gap-2 flex-wrap">
@@ -224,6 +227,11 @@ export default function Settings() {
                   if (e.key === 'Enter') addEmail();
                   if (e.key === 'Escape') setEmailAdd(null);
                 }} />
+              <select value={emailLevel} onChange={(e) => setEmailLevel(e.target.value)} title="רמת הגישה של הכתובת לחשבון"
+                className="border border-line rounded-[10px] px-2 py-1.5 bg-surface text-sm text-ink cursor-pointer">
+                <option value="full">שליטה מלאה</option>
+                <option value="ro">צפייה בלבד</option>
+              </select>
               <Button disabled={busy || !emailAdd.trim()} onClick={addEmail}>הוסף</Button>
               <Button variant="ghost" onClick={() => setEmailAdd(null)}>ביטול</Button>
             </div>

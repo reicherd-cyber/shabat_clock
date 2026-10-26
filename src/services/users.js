@@ -94,7 +94,7 @@ export async function accountsForEmail(email) {
      ORDER BY e.is_primary DESC, u.id`,
     [clean],
   );
-  // read_only: a showcase invitation — the panel labels it "(צפייה)" and the
+  // read_only: a צפייה-בלבד invitation — the panel labels it "(צפייה)" and the
   // server (api/readOnly.js) refuses every write from such a session.
   return rows.map((r) => ({ id: Number(r.id), full_name: r.full_name, is_home: !!r.is_home, read_only: !!r.read_only }));
 }
@@ -108,7 +108,7 @@ async function primaryTakenElsewhere(conn, email, userId) {
   return !!row;
 }
 
-// readOnly: a showcase invitation (services/showcase.js) — the address may look
+// readOnly: a צפייה-בלבד invitation (services/accessLevel.js) — the address may look
 // at the account and nothing more. The owner's own additions are full access.
 export async function addUserEmail({ userId, email, actor = null, readOnly = false }) {
   const clean = normalizeEmail(email);

@@ -3,7 +3,6 @@ import { api } from '../api.js';
 import { Card, CardHead, CodeChip, Toggle, ErrorNote, Button, TimeInput, useInterval, channelColorOf, ChannelDot, useRelayCommand, isStaleOffline, relativeHe } from '../ui.jsx';
 import { House, Timer, LayoutGrid, List, GripVertical, TriangleAlert } from 'lucide-react';
 import { InspectEye } from './DeviceInspect.jsx';
-import { ShowcaseCard } from './Showcase.jsx';
 
 const STATE_HE = { on: 'דולק', off: 'כבוי', unknown: 'לא ידוע' };
 
@@ -254,7 +253,6 @@ export default function Dashboard() {
 
   return (
     <>
-      <ShowcaseCard />
       <div className="mb-7 flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="font-serif font-bold text-[34px] tracking-tight">
