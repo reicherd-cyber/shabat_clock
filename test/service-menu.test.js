@@ -361,3 +361,25 @@ test('without the assistant (no key / over budget) the old paths are unchanged',
   assert.equal(io.log.tickets[0].topic, 'info');
   assert.match(info.last.text, /הפנייה נרשמה/);
 });
+
+// ── confirm_action: an order that arrived as a guess is confirmed first; its ids are re-checked ──
+test('confirm_action: 1 releases the order, 2 cancels, a foreign or missing action restarts at the menu', async () => {
+  const io = fakeIo();
+  const own = { kind: 'immediate', relay_id: 15, relay_name: 'דוד', action: 'off', summary: 'כיבוי דוד עכשיו' };
+  const shown = await step(ctxUser, { node: 'confirm_action', data: { action: own }, _render: true }, null, io);
+  assert.equal(shown.text, 'לאשר: כיבוי דוד עכשיו?');
+  assert.deepEqual(shown.options.map((o) => o.n), [1, 2]);
+  const yes = await step(ctxUser, shown.state, '1', io);
+  assert.deepEqual(yes.action, own);
+  const no = await step(ctxUser, shown.state, '2', io);
+  assert.equal(no.action, undefined);
+  assert.equal(no.state.node, 'main');
+  const foreign = await step(ctxUser, { node: 'confirm_action', data: { action: { ...own, relay_id: 999 } }, _render: true }, null, io);
+  assert.equal(foreign.state.node, 'main');
+  assert.equal(foreign.options.some((o) => o.n === 1 && o.label === 'אישור'), false);
+  const none = await step(ctxUser, { node: 'confirm_action', data: {} }, '1', io);
+  assert.equal(none.action, undefined);
+  const plan = await step(ctxUser, { node: 'confirm_action', data: { action: { kind: 'plan_toggle', plan_key: 'pA', action: 'off', summary: 'עצירת התוכנית שבת' } }, _render: true }, null,
+    { ...io, plans: async () => [{ key: 'pA', name: 'שבת', enabled: true, channels: [], schedule_ids: [1] }] });
+  assert.equal(plan.state.node, 'confirm_action');
+});

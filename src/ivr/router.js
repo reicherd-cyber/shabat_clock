@@ -70,6 +70,9 @@ async function nluDeliver(session, out) {
     return mainMenu(session, await speak('ivr.nlu_parse_error', {}, 'אירעה שגיאה בפירוש הבקשה, נסו שוב'));
   }
   const interp = out.r;
+  // Budget / kill switch: listening again would only cost speech-to-text units
+  // for the same refusal — straight back to the menu with the message.
+  if (interp.exhausted) return mainMenu(session, [{ t: interp.clarification }]);
   if (!interp.understood) {
     await appendPath(session.callLogId, 'nlu_fail');
     // Re-listen right away (clarification as the prompt) instead of a main-menu

@@ -540,6 +540,10 @@ userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
     // router first (services/menuRouter.js, phase 3), then the tree's re-prompt.
     const { menuInput } = await import('../../services/menuRouter.js');
     let r = state ? await menuInput({ ctx, state, text: String(req.body?.input ?? '').slice(0, 2000) }) : menuStart(ctx);
+    if (r.action && r.action.kind !== 'status' && r.routed) {
+      // A guess from the free-text router: ask before running (confirm_action).
+      r = await step(ctx, { node: 'confirm_action', data: { action: r.action }, _render: true }, null);
+    }
     if (r.action && r.action.kind !== 'status') {
       // The site is the customer's own panel: a switch, a quick one-off timing or
       // a plan stop/start runs at once (the page already showed the choice).

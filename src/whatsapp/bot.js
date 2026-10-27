@@ -132,6 +132,10 @@ async function commandReply({ phone, user, text }) {
     }
     throw e;
   }
+  if (interp.exhausted) {
+    await sendText({ phone, userId: user.id, text: interp.clarification });
+    return;
+  }
   if (!interp.understood) {
     // Not an order the interpreter recognised — maybe it was a question after all.
     await supportReply({ phone, user, text });
@@ -160,7 +164,15 @@ async function executePending({ phone, user, session }) {
   }
   const scheduled = actions.filter((a) => a.kind !== 'immediate').map((a) => `✅ ${a.summary}`);
   const head = unacked ? await getText('whatsapp.done_unacked') : await getText('whatsapp.done');
-  await sendText({ phone, userId: user.id, text: [head, ...lines, ...scheduled].join('\n'), kind: 'result' });
+  const parts = [head, ...lines, ...scheduled];
+  // Where the menu is offered, it comes back under the result so the chat goes
+  // on without a new greeting.
+  if (await phoneAllowed('whatsapp.menu_phones', phone)) {
+    const r = menuStart(menuCtx(user, phone));
+    await saveSession({ phone, userId: user.id, state: 'MENU', pending: { menu: r.state } });
+    parts.push('', renderText(r));
+  }
+  await sendText({ phone, userId: user.id, text: parts.join('\n'), kind: 'result' });
 }
 
 // Meta's own notifications (setup nudges, policy notices) come in as regular
