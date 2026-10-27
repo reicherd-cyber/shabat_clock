@@ -30,13 +30,13 @@ const localPath = (ticketId) => path.join(DIR, `${Number(ticketId)}.wav`);
 // "recording done" callback (caller dropped at/before the beep). Every such
 // call so far left NO file on Yemot despite the keep-on-hangup flag (migration
 // 66), so the ticket says so up front — the number is what's worth keeping.
-export async function createPhoneTicket({ phone, callLogId, topic, yemotFile, hungUp = false }) {
+export async function createPhoneTicket({ phone, callLogId, topic, yemotFile, hungUp = false, userId = null }) {
   const who = phone ? `מהמספר ${phone}` : 'ממספר חסוי';
   const body = hungUp ? `ניתק לפני שהשאיר הודעה ${who}` : `הודעה קולית ${who}`;
   const r = await query(
     `INSERT INTO support_messages (user_id, source, phone, call_log_id, topic, body, yemot_file, voicemail_hangup, created_by)
-     VALUES (NULL, 'phone', ?, ?, ?, ?, ?, ?, 'ivr')`,
-    [phone || null, callLogId, topic, body, yemotFile, hungUp ? 1 : 0],
+     VALUES (?, 'phone', ?, ?, ?, ?, ?, ?, 'ivr')`,
+    [userId ?? null, phone || null, callLogId, topic, body, yemotFile, hungUp ? 1 : 0],
   );
   return r.insertId;
 }

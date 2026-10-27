@@ -90,3 +90,21 @@ export function sayAndHangup(spec) {
 export function hangup() {
   return 'go_to_folder=hangup';
 }
+
+// Transfer the caller to an outside phone — Yemot "routing" (16 comma fields,
+// per the freeivr API-module guide; only the ones used are filled): the
+// number, then routing_end_time (seconds to ring) and routing_end_goto (the
+// folder the caller lands in when nobody answers — '' = Yemot's default, one
+// folder up; set it to this API extension's path so the call comes back here).
+// Optional message first (id_list_message may be followed by one action).
+// Written 2026-10-27 for "נציג"; the no-answer return path is verified on a
+// real call, not from docs (see router.js AGENT_TRANSFER).
+export function transfer(spec, { phone, ringSeconds = 25, goto = '' } = {}) {
+  const num = String(phone ?? '').replace(/\D/g, '');
+  const ring = Math.min(120, Math.max(5, Number(ringSeconds) || 25));
+  const folder = String(goto ?? '').replace(/[^\w/]/g, '');
+  const parts = [];
+  if (spec) parts.push(`id_list_message=${data(spec)}`);
+  parts.push(`routing=${[num, '', '', '', '', '', '', '', String(ring), folder].join(',')}`);
+  return parts.join('&');
+}

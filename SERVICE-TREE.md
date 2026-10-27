@@ -87,7 +87,7 @@ Navigation everywhere: `9` = main menu, `0` on the main menu = a person.
 │   └─ the next 7 days per channel from GET /schedules/calendar (same data as the site's מועדים קרובים ✅):
 │      "שבת: מטבח 🟢 18:12 כניסת שבת → ⚪ 20:30 … סלון …"   (read-only, no confirm)
 │
-├─ 0  נציג אנושי                                                  ✅
+├─ 0  נציג אנושי                                                  ✅  phone: transfers to ivr.agent_phone, no answer → voice message 🎫 [agent] (2026-10-27)
 │   └─ 🎫 [agent] "הלקוח ביקש נציג — לחזור אליו"  (nothing to type)
 │
 └─ free text where a digit was expected

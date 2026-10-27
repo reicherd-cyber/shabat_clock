@@ -50,3 +50,11 @@ test('parsePhoneList: a single space separates two numbers', async () => {
   const { parsePhoneList } = await import('../src/services/phone.js');
   assert.deepEqual([...parsePhoneList('0501112233 0521112233')], ['0501112233', '0521112233']);
 });
+
+test('transfer: message, then Yemot routing with the number, ring time and the no-answer folder', async () => {
+  const { transfer } = await import('../src/ivr/responses.js');
+  assert.equal(transfer('מעבירים', { phone: '058-761-0753', ringSeconds: 25, goto: '/1' }),
+    'id_list_message=t-מעבירים&routing=0587610753,,,,,,,,25,/1');
+  assert.equal(transfer(null, { phone: '0587610753' }), 'routing=0587610753,,,,,,,,25,'); // defaults, no message
+  assert.equal(transfer(null, { phone: '0587610753', ringSeconds: 999, goto: 'x&y=1' }), 'routing=0587610753,,,,,,,,120,xy1'); // clamped, sanitised
+});
