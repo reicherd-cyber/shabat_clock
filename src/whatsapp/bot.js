@@ -226,7 +226,10 @@ export async function handleInbound(msg) {
     // (10-min TTL), the server restarted, or it's a second tap. Say so — never
     // feed "אישור ✅" to the interpreter and the support bot (two paid calls and
     // a bogus ticket).
-    if (user && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || (msg.text != null && confirmWord(msg.text)))) {
+    // A bare digit is never a stray confirmation: "1" / "2" are menu choices
+    // (the menu comes back under every result), so only yes/no WORDS and the
+    // confirm buttons mean "the order I was asked about".
+    if (user && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || (msg.text != null && !isBareDigit(msg.text) && confirmWord(msg.text)))) {
       await sendText({ phone, userId, text: await getText('whatsapp.confirm_expired') });
       return;
     }
