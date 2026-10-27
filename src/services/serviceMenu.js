@@ -646,10 +646,11 @@ export async function step(ctx, state, input, io = realIo) {
 
     // ── 0 נציג ──
     case 'agent': {
-      // On the phone the call itself goes to a person (ivr/router.js agentTransfer:
-      // ring the agent; no answer → a voice message is the ticket) — no callback
-      // ticket from here. Elsewhere, nothing to type: the request is the ticket.
-      if (ctx.source === 'phone') return reply({ node: 'main', data: {} }, '', { done: true, options: [BACK], action: { kind: 'agent' } });
+      // On the phone, for callers in the rollout list (ctx.transferAgent, from
+      // ivr.agent_transfer_phones), the call itself goes to a person (ivr/router.js
+      // agentTransfer: ring the agent; no answer → a voice message is the ticket) —
+      // no callback ticket from here. Otherwise, nothing to type: the request is the ticket.
+      if (ctx.source === 'phone' && ctx.transferAgent) return reply({ node: 'main', data: {} }, '', { done: true, options: [BACK], action: { kind: 'agent' } });
       const id = await io.ticket({ ctx, topic: 'agent', body: 'הלקוח ביקש נציג — לחזור אליו.' });
       return reply({ node: 'main', data: {} }, `הפנייה נרשמה (מס׳ ${id}). נציג יחזור אליכם ${CALLBACK_HE}.`, { options: [BACK], done: true });
     }

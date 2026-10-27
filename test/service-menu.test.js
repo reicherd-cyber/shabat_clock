@@ -480,7 +480,7 @@ test('choiceOptions: the phone keeps a channel that owns 9 and drops only the wa
 
 test('נציג on the phone is a transfer, not a callback ticket; other channels still file the ticket', async () => {
   const io = fakeIo();
-  const phoneCtx = { ...ctxUser, source: 'phone', actor: 'ivr:3', actorObj: { type: 'ivr', id: 3 } };
+  const phoneCtx = { ...ctxUser, source: 'phone', actor: 'ivr:3', actorObj: { type: 'ivr', id: 3 }, transferAgent: true };
   const phone = await step(phoneCtx, { node: 'agent', data: {} }, null, io);
   // the phone reaches the leaf by rendering it (no digit); the reply is a transfer order
   const r = await step(phoneCtx, { node: 'agent', data: {}, _render: true }, null, io);
@@ -490,5 +490,13 @@ test('נציג on the phone is a transfer, not a callback ticket; other channels
   assert.equal(phone.action?.kind, 'agent');
   const wa = await step(ctxUser, { node: 'agent', data: {}, _render: true }, null, io);
   assert.equal(wa.action, undefined);
+  assert.deepEqual(io.log.tickets.map((t) => t.topic), ['agent']);
+});
+
+test('נציג on the phone without the rollout flag is still a callback ticket', async () => {
+  const io = fakeIo();
+  const phoneCtx = { ...ctxUser, source: 'phone', actor: 'ivr:3', actorObj: { type: 'ivr', id: 3 } };
+  const r = await step(phoneCtx, { node: 'agent', data: {}, _render: true }, null, io);
+  assert.equal(r.action, undefined);
   assert.deepEqual(io.log.tickets.map((t) => t.topic), ['agent']);
 });

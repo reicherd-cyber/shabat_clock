@@ -105,6 +105,7 @@ async function nluDeliver(session, out) {
 const svcCtx = (session) => ({
   user: { id: session.userId, full_name: session.userName || '' }, phone: session.phone || null, source: 'phone',
   actor: `ivr:${session.userId}`, actorObj: { type: 'ivr', id: session.userId },
+  transferAgent: session.agentTransfer === true, // נציג rings a person (rollout list), else a callback ticket
 });
 // Screen text → something a voice can read: no emoji, no slashes, no dashes.
 const speech = (t) => String(t || '')
@@ -594,7 +595,12 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       const user = asGuest ? null : await findUserByPhone(phone);
       // Suspended → treated as not found (no info leak).
       if (user && user.status === 'active') {
-        session = createSession(callId, { callLogId, phone, userId: user.id, userName: user.full_name, requirePin: Boolean(user.require_pin) });
+        session = createSession(callId, {
+          callLogId, phone, userId: user.id, userName: user.full_name, requirePin: Boolean(user.require_pin),
+          // Per-number rollout of the נציג transfer (ivr.agent_transfer_phones, '' = nobody):
+          // other callers keep the callback ticket.
+          agentTransfer: await phoneAllowed('ivr.agent_transfer_phones', phone),
+        });
         await setCallUser(callLogId, user.id);
         if (user.require_pin) {
           session.state = 'AUTH_PIN';
