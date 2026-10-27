@@ -22,6 +22,7 @@ import { interpretCommand } from '../services/nlu.js';
 import { runNluActions, ymdForDay } from '../services/nluExec.js';
 import { shiftDate } from '../services/time.js';
 import { step as menuStep } from '../services/serviceMenu.js';
+import { phoneAllowed } from '../services/rollout.js';
 
 function nextYmd(ymd) {
   const [y, mo, d] = ymd.split('-').map(Number);
@@ -178,7 +179,10 @@ async function mainMenu(session, message = null) {
       'לומר בקשה בקול, הקישו 1, להדלקת מכשיר, הקישו 2, לכיבוי מכשיר, הקישו 3, לתזמון, הקישו 4, לשמיעת מצב המכשירים, הקישו 5')];
     // Phase 5 (2026-10-27): the service desk and the coming week, from the
     // shared menu tree. TTS until a recording exists (Edge TTS is down).
-    items.push(...await speak('ivr.main_menu_service', {}, 'לשירות לקוחות, הקישו 6, למה קורה בשבת הקרובה, הקישו 7'));
+    // Per-number rollout (ivr.service_phones, '' = nobody): only listed callers hear them.
+    if (await phoneAllowed('ivr.service_phones', session.phone)) {
+      items.push(...await speak('ivr.main_menu_service', {}, 'לשירות לקוחות, הקישו 6, למה קורה בשבת הקרובה, הקישו 7'));
+    }
   } else {
     const audio = await getSetting('ivr.audio.main_menu');
     items = audio
@@ -649,7 +653,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
             return res.send(await schedBrowse(session));
           }
           if (input === '5') return res.send(await runStatus(session));
-          if (input === '6' || input === '7') {
+          if ((input === '6' || input === '7') && await phoneAllowed('ivr.service_phones', session.phone)) {
             await appendPath(session.callLogId, input === '6' ? 'svc' : 'svc_week');
             const r = await menuStep(svcCtx(session), { node: input === '6' ? 'service' : 'week', data: {}, _render: true }, null);
             return res.send(await svcDeliver(session, r));

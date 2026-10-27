@@ -24,6 +24,7 @@ import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion } from './p
 import { smallTalkAnswer } from '../services/supportRules.js';
 import { menuStart, step as menuStep, renderText } from '../services/serviceMenu.js';
 import { menuInput } from '../services/menuRouter.js';
+import { phoneAllowed } from '../services/rollout.js';
 
 // ── מוקד שירות: the numbered menu (services/serviceMenu.js), phase 1 2026-10-27 ──
 // A greeting or a bare digit opens it; while a branch is open every message
@@ -225,9 +226,10 @@ export async function handleInbound(msg) {
     }
     const text = msg.text.trim();
 
-    // The numbered menu, for customers and guests alike.
+    // The numbered menu, for customers and guests alike — but only for the
+    // numbers listed in whatsapp.menu_phones (per-number rollout, '' = nobody).
     const menuState = session.state === 'MENU' && session.pending?.menu ? session.pending.menu : null;
-    if (menuState || isGreeting(text) || isBareDigit(text)) {
+    if ((menuState || isGreeting(text) || isBareDigit(text)) && await phoneAllowed('whatsapp.menu_phones', phone)) {
       const ctx = menuCtx(user, phone);
       let r = null;
       if (isGreeting(text)) r = menuStart(ctx);
