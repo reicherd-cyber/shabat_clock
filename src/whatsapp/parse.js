@@ -81,5 +81,5 @@ export const looksLikeQuestion = (text) => {
 // every result — so it is never read as a stray "yes"/"no" after a confirmation
 // has already expired. Inside a live confirmation the typed 1 / 2 still count
 // (confirmWord), because that branch runs first.
-export const isBareDigit = (t) => /^\s*\d{1,2}\s*$/.test(String(t || ''));
+export const isBareDigit = (t) => /^\s*(\d{1,6}|\*)\s*$/.test(String(t || ''));
 export const strayConfirmWord = (text) => (text != null && !isBareDigit(text) ? confirmWord(text) : null);

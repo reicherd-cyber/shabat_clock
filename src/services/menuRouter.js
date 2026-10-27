@@ -155,7 +155,7 @@ export async function routeFreeText({ ctx, text, node, io = realIo, call = null 
 export async function menuInput({ ctx, state, text, io = realIo, route = routeFreeText }) {
   if (!state) return menuStart(ctx);
   const node = state.node || 'main';
-  const isDigit = /^\s*\d{1,2}\s*$/.test(String(text ?? ''));
+  const isDigit = /^\s*(\d{1,6}|\*)\s*$/.test(String(text ?? ''));
   if (isDigit || FREE_NODES.has(node)) return step(ctx, state, text, io);
   const parsed = await route({ ctx, text, node, io });
   const jumped = await applyMoves(ctx, movesFor(parsed, { customer: Boolean(ctx.user) }), io);

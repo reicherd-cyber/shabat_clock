@@ -63,7 +63,7 @@ export default function ServiceChat() {
         {options.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {options.map((o) => (
-              <Button key={o.n} variant={o.n === 9 || o.n === 0 ? 'ghost' : 'primary'} disabled={busy} onClick={() => pick(o)}>
+              <Button key={o.n} variant={o.n === 9 || o.n === 0 || o.n === '*' ? 'ghost' : 'primary'} disabled={busy} onClick={() => pick(o)}>
                 <span className="inline-flex items-center gap-1.5"><span className="font-mono text-xs opacity-80">{o.n}</span>{o.label}</span>
               </Button>
             ))}

@@ -65,7 +65,9 @@ test('a bare digit is a menu choice, not a stray yes/no; words still are', async
   const { isBareDigit, strayConfirmWord, confirmWord } = await import('../src/whatsapp/parse.js');
   assert.equal(isBareDigit('1'), true);
   assert.equal(isBareDigit(' 12 '), true);
-  assert.equal(isBareDigit('123'), false);
+  assert.equal(isBareDigit('123456'), true); // IVR codes run to six digits
+  assert.equal(isBareDigit('*'), true);      // the way back when a channel owns 9
+  assert.equal(isBareDigit('1234567'), false);
   assert.equal(strayConfirmWord('1'), null);   // the menu under the last result wants this
   assert.equal(strayConfirmWord('2'), null);
   assert.equal(strayConfirmWord('כן'), 'yes');  // a word with nothing pending → "expired"
