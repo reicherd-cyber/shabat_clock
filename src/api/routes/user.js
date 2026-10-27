@@ -537,11 +537,17 @@ userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
     const ctx = { user, phone: primary?.phone ?? null, source: 'web', actor: actorStr(actorOf(req)), actorObj: actorOf(req) };
     const state = req.body?.state && typeof req.body.state === 'object' ? req.body.state : null;
     let r = state ? await step(ctx, state, String(req.body?.input ?? '').slice(0, 2000)) : menuStart(ctx);
-    if (r.action?.kind === 'immediate') {
+    if (r.action && r.action.kind !== 'status') {
+      // The site is the customer's own panel: a switch, a quick one-off timing or
+      // a plan stop/start runs at once (the page already showed the choice).
       const { runNluActions } = await import('../../services/nluExec.js');
       const { results } = await runNluActions({ userId: req.auth.userId, actions: [r.action], tz: 'Asia/Jerusalem', source: 'web' });
-      const ok = results[0]?.status === 'acked';
-      r = { ...r, action: undefined, text: ok ? `✅ ${r.action.relay_name} ${r.action.action === 'on' ? 'הודלק' : 'כובה'}` : `⚠️ ${r.action.relay_name} — המכשיר לא אישר (${results[0]?.fail_reason || 'לא ידוע'})` };
+      let text;
+      if (r.action.kind === 'immediate') {
+        const ok = results[0]?.status === 'acked';
+        text = ok ? `✅ ${r.action.relay_name} ${r.action.action === 'on' ? 'הודלק' : 'כובה'}` : `⚠️ ${r.action.relay_name} — המכשיר לא אישר (${results[0]?.fail_reason || 'לא ידוע'})`;
+      } else text = `✅ ${r.action.summary}`;
+      r = { ...r, action: undefined, text };
     } else if (r.action?.kind === 'status') {
       const devices = await listDevicesWithRelays(req.auth.userId);
       // One line per live relay, each relay once (a relay belongs to one device,

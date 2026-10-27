@@ -43,7 +43,9 @@ async function sendMenu({ phone, user, r }) {
     await sendText({ phone, userId, text: await statusText(user.id), kind: 'status' });
     return;
   }
-  if (r.action?.kind === 'immediate' && user) {
+  // An order leaf (switch now, a quick one-off timing, stop/start a plan) goes
+  // through the same confirm buttons as a spoken order; executePending runs it.
+  if (r.action && r.action.kind !== 'status' && user) {
     await saveSession({ phone, userId, state: 'CONFIRM', pending: { actions: [r.action], tz: 'Asia/Jerusalem', text: r.action.summary } });
     const body = await getText('whatsapp.confirm', { summary: `• ${r.action.summary}` });
     await sendButtons({ phone, userId, text: body, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });

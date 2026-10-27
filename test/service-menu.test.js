@@ -35,7 +35,7 @@ async function run(ctx, io, inputs) {
 test('main menu: a known customer is greeted by name and sees the device options; a guest does not', () => {
   const r = menuStart(ctxUser);
   assert.match(r.text, /שלום דוד/);
-  assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3, 4, 5, 0]);
+  assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3, 4, 5, 6, 7, 8, 0]);
   const g = menuStart(ctxGuest);
   assert.deepEqual(g.options.map((o) => o.n), [1, 2, 3, 0]);
 });
@@ -246,4 +246,76 @@ test('every escalation writes a ticket with a topic and the customer hears the 3
     assert.match(last.text, /תוך 3 שעות בשעות הפעילות/, p.inputs.join(' '));
   }
   assert.equal(io.log.tickets.length, 0);
+});
+
+// ── phase 2 (2026-10-27): quick timing, my plans, the coming week ──
+const fakeIo2 = (over = {}) => ({
+  ...fakeIo(),
+  clock: () => ({ y: 2026, mo: 10, d: 27, hh: 18, mm: 30 }),
+  plans: async () => [
+    { key: 'pA', name: 'שבת', enabled: true, channels: ['דוד'], schedule_ids: [1, 2] },
+    { key: 's9', name: 'תזמון שבועי לממסר פלטה', enabled: false, channels: ['פלטה'], schedule_ids: [9] },
+  ],
+  upcoming: async () => [
+    { date: '2026-10-27', time: '17:00', action: 'on', relay_name: 'דוד' },                 // already passed
+    { date: '2026-10-27', time: '20:00', action: 'off', relay_name: 'דוד' },
+    { date: '2026-10-30', time: '16:41', action: 'on', relay_name: 'פלטה' },
+    { date: '2026-10-30', time: '16:41', action: 'on', relay_name: 'דוד', manual: true },  // manual switches are not listed
+    { date: '2026-10-31', time: '20:30', action: 'off', relay_name: 'פלטה' },
+  ],
+  ...over,
+});
+
+test('6 תזמון מהיר: relay, on/off, when → a timed action for the channel to run; a passed clock time rolls to tomorrow', async () => {
+  const io = fakeIo2();
+  const hour = await run(ctxUser, io, ['6', '1', '1', '1']);
+  assert.deepEqual(hour.last.action, { kind: 'timed', relay_id: 15, relay_name: 'דוד', action: 'on', time: '19:30', day: 'today', summary: 'הדלקה של "דוד" היום בשעה 19:30' });
+  const evening = await run(ctxUser, io, ['6', '2', '2', '3']);
+  assert.equal(evening.last.action.time, '20:00');
+  assert.equal(evening.last.action.day, 'today');          // 18:30 now → 20:00 is still today
+  const custom = await run(ctxUser, io, ['6', '1', '2', '4', '17:30']);
+  assert.equal(custom.last.action.day, 'tomorrow');        // 17:30 already passed today
+  assert.equal(custom.last.action.action, 'off');
+  const bad = await run(ctxUser, io, ['6', '1', '2', '4', 'בערב']);
+  assert.equal(bad.last.free, true);                       // re-asks the hour
+  const late = await run(ctxUser, { ...io, clock: () => ({ y: 2026, mo: 10, d: 27, hh: 23, mm: 30 }) }, ['6', '1', '1', '1']);
+  assert.deepEqual([late.last.action.time, late.last.action.day], ['00:30', 'tomorrow']);
+  // a crafted state with a foreign relay goes nowhere
+  const foreign = await step(ctxUser, { node: 'quick_when', data: { relay: { id: 999 }, action: 'on' } }, '1', io);
+  assert.equal(foreign.action, undefined);
+  assert.equal(foreign.state.node, 'main');
+});
+
+test('7 התוכניות שלי: a plan by number, stop/start → a plan_toggle action with the "already" note', async () => {
+  const io = fakeIo2();
+  const stop = await run(ctxUser, io, ['7', '1', '1']);
+  assert.deepEqual(stop.last.action, { kind: 'plan_toggle', plan_key: 'pA', plan_name: 'שבת', action: 'off', schedule_ids: [1, 2], summary: 'עצירת התוכנית שבת' });
+  const start = await run(ctxUser, io, ['7', '1', '2']);
+  assert.match(start.last.action.summary, /היא כבר פעילה$/);
+  const loose = await run(ctxUser, io, ['7', '2', '2']);
+  assert.equal(loose.last.action.plan_key, 's9');
+  const none = await run(ctxUser, { ...io, plans: async () => [] }, ['7']);
+  assert.match(none.last.text, /אין עדיין תוכניות/);
+  assert.equal(none.last.state.node, 'main');
+});
+
+test('8 מה קורה השבוע: the coming firings by day, future only, no manual switches', async () => {
+  const io = fakeIo2();
+  const { last } = await run(ctxUser, io, ['8']);
+  assert.equal(last.action, undefined);
+  assert.match(last.text, /^מה קורה בשבוע הקרוב:/);
+  assert.match(last.text, /יום שלישי 27\.10 \(היום\):\n  ⚪ 20:00 דוד/);
+  assert.doesNotMatch(last.text, /17:00/);
+  assert.match(last.text, /יום שישי 30\.10:\n  🟢 16:41 פלטה\n/);
+  assert.doesNotMatch(last.text, /16:41 דוד/);
+  assert.match(last.text, /יום שבת 31\.10:\n  ⚪ 20:30 פלטה/);
+  const empty = await run(ctxUser, { ...io, upcoming: async () => [] }, ['8']);
+  assert.equal(empty.last.text, 'אין תזמונים בשבוע הקרוב.');
+});
+
+test('guests do not see 6–8 and cannot reach them', async () => {
+  const io = fakeIo2();
+  const r = menuStart(ctxGuest);
+  assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3, 0]);
+  for (const n of ['6', '7', '8']) assert.match((await step(ctxGuest, r.state, n, io)).text, /^לא הבנתי/);
 });

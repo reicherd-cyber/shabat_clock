@@ -17,6 +17,10 @@ import { query } from '../db/pool.js';
 import { getSetting } from './settings.js';
 import { diagnoseDevice } from './device-diagnosis.js';
 import { logAction } from './audit.js';
+import { listSchedules } from './schedules.js';
+import { groupPlans } from './nlu.js';
+import { calendarTimeline } from './calendar.js';
+import { localParts } from './time.js';
 
 export const MENU_MAIN = '9';
 const BACK = { n: 9, label: 'תפריט ראשי' };
@@ -80,6 +84,14 @@ export const realIo = {
     await logAction(ctx.actorObj, 'create', 'crm_lead', r.insertId, { after: { name, via: 'menu' } }).catch(() => {});
     return r.insertId;
   },
+  // Phase 2 (2026-10-27): the customer's תוכניות as the web shows them, the
+  // next days' firings as the calendar computes them, and the local clock.
+  plans: async (userId) => groupPlans(await listSchedules({ userId })),
+  async upcoming(userId, days = 7) {
+    const p = localParts(new Date(), 'Asia/Jerusalem');
+    return calendarTimeline({ userId, from: { y: p.y, mo: p.mo, d: p.d }, days });
+  },
+  clock: (tz = 'Asia/Jerusalem') => localParts(new Date(), tz),
   async orders({ ctx }) {
     if (!ctx.phone && !ctx.user) return [];
     return query(
@@ -107,7 +119,61 @@ const ownDevice = async (ctx, io, id) => (ctx.user ? (await io.devices(ctx.user.
 // Nodes that only a registered customer may stand on — a guest's state naming
 // one of them (crafted, or a session that lost its user) restarts at the menu.
 const USER_NODES = new Set(['service', 'fault_device', 'fault_check', 'fault_online_helped', 'fault_steps', 'fault_offer_ticket', 'fault_ticket',
-  'sched_problem', 'sched_relay', 'order_status', 'order_status_helped', 'switch_relay', 'switch_action', 'status']);
+  'sched_problem', 'sched_relay', 'order_status', 'order_status_helped', 'switch_relay', 'switch_action', 'status',
+  'quick_relay', 'quick_action', 'quick_when', 'quick_time', 'plans', 'plan_action', 'week']);
+// ── phase 2: quick timing / plans / the coming week ──
+const QUICK_WHEN = [
+  { n: 1, label: 'בעוד שעה', minutes: 60 }, { n: 2, label: 'בעוד שעתיים', minutes: 120 },
+  { n: 3, label: 'הערב ב-20:00', at: '20:00' }, { n: 4, label: 'שעה אחרת', key: 'custom' },
+];
+const pad2 = (n) => String(n).padStart(2, '0');
+const parseClock = (t) => {
+  const m = /^\s*(\d{1,2})(?::(\d{2}))?\s*$/.exec(String(t || ''));
+  if (!m) return null;
+  const hh = Number(m[1]); const mm = Number(m[2] || 0);
+  if (hh > 23 || mm > 59) return null;
+  return `${pad2(hh)}:${pad2(mm)}`;
+};
+// { time, day } from the current local clock — the executor turns it into a one-off row.
+const plusMinutes = (c, mins) => {
+  const total = c.hh * 60 + c.mm + mins;
+  return { time: `${pad2(Math.floor(total / 60) % 24)}:${pad2(total % 60)}`, day: total >= 1440 ? 'tomorrow' : 'today' };
+};
+const atClock = (c, hhmm) => {
+  const [h, m] = hhmm.split(':').map(Number);
+  return { time: hhmm, day: h * 60 + m > c.hh * 60 + c.mm ? 'today' : 'tomorrow' };
+};
+const quickDone = (s, when) => {
+  const verb = s.data.action === 'on' ? 'הדלקה' : 'כיבוי';
+  const dayHe = when.day === 'tomorrow' ? 'מחר' : 'היום';
+  return reply({ node: 'main', data: {} }, '', {
+    done: true, options: [BACK],
+    action: { kind: 'timed', relay_id: s.data.relay.id, relay_name: s.data.relay.name, action: s.data.action, time: when.time, day: when.day,
+      summary: `${verb} של "${s.data.relay.name}" ${dayHe} בשעה ${when.time}` },
+  });
+};
+const DAY_HE = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+export function weekText(events, clock) {
+  const today = `${clock.y}-${pad2(clock.mo)}-${pad2(clock.d)}`;
+  const nowKey = `${today}T${pad2(clock.hh)}:${pad2(clock.mm)}`;
+  const byDate = new Map();
+  for (const e of events) {
+    if (e.manual || !e.time || `${e.date}T${e.time}` < nowKey) continue;
+    if (!byDate.has(e.date)) byDate.set(e.date, []);
+    byDate.get(e.date).push(e);
+  }
+  if (!byDate.size) return 'אין תזמונים בשבוע הקרוב.';
+  const lines = [];
+  for (const [date, list] of byDate) {
+    const dow = new Date(`${date}T12:00:00Z`).getUTCDay();
+    const [, mo, d] = date.split('-');
+    lines.push(`יום ${DAY_HE[dow]} ${Number(d)}.${Number(mo)}${date === today ? ' (היום)' : ''}:`);
+    for (const e of list.slice(0, 12)) lines.push(`  ${e.action === 'on' ? '🟢' : '⚪'} ${e.time} ${e.relay_name}`);
+    if (list.length > 12) lines.push(`  … ועוד ${list.length - 12}`);
+  }
+  return `מה קורה בשבוע הקרוב:\n${lines.join('\n')}`;
+}
+
 const ORDER_STATUS_HE = { open: 'בטיפול — ההזמנה נקלטה ואנחנו עובדים עליה', delivered: 'סופקה', cancelled: 'בוטלה' };
 
 function mainMenu(ctx) {
@@ -116,7 +182,10 @@ function mainMenu(ctx) {
     { n: 2, label: 'שירות לקוחות' },
     { n: 3, label: 'מידע כללי' },
   ];
-  if (ctx.user) options.push({ n: 4, label: 'הדלקה / כיבוי של ערוץ' }, { n: 5, label: 'מצב הערוצים' });
+  if (ctx.user) {
+    options.push({ n: 4, label: 'הדלקה / כיבוי של ערוץ' }, { n: 5, label: 'מצב הערוצים' },
+      { n: 6, label: 'תזמון מהיר' }, { n: 7, label: 'התוכניות שלי' }, { n: 8, label: 'מה קורה השבוע' });
+  }
   options.push({ n: 0, label: 'נציג אנושי' });
   const hello = ctx.user ? `שלום ${firstName(ctx.user)}, ` : 'שלום, ';
   return { text: `${hello}כאן מוקד השירות של TelTech. במה נוכל לעזור?`, options };
@@ -154,6 +223,9 @@ export async function step(ctx, state, input, io = realIo) {
       if (d === 3) { s.node = 'info'; return render(ctx, s, io); }
       if (d === 4 && ctx.user) { s.node = 'switch_relay'; return render(ctx, s, io); }
       if (d === 5 && ctx.user) { s.node = 'status'; return render(ctx, s, io); }
+      if (d === 6 && ctx.user) { s.node = 'quick_relay'; return render(ctx, s, io); }
+      if (d === 7 && ctx.user) { s.node = 'plans'; return render(ctx, s, io); }
+      if (d === 8 && ctx.user) { s.node = 'week'; return render(ctx, s, io); }
       if (d === 0) { s.node = 'agent'; return render(ctx, s, io); }
       return notUnderstood(menuStart(ctx));
     }
@@ -401,6 +473,79 @@ export async function step(ctx, state, input, io = realIo) {
     }
     case 'status': {
       return reply({ node: 'main', data: {} }, '', { done: true, options: [BACK], action: { kind: 'status' } });
+    }
+
+    // ── 6 תזמון מהיר: a one-off on/off later today (or tomorrow if the time passed) ──
+    case 'quick_relay': {
+      const relays = await io.relays(ctx.user.id);
+      if (!relays.length) return reply({ node: 'main', data: {} }, 'לחשבון שלכם אין עדיין ערוצים פעילים.', { options: [BACK] });
+      const list = numbered(relays.map((r) => ({ relay: r, label: r.name })));
+      const options = withBack(list.map(({ n, label }) => ({ n, label })));
+      if (rendering) return reply(s, 'תזמון מהיר — איזה ערוץ?', { options });
+      const pick = pickNumbered(list, d)?.relay;
+      if (!pick) return notUnderstood(await render(ctx, s, io));
+      s.data.relay = { id: pick.id, name: pick.name }; s.node = 'quick_action';
+      return render(ctx, s, io);
+    }
+    case 'quick_action': {
+      const relay = await ownRelay(ctx, io, s.data.relay?.id);
+      if (!relay) return menuStart(ctx);
+      s.data.relay = { id: relay.id, name: relay.name };
+      const options = withBack([{ n: 1, label: 'הדלקה' }, { n: 2, label: 'כיבוי' }]);
+      if (rendering) return reply(s, `"${relay.name}" — מה לעשות?`, { options });
+      if (d !== 1 && d !== 2) return notUnderstood(await render(ctx, s, io));
+      s.data.action = d === 1 ? 'on' : 'off'; s.node = 'quick_when';
+      return render(ctx, s, io);
+    }
+    case 'quick_when': {
+      if (!(await ownRelay(ctx, io, s.data.relay?.id)) || !['on', 'off'].includes(s.data.action)) return menuStart(ctx);
+      const options = withBack(QUICK_WHEN.map(({ n, label }) => ({ n, label })));
+      if (rendering) return reply(s, 'מתי?', { options });
+      const o = QUICK_WHEN.find((x) => x.n === d);
+      if (!o) return notUnderstood(await render(ctx, s, io));
+      if (o.key === 'custom') { s.node = 'quick_time'; return render(ctx, s, io); }
+      const clock = io.clock();
+      return quickDone(s, o.minutes != null ? plusMinutes(clock, o.minutes) : atClock(clock, o.at));
+    }
+    case 'quick_time': {
+      if (!(await ownRelay(ctx, io, s.data.relay?.id)) || !['on', 'off'].includes(s.data.action)) return menuStart(ctx);
+      if (rendering) return reply(s, 'באיזו שעה? (למשל 17:30)', { free: true });
+      const t = parseClock(text);
+      if (!t) return reply(s, 'כתבו שעה בפורמט 17:30.', { free: true });
+      return quickDone(s, atClock(io.clock(), t));
+    }
+
+    // ── 7 התוכניות שלי: stop / start a plan (nothing deleted) ──
+    case 'plans': {
+      const plans = await io.plans(ctx.user.id);
+      if (!plans.length) return reply({ node: 'main', data: {} }, 'אין עדיין תוכניות בחשבון שלכם.', { options: [BACK] });
+      const list = numbered(plans.map((p) => ({ plan: p, label: `${p.name} — ${p.enabled ? 'פעילה' : 'מושבתת'}` })));
+      const options = withBack(list.map(({ n, label }) => ({ n, label })));
+      if (rendering) return reply(s, 'התוכניות שלכם — איזו תוכנית?', { options });
+      const pick = pickNumbered(list, d)?.plan;
+      if (!pick) return notUnderstood(await render(ctx, s, io));
+      s.data.plan = { key: pick.key }; s.node = 'plan_action';
+      return render(ctx, s, io);
+    }
+    case 'plan_action': {
+      const plan = (await io.plans(ctx.user.id)).find((p) => p.key === s.data.plan?.key);
+      if (!plan) return menuStart(ctx);
+      const options = withBack([{ n: 1, label: 'עצירה' }, { n: 2, label: 'הפעלה' }]);
+      if (rendering) return reply(s, `"${plan.name}" (${plan.enabled ? 'פעילה' : 'מושבתת'}) — מה לעשות?`, { options });
+      if (d !== 1 && d !== 2) return notUnderstood(await render(ctx, s, io));
+      const on = d === 2;
+      const already = plan.enabled === on ? (on ? ', היא כבר פעילה' : ', היא כבר מושבתת') : '';
+      return reply({ node: 'main', data: {} }, '', {
+        done: true, options: [BACK],
+        action: { kind: 'plan_toggle', plan_key: plan.key, plan_name: plan.name, action: on ? 'on' : 'off', schedule_ids: plan.schedule_ids,
+          summary: `${on ? 'הפעלת' : 'עצירת'} התוכנית ${plan.name}${already}` },
+      });
+    }
+
+    // ── 8 מה קורה השבוע: the next 7 days' firings, read-only ──
+    case 'week': {
+      const events = await io.upcoming(ctx.user.id, 7);
+      return reply({ node: 'main', data: {} }, weekText(events, io.clock()), { done: true, options: [BACK] });
     }
 
     // ── 0 נציג ──
