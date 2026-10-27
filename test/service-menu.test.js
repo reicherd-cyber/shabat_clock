@@ -43,9 +43,9 @@ async function runFrom(ctx, io, node, inputs) {
 test('main menu: a known customer is greeted by name and sees the device options; a guest does not', () => {
   const r = menuStart(ctxUser);
   assert.match(r.text, /שלום דוד/);
-  assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3, 4, 5, 6, 0]);
+  assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3, 4, 5, 6]);
   const g = menuStart(ctxGuest);
-  assert.deepEqual(g.options.map((o) => o.n), [1, 2, 3, 0]);
+  assert.deepEqual(g.options.map((o) => o.n), [1, 2, 3]);
 });
 
 test('order branch: numbered answers, then name (guest only) and city, and a CRM lead', async () => {
@@ -146,8 +146,9 @@ test('feature request lives inside שירות לקוחות (one free text); נצ
   const io = fakeIo();
   const f = await run(ctxUser, io, ['2', '5', 'תוסיפו טיימר לשעה']);
   assert.equal(f.last.done, true);
-  const a = await run(ctxGuest, io, ['0']);
+  const a = await runFrom(ctxGuest, io, 'agent', []);
   assert.equal(a.last.done, true, 'one tap, no typing');
+  assert.match((await step(ctxUser, menuStart(ctxUser).state, '0', io)).text, /^לא הבנתי/); // 0 is no longer a main-menu key
   assert.deepEqual(io.log.tickets.map((t) => t.topic), ['feature', 'agent']);
   assert.equal(io.log.tickets[0].body, 'תוסיפו טיימר לשעה');
 });
@@ -155,7 +156,7 @@ test('feature request lives inside שירות לקוחות (one free text); נצ
 test('free text is asked only inside הזמנה and שירות לקוחות — every other reply offers numbers', async () => {
   const io = fakeIo({ online: true });
   const seen = [];
-  for (const inputs of [['3'], ['3', '2'], ['4'], ['4', '1'], ['5'], ['0']]) {
+  for (const inputs of [['3'], ['3', '2'], ['4'], ['4', '1'], ['5'], ['2']]) {
     const { replies } = await run(ctxUser, io, inputs);
     for (const r of replies) seen.push(r);
   }
@@ -183,7 +184,7 @@ test('renderText lists the options with keycaps under the text', () => {
   const t = renderText(r);
   assert.match(t, /^שלום, כאן מוקד השירות/);
   assert.match(t, /\n1️⃣ הזמנה \/ מכירה\n/);
-  assert.match(t, /0️⃣ נציג אנושי$/);
+  assert.match(t, /3️⃣ מידע כללי$/); // 0 נציג is off the main menu (2026-10-27)
 });
 
 // ── the state is the channel's, not ours: ids in it are honoured only when they are the customer's ──
@@ -283,7 +284,7 @@ test('an order lead records the channel count', async () => {
 test('every escalation writes a ticket with a topic and the customer hears the 3-hour promise', async () => {
   const io = fakeIo({ online: false });
   const paths = [
-    { ctx: ctxUser, inputs: ['0'] },                                   // נציג
+    { ctx: ctxUser, node: 'agent', inputs: [] },                       // נציג (reached inside the branches, not from the main menu)
     { ctx: ctxUser, inputs: ['2', '4', 'הכל מהבהב'] },                 // משהו אחר
     { ctx: ctxUser, inputs: ['2', '1', '1', '1', '1', '1', '1'] },     // device check: pick unit, three steps, open the ticket
     { ctx: ctxGuest, inputs: ['2', '0501234567 המכשיר לא עובד'] },     // guest service
@@ -291,7 +292,7 @@ test('every escalation writes a ticket with a topic and the customer hears the 3
   ];
   for (const p of paths) {
     const io2 = fakeIo({ online: false });
-    const { last } = await run(p.ctx, io2, p.inputs);
+    const { last } = p.node ? await runFrom(p.ctx, io2, p.node, p.inputs) : await run(p.ctx, io2, p.inputs);
     assert.equal(io2.log.tickets.length, 1, p.inputs.join(' '));
     assert.ok(io2.log.tickets[0].topic, 'topic');
     assert.match(last.text, /תוך 3 שעות בשעות הפעילות/, p.inputs.join(' '));
@@ -367,7 +368,7 @@ test('מה קורה השבוע (off the menu, router-only): the coming firings b
 test('guests do not see 4–6 and cannot reach them; 7 and 8 are gone for everyone', async () => {
   const io = fakeIo2();
   const r = menuStart(ctxGuest);
-  assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3, 0]);
+  assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3]);
   for (const n of ['4', '5', '6', '7', '8']) assert.match((await step(ctxGuest, r.state, n, io)).text, /^לא הבנתי/);
   for (const n of ['7', '8']) assert.match((await step(ctxUser, menuStart(ctxUser).state, n, io)).text, /^לא הבנתי/);
 });
@@ -483,7 +484,7 @@ test('choiceOptions: the phone keeps a channel that owns 9 and drops only the wa
   assert.deepEqual(choiceOptions(list.last).map((o) => o.n), [9, 1]); // * (back) dropped, the channel on 9 kept
   const plans = await run(ctxUser, { ...io, plans: async () => [{ key: 'p1', name: 'שבת', enabled: true }] }, ['6']);
   assert.deepEqual(choiceOptions(plans.last).map((o) => o.n), [1]); // 9 (back) dropped
-  assert.deepEqual(choiceOptions(menuStart(ctxUser)).map((o) => o.n), [1, 2, 3, 4, 5, 6, 0]);
+  assert.deepEqual(choiceOptions(menuStart(ctxUser)).map((o) => o.n), [1, 2, 3, 4, 5, 6]);
 });
 
 test('נציג on the phone is a transfer, not a callback ticket; other channels still file the ticket', async () => {
