@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Modal, ErrorNote, useAsync, SectionHead, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect } from '../ui.jsx';
-import { MessageSquare, MessageCircle, Send, Phone, PhoneOff, Inbox, Bot } from 'lucide-react';
+import { MessageSquare, MessageCircle, Send, Phone, PhoneOff, Inbox, Bot, BarChart3, Sparkles, RefreshCw } from 'lucide-react';
 import HelpChats from './HelpChats.jsx';
+import DeskStats from './DeskStats.jsx';
 
 // פניות תמיכה: תיבת ההודעות שמשתמשים שולחים ממרכז העזרה. סטטוסים רכים והפיכים
 // (חדשה ↔ נקראה ↔ טופלה) — לעולם לא מחיקה. פתיחת פנייה חדשה מסמנת אותה כנקראה
@@ -95,6 +96,7 @@ function ChatBubble({ who, name, ts, seen, children }) {
 const TABS = [
   { key: 'inbox', label: 'פניות', Icon: Inbox },
   { key: 'bot', label: 'שיחות עם הבוט', Icon: Bot },
+  { key: 'desk', label: 'מספרי המוקד', Icon: BarChart3 },
 ];
 
 export function SupportInbox() {
@@ -110,6 +112,17 @@ export function SupportInbox() {
   const [thread, setThread] = useState(null); // replies of the open row (null = loading)
   const [reply, setReply] = useState('');
   const [confirmClose, setConfirmClose] = useState(null); // row pending "טופלה" confirm
+  // עוזר לנציג (phase 4): summary / urgency / facts / a suggested reply for the open
+  // ticket — computed once per ticket on the server, out of the customer's path.
+  const [enrich, setEnrich] = useState(null); // undefined = loading, null = none, object = result
+  const [enriching, setEnriching] = useState(false);
+  const loadEnrich = async (id, force = false) => {
+    setEnriching(true); setEnrich(undefined);
+    try {
+      const r = await adminApi.post(`/support/${id}/enrich${force ? '?force=1' : ''}`, {});
+      setEnrich(r.enrichment || null);
+    } catch (e) { setEnrich(null); setError(e); } finally { setEnriching(false); }
+  };
   const threadEnd = useRef(null);
   const { busy, error, run, setError } = useAsync();
 
@@ -146,6 +159,7 @@ export function SupportInbox() {
     setThread(null);
     setReply('');
     loadThread(row.id).catch(setError);
+    if (!isPhone(row)) loadEnrich(row.id); else setEnrich(null);
     if (row.status === 'new') setStatus(row, 'read');
   };
 
@@ -185,6 +199,7 @@ export function SupportInbox() {
         ))}
       </div>
       {tab === 'bot' && <HelpChats />}
+      {tab === 'desk' && <DeskStats />}
       {tab === 'inbox' && <>
 
       {/* מונים — לחיצים, מסננים את הרשימה */}
@@ -278,6 +293,42 @@ export function SupportInbox() {
             {isPhone(open) && (
               <div className="border border-line rounded-[10px] bg-surface2/50 px-3 py-2">
                 <VoicePlayer id={open.id} hungUp={!!open.voicemail_hangup} />
+              </div>
+            )}
+
+            {/* עוזר לנציג: מה שהמערכת כבר יודעת + טיוטה — הנציג שולח, לא המודל */}
+            {!isPhone(open) && (
+              <div className="border border-line rounded-[10px] bg-surface2/50 px-3 py-2 text-sm space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold inline-flex items-center gap-1.5"><Sparkles size={15} className="text-accent" />עוזר לנציג</span>
+                  <button type="button" className="text-xs text-muted hover:text-ink inline-flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                    disabled={enriching} onClick={() => loadEnrich(open.id, true)} title="לחשב מחדש (קריאה למודל)">
+                    <RefreshCw size={12} className={enriching ? 'animate-spin' : ''} />רענון
+                  </button>
+                </div>
+                {enrich === undefined && <p className="text-muted text-xs">אוסף נתונים ומנסח…</p>}
+                {enrich === null && !enriching && <p className="text-muted text-xs">אין עוזר כרגע (אין מפתח או שתקציב ה-AI היומי נגמר).</p>}
+                {enrich && (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`pill ${enrich.urgency === 'high' ? 'text-off' : enrich.urgency === 'low' ? 'text-muted' : ''}`}>
+                        דחיפות: {enrich.urgency === 'high' ? 'גבוהה' : enrich.urgency === 'low' ? 'נמוכה' : 'רגילה'}
+                      </span>
+                      <span className="text-xs text-muted">{enrich.model} · ${Number(enrich.cost_usd).toFixed(3)}</span>
+                    </div>
+                    <p className="whitespace-pre-wrap">{enrich.summary}</p>
+                    {enrich.facts?.length > 0 && (
+                      <ul className="list-disc ms-5 text-xs space-y-0.5">{enrich.facts.map((f, i) => <li key={i}>{f}</li>)}</ul>
+                    )}
+                    {enrich.suggested_reply && (
+                      <div className="border border-line rounded-[8px] bg-surface px-2.5 py-1.5">
+                        <div className="text-xs text-muted mb-1">טיוטת תשובה:</div>
+                        <p className="whitespace-pre-wrap">{enrich.suggested_reply}</p>
+                        <Button variant="ghost" className="text-xs py-1 mt-1" onClick={() => setReply(enrich.suggested_reply)}>השתמש בטיוטה (לעריכה לפני שליחה)</Button>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             )}
 
