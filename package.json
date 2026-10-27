@@ -28,7 +28,7 @@
     "mqtt": "^5.10.1",
     "msedge-tts": "^2.1.0",
     "mysql2": "^3.11.3",
-    "nodemailer": "^9.0.3",
+    "nodemailer": "^10.2.1",
     "qrcode": "^1.5.4",
     "suncalc": "^2.0.1"
   },
