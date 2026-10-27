@@ -18,6 +18,7 @@ function fakeIo({ online = false, orders = [], infoText = 'טקסט מידע' } 
     ticket: async (t) => { log.tickets.push(t); return 100 + log.tickets.length; },
     lead: async (l) => { log.leads.push(l); return 55; },
     orders: async () => orders,
+    assistAvailable: async () => false, assist: async () => ({ can_answer: false, answer: null }),
   };
 }
 const user = { id: 3, full_name: 'דוד כהן' };
@@ -318,4 +319,45 @@ test('guests do not see 6–8 and cannot reach them', async () => {
   const r = menuStart(ctxGuest);
   assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3, 0]);
   for (const n of ['6', '7', '8']) assert.match((await step(ctxGuest, r.state, n, io)).text, /^לא הבנתי/);
+});
+
+// ── phase 3: the assistant is offered only after the menu failed, and only when available ──
+test('after לא עזר the assistant is offered when available; its answer is shown; לא עזר → the question becomes the ticket', async () => {
+  const io = { ...fakeIo({ online: true }), assistAvailable: async () => true, assist: async ({ text }) => ({ can_answer: true, answer: 'תשובה על ' + text }) };
+  const offer = await run(ctxUser, io, ['2', '4']);
+  assert.deepEqual(offer.last.options.map((o) => o.n), [1, 2, 9]);
+  const asked = await step(ctxUser, offer.last.state, '1', io);
+  assert.equal(asked.free, true);
+  const answered = await step(ctxUser, asked.state, 'איך מוסיפים תוכנית', io);
+  assert.match(answered.text, /^תשובה על איך מוסיפים תוכנית\n\nזה עזר\?/);
+  const no = await step(ctxUser, answered.state, '2', io);
+  assert.equal(io.log.tickets.length, 1);
+  assert.equal(io.log.tickets[0].body, 'איך מוסיפים תוכנית');
+  assert.equal(io.log.tickets[0].details.assistant_answer, 'תשובה על איך מוסיפים תוכנית');
+  assert.match(no.text, /תוך 3 שעות/);
+  // the same offer after an online unit "לא עזר", and after an info topic "לא עזר"
+  const online = await run(ctxUser, io, ['2', '1', '1', '2']);
+  assert.equal(online.last.state.node, 'assistant_offer');
+  const info = await run(ctxUser, io, ['3', '1', '2']);
+  assert.equal(info.last.state.node, 'assistant_offer');
+  const agent = await step(ctxUser, info.last.state, '2', io);
+  assert.equal(io.log.tickets.length, 2);
+  assert.equal(io.log.tickets[1].topic, 'info');
+  assert.match(agent.text, /הפנייה נרשמה/);
+  // the assistant could not answer → the question goes to a person at once
+  const io2 = { ...fakeIo({ online: true }), assistAvailable: async () => true, assist: async () => ({ can_answer: false, answer: null }) };
+  const direct = await run(ctxUser, io2, ['2', '4', '1', 'שאלה קשה']);
+  assert.equal(io2.log.tickets.length, 1);
+  assert.equal(io2.log.tickets[0].body, 'שאלה קשה');
+  assert.match(direct.last.text, /הפנייה נרשמה/);
+});
+
+test('without the assistant (no key / over budget) the old paths are unchanged', async () => {
+  const io = fakeIo({ online: true });
+  const other = await run(ctxUser, io, ['2', '4']);
+  assert.equal(other.last.free, true);
+  const info = await run(ctxUser, io, ['3', '1', '2']);
+  assert.equal(io.log.tickets.length, 1);
+  assert.equal(io.log.tickets[0].topic, 'info');
+  assert.match(info.last.text, /הפנייה נרשמה/);
 });

@@ -69,9 +69,11 @@ export default function ServiceChat() {
             ))}
           </div>
         )}
-        {reply?.free && (
+        {/* Always typeable: a node that asks for words takes them as they are; elsewhere
+            typed words go through the free-text router and land on the right branch. */}
+        {reply && (
           <div className="flex items-center gap-2">
-            <Input autoFocus className="flex-1" value={input} placeholder="כתבו כאן…" disabled={busy}
+            <Input autoFocus={Boolean(reply.free)} className="flex-1" value={input} placeholder={reply.free ? 'כתבו כאן…' : 'או כתבו במילים מה תרצו…'} disabled={busy}
               onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') send(); }} />
             <Button disabled={busy || !input.trim()} onClick={send}><span className="inline-flex items-center gap-1"><Send size={14} />שליחה</span></Button>
           </div>

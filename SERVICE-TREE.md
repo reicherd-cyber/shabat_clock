@@ -43,7 +43,7 @@ Navigation everywhere: `9` = main menu, `0` on the main menu = a person.
 │       │   │        ├─ חזר להיות מחובר → ✔ "חזר ✅. התזמונים ממשיכים"
 │       │   │        └─ עדיין לא → "לא נפתר מרחוק — 1 פתיחת פנייה"
 │       │   │             🎫 [device_offline] + details {device_id, steps_done, diagnosis verdict/category}
-│       │   └─ 🆕 after "לא עזר": 1 לשאול את העוזר 🤖 (one question) · 2 לנציג
+│       │   └─ 🔧 after "לא עזר": 1 לשאול את העוזר 🤖 (one question) · 2 לנציג
 │       ├─ 2  תזמון לא פעל                                                      🔧
 │       │   ├─ מה קרה?  1 לא נדלק · 2 לא כבה · 3 פעל בשעה לא נכונה
 │       │   ├─ באיזה ערוץ?  1..n  (עם שם המכשיר כשיש כמה)
@@ -53,7 +53,7 @@ Navigation everywhere: `9` = main menu, `0` on the main menu = a person.
 │       │   ├─ הזמנות פתוחות על המספר → רשימה + "זה עזר?"  1 כן · 2 לא → 📝 🎫 [service_other]
 │       │   └─ אין → 📝 "על איזו הזמנה מדובר?"  🎫 [service_other]
 │       ├─ 4  משהו אחר  📝 תיאור                                 🎫 [service_other]   🔧
-│       │   └─ 🆕 before the ticket: 1 לשאול את העוזר 🤖 · 2 לנציג  (assistant answer → "עזר?" → ticket if not)
+│       │   └─ 🔧 before the ticket: 1 לשאול את העוזר 🤖 · 2 לנציג  (assistant answer → "עזר?" → ticket if not)
 │       ├─ 5  בקשה או הצעה לשיפור  📝                             🎫 [feature]         🔧
 │       └─ 9  תפריט ראשי
 │
@@ -61,7 +61,7 @@ Navigation everywhere: `9` = main menu, `0` on the main menu = a person.
 │   ├─ 1 מחירים · 2 איך זה עובד · 3 התקנה · 4 שעות פעילות ואזורי שירות · 5 הלכה
 │   │   (editable texts settings menu.info.*, seeded by migration 75)
 │   └─ "זה עזר?"  1 כן → "בשמחה!" · 2 לא → 🎫 [info] (topic only — no free question, no model)
-│       🆕 2 לא → 1 לשאול את העוזר 🤖 · 2 לנציג
+│       🔧 2 לא → 1 לשאול את העוזר 🤖 · 2 לנציג
 │
 ├─ 4  🔒 הדלקה / כיבוי של ערוץ                                   🔧 ⚡
 │   ├─ איזה ערוץ?  1..n  (עם המצב: דולק/כבוי)
@@ -92,7 +92,7 @@ Navigation everywhere: `9` = main menu, `0` on the main menu = a person.
 │
 └─ free text where a digit was expected
     ├─ today 🔧: "לא הבנתי. בחרו מספר מהרשימה" + the same options
-    └─ 🆕 router 🤖 (Haiku-class, cached prompt, whitelisted node ids):
+    └─ 🔧 router 🤖 (Haiku-class, cached prompt, whitelisted node ids):
          "תכבה את הסלון"      → 4 → switch_action(סלון, כיבוי) → confirm
          "מה המצב"            → 5
          "המכשיר לא עובד"     → 2.1
@@ -184,11 +184,11 @@ settings         menu.info.* · whatsapp.* · ivr.* texts — editable, no deplo
 
 | # | Touchpoint | Channel | Model class | Guard | Status |
 |---|---|---|---|---|---|
-| 1 | Free-text router → menu node + slots | WhatsApp, site | Haiku-class, cached prompt | whitelisted nodes, relay re-scoping, confirm | 🆕 |
-| 2 | One-question assistant (knowledge base) | all | `SUPPORT_MODEL`, rules → reuse → cache | opt-in after the menu failed, 6/min + daily cap, `can_answer=false` → ticket | ✅ bot, 🆕 placement |
+| 1 | Free-text router → menu node + slots | WhatsApp, site | Haiku-class, cached prompt | whitelisted nodes, relay re-scoping, confirm | 🔧 |
+| 2 | One-question assistant (knowledge base) | all | `SUPPORT_MODEL`, rules → reuse → cache | opt-in after the menu failed, 6/min + daily cap, `can_answer=false` → ticket | 🔧 |
 | 3 | Voice interpretation (garbled STT) | phone | Opus-class, cached rules block | confirm read-back, re-listen ×2 | ✅ |
 | 4 | Agent-side enrichment | admin | cheapest that passes eval | async, agent sends | 🆕 |
 | — | Menu nodes | all | **none** | — | 🔧 |
 
-Budgets: `ai.enabled` kill switch, `ai.budget.daily_usd`, `ai.budget.user_daily` 🆕;
+Budgets: `ai.enabled` kill switch, `ai.budget.daily_usd`, `ai.budget.user_daily` 🔧 (migration 78);
 every call logged to `nlu_usage` (source, kind, cost, outcome) ✅.

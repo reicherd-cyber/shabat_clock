@@ -18,6 +18,7 @@ import { query } from '../db/pool.js';
 import { errors } from '../config/errors.js';
 import { env } from '../config/env.js';
 import { costUsd, totalInputTokens, quickAnswerParams } from './aiPricing.js';
+import { aiAllowed } from './aiBudget.js';
 import { smallTalkAnswer, normalizeQuestion } from './supportRules.js';
 
 const SCHEMA = {
@@ -105,6 +106,7 @@ export async function answerSupportQuestion({ userId, text, source = 'web', phon
   }
 
   if (!env.anthropic.apiKey) return { can_answer: false, answer: null };
+  if (!(await aiAllowed({ userId, kind: 'support' }))) return { can_answer: false, answer: null };
 
   // 2. Repeated question — the answer the model already gave.
   const reused = await reusableAnswer(clean).catch(() => null);

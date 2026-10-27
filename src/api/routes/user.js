@@ -536,7 +536,10 @@ userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
       'SELECT phone FROM user_phones WHERE user_id = ? AND deleted_at IS NULL ORDER BY is_primary DESC, id LIMIT 1', [req.auth.userId]);
     const ctx = { user, phone: primary?.phone ?? null, source: 'web', actor: actorStr(actorOf(req)), actorObj: actorOf(req) };
     const state = req.body?.state && typeof req.body.state === 'object' ? req.body.state : null;
-    let r = state ? await step(ctx, state, String(req.body?.input ?? '').slice(0, 2000)) : menuStart(ctx);
+    // Digits and asked-for text go to the tree; other words try the free-text
+    // router first (services/menuRouter.js, phase 3), then the tree's re-prompt.
+    const { menuInput } = await import('../../services/menuRouter.js');
+    let r = state ? await menuInput({ ctx, state, text: String(req.body?.input ?? '').slice(0, 2000) }) : menuStart(ctx);
     if (r.action && r.action.kind !== 'status') {
       // The site is the customer's own panel: a switch, a quick one-off timing or
       // a plan stop/start runs at once (the page already showed the choice).

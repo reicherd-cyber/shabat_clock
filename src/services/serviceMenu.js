@@ -21,8 +21,12 @@ import { listSchedules } from './schedules.js';
 import { groupPlans } from './nlu.js';
 import { calendarTimeline } from './calendar.js';
 import { localParts } from './time.js';
+import { answerSupportQuestion } from './support.js';
+import { aiAllowed } from './aiBudget.js';
+import { env } from '../config/env.js';
 
 export const MENU_MAIN = '9';
+export const FREE_NODES = new Set(['order_name', 'order_city', 'service_unknown', 'service_other', 'feature', 'quick_time', 'assistant_ask']);
 const BACK = { n: 9, label: 'תפריט ראשי' };
 
 const CHANNEL_OPTIONS = [
@@ -92,6 +96,10 @@ export const realIo = {
     return calendarTimeline({ userId, from: { y: p.y, mo: p.mo, d: p.d }, days });
   },
   clock: (tz = 'Asia/Jerusalem') => localParts(new Date(), tz),
+  // Phase 3: the one-question assistant (the knowledge-base bot) — offered only
+  // after the menu failed, only with a key and within the AI budget.
+  assistAvailable: async (ctx) => Boolean(env.anthropic.apiKey) && aiAllowed({ userId: ctx.user?.id ?? null, kind: 'support' }),
+  assist: ({ ctx, text }) => answerSupportQuestion({ userId: ctx.user?.id ?? null, text, source: ctx.source === 'whatsapp' ? 'whatsapp' : 'web', phone: ctx.phone ?? null }),
   async orders({ ctx }) {
     if (!ctx.phone && !ctx.user) return [];
     return query(
@@ -172,6 +180,24 @@ export function weekText(events, clock) {
     if (list.length > 12) lines.push(`  … ועוד ${list.length - 12}`);
   }
   return `מה קורה בשבוע הקרוב:\n${lines.join('\n')}`;
+}
+
+// After "לא עזר": where the branch would have gone without the assistant.
+async function fallbackOf(ctx, s, io) {
+  if (s.data.fallback === 'info_ticket') return infoTicket(ctx, s, io);
+  s.node = 'service_other';
+  return step(ctx, { ...s, _render: true }, null, io);
+}
+async function infoTicket(ctx, s, io) {
+  // no free question, no model: the topic alone is the ticket
+  const id = await io.ticket({ ctx, topic: 'info', body: `המידע על "${INFO_TOPICS.find((x) => x.key === s.data.topic)?.label || s.data.topic}" לא ענה על השאלה — לחזור ללקוח.`, details: { topic: s.data.topic } });
+  return reply({ node: 'main', data: {} }, `הפנייה נרשמה (מס׳ ${id}). נציג יחזור אליכם עם תשובה ${CALLBACK_HE}.`, { options: [BACK], done: true });
+}
+// The assistant could not answer, or its answer did not help: the question
+// (and the answer the customer rejected) go to a person.
+async function assistantTicket(ctx, s, io, answer) {
+  const id = await io.ticket({ ctx, topic: 'service_other', body: s.data.question || '', details: { via: 'assistant', topic: s.data.topic || null, assistant_answer: answer } });
+  return reply({ node: 'main', data: {} }, `הפנייה נרשמה (מס׳ ${id}). נציג יחזור אליכם ${CALLBACK_HE}.`, { options: [BACK], done: true });
 }
 
 const ORDER_STATUS_HE = { open: 'בטיפול — ההזמנה נקלטה ואנחנו עובדים עליה', delivered: 'סופקה', cancelled: 'בוטלה' };
@@ -292,7 +318,7 @@ export async function step(ctx, state, input, io = realIo) {
       if (d === 1) { s.node = 'fault_device'; return render(ctx, s, io); }
       if (d === 2) { s.node = 'sched_problem'; return render(ctx, s, io); }
       if (d === 3) { s.node = 'order_status'; return render(ctx, s, io); }
-      if (d === 4) { s.node = 'service_other'; return render(ctx, s, io); }
+      if (d === 4) { s.node = (await io.assistAvailable(ctx)) ? 'assistant_offer' : 'service_other'; s.data.fallback = 'service_other'; return render(ctx, s, io); }
       if (d === 5) { s.node = 'feature'; return render(ctx, s, io); }
       return notUnderstood(await render(ctx, s, io));
     }
@@ -326,7 +352,7 @@ export async function step(ctx, state, input, io = realIo) {
     case 'fault_online_helped': {
       if (rendering) return reply(s, 'זה עזר?', { options: withBack(HELPED) });
       if (d === 1) return reply({ node: 'main', data: {} }, 'מצוין, שמחים לעזור!', { options: [BACK], done: true });
-      if (d === 2) { s.node = 'service_other'; return render(ctx, s, io); }
+      if (d === 2) { s.node = (await io.assistAvailable(ctx)) ? 'assistant_offer' : 'service_other'; s.data.fallback = 'service_other'; return render(ctx, s, io); }
       return notUnderstood(await render(ctx, s, io));
     }
     case 'fault_steps': {
@@ -430,9 +456,8 @@ export async function step(ctx, state, input, io = realIo) {
       if (rendering) return reply(s, 'זה עזר?', { options: withBack(HELPED) });
       if (d === 1) return reply({ node: 'main', data: {} }, 'בשמחה!', { options: [BACK], done: true });
       if (d === 2) {
-        // no free question, no model: the topic alone is the ticket
-        const id = await io.ticket({ ctx, topic: 'info', body: `המידע על "${INFO_TOPICS.find((x) => x.key === s.data.topic)?.label || s.data.topic}" לא ענה על השאלה — לחזור ללקוח.`, details: { topic: s.data.topic } });
-        return reply({ node: 'main', data: {} }, `הפנייה נרשמה (מס׳ ${id}). נציג יחזור אליכם עם תשובה ${CALLBACK_HE}.`, { options: [BACK], done: true });
+        if (await io.assistAvailable(ctx)) { s.node = 'assistant_offer'; s.data.fallback = 'info_ticket'; return render(ctx, s, io); }
+        return infoTicket(ctx, s, io);
       }
       return notUnderstood(await render(ctx, s, io));
     }
@@ -546,6 +571,31 @@ export async function step(ctx, state, input, io = realIo) {
     case 'week': {
       const events = await io.upcoming(ctx.user.id, 7);
       return reply({ node: 'main', data: {} }, weekText(events, io.clock()), { done: true, options: [BACK] });
+    }
+
+    // ── the one-question assistant (SPEC [CS3] #2): offered only after the menu
+    //    failed; one question; a declined answer becomes the ticket ──
+    case 'assistant_offer': {
+      const options = withBack([{ n: 1, label: 'לשאול את העוזר' }, { n: 2, label: 'נציג אנושי' }]);
+      if (rendering) return reply(s, 'אפשר לשאול את העוזר הדיגיטלי שאלה אחת, או להשאיר פנייה לנציג.', { options });
+      if (d === 1) { s.node = 'assistant_ask'; return render(ctx, s, io); }
+      if (d === 2) return fallbackOf(ctx, s, io);
+      return notUnderstood(await render(ctx, s, io));
+    }
+    case 'assistant_ask': {
+      if (rendering) return reply(s, 'מה השאלה?', { free: true });
+      if (text.length < 3) return reply(s, 'כתבו את השאלה במילים.', { free: true });
+      s.data.question = text.slice(0, 1000);
+      const a = await io.assist({ ctx, text: s.data.question }).catch(() => ({ can_answer: false, answer: null }));
+      if (!a?.can_answer || !a.answer) return assistantTicket(ctx, s, io, null);
+      s.data.answer = String(a.answer).slice(0, 4000); s.node = 'assistant_helped';
+      return reply(s, `${s.data.answer}\n\nזה עזר?`, { options: withBack(HELPED) });
+    }
+    case 'assistant_helped': {
+      if (rendering) return reply(s, 'זה עזר?', { options: withBack(HELPED) });
+      if (d === 1) return reply({ node: 'main', data: {} }, 'בשמחה!', { options: [BACK], done: true });
+      if (d === 2) return assistantTicket(ctx, s, io, s.data.answer);
+      return notUnderstood(await render(ctx, s, io));
     }
 
     // ── 0 נציג ──

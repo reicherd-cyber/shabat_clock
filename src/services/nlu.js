@@ -6,6 +6,7 @@
 // intent → relay id + action/time; all validation stays server-side.
 import Anthropic from '@anthropic-ai/sdk';
 import { costUsd, totalInputTokens, quickAnswerParams } from './aiPricing.js';
+import { aiAllowed } from './aiBudget.js';
 import { query } from '../db/pool.js';
 import { errors } from '../config/errors.js';
 import { env } from '../config/env.js';
@@ -351,6 +352,11 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
 
   // Only the model path needs the schedules (plans in the prompt, deletion
   // matching) — hundreds of rows on a busy account, not fetched for a rules answer.
+  // The budget / kill switch (services/aiBudget.js): over it, the caller hears a
+  // plain "not now" and the menu keeps working — never an error.
+  if (!(await aiAllowed({ userId, kind: 'command' }))) {
+    return { understood: false, clarification: 'הפקודה הקולית לא זמינה כרגע, אפשר להשתמש בתפריט הרגיל', actions: [], tz: relays[0].timezone || 'Asia/Jerusalem' };
+  }
   const schedules = await listSchedules({ userId });
 
   const plans = groupPlans(schedules);

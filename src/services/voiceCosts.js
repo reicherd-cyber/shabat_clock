@@ -118,7 +118,7 @@ async function fetchYemotSttTransactions() {
 // /call-logs), userId, phone (partial digits), q (substring of the text),
 // source ('phone' | 'web' | 'whatsapp' | 'unknown'), kind ('command' | 'support').
 export const USAGE_SOURCES = ['phone', 'web', 'whatsapp', 'unknown'];
-export const USAGE_KINDS = ['command', 'support'];
+export const USAGE_KINDS = ['command', 'support', 'router'];
 export async function getVoiceCosts({ from, to, userId, phone, q, source, kind } = {}) {
   const rates = await loadRates();
   // The usage rows must cover the whole requested period (plus the matching

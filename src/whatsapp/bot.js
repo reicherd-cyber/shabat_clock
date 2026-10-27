@@ -23,6 +23,7 @@ import { sendText, sendButtons, markRead } from './client.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
 import { menuStart, step as menuStep, renderText } from '../services/serviceMenu.js';
+import { menuInput } from '../services/menuRouter.js';
 
 // ── מוקד שירות: the numbered menu (services/serviceMenu.js), phase 1 2026-10-27 ──
 // A greeting or a bare digit opens it; while a branch is open every message
@@ -232,7 +233,9 @@ export async function handleInbound(msg) {
       if (isGreeting(text)) r = menuStart(ctx);
       else if (menuState) {
         const inside = menuState.node && menuState.node !== 'main';
-        if (inside || isBareDigit(text)) r = await menuStep(ctx, menuState, text);
+        // Inside a branch: digits and asked-for text go to the tree; other words
+        // try the free-text router first (phase 3), then the tree's re-prompt.
+        if (inside || isBareDigit(text)) r = await menuInput({ ctx, state: menuState, text });
         else await resetSession(phone, userId); // a sentence at the main menu: the old paths below
       } else r = await menuStep(ctx, menuStart(ctx).state, text); // a bare digit with no menu open
       if (r) { await sendMenu({ phone, user, r }); return; }
