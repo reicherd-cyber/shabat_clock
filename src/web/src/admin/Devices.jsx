@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../api.js';
+import { IVR_DIGIT_MAX, IVR_DIGIT_WIDTH } from '../ivrCode.js';
 import { Download } from 'lucide-react';
 import { Card, Button, Input, Select, Badge, OnlineDot, Modal, ErrorNote, useAsync, FilterSelect, SearchSelect, fmtWhen, normalizeMac, shellyModelInfo, useSort, SortTh, agoHe } from '../ui.jsx';
 
@@ -179,7 +180,8 @@ export default function Devices() {
     const fleet = await adminApi.get('/relays');
     const taken = new Set(fleet.filter((r) => String(r.user_id) === String(userId) && r.ivr_digit != null).map((r) => Number(r.ivr_digit)));
     const out = [];
-    for (let d = 1; out.length < n; d++) if (!taken.has(d)) out.push(d);
+    for (let d = 1; out.length < n && d <= IVR_DIGIT_MAX; d++) if (!taken.has(d)) out.push(d);
+    if (out.length < n) throw new Error(`ללקוח לא נותרו קודי IVR פנויים (1–${IVR_DIGIT_MAX})`);
     return out;
   };
   const shellyProbe = () => run(async () => {
@@ -673,7 +675,7 @@ export default function Devices() {
                 <Input placeholder="שם" value={r.name}
                   onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, name: e.target.value } : x) })} />
                 <label className="text-sm flex items-center gap-1 whitespace-nowrap">קוד IVR:
-                  <Input className="w-24" inputMode="numeric" value={r.ivr_digit}
+                  <Input className="w-24" inputMode="numeric" maxLength={IVR_DIGIT_WIDTH} value={r.ivr_digit}
                     onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, ivr_digit: e.target.value } : x) })} />
                 </label>
               </div>
@@ -783,7 +785,7 @@ export default function Devices() {
                 <Input placeholder="שם" value={r.name}
                   onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, name: e.target.value } : x) })} />
                 <label className="text-sm flex items-center gap-1 whitespace-nowrap">קוד IVR:
-                  <Input className="w-24" inputMode="numeric" value={r.ivr_digit}
+                  <Input className="w-24" inputMode="numeric" maxLength={IVR_DIGIT_WIDTH} value={r.ivr_digit}
                     onChange={(e) => setShelly({ ...shelly, relays: shelly.relays.map((x, j) => j === i ? { ...x, ivr_digit: e.target.value } : x) })} />
                 </label>
               </div>

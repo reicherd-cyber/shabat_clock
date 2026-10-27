@@ -13,6 +13,7 @@ import { query } from '../db/pool.js';
 import { costUsd, totalInputTokens, quickAnswerParams } from './aiPricing.js';
 import { aiAllowed } from './aiBudget.js';
 import { step, menuStart, realIo, FREE_NODES } from './serviceMenu.js';
+import { isBareNumber } from './ivrCode.js';
 
 export const TARGETS = {
   main: 'חזרה לתפריט הראשי',
@@ -155,8 +156,9 @@ export async function routeFreeText({ ctx, text, node, io = realIo, call = null 
 export async function menuInput({ ctx, state, text, io = realIo, route = routeFreeText }) {
   if (!state) return menuStart(ctx);
   const node = state.node || 'main';
-  const isDigit = /^\s*(\d{1,3}|\*)\s*$/.test(String(text ?? ''));
-  if (isDigit || FREE_NODES.has(node)) return step(ctx, state, text, io);
+  // Any bare number or * is for the tree (a choice, or its own re-prompt) —
+  // never a paid routing call; words at a free-text node are what was asked for.
+  if (isBareNumber(text) || String(text ?? '').trim() === '*' || FREE_NODES.has(node)) return step(ctx, state, text, io);
   const parsed = await route({ ctx, text, node, io });
   const jumped = await applyMoves(ctx, movesFor(parsed, { customer: Boolean(ctx.user) }), io);
   // routed: the channel must treat an order in it as a guess (the site asks

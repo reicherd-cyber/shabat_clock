@@ -75,3 +75,10 @@ test('budgetDecision: kill switch, daily dollars, per-customer calls', () => {
   assert.deepEqual(budgetDecision({ enabled: true, dailyUsd: 5, spentUsd: 1, userDaily: 30, userCount: 2 }), { ok: true, reason: null });
   assert.deepEqual(budgetDecision({ enabled: true, dailyUsd: 0, spentUsd: 99, userDaily: 0, userCount: 99 }), { ok: true, reason: null }); // 0 = no cap
 });
+
+test('menuInput: a long bare number (a phone number, a year) is for the tree, never the router', async () => {
+  let calls = 0;
+  const r = await menuInput({ ctx, state: menuStart(ctx).state, text: '2026', io, route: async () => { calls++; return null; } });
+  assert.equal(calls, 0);
+  assert.match(r.text, /^לא הבנתי/);
+});
