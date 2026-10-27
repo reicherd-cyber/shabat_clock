@@ -658,8 +658,16 @@ export async function step(ctx, state, input, io = realIo) {
 // Plain-text rendering for channels without buttons (WhatsApp lists, phone):
 // "1️⃣ הזמנה" lines under the text.
 // A multi-digit code is one keycap per digit (1️⃣2️⃣), so every line looks alike.
+// WhatsApp lays each keycap out as an emoji — direction-neutral — so inside a
+// Hebrew line 1️⃣5️⃣ came out as 5 1 (seen 2026-10-27). A left-to-right mark
+// (U+200E, invisible) on both sides of every keycap pins the run; a single
+// keycap needs none.
 const KEYCAP = { '0': '0️⃣', '1': '1️⃣', '2': '2️⃣', '3': '3️⃣', '4': '4️⃣', '5': '5️⃣', '6': '6️⃣', '7': '7️⃣', '8': '8️⃣', '9': '9️⃣', '*': '*️⃣' };
-export const keycaps = (n) => String(n).split('').map((c) => KEYCAP[c] ?? c).join('');
+const LRM = '‎';
+export const keycaps = (n) => {
+  const caps = String(n).split('').map((c) => KEYCAP[c] ?? c);
+  return caps.length > 1 ? LRM + caps.join(LRM) + LRM : caps.join('');
+};
 export function renderText(r) {
   const lines = (r.options || []).map((o) => `${keycaps(o.n)} ${o.label}`);
   return [r.text, ...(lines.length ? ['', ...lines] : [])].filter((l, i) => l !== '' || i > 0).join('\n').trim();
