@@ -16,6 +16,7 @@ import { query } from '../db/pool.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, createSession, endSession } from './session.js';
 import { ask, askVoice, askRecord, say, sayAndHangup, transfer } from './responses.js';
+import { spokenText, spokenOption } from './speech.js';
 import { voicemailFolder, voicemailFileName, createPhoneTicket, fetchVoicemailInBackground } from '../services/voicemail.js';
 import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
@@ -107,10 +108,8 @@ const svcCtx = (session) => ({
   actor: `ivr:${session.userId}`, actorObj: { type: 'ivr', id: session.userId },
   transferAgent: session.agentTransfer === true, // נציג rings a person (rollout list), else a callback ticket
 });
-// Screen text → something a voice can read: no emoji, no slashes, no dashes.
-const speech = (t) => String(t || '')
-  .replace(/🟢/g, 'הדלקה').replace(/⚪/g, 'כיבוי').replace(/✅/g, '').replace(/⚠️/g, 'שימו לב,')
-  .replace(/ \/ /g, ' או ').replace(/[—–]/g, ',').replace(/…/g, '').replace(/\s*\n\s*/g, ', ').replace(/\s{2,}/g, ' ').trim();
+// The tree's sentences and option labels are played from the phrase bank
+// (recordings, ./speech.js) when they are static, else spoken by Yemot's TTS.
 async function svcDeliver(session, r) {
   if (r.action?.kind === 'status') return runStatus(session);
   if (r.action?.kind === 'agent') return agentTransfer(session);
@@ -120,9 +119,9 @@ async function svcDeliver(session, r) {
     session.state = 'NLU_CONFIRM';
     return ask(await nluConfirmItems([r.action]));
   }
-  const spoken = [{ t: speech(r.text) }];
+  const spoken = spokenText(r.text);
   if (r.free) {
-    session.data.svc = r.state; session.data.svcPrompt = speech(r.text); session.data.svcRetries = 0; session.state = 'SVC_VOICE';
+    session.data.svc = r.state; session.data.svcPrompt = spoken; session.data.svcRetries = 0; session.state = 'SVC_VOICE';
     return askVoice(spoken, { maxSilence: 3 });
   }
   const opts = choiceOptions(r); // without the way-back entry: * and 0 do that on the line (a channel may own 9)
@@ -134,7 +133,7 @@ async function svcDeliver(session, r) {
   // and shorter choices are spoken with leading zeros ("הקישו 01").
   const width = Math.max(1, ...opts.map((o) => String(o.n).length));
   session.data.svcWidth = width;
-  const menuItems = opts.map((o) => ({ t: `${speech(o.label)}, הקישו ${String(o.n).padStart(width, '0')},` }));
+  const menuItems = opts.flatMap((o) => spokenOption(o.label, String(o.n).padStart(width, '0')));
   return ask([...spoken, ...menuItems], { min: width, max: width });
 }
 
@@ -808,7 +807,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         const spoken = String(Array.isArray(raw) ? raw[raw.length - 1] : (raw ?? '')).trim();
         if (!spoken) {
           session.data.svcRetries = (session.data.svcRetries || 0) + 1;
-          if (session.data.svcRetries <= 2) return res.send(askVoice([{ t: session.data.svcPrompt || 'אמרו את התשובה לאחר הצפצוף' }], { maxSilence: 3 }));
+          if (session.data.svcRetries <= 2) return res.send(askVoice(session.data.svcPrompt?.length ? session.data.svcPrompt : [{ t: 'אמרו את התשובה לאחר הצפצוף' }], { maxSilence: 3 }));
           return res.send(await mainMenu(session, await speak('ivr.nlu_giveup', {}, 'לא זוהה דיבור, חוזרים לתפריט הראשי')));
         }
         const r = await menuStep(svcCtx(session), session.data.svc || { node: 'service', data: {} }, spoken);
