@@ -21,9 +21,12 @@ export function ymdForDay(day, tz) {
 // audit actor_type value, so history shows where the order came from.
 // Returns the number of immediate actions the device did NOT acknowledge, so the
 // caller can report honestly — schedules are just DB rows and can't fail this way.
-export async function runNluActions({ userId, actions, tz, source, callId = null }) {
-  const actor = { type: source, id: userId };
-  const actorStamp = `${source}:${userId}`;
+// actor: who to attribute the mutations to in the audit log. Defaults to the
+// channel itself ('ivr' / 'whatsapp' are actor types); the site passes the
+// user — or the impersonating admin — because 'web' is a source, not an actor.
+export async function runNluActions({ userId, actions, tz, source, callId = null, actor: actorOverride = null }) {
+  const actor = actorOverride || { type: source, id: userId };
+  const actorStamp = actor.id != null ? `${actor.type}:${actor.id}` : actor.type;
   // Immediate orders go out together: each one blocks ~2s on its meter
   // read-back (services/commands.js verifyCommand), and "כבה הכל" on a
   // 4-channel unit run serially would leave the caller in dead air.

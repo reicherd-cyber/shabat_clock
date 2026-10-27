@@ -159,6 +159,8 @@ export async function menuInput({ ctx, state, text, io = realIo, route = routeFr
   if (isDigit || FREE_NODES.has(node)) return step(ctx, state, text, io);
   const parsed = await route({ ctx, text, node, io });
   const jumped = await applyMoves(ctx, movesFor(parsed, { customer: Boolean(ctx.user) }), io);
-  if (jumped) return jumped;
+  // routed: the channel must treat an order in it as a guess (the site asks
+  // the engine's confirm_action node; WhatsApp already shows confirm buttons).
+  if (jumped) return { ...jumped, routed: true };
   return step(ctx, state, text, io);
 }

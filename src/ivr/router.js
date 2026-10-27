@@ -70,6 +70,9 @@ async function nluDeliver(session, out) {
     return mainMenu(session, await speak('ivr.nlu_parse_error', {}, 'אירעה שגיאה בפירוש הבקשה, נסו שוב'));
   }
   const interp = out.r;
+  // Budget / kill switch: listening again would only cost speech-to-text units
+  // for the same refusal — straight back to the menu with the message.
+  if (interp.exhausted) return mainMenu(session, [{ t: interp.clarification }]);
   if (!interp.understood) {
     await appendPath(session.callLogId, 'nlu_fail');
     // Re-listen right away (clarification as the prompt) instead of a main-menu
@@ -123,9 +126,13 @@ async function svcDeliver(session, r) {
   const opts = (r.options || []).filter((o) => o.n !== 9); // 9 = main menu: * and 0 do that on the line
   if (r.done || !opts.length) return mainMenu(session, spoken);
   session.data.svc = r.state; session.state = 'SVC_MENU';
-  const menuItems = opts.map((o) => ({ t: `${speech(o.label)}, הקישו ${o.n},` }));
-  const max = opts.some((o) => o.n >= 10) ? 2 : 1;
-  return ask([...spoken, ...menuItems], { min: 1, max });
+  // Fixed-width collection (min === max) is the only mode that submitted
+  // reliably on real calls (see relayMenu): with ten or more options every
+  // choice is two digits, spoken with its leading zero ("הקישו 01").
+  const wide = opts.some((o) => o.n >= 10);
+  session.data.svcWide = wide;
+  const menuItems = opts.map((o) => ({ t: `${speech(o.label)}, הקישו ${wide ? String(o.n).padStart(2, '0') : o.n},` }));
+  return ask([...spoken, ...menuItems], { min: wide ? 2 : 1, max: wide ? 2 : 1 });
 }
 
 export const ivrRouter = Router();
@@ -736,7 +743,9 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       // ── מוקד שירות: digits into the shared tree ──
       case 'SVC_MENU': {
         if (input === '*') return res.send(await mainMenu(session));
-        const r = await menuStep(svcCtx(session), session.data.svc || { node: 'service', data: {} }, input);
+        // Two-digit menus: "01" is the engine's 1, "00" its 0.
+        const choice = session.data.svcWide && /^\d{2}$/.test(String(input)) ? String(Number(input)) : input;
+        const r = await menuStep(svcCtx(session), session.data.svc || { node: 'service', data: {} }, choice);
         if (r.state?.node === 'main' && !r.action && !r.done) return res.send(await mainMenu(session)); // 9 / an unknown state
         return res.send(await svcDeliver(session, r));
       }

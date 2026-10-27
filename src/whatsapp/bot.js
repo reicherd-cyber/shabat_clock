@@ -20,7 +20,7 @@ import { logAction } from '../services/audit.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, saveSession, resetSession } from './session.js';
 import { sendText, sendButtons, markRead } from './client.js';
-import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion } from './parse.js';
+import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion, isBareDigit, strayConfirmWord } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
 import { menuStart, step as menuStep, renderText } from '../services/serviceMenu.js';
 import { menuInput } from '../services/menuRouter.js';
@@ -32,7 +32,6 @@ import { phoneAllowed } from '../services/rollout.js';
 // menu a sentence is still handed to the existing paths (command / question),
 // so nothing a customer could do before is lost. A leaf that carries an order
 // goes through the usual confirm buttons; a status leaf answers at once.
-const isBareDigit = (t) => /^\s*\d{1,2}\s*$/.test(String(t || ''));
 const menuCtx = (user, phone) => ({
   user, phone, source: 'whatsapp',
   actor: user ? `whatsapp:${user.id}` : 'whatsapp',
@@ -132,6 +131,10 @@ async function commandReply({ phone, user, text }) {
     }
     throw e;
   }
+  if (interp.exhausted) {
+    await sendText({ phone, userId: user.id, text: interp.clarification });
+    return;
+  }
   if (!interp.understood) {
     // Not an order the interpreter recognised — maybe it was a question after all.
     await supportReply({ phone, user, text });
@@ -160,7 +163,15 @@ async function executePending({ phone, user, session }) {
   }
   const scheduled = actions.filter((a) => a.kind !== 'immediate').map((a) => `✅ ${a.summary}`);
   const head = unacked ? await getText('whatsapp.done_unacked') : await getText('whatsapp.done');
-  await sendText({ phone, userId: user.id, text: [head, ...lines, ...scheduled].join('\n'), kind: 'result' });
+  const parts = [head, ...lines, ...scheduled];
+  // Where the menu is offered, it comes back under the result so the chat goes
+  // on without a new greeting.
+  if (await phoneAllowed('whatsapp.menu_phones', phone)) {
+    const r = menuStart(menuCtx(user, phone));
+    await saveSession({ phone, userId: user.id, state: 'MENU', pending: { menu: r.state } });
+    parts.push('', renderText(r));
+  }
+  await sendText({ phone, userId: user.id, text: parts.join('\n'), kind: 'result' });
 }
 
 // Meta's own notifications (setup nudges, policy notices) come in as regular
@@ -214,7 +225,10 @@ export async function handleInbound(msg) {
     // (10-min TTL), the server restarted, or it's a second tap. Say so — never
     // feed "אישור ✅" to the interpreter and the support bot (two paid calls and
     // a bogus ticket).
-    if (user && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || (msg.text != null && confirmWord(msg.text)))) {
+    // A bare digit is never a stray confirmation: "1" / "2" are menu choices
+    // (the menu comes back under every result), so only yes/no WORDS and the
+    // confirm buttons mean "the order I was asked about".
+    if (user && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || strayConfirmWord(msg.text))) {
       await sendText({ phone, userId, text: await getText('whatsapp.confirm_expired') });
       return;
     }

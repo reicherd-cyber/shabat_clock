@@ -128,7 +128,7 @@ const ownDevice = async (ctx, io, id) => (ctx.user ? (await io.devices(ctx.user.
 // one of them (crafted, or a session that lost its user) restarts at the menu.
 const USER_NODES = new Set(['service', 'fault_device', 'fault_check', 'fault_online_helped', 'fault_steps', 'fault_offer_ticket', 'fault_ticket',
   'sched_problem', 'sched_relay', 'order_status', 'order_status_helped', 'switch_relay', 'switch_action', 'status',
-  'quick_relay', 'quick_action', 'quick_when', 'quick_time', 'plans', 'plan_action', 'week']);
+  'quick_relay', 'quick_action', 'quick_when', 'quick_time', 'plans', 'plan_action', 'week', 'confirm_action']);
 // ── phase 2: quick timing / plans / the coming week ──
 const QUICK_WHEN = [
   { n: 1, label: 'בעוד שעה', minutes: 60 }, { n: 2, label: 'בעוד שעתיים', minutes: 120 },
@@ -595,6 +595,21 @@ export async function step(ctx, state, input, io = realIo) {
       if (rendering) return reply(s, 'זה עזר?', { options: withBack(HELPED) });
       if (d === 1) return reply({ node: 'main', data: {} }, 'בשמחה!', { options: [BACK], done: true });
       if (d === 2) return assistantTicket(ctx, s, io, s.data.answer);
+      return notUnderstood(await render(ctx, s, io));
+    }
+
+    // ── confirm_action: an order that arrived through the free-text router is a
+    //    GUESS — the customer confirms it like on WhatsApp before anything runs.
+    //    The action comes back from the channel, so its ids are re-checked. ──
+    case 'confirm_action': {
+      const a = s.data.action;
+      const okRelay = a && ['immediate', 'timed'].includes(a.kind) && await ownRelay(ctx, io, a.relay_id);
+      const okPlan = a && a.kind === 'plan_toggle' && (await io.plans(ctx.user.id)).some((p) => p.key === a.plan_key);
+      if (!okRelay && !okPlan) return menuStart(ctx);
+      const options = [{ n: 1, label: 'אישור' }, { n: 2, label: 'ביטול' }];
+      if (rendering) return reply(s, `לאשר: ${a.summary}?`, { options });
+      if (d === 1) return reply({ node: 'main', data: {} }, '', { done: true, options: [BACK], action: a });
+      if (d === 2) return reply({ node: 'main', data: {} }, 'בוטל.', { options: [BACK], done: true });
       return notUnderstood(await render(ctx, s, io));
     }
 

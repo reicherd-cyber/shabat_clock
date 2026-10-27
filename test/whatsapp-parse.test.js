@@ -60,3 +60,17 @@ test('intent helpers: greeting, status, question routing', () => {
   assert.equal(looksLikeQuestion('כבה את הסלון'), false);
   assert.equal(looksLikeQuestion('הדלק את הפלטה מחר ב-7'), false);
 });
+
+test('a bare digit is a menu choice, not a stray yes/no; words still are', async () => {
+  const { isBareDigit, strayConfirmWord, confirmWord } = await import('../src/whatsapp/parse.js');
+  assert.equal(isBareDigit('1'), true);
+  assert.equal(isBareDigit(' 12 '), true);
+  assert.equal(isBareDigit('123'), false);
+  assert.equal(strayConfirmWord('1'), null);   // the menu under the last result wants this
+  assert.equal(strayConfirmWord('2'), null);
+  assert.equal(strayConfirmWord('כן'), 'yes');  // a word with nothing pending → "expired"
+  assert.equal(strayConfirmWord('ביטול'), 'no');
+  assert.equal(strayConfirmWord(null), null);
+  assert.equal(confirmWord('1'), 'yes');        // inside a live confirmation 1 / 2 still count
+  assert.equal(confirmWord('2'), 'no');
+});

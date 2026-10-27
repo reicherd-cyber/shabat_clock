@@ -46,6 +46,9 @@ test('menuInput: a digit goes straight to the tree, the router is not called', a
 test('menuInput: words at a numbered node go to the router and land on the confirmation', async () => {
   const r = await menuInput({ ctx, state: menuStart(ctx).state, text: 'תכבה את הדוד', io, route: async () => ({ target: 'switch', relay_id: 15, action: 'off' }) });
   assert.deepEqual(r.action, { kind: 'immediate', relay_id: 15, relay_name: 'דוד', action: 'off', summary: 'כיבוי דוד עכשיו' });
+  assert.equal(r.routed, true); // a guess: the channel must confirm before running it
+  const tapped = await menuInput({ ctx, state: menuStart(ctx).state, text: '5', io, route: async () => null });
+  assert.equal(tapped.routed, undefined); // a tap is not a guess
 });
 
 test('menuInput: a routed id the customer does not own is refused by the engine itself', async () => {

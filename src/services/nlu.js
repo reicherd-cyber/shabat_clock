@@ -355,7 +355,7 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
   // The budget / kill switch (services/aiBudget.js): over it, the caller hears a
   // plain "not now" and the menu keeps working — never an error.
   if (!(await aiAllowed({ userId, kind: 'command' }))) {
-    return { understood: false, clarification: 'הפקודה הקולית לא זמינה כרגע, אפשר להשתמש בתפריט הרגיל', actions: [], tz: relays[0].timezone || 'Asia/Jerusalem' };
+    return { understood: false, exhausted: true, clarification: 'הפקודה הקולית לא זמינה כרגע, אפשר להשתמש בתפריט הרגיל', actions: [], tz: relays[0].timezone || 'Asia/Jerusalem' };
   }
   const schedules = await listSchedules({ userId });
 

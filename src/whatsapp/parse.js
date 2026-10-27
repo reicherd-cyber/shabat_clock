@@ -76,3 +76,10 @@ export const looksLikeQuestion = (text) => {
   const t = String(text || '').trim();
   return t.endsWith('?') || QUESTION.test(t);
 };
+
+// A bare digit (1–2 digits) is a MENU choice — the numbered menu comes back under
+// every result — so it is never read as a stray "yes"/"no" after a confirmation
+// has already expired. Inside a live confirmation the typed 1 / 2 still count
+// (confirmWord), because that branch runs first.
+export const isBareDigit = (t) => /^\s*\d{1,2}\s*$/.test(String(t || ''));
+export const strayConfirmWord = (text) => (text != null && !isBareDigit(text) ? confirmWord(text) : null);

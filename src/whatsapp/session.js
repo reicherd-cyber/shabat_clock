@@ -6,14 +6,25 @@
 import { query } from '../db/pool.js';
 
 const CONFIRM_TTL_MS = 10 * 60 * 1000;
+// A menu left mid-branch is forgotten after this: the next message is a fresh
+// conversation, not a digit expected by a question asked days ago.
+const MENU_TTL_MS = 30 * 60 * 1000;
+// Pure: the state a stored row stands for now.
+export function settleState(row, now = Date.now()) {
+  const age = now - new Date(row.updated_at).getTime();
+  if (row.state === 'CONFIRM' && age > CONFIRM_TTL_MS) return 'IDLE';
+  if (row.state === 'MENU' && age > MENU_TTL_MS) return 'IDLE';
+  return row.state;
+}
 
 export async function getSession(phone) {
   const [row] = await query('SELECT phone, user_id, state, pending, retries, updated_at FROM whatsapp_sessions WHERE phone = ?', [phone]);
   if (!row) return { phone, user_id: null, state: 'IDLE', pending: null, retries: 0, fresh: true };
   let pending = row.pending;
   if (typeof pending === 'string') { try { pending = JSON.parse(pending); } catch { pending = null; } }
-  const stale = row.state === 'CONFIRM' && Date.now() - new Date(row.updated_at).getTime() > CONFIRM_TTL_MS;
-  return { ...row, pending: stale ? null : pending, state: stale ? 'IDLE' : row.state, fresh: false };
+  const state = settleState(row);
+  const stale = state !== row.state;
+  return { ...row, pending: stale ? null : pending, state, fresh: false };
 }
 
 export async function saveSession({ phone, userId = null, state = 'IDLE', pending = null, retries = 0 }) {
