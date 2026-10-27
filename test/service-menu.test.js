@@ -225,10 +225,12 @@ test('channel lists carry the customer\'s own IVR codes, in IVR order, and rende
     assert.equal(back.state.node, 'main', first);
   }
   const text = renderText((await run(ctxUser, io, ['4'])).last);
-  assert.match(text, /1️⃣2️⃣ מטבח/);
+  assert.match(text, /\u200E1️⃣\u200E2️⃣\u200E מטבח/); // LRM-pinned: WhatsApp showed 2 1 in a Hebrew line
   assert.match(text, /\n3️⃣ סלון/);
-  assert.match(text, /1️⃣2️⃣0️⃣ דוד/);
-  assert.equal(keycaps(9), '9️⃣');
+  assert.match(text, /\u200E1️⃣\u200E2️⃣\u200E0️⃣\u200E דוד/);
+  assert.equal(keycaps(9), "9️⃣"); // a single keycap carries no direction marks
+  assert.equal(keycaps(15), "\u200E1️⃣\u200E5️⃣\u200E");
+  assert.equal(keycaps("*"), "*️⃣");
 });
 
 test('a channel whose IVR code is 9 keeps its 9; the way back is then *', async () => {
