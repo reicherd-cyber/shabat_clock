@@ -15,7 +15,12 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import 'dotenv/config';
 
-const VOICE = process.env.IVR_TTS_VOICE || 'he-IL-HilaNeural';
+// The voice in production is Avri (deploy/ivr-audio.json records what was used);
+// every prompt is synthesised with the same voice and rate so the IVR sounds like
+// one speaker. Rate +30% since 2026-10-27 (user: "much faster"); a relative
+// percentage per the SSML prosody rule, see msedge-tts ProsodyOptions.
+const VOICE = process.env.IVR_TTS_VOICE || 'he-IL-AvriNeural';
+const RATE = process.env.IVR_TTS_RATE || '+30%';
 const YEMOT_FOLDER = '99';
 const MANIFEST = fileURLToPath(new URL('../deploy/ivr-audio.json', import.meta.url));
 
@@ -73,13 +78,38 @@ const PROMPTS = {
   cmd_closed: 'הפקודה בוצעה, המכשיר מקבל חשמל אך כמעט אינו צורך, ייתכן שהוא כבוי במתג שלו',
   // — voice order, after the first successful use: no example (2026-10-25) —
   nlu_listen_short: 'אמרו את הבקשה לאחר הצפצוף, לְחַץ סולמית לסיום',
+  // — everything the router still spoke through Yemot's robot TTS (2026-10-27):
+  //   the schedule browser, command verdicts, the voice-order edge cases, the
+  //   service-desk menu line and the נציג transfer. Texts match the inline
+  //   fallbacks in src/ivr/router.js. —
+  sched_none: 'אין תזמונים במערכת',
+  sched_browse_empty: 'להוספת תזמון חדש, הַקִּישׁוּ 4, לחזרה, הַקִּישׁוּ כוכבית',
+  sched_browse_next: 'לתזמון הבא, הַקִּישׁוּ 1',
+  sched_browse_prev: 'לתזמון הקודם, הַקִּישׁוּ 2',
+  sched_browse_ops: 'למחיקת תזמון זה, הַקִּישׁוּ 3, להוספת תזמון חדש, הַקִּישׁוּ 4, לחזרה, הַקִּישׁוּ כוכבית',
+  sched_del_confirm: 'להקיש 1 לאישור, 2 לביטול',
+  sched_deleted: 'התזמון נמחק',
+  sched_type: 'לתזמון חד פעמי, הַקִּישׁוּ 1, לתזמון יומי קבוע, הַקִּישׁוּ 2, לתזמון שבועי, הַקִּישׁוּ 3',
+  sched_sides: 'לתזמון הדלקה וכיבוי, הַקִּישׁוּ 1, להדלקה בלבד, הַקִּישׁוּ 2, לכיבוי בלבד, הַקִּישׁוּ 3',
+  sched_once_day: 'לתזמון להיום, הַקִּישׁוּ 1, למחר, הַקִּישׁוּ 2',
+  cmd_verified: 'הפקודה בוצעה ואומתה',
+  cmd_no_flow: 'הפקודה התקבלה, אך לא נמדדת צריכת חשמל במכשיר, ייתכן שהוא כבוי במתג שלו',
+  cmd_stuck_on: 'שימו לב, המכשיר לא כובה בפועל, החשמל עדיין זורם אליו',
+  cmd_not_switched: 'אירעה שגיאה, המכשיר לא ביצע את הפקודה',
+  cmd_closed: 'הפקודה בוצעה, המכשיר מקבל חשמל אך כמעט אינו צורך, ייתכן שהוא כבוי במתג שלו',
+  nlu_giveup: 'לא זוהה דיבור, חוזרים לתפריט הראשי',
+  nlu_thinking: 'קיבלתי, מעבד את הבקשה',
+  main_menu_service: 'לשירות לקוחות, הַקִּישׁוּ 6, למה קורה בשבת הקרובה, הַקִּישׁוּ 7',
+  agent_transfer: 'מעבירים אתכם לנציג, אנא המתינו',
+  agent_record: 'הנציג אינו זמין כרגע, אנא השאירו הודעה לאחר הצליל, בסיום הַקִּישׁוּ סולמית, ונחזור אליכם בהקדם',
+  agent_done: 'תודה, להתראות',
 };
 
 async function synthToMp3(text, outFile) {
   const { MsEdgeTTS, OUTPUT_FORMAT } = await import('msedge-tts');
   const tts = new MsEdgeTTS();
   await tts.setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-  const res = await tts.toStream(text);
+  const res = await tts.toStream(text, { rate: RATE });
   const stream = res.audioStream ?? res;
   const chunks = [];
   await new Promise((resolve, reject) => {
@@ -132,13 +162,21 @@ async function generate() {
     const mp3 = path.join(workDir, `${key}.mp3`);
     const wav = path.join(workDir, `${key}.wav`);
     console.log(`[${fileNum}] ${key}: "${PROMPTS[key]}"`);
-    await synthToMp3(PROMPTS[key], mp3);
+    // The Edge TTS socket drops now and then (a TLS hiccup mid-batch, 2026-10-27);
+    // one prompt is a second of work, so retry it rather than abort the batch.
+    for (let attempt = 1; ; attempt++) {
+      try { await synthToMp3(PROMPTS[key], mp3); break; } catch (e) {
+        if (attempt >= 3) throw e;
+        console.warn(`  retry ${attempt}: ${e.message}`);
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
+    }
     mp3ToYemotWav(mp3, wav);
     await uploadToYemot(token, `ivr2:/${YEMOT_FOLDER}/${fileNum}.wav`, wav);
     manifest[key] = `${YEMOT_FOLDER}/${fileNum}`;
   }
-  writeFileSync(MANIFEST, JSON.stringify({ voice: VOICE, texts: PROMPTS, files: manifest }, null, 2));
-  console.log(`\nUploaded ${keys.length} files to ivr2:/${YEMOT_FOLDER}/ — manifest written to deploy/ivr-audio.json`);
+  writeFileSync(MANIFEST, JSON.stringify({ voice: VOICE, rate: RATE, texts: PROMPTS, files: manifest }, null, 2));
+  console.log(`\nUploaded ${only.length || keys.length} files to ivr2:/${YEMOT_FOLDER}/ — manifest written to deploy/ivr-audio.json`);
   console.log('Now run: node scripts/ivr-audio.mjs apply   (locally AND on the droplet)');
 }
 
