@@ -32,7 +32,7 @@ import { Logo, Wordmark, useInterval, Modal, Button } from './ui.jsx';
 import {
   LayoutGrid, CalendarClock, CalendarDays, History as HistoryIcon, Settings as SettingsIcon,
   Activity, Users as UsersIcon, Plug, PhoneCall, GitBranch, Wallet, Mic,
-  ShieldCheck, ScrollText, Database as DatabaseIcon, ChevronDown, AudioLines, LifeBuoy, Inbox, Handshake, ListChecks, MessageCircle, Mail, BookOpen,
+  ShieldCheck, ScrollText, Database as DatabaseIcon, ChevronDown, AudioLines, Headset, Inbox, Handshake, ListChecks, MessageCircle, Mail, BookOpen,
 } from 'lucide-react';
 
 // While impersonating, api.js blocks every mutation until this modal approves it
@@ -164,10 +164,12 @@ function UserLayout() {
           ))}
         </nav>
         <div className="flex items-center gap-2.5 font-medium text-muted">
-          {/* עזרה חיה בפינה, לא בניווט — כפתור ? קבוע בכל מסך */}
+          {/* מוקד שירות בפינה, לא בניווט — כפתור קבוע בכל מסך. Headset (a support
+              desk), not the lifebuoy ring that read as a gear at 17px (user, 2026-10-27);
+              the chat on the page uses the same icon. */}
           <NavLink to="/help" title={supportUnread ? `עזרה ותמיכה — ${supportUnread} תשובות חדשות` : 'עזרה ותמיכה'} className={({ isActive }) =>
             `relative w-8 h-8 rounded-full border grid place-items-center transition-colors ${isActive ? 'bg-accent text-white border-accent' : 'border-line text-muted hover:text-accent-dk hover:border-accent'}`}>
-            <LifeBuoy size={17} strokeWidth={2} />
+            <Headset size={17} strokeWidth={2} />
             {supportUnread > 0 && (
               <span className="absolute -top-1.5 -start-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#e11d48] text-white text-[11px] font-bold grid place-items-center leading-none">
                 {supportUnread}
