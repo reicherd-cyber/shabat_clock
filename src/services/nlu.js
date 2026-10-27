@@ -186,9 +186,11 @@ ${planList}`;
 // purpose: a time word, a number, a plan word, two kinds of verb, a partial or
 // garbled relay name, or any unexplained word sends the text to the model. The
 // confirm step still guards the result like every other interpretation.
-const ON_VERBS = /^(תדליק|תדליקי|תדליקו|הדלק|הדליקו|להדליק|דלק)$/;
-const OFF_VERBS = /^(תכבה|תכבי|תכבו|כבה|כבו|לכבות)$/;
-const FILLER = /^(את|מיד|מידי|מיידי|מיידית|עכשיו|בבקשה|תודה|רק|גם|נא|אנא|לי|לנו|ו|בבית|בחדר)$/;
+// Verb forms AND the noun forms callers use ("הדלקה של הסלון", "הדלקת ערוץ 2",
+// "כיבוי של הדוד" — real transcripts 25–27.10); "של" is then filler.
+const ON_VERBS = /^(תדליק|תדליקי|תדליקו|הדלק|הדליקו|להדליק|דלק|הדלקה|הדלקת)$/;
+const OFF_VERBS = /^(תכבה|תכבי|תכבו|כבה|כבו|לכבות|כיבוי)$/;
+const FILLER = /^(את|של|מיד|מידי|מיידי|מיידית|עכשיו|בבקשה|תודה|רק|גם|נא|אנא|לי|לנו|ו|בבית|בחדר)$/;
 // Words the rules never handle: times, number words, plans, schedules, days.
 // Digits are NOT listed: a digit that is part of a relay's own name ("ערוץ 2",
 // "מזגן 1") is fine; any digit left unexplained after the relay match sends
