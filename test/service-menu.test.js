@@ -477,3 +477,18 @@ test('choiceOptions: the phone keeps a channel that owns 9 and drops only the wa
   assert.deepEqual(choiceOptions(plans.last).map((o) => o.n), [1]); // 9 (back) dropped
   assert.deepEqual(choiceOptions(menuStart(ctxUser)).map((o) => o.n), [1, 2, 3, 4, 5, 6, 7, 8, 0]);
 });
+
+test('נציג on the phone is a transfer, not a callback ticket; other channels still file the ticket', async () => {
+  const io = fakeIo();
+  const phoneCtx = { ...ctxUser, source: 'phone', actor: 'ivr:3', actorObj: { type: 'ivr', id: 3 } };
+  const phone = await step(phoneCtx, { node: 'agent', data: {} }, null, io);
+  // the phone reaches the leaf by rendering it (no digit); the reply is a transfer order
+  const r = await step(phoneCtx, { node: 'agent', data: {}, _render: true }, null, io);
+  assert.equal(r.action?.kind, 'agent');
+  assert.equal(r.done, true);
+  assert.equal(io.log.tickets.length, 0, 'no callback ticket on the phone');
+  assert.equal(phone.action?.kind, 'agent');
+  const wa = await step(ctxUser, { node: 'agent', data: {}, _render: true }, null, io);
+  assert.equal(wa.action, undefined);
+  assert.deepEqual(io.log.tickets.map((t) => t.topic), ['agent']);
+});

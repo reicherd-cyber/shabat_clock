@@ -15,7 +15,7 @@ import { startCall, setCallUser, appendPath, finishCall } from '../services/call
 import { query } from '../db/pool.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, createSession, endSession } from './session.js';
-import { ask, askVoice, askRecord, say, sayAndHangup } from './responses.js';
+import { ask, askVoice, askRecord, say, sayAndHangup, transfer } from './responses.js';
 import { voicemailFolder, voicemailFileName, createPhoneTicket, fetchVoicemailInBackground } from '../services/voicemail.js';
 import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
@@ -112,6 +112,7 @@ const speech = (t) => String(t || '')
   .replace(/ \/ /g, ' או ').replace(/[—–]/g, ',').replace(/…/g, '').replace(/\s*\n\s*/g, ', ').replace(/\s{2,}/g, ' ').trim();
 async function svcDeliver(session, r) {
   if (r.action?.kind === 'status') return runStatus(session);
+  if (r.action?.kind === 'agent') return agentTransfer(session);
   if (r.action) {
     session.data.nluActions = [r.action];
     session.data.nluTz = 'Asia/Jerusalem';
@@ -213,15 +214,42 @@ async function salesMenu(session, message = null) {
 }
 
 async function salesRecord(session, topic) {
+  return recordMessage(session, topic, { state: 'SALES_RECORD',
+    prompt: await speak('ivr.sales_record', {}, 'אנא השאירו הודעה לאחר הצליל, בסיום הקישו סולמית') });
+}
+// One recording step for the sales menu and for an unanswered נציג transfer.
+async function recordMessage(session, topic, { state, prompt }) {
   const folder = await voicemailFolder();
   const fileName = voicemailFileName(session.callLogId);
   session.data.vmTopic = topic;
   session.data.vmFile = `${folder}/${fileName}`;
-  session.state = 'SALES_RECORD';
+  session.state = state;
   session.invalidCount = 0;
   await appendPath(session.callLogId, `vm:${topic}`);
-  return askRecord(await speak('ivr.sales_record', {}, 'אנא השאירו הודעה לאחר הצליל, בסיום הקישו סולמית'),
-    { folder, fileName, maxSeconds: 120 });
+  return askRecord(prompt, { folder, fileName, maxSeconds: 120 });
+}
+
+// נציג on the phone (2026-10-27): ring the agent's phone (ivr.agent_phone); when
+// nobody answers within ivr.agent_ring_seconds Yemot sends the caller to
+// ivr.agent_return_folder — this API extension — and AGENT_TRANSFER below offers
+// a voice message, which becomes the ticket (support_messages, source 'phone',
+// under the customer's account) for the inbox and the customer's פניות page.
+// With no agent number configured the caller goes straight to the message.
+async function agentTransfer(session) {
+  const phone = String(await getSetting('ivr.agent_phone', '')).replace(/\D/g, '');
+  if (!phone) return agentRecord(session);
+  session.state = 'AGENT_TRANSFER';
+  session.data.transferAt = Date.now();
+  session.data.transferRing = Math.min(120, Math.max(5, Number(await getSetting('ivr.agent_ring_seconds', '25')) || 25));
+  session.invalidCount = 0;
+  await appendPath(session.callLogId, 'agent');
+  return transfer(await speak('ivr.agent_transfer', {}, 'מעבירים אתכם לנציג, אנא המתינו'), {
+    phone, ringSeconds: session.data.transferRing, goto: await getSetting('ivr.agent_return_folder', ''),
+  });
+}
+async function agentRecord(session) {
+  return recordMessage(session, 'agent', { state: 'AGENT_RECORD',
+    prompt: await speak('ivr.agent_record', {}, 'הנציג אינו זמין כרגע, אנא השאירו הודעה לאחר הצליל, בסיום הקישו סולמית, ונחזור אליכם בהקדם') });
 }
 
 // Recording ended — # pressed / max length, or a hangup mid-message (Yemot keeps
@@ -232,6 +260,7 @@ async function salesRecord(session, topic) {
 async function salesVoicemailDone(session, { hungUp = false } = {}) {
   const ticketId = await createPhoneTicket({
     phone: session.phone, callLogId: session.callLogId, topic: session.data.vmTopic, yemotFile: session.data.vmFile, hungUp,
+    userId: session.userId ?? null,
   });
   await logAction({ type: 'ivr', id: null }, 'create', 'support_message', ticketId,
     { after: { source: 'phone', topic: session.data.vmTopic, phone: session.phone, hung_up: hungUp } });
@@ -535,10 +564,14 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
     // Hangup notification → close the log honestly (§4.1.7).
     if (req.query.ApiHangup !== undefined || req.query.hangup === 'yes') {
       if (session) {
-        if (session.state === 'SALES_RECORD') {
+        if (session.state === 'SALES_RECORD' || session.state === 'AGENT_RECORD') {
           // Hung up during the record step — file the number; Yemot has not
           // kept the audio on any such call despite the keep-on-hangup flag.
           await salesVoicemailDone(session, { hungUp: true });
+        } else if (session.state === 'AGENT_TRANSFER') {
+          // Hung up while ringing the agent, or after talking to them.
+          await finishCall(session.callLogId, 'agent');
+          endSession(callId);
         } else {
           await finishCall(session.callLogId, session.data.salesInfo ? 'info' : 'abandoned');
           endSession(callId);
@@ -618,11 +651,24 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         if (input === '2' || input === '0' || input === '*') return res.send(await salesMenu(session));
         return res.send(await invalidInput(session));
       }
-      case 'SALES_RECORD': {
+      case 'SALES_RECORD':
+      case 'AGENT_RECORD': {
         // Any callback in this state means the recording step finished.
         await salesVoicemailDone(session);
         return res.send(sayAndHangup(await speak('ivr.sales_thanks', {},
           'תודה, ההודעה התקבלה וניצור עמכם קשר בהקדם, להתראות')));
+      }
+      // ── נציג: the call is back from the transfer ──
+      case 'AGENT_TRANSFER': {
+        // Yemot does not say whether the agent answered. Back within the ring
+        // window (plus grace) = nobody picked up → offer a message; later = a
+        // conversation happened and ended → thank and hang up.
+        const elapsed = (Date.now() - (session.data.transferAt || 0)) / 1000;
+        if (elapsed <= (session.data.transferRing || 25) + 15) return res.send(await agentRecord(session));
+        await appendPath(session.callLogId, 'agent_done');
+        await finishCall(session.callLogId, 'agent');
+        endSession(callId);
+        return res.send(sayAndHangup(await speak('ivr.agent_done', {}, 'תודה, להתראות')));
       }
 
       // ── auth: known caller with require_pin ──
