@@ -9,13 +9,9 @@ async function pushAfterCommit(deviceIds) {
   }
 }
 
-// IVR code range (2026-09-07: the 1–20 cap is gone). Any positive integer up to
-// six digits — the phone menu collects a fixed width equal to the longest code
-// the user has, so a huge code only makes dialing longer, never ambiguous.
-export const IVR_DIGIT_MAX = 999999;
-export const IVR_DIGIT_RULE = '1-999999';
-export const IVR_DIGIT_MSG = 'קוד IVR חייב להיות מספר שלם חיובי (עד 6 ספרות)';
-export const isValidIvrDigit = (d) => Number.isInteger(d) && d >= 1 && d <= IVR_DIGIT_MAX;
+// The IVR code rule lives in ivrCode.js (pure, shared with the channels' parsers).
+export { IVR_DIGIT_MAX, IVR_DIGIT_RULE, IVR_DIGIT_MSG, isValidIvrDigit } from './ivrCode.js';
+import { IVR_DIGIT_MAX, IVR_DIGIT_RULE, IVR_DIGIT_MSG, isValidIvrDigit } from './ivrCode.js';
 
 export async function listDevicesWithRelays(userId) {
   // offline_stale: the customer-facing "unavailable" rule (2026-10-22) — offline

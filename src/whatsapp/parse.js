@@ -1,6 +1,7 @@
 // Pure helpers for the WhatsApp webhook — no I/O, so they are unit-tested
 // (test/whatsapp-parse.test.js) without a Meta account.
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { isIvrChoice } from '../services/ivrCode.js';
 
 // Meta signs every webhook body: X-Hub-Signature-256: sha256=<hex HMAC of the
 // RAW bytes with the app secret>. Constant-time compare, length-checked first
@@ -81,5 +82,5 @@ export const looksLikeQuestion = (text) => {
 // every result — so it is never read as a stray "yes"/"no" after a confirmation
 // has already expired. Inside a live confirmation the typed 1 / 2 still count
 // (confirmWord), because that branch runs first.
-export const isBareDigit = (t) => /^\s*\d{1,2}\s*$/.test(String(t || ''));
+export const isBareDigit = (t) => isIvrChoice(t);
 export const strayConfirmWord = (text) => (text != null && !isBareDigit(text) ? confirmWord(text) : null);

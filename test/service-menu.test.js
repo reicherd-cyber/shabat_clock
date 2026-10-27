@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { menuStart, step, renderText } from '../src/services/serviceMenu.js';
+import { menuStart, step, renderText, keycaps } from '../src/services/serviceMenu.js';
 
 // A fake world: two devices (one offline), two relays, one open order, and a
 // log of every side effect the tree asked for.
@@ -209,14 +209,55 @@ test('a guest whose state names a customer-only node restarts at the main menu',
   }
 });
 
-test('lists skip 9 and 0: the 9th item is 10 and still reachable', async () => {
-  const many = Array.from({ length: 11 }, (_, i) => ({ id: 100 + i, name: `ערוץ ${i + 1}`, ivr_digit: i + 1, current_state: 'off', device_name: 'ראשי', device_id: 7 }));
-  const io = { ...fakeIo(), relays: async () => many };
+test('channel lists carry the customer\'s own IVR codes, in IVR order, and render every digit as a keycap', async () => {
+  const relays = [
+    { id: 101, name: 'מטבח', ivr_digit: 12, current_state: 'off', device_name: 'ראשי', device_id: 7 },
+    { id: 102, name: 'סלון', ivr_digit: 3, current_state: 'on', device_name: 'ראשי', device_id: 7 },
+    { id: 103, name: 'דוד', ivr_digit: 120, current_state: 'off', device_name: 'ראשי', device_id: 7 },
+  ];
+  const io = { ...fakeIo(), relays: async () => relays };
+  for (const first of ['4', '6']) {
+    const list = await run(ctxUser, io, [first]);
+    assert.deepEqual(list.last.options.map((o) => o.n), [12, 3, 120, 9], first); // as the io lists them (ORDER BY ivr_digit), then 9 = main menu
+    const pick = await step(ctxUser, list.last.state, '120', io);
+    assert.equal(pick.state.data.relay.name, 'דוד', first);
+    const back = await step(ctxUser, list.last.state, '9', io);
+    assert.equal(back.state.node, 'main', first);
+  }
+  const text = renderText((await run(ctxUser, io, ['4'])).last);
+  assert.match(text, /1️⃣2️⃣ מטבח/);
+  assert.match(text, /\n3️⃣ סלון/);
+  assert.match(text, /1️⃣2️⃣0️⃣ דוד/);
+  assert.equal(keycaps(9), '9️⃣');
+});
+
+test('a channel whose IVR code is 9 keeps its 9; the way back is then *', async () => {
+  const relays = [
+    { id: 101, name: 'מטבח', ivr_digit: 9, current_state: 'off', device_name: 'ראשי', device_id: 7 },
+    { id: 102, name: 'סלון', ivr_digit: 1, current_state: 'on', device_name: 'ראשי', device_id: 7 },
+  ];
+  const io = { ...fakeIo(), relays: async () => relays };
   const list = await run(ctxUser, io, ['4']);
+  assert.deepEqual(list.last.options.map((o) => o.n), [9, 1, '*']);
+  assert.match(renderText(list.last), /\*️⃣ תפריט ראשי/);
+  const nine = await step(ctxUser, list.last.state, '9', io);
+  assert.equal(nine.state.data.relay.name, 'מטבח');
+  const star = await step(ctxUser, list.last.state, '*', io);
+  assert.equal(star.state.node, 'main');
+  // * is a way back from any node, 9 still is outside channel lists
+  const plans = await run(ctxUser, { ...io, plans: async () => [{ key: 'p1', name: 'שבת', enabled: true }] }, ['7']);
+  assert.equal((await step(ctxUser, plans.last.state, '*', io)).state.node, 'main');
+  assert.equal((await step(ctxUser, plans.last.state, '9', io)).state.node, 'main');
+});
+
+test('other lists skip 9 and 0: the 9th item is 10 and still reachable', async () => {
+  const many = Array.from({ length: 11 }, (_, i) => ({ key: `p${i + 1}`, name: `תוכנית ${i + 1}`, enabled: true }));
+  const io = { ...fakeIo(), plans: async () => many };
+  const list = await run(ctxUser, io, ['7']);
   const ns = list.last.options.map((o) => o.n);
   assert.deepEqual(ns, [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 9]); // items, then 9 = main menu
-  const ninth = await step(ctxUser, io ? list.last.state : null, '10', io);
-  assert.equal(ninth.state.data.relay.name, 'ערוץ 9');
+  const ninth = await step(ctxUser, list.last.state, '10', io);
+  assert.equal(ninth.state.data.plan.key, 'p9');
   const back = await step(ctxUser, list.last.state, '9', io);
   assert.equal(back.state.node, 'main');
 });
@@ -382,4 +423,55 @@ test('confirm_action: 1 releases the order, 2 cancels, a foreign or missing acti
   const plan = await step(ctxUser, { node: 'confirm_action', data: { action: { kind: 'plan_toggle', plan_key: 'pA', action: 'off', summary: 'עצירת התוכנית שבת' } }, _render: true }, null,
     { ...io, plans: async () => [{ key: 'pA', name: 'שבת', enabled: true, channels: [], schedule_ids: [1] }] });
   assert.equal(plan.state.node, 'confirm_action');
+});
+
+test('a channel without an IVR code (or one above the cap) is not offered: nothing to press, and 0 is the agent key', async () => {
+  const relays = [
+    { id: 101, name: 'מטבח', ivr_digit: null, current_state: 'off', device_name: 'ראשי', device_id: 7 },
+    { id: 102, name: 'סלון', ivr_digit: 2, current_state: 'on', device_name: 'ראשי', device_id: 7 },
+    { id: 103, name: 'דוד', ivr_digit: 1234, current_state: 'off', device_name: 'ראשי', device_id: 7 },
+  ];
+  const io = { ...fakeIo(), relays: async () => relays };
+  for (const first of ['4', '6']) {
+    const list = await run(ctxUser, io, [first]);
+    assert.deepEqual(list.last.options.map((o) => o.n), [2, 9], first);
+    assert.match((await step(ctxUser, list.last.state, '0', io)).text, /^לא הבנתי/, first);
+  }
+  // only code-less channels = no channels to offer
+  const none = { ...io, relays: async () => [relays[0]] };
+  assert.match((await run(ctxUser, none, ['4'])).last.text, /אין עדיין ערוצים/);
+});
+
+test('9 on an emptied channel list still returns to the main menu', async () => {
+  const io = { ...fakeIo(), relays: async () => [] };
+  for (const [first, node] of [['4', 'switch_relay'], ['6', 'quick_relay']]) {
+    const r = await step(ctxUser, { node, data: {} }, '9', io);
+    assert.equal(r.state.node, 'main', first);
+    assert.doesNotMatch(r.text, /אין עדיין ערוצים/, first);
+  }
+  const sched = await step(ctxUser, { node: 'sched_relay', data: { problem: 'לא נדלק' } }, '9', io);
+  assert.equal(sched.state.node, 'main');
+  assert.notEqual(sched.free, true); // not the free-text ticket prompt
+});
+
+test('* or 9 on the main menu simply shows it again — a first message of * is not a mistake', async () => {
+  const io = fakeIo();
+  for (const key of ['*', '9']) {
+    const r = await step(ctxUser, menuStart(ctxUser).state, key, io);
+    assert.equal(r.state.node, 'main', key);
+    assert.doesNotMatch(r.text, /לא הבנתי/, key);
+  }
+});
+
+test('choiceOptions: the phone keeps a channel that owns 9 and drops only the way-back entry', async () => {
+  const { choiceOptions } = await import('../src/services/serviceMenu.js');
+  const io = { ...fakeIo(), relays: async () => [
+    { id: 101, name: 'מטבח', ivr_digit: 9, current_state: 'off', device_name: 'ראשי', device_id: 7 },
+    { id: 102, name: 'סלון', ivr_digit: 1, current_state: 'on', device_name: 'ראשי', device_id: 7 },
+  ] };
+  const list = await run(ctxUser, io, ['4']);
+  assert.deepEqual(choiceOptions(list.last).map((o) => o.n), [9, 1]); // * (back) dropped, the channel on 9 kept
+  const plans = await run(ctxUser, { ...io, plans: async () => [{ key: 'p1', name: 'שבת', enabled: true }] }, ['7']);
+  assert.deepEqual(choiceOptions(plans.last).map((o) => o.n), [1]); // 9 (back) dropped
+  assert.deepEqual(choiceOptions(menuStart(ctxUser)).map((o) => o.n), [1, 2, 3, 4, 5, 6, 7, 8, 0]);
 });

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
+import { IVR_DIGIT_WIDTH } from '../ivrCode.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, Toggle, useAsync, useInterval, timeFormat, channelColorOf, ChannelDot, useRelayCommand, isStaleOffline } from '../ui.jsx';
 import { UserRound, Phone, Plug, Pencil, Plus, KeyRound, Trash2, Lock } from 'lucide-react';
 import WifiCard from './WifiCard.jsx';
@@ -334,7 +335,7 @@ export default function Settings() {
                 </span>
                 <label className="text-sm flex items-center gap-1 shrink-0">
                   קוד:
-                  <Input className="!w-20" inputMode="numeric" defaultValue={r.ivr_digit}
+                  <Input className="!w-20" inputMode="numeric" maxLength={IVR_DIGIT_WIDTH} defaultValue={r.ivr_digit}
                     onBlur={(e) => Number(e.target.value) !== r.ivr_digit && patchRelay(r, { ivr_digit: Number(e.target.value) })} />
                 </label>
                 <Select className="!w-auto shrink-0" value={r.boot_behavior} onChange={(e) => patchRelay(r, { boot_behavior: e.target.value })}>

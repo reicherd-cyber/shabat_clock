@@ -21,7 +21,7 @@ import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
 import { runNluActions, ymdForDay } from '../services/nluExec.js';
 import { shiftDate } from '../services/time.js';
-import { step as menuStep } from '../services/serviceMenu.js';
+import { step as menuStep, choiceOptions } from '../services/serviceMenu.js';
 import { phoneAllowed } from '../services/rollout.js';
 
 function nextYmd(ymd) {
@@ -123,16 +123,17 @@ async function svcDeliver(session, r) {
     session.data.svc = r.state; session.data.svcPrompt = speech(r.text); session.data.svcRetries = 0; session.state = 'SVC_VOICE';
     return askVoice(spoken, { maxSilence: 3 });
   }
-  const opts = (r.options || []).filter((o) => o.n !== 9); // 9 = main menu: * and 0 do that on the line
+  const opts = choiceOptions(r); // without the way-back entry: * and 0 do that on the line (a channel may own 9)
   if (r.done || !opts.length) return mainMenu(session, spoken);
   session.data.svc = r.state; session.state = 'SVC_MENU';
   // Fixed-width collection (min === max) is the only mode that submitted
-  // reliably on real calls (see relayMenu): with ten or more options every
-  // choice is two digits, spoken with its leading zero ("הקישו 01").
-  const wide = opts.some((o) => o.n >= 10);
-  session.data.svcWide = wide;
-  const menuItems = opts.map((o) => ({ t: `${speech(o.label)}, הקישו ${wide ? String(o.n).padStart(2, '0') : o.n},` }));
-  return ask([...spoken, ...menuItems], { min: wide ? 2 : 1, max: wide ? 2 : 1 });
+  // reliably on real calls (see relayMenu): the width is the longest choice
+  // offered (channel lists carry the customer's own IVR codes, 1–3 digits),
+  // and shorter choices are spoken with leading zeros ("הקישו 01").
+  const width = Math.max(1, ...opts.map((o) => String(o.n).length));
+  session.data.svcWidth = width;
+  const menuItems = opts.map((o) => ({ t: `${speech(o.label)}, הקישו ${String(o.n).padStart(width, '0')},` }));
+  return ask([...spoken, ...menuItems], { min: width, max: width });
 }
 
 export const ivrRouter = Router();
@@ -743,8 +744,8 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       // ── מוקד שירות: digits into the shared tree ──
       case 'SVC_MENU': {
         if (input === '*') return res.send(await mainMenu(session));
-        // Two-digit menus: "01" is the engine's 1, "00" its 0.
-        const choice = session.data.svcWide && /^\d{2}$/.test(String(input)) ? String(Number(input)) : input;
+        // Fixed-width menus: "01" is the engine's 1, "00" its 0.
+        const choice = (session.data.svcWidth || 1) > 1 && /^\d+$/.test(String(input)) ? String(Number(input)) : input;
         const r = await menuStep(svcCtx(session), session.data.svc || { node: 'service', data: {} }, choice);
         if (r.state?.node === 'main' && !r.action && !r.done) return res.send(await mainMenu(session)); // 9 / an unknown state
         return res.send(await svcDeliver(session, r));
