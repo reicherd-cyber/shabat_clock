@@ -1,6 +1,6 @@
 // IVR codes without the 1–20 cap (2026-09-07): relays.ivr_digit (and its
 // removal stash) become INT UNSIGNED and the CHECK constraint from migration 1
-// is dropped. The app validates 1–999999 (six digits — the phone menu reads a
+// is dropped. The app validates the range (1–999 since 2026-10-27; the phone menu reads a
 // fixed width equal to the longest code the user has). relay_no keeps its own
 // 1–20 CHECK (hardware channels).
 export async function migrate52(conn) {

@@ -116,14 +116,14 @@ export const realIo = {
 const firstName = (user) => String(user?.full_name || '').trim().split(/\s+/)[0] || '';
 // `rest` carries channel instructions (action: an order to execute / a status request).
 const reply = (state, text, { options = [], free = false, done = false, ...rest } = {}) => ({ text, options, free, done, state, ...rest });
-const digit = (input) => { const m = /^\s*(\d{1,6})\s*$/.exec(String(input ?? '')); return m ? Number(m[1]) : null; };
+const digit = (input) => { const m = /^\s*(\d{1,3})\s*$/.exec(String(input ?? '')); return m ? Number(m[1]) : null; };
 const withBack = (options) => [...options, BACK];
 // Lists are numbered 1..8, then 10, 11, … — 9 and 0 are navigation everywhere
 // (9 = main menu, 0 = a person), so the 9th item used to be unreachable.
 const numbered = (items) => items.map((it, i) => ({ ...it, n: i < 8 ? i + 1 : i + 2 }));
 const pickNumbered = (list, d) => list.find((x) => x.n === d) || null;
 // Channel lists: each channel under its own IVR code, in IVR order — the same
-// numbers the customer presses on the phone (unique per user, 1–999999).
+// numbers the customer presses on the phone (unique per user, 1–999).
 const byCode = (relays, labelOf) => relays.map((r) => ({ relay: r, label: labelOf(r), n: Number(r.ivr_digit) }));
 // 9 is "main menu" everywhere, except in a channel list where a channel owns 9:
 // there the way back is * (its own keycap on WhatsApp, the star key on the phone).

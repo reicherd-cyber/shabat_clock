@@ -128,7 +128,7 @@ async function svcDeliver(session, r) {
   session.data.svc = r.state; session.state = 'SVC_MENU';
   // Fixed-width collection (min === max) is the only mode that submitted
   // reliably on real calls (see relayMenu): the width is the longest choice
-  // offered (channel lists carry the customer's own IVR codes, 1–6 digits),
+  // offered (channel lists carry the customer's own IVR codes, 1–3 digits),
   // and shorter choices are spoken with leading zeros ("הקישו 01").
   const width = Math.max(1, ...opts.map((o) => String(o.n).length));
   session.data.svcWidth = width;
