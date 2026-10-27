@@ -22,6 +22,40 @@ import { getSession, saveSession, resetSession } from './session.js';
 import { sendText, sendButtons, markRead } from './client.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
+import { menuStart, step as menuStep, renderText } from '../services/serviceMenu.js';
+import { menuInput } from '../services/menuRouter.js';
+import { phoneAllowed } from '../services/rollout.js';
+
+// ── מוקד שירות: the numbered menu (services/serviceMenu.js), phase 1 2026-10-27 ──
+// A greeting or a bare digit opens it; while a branch is open every message
+// goes to the tree (digits, or the free text the node asked for). At the MAIN
+// menu a sentence is still handed to the existing paths (command / question),
+// so nothing a customer could do before is lost. A leaf that carries an order
+// goes through the usual confirm buttons; a status leaf answers at once.
+const isBareDigit = (t) => /^\s*\d{1,2}\s*$/.test(String(t || ''));
+const menuCtx = (user, phone) => ({
+  user, phone, source: 'whatsapp',
+  actor: user ? `whatsapp:${user.id}` : 'whatsapp',
+  actorObj: { type: 'whatsapp', id: user?.id ?? null },
+});
+async function sendMenu({ phone, user, r }) {
+  const userId = user?.id ?? null;
+  if (r.action?.kind === 'status' && user) {
+    await resetSession(phone, userId);
+    await sendText({ phone, userId, text: await statusText(user.id), kind: 'status' });
+    return;
+  }
+  // An order leaf (switch now, a quick one-off timing, stop/start a plan) goes
+  // through the same confirm buttons as a spoken order; executePending runs it.
+  if (r.action && r.action.kind !== 'status' && user) {
+    await saveSession({ phone, userId, state: 'CONFIRM', pending: { actions: [r.action], tz: 'Asia/Jerusalem', text: r.action.summary } });
+    const body = await getText('whatsapp.confirm', { summary: `• ${r.action.summary}` });
+    await sendButtons({ phone, userId, text: body, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
+    return;
+  }
+  await saveSession({ phone, userId, state: 'MENU', pending: { menu: r.state } });
+  await sendText({ phone, userId, text: renderText(r), kind: 'menu' });
+}
 
 const BTN_YES = 'confirm_yes';
 const BTN_NO = 'confirm_no';
@@ -191,6 +225,23 @@ export async function handleInbound(msg) {
       return;
     }
     const text = msg.text.trim();
+
+    // The numbered menu, for customers and guests alike — but only for the
+    // numbers listed in whatsapp.menu_phones (per-number rollout, '' = nobody).
+    const menuState = session.state === 'MENU' && session.pending?.menu ? session.pending.menu : null;
+    if ((menuState || isGreeting(text) || isBareDigit(text)) && await phoneAllowed('whatsapp.menu_phones', phone)) {
+      const ctx = menuCtx(user, phone);
+      let r = null;
+      if (isGreeting(text)) r = menuStart(ctx);
+      else if (menuState) {
+        const inside = menuState.node && menuState.node !== 'main';
+        // Inside a branch: digits and asked-for text go to the tree; other words
+        // try the free-text router first (phase 3), then the tree's re-prompt.
+        if (inside || isBareDigit(text)) r = await menuInput({ ctx, state: menuState, text });
+        else await resetSession(phone, userId); // a sentence at the main menu: the old paths below
+      } else r = await menuStep(ctx, menuStart(ctx).state, text); // a bare digit with no menu open
+      if (r) { await sendMenu({ phone, user, r }); return; }
+    }
 
     if (!user) {
       if (isGreeting(text) || session.fresh) {

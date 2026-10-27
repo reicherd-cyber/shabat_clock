@@ -21,6 +21,8 @@ import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
 import { runNluActions, ymdForDay } from '../services/nluExec.js';
 import { shiftDate } from '../services/time.js';
+import { step as menuStep } from '../services/serviceMenu.js';
+import { phoneAllowed } from '../services/rollout.js';
 
 function nextYmd(ymd) {
   const [y, mo, d] = ymd.split('-').map(Number);
@@ -92,6 +94,40 @@ async function nluDeliver(session, out) {
   return ask(confirmItems);
 }
 
+// ── מוקד שירות on the phone (phase 5, 2026-10-27): the shared menu tree
+//    (services/serviceMenu.js) spoken over the line. Digits drive it like on
+//    WhatsApp; a node that asks for words listens (speech-to-text); an order
+//    leaf goes through the usual NLU confirmation; 9 / * / 0 return to the
+//    IVR's own main menu. Tickets carry source 'phone', actor 'ivr'.
+const svcCtx = (session) => ({
+  user: { id: session.userId, full_name: session.userName || '' }, phone: session.phone || null, source: 'phone',
+  actor: `ivr:${session.userId}`, actorObj: { type: 'ivr', id: session.userId },
+});
+// Screen text → something a voice can read: no emoji, no slashes, no dashes.
+const speech = (t) => String(t || '')
+  .replace(/🟢/g, 'הדלקה').replace(/⚪/g, 'כיבוי').replace(/✅/g, '').replace(/⚠️/g, 'שימו לב,')
+  .replace(/ \/ /g, ' או ').replace(/[—–]/g, ',').replace(/…/g, '').replace(/\s*\n\s*/g, ', ').replace(/\s{2,}/g, ' ').trim();
+async function svcDeliver(session, r) {
+  if (r.action?.kind === 'status') return runStatus(session);
+  if (r.action) {
+    session.data.nluActions = [r.action];
+    session.data.nluTz = 'Asia/Jerusalem';
+    session.state = 'NLU_CONFIRM';
+    return ask(await nluConfirmItems([r.action]));
+  }
+  const spoken = [{ t: speech(r.text) }];
+  if (r.free) {
+    session.data.svc = r.state; session.data.svcPrompt = speech(r.text); session.data.svcRetries = 0; session.state = 'SVC_VOICE';
+    return askVoice(spoken, { maxSilence: 3 });
+  }
+  const opts = (r.options || []).filter((o) => o.n !== 9); // 9 = main menu: * and 0 do that on the line
+  if (r.done || !opts.length) return mainMenu(session, spoken);
+  session.data.svc = r.state; session.state = 'SVC_MENU';
+  const menuItems = opts.map((o) => ({ t: `${speech(o.label)}, הקישו ${o.n},` }));
+  const max = opts.some((o) => o.n >= 10) ? 2 : 1;
+  return ask([...spoken, ...menuItems], { min: 1, max });
+}
+
 export const ivrRouter = Router();
 
 // Prompt as response items: the neural-voice recording when ivr.audio.<key> is set
@@ -141,6 +177,12 @@ async function mainMenu(session, message = null) {
     // below matches. main_menu_voice recording via scripts/ivr-audio.mjs.
     items = [...greeting, ...await speak('ivr.main_menu_voice', {},
       'לומר בקשה בקול, הקישו 1, להדלקת מכשיר, הקישו 2, לכיבוי מכשיר, הקישו 3, לתזמון, הקישו 4, לשמיעת מצב המכשירים, הקישו 5')];
+    // Phase 5 (2026-10-27): the service desk and the coming week, from the
+    // shared menu tree. TTS until a recording exists (Edge TTS is down).
+    // Per-number rollout (ivr.service_phones, '' = nobody): only listed callers hear them.
+    if (await phoneAllowed('ivr.service_phones', session.phone)) {
+      items.push(...await speak('ivr.main_menu_service', {}, 'לשירות לקוחות, הקישו 6, למה קורה בשבת הקרובה, הקישו 7'));
+    }
   } else {
     const audio = await getSetting('ivr.audio.main_menu');
     items = audio
@@ -611,6 +653,11 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
             return res.send(await schedBrowse(session));
           }
           if (input === '5') return res.send(await runStatus(session));
+          if ((input === '6' || input === '7') && await phoneAllowed('ivr.service_phones', session.phone)) {
+            await appendPath(session.callLogId, input === '6' ? 'svc' : 'svc_week');
+            const r = await menuStep(svcCtx(session), { node: input === '6' ? 'service' : 'week', data: {}, _render: true }, null);
+            return res.send(await svcDeliver(session, r));
+          }
         } else {
           // Legacy build (no key): 1=on, 2=off, 3=schedule, 4=status.
           if (input === '1' || input === '2') {
@@ -684,6 +731,26 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         const worst = results.find((x) => x.status !== 'acked') || results.find((x) => x.verify === 'no_flow');
         const feedback = worst ? await cmdFeedback(worst) : await speak('ivr.nlu_done', {}, 'הבקשה בוצעה');
         return res.send(await mainMenu(session, feedback));
+      }
+
+      // ── מוקד שירות: digits into the shared tree ──
+      case 'SVC_MENU': {
+        if (input === '*') return res.send(await mainMenu(session));
+        const r = await menuStep(svcCtx(session), session.data.svc || { node: 'service', data: {} }, input);
+        if (r.state?.node === 'main' && !r.action && !r.done) return res.send(await mainMenu(session)); // 9 / an unknown state
+        return res.send(await svcDeliver(session, r));
+      }
+      // ── מוקד שירות: a node that asked for words — speech-to-text into the tree ──
+      case 'SVC_VOICE': {
+        const raw = req.query.nlu;
+        const spoken = String(Array.isArray(raw) ? raw[raw.length - 1] : (raw ?? '')).trim();
+        if (!spoken) {
+          session.data.svcRetries = (session.data.svcRetries || 0) + 1;
+          if (session.data.svcRetries <= 2) return res.send(askVoice([{ t: session.data.svcPrompt || 'אמרו את התשובה לאחר הצפצוף' }], { maxSilence: 3 }));
+          return res.send(await mainMenu(session, await speak('ivr.nlu_giveup', {}, 'לא זוהה דיבור, חוזרים לתפריט הראשי')));
+        }
+        const r = await menuStep(svcCtx(session), session.data.svc || { node: 'service', data: {} }, spoken);
+        return res.send(await svcDeliver(session, r));
       }
 
       // ── schedules browser: 1 next / 2 previous / 3 delete current / 4 add ──

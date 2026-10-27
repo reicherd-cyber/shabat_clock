@@ -79,6 +79,10 @@ export const env = {
   // Emergency escape hatch: ADMIN_PASSWORD_LOGIN=1 re-enables the email+password
   // admin login if Google sign-in is ever unavailable. Off by default — Google only.
   adminPasswordLogin: process.env.ADMIN_PASSWORD_LOGIN === '1',
+  // מוקד שירות as a chat on the site (phase 1, 2026-10-27): on staging only —
+  // the chat page and its endpoint stay hidden/refused wherever this is unset,
+  // so a production deploy of the same code changes nothing for customers.
+  serviceMenuWeb: process.env.SERVICE_MENU_WEB === '1',
   smtp: {
     host: process.env.SMTP_HOST || '',
     port: Number(process.env.SMTP_PORT || 587),
@@ -91,6 +95,9 @@ export const env = {
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY || '',
     model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
+    // The menu's free-text router (services/menuRouter.js): a small model is
+    // enough to pick a menu target from a typed sentence.
+    routerModel: process.env.ROUTER_MODEL || 'claude-haiku-5-5',
     // The support answer-bot (site help + WhatsApp questions) may run on a
     // cheaper model than the voice-command interpreter: it answers from a fixed
     // knowledge base, not from garbled speech. Defaults to the main model.

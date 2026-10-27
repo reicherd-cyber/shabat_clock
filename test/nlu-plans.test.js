@@ -15,6 +15,11 @@ test('ruleInterpret: a plain on/off naming a relay in full is answered without a
   assert.deepEqual(ruled('תדליק את הדוד ואת הסלון בבקשה'), ['on:דוד', 'on:סלון']); // two relays, one verb
   assert.deepEqual(ruled('תדליק תאורה'), ['on:תאורה']);                         // the short name alone
   assert.deepEqual(ruled('להדליק את תאורה עזרת נשים, תודה'), ['on:תאורה עזרת נשים']);
+  // noun forms (real transcripts): הדלקה של / הדלקת / כיבוי של
+  assert.deepEqual(ruled('הדלקה של הסלון'), ['on:סלון']);
+  assert.deepEqual(ruled('כיבוי של הדוד'), ['off:דוד']);
+  const ch = [{ id: 1, name: 'ערוץ 1' }, { id: 2, name: 'ערוץ 2' }, { id: 3, name: 'ערוץ 3' }];
+  assert.deepEqual(ruleInterpret('הדלקת ערוץ 2 ערוץ 3 ערוץ 1', ch).map((a) => a.relay_name), ['ערוץ 2', 'ערוץ 3', 'ערוץ 1']);
 });
 
 test('ruleInterpret: anything the rules cannot fully explain goes to the model', () => {

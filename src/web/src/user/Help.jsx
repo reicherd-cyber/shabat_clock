@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Card, Button, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
+import ServiceChat from './ServiceChat.jsx';
 import {
   WifiOff, CalendarX, KeyRound, PhoneCall, MonitorSmartphone, MessageCircleQuestion,
   ChevronRight, ChevronDown, Check, Send, Sparkles, MessagesSquare,
@@ -241,6 +242,8 @@ export default function Help() {
       </SectionHead>
 
       {/* הפניות שלי — רק אם יש כאלה, מעל הנושאים */}
+      {/* מוקד שירות as a chat — staging only (flag menu_web from /me), phase 1 2026-10-27 */}
+      {!topic && <ServiceChat />}
       {!topic && mine?.length > 0 && <MyTickets rows={mine} reload={loadMine} />}
 
       {/* בחירת נושא */}

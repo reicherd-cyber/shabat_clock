@@ -6,6 +6,7 @@
 // intent → relay id + action/time; all validation stays server-side.
 import Anthropic from '@anthropic-ai/sdk';
 import { costUsd, totalInputTokens, quickAnswerParams } from './aiPricing.js';
+import { aiAllowed } from './aiBudget.js';
 import { query } from '../db/pool.js';
 import { errors } from '../config/errors.js';
 import { env } from '../config/env.js';
@@ -186,9 +187,11 @@ ${planList}`;
 // purpose: a time word, a number, a plan word, two kinds of verb, a partial or
 // garbled relay name, or any unexplained word sends the text to the model. The
 // confirm step still guards the result like every other interpretation.
-const ON_VERBS = /^(תדליק|תדליקי|תדליקו|הדלק|הדליקו|להדליק|דלק)$/;
-const OFF_VERBS = /^(תכבה|תכבי|תכבו|כבה|כבו|לכבות)$/;
-const FILLER = /^(את|מיד|מידי|מיידי|מיידית|עכשיו|בבקשה|תודה|רק|גם|נא|אנא|לי|לנו|ו|בבית|בחדר)$/;
+// Verb forms AND the noun forms callers use ("הדלקה של הסלון", "הדלקת ערוץ 2",
+// "כיבוי של הדוד" — real transcripts 25–27.10); "של" is then filler.
+const ON_VERBS = /^(תדליק|תדליקי|תדליקו|הדלק|הדליקו|להדליק|דלק|הדלקה|הדלקת)$/;
+const OFF_VERBS = /^(תכבה|תכבי|תכבו|כבה|כבו|לכבות|כיבוי)$/;
+const FILLER = /^(את|של|מיד|מידי|מיידי|מיידית|עכשיו|בבקשה|תודה|רק|גם|נא|אנא|לי|לנו|ו|בבית|בחדר)$/;
 // Words the rules never handle: times, number words, plans, schedules, days.
 // Digits are NOT listed: a digit that is part of a relay's own name ("ערוץ 2",
 // "מזגן 1") is fine; any digit left unexplained after the relay match sends
@@ -349,6 +352,11 @@ export async function interpretCommand({ userId, text, phone = null, prevText = 
 
   // Only the model path needs the schedules (plans in the prompt, deletion
   // matching) — hundreds of rows on a busy account, not fetched for a rules answer.
+  // The budget / kill switch (services/aiBudget.js): over it, the caller hears a
+  // plain "not now" and the menu keeps working — never an error.
+  if (!(await aiAllowed({ userId, kind: 'command' }))) {
+    return { understood: false, clarification: 'הפקודה הקולית לא זמינה כרגע, אפשר להשתמש בתפריט הרגיל', actions: [], tz: relays[0].timezone || 'Asia/Jerusalem' };
+  }
   const schedules = await listSchedules({ userId });
 
   const plans = groupPlans(schedules);

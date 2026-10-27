@@ -1792,3 +1792,23 @@ adminRouter.get('/docs/:key', requireSuperadmin, async (req, res, next) => {
     res.json({ key: d.key, file: d.file, title: d.title, markdown, commit: appVersion.commit, edited });
   } catch (e) { next(e); }
 });
+
+// ── מוקד שירות, phase 4 (2026-10-27): the agent's side ──
+// Enrichment of one ticket: summary, urgency, facts, a suggested reply the
+// agent sends or edits (services/ticketEnrich.js). Cached per ticket; ?force=1
+// recomputes. Costs a model call → write permission, like a reply.
+adminRouter.post('/support/:id/enrich', requireWrite, async (req, res, next) => {
+  try {
+    const { enrichTicket } = await import('../../services/ticketEnrich.js');
+    const r = await enrichTicket({ id: Number(req.params.id), force: String(req.query.force || '') === '1', adminId: req.auth.adminId });
+    res.json({ enrichment: r }); // null = no key / over budget — the page says so
+  } catch (e) { next(e); }
+});
+
+// The weekly desk numbers (services/deskStats.js). Read-only, any admin role.
+adminRouter.get('/support-desk', async (req, res, next) => {
+  try {
+    const { deskStats } = await import('../../services/deskStats.js');
+    res.json(await deskStats({ weeks: Math.min(Math.max(Number(req.query.weeks) || 8, 1), 26) }));
+  } catch (e) { next(e); }
+});
