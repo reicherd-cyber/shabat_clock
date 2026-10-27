@@ -548,7 +548,7 @@ userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
       // The site is the customer's own panel: a switch, a quick one-off timing or
       // a plan stop/start runs at once (the page already showed the choice).
       const { runNluActions } = await import('../../services/nluExec.js');
-      const { results } = await runNluActions({ userId: req.auth.userId, actions: [r.action], tz: 'Asia/Jerusalem', source: 'web' });
+      const { results } = await runNluActions({ userId: req.auth.userId, actions: [r.action], tz: 'Asia/Jerusalem', source: 'web', actor: actorOf(req) });
       let text;
       if (r.action.kind === 'immediate') {
         const ok = results[0]?.status === 'acked';
