@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getTimes } from 'suncalc';
 import { HDate, HebrewCalendar, flags, gematriya } from '@hebcal/core';
@@ -762,6 +762,12 @@ export default function Calendar() {
     );
   };
 
+  // The grids below are plain render helpers, CALLED (MatrixGrid(...)), never
+  // mounted as element types (<MatrixGrid />): a function defined inside this
+  // component is a new "type" on every render, and React would then unmount
+  // and rebuild the whole grid on each tick/refresh/hover — which threw the
+  // horizontal scroll back to the start (the right edge, RTL) and the page to
+  // the top. Called as functions they are just this component's own markup.
   // ── day-band matrix (week AND month): the day view's layout — channels are
   // columns — with the vertical axis being DAYS: each day is one equal band
   // and its 24 hours compress inside it. Week: 7 bands × 96px; month: every
@@ -772,7 +778,7 @@ export default function Calendar() {
     const segLabel = (s) => (s.from && s.to ? `${s.from}–${s.to}` : s.to ? `כיבוי ${s.to}` : s.from ? `הדלקה ${s.from}` : 'דולק');
     return (
       <Card flush className="overflow-hidden">
-        <StateLegend />
+        {StateLegend({})}
         <div className="overflow-x-auto">
           <div style={{ minWidth: Math.max(0, shownRelays.length * 104 + 56) }}>
             <div className="flex border-b border-line bg-surface2/60">
@@ -872,7 +878,7 @@ export default function Calendar() {
     const shownRelays = relays.filter((r) => !hiddenRelays.has(r.id));
     return (
       <Card flush className="overflow-hidden">
-        <StateLegend />
+        {StateLegend({})}
         <div className="overflow-x-auto">
           <div style={{ minWidth: Math.max(0, shownRelays.length * 104 + 56) }}>
             <div className="flex border-b border-line bg-surface2/60">
@@ -887,11 +893,13 @@ export default function Calendar() {
               <p className="text-muted p-8 text-center">אין ערוצים להצגה — בחרו ערוצים בסינון למעלה.</p>
             ) : (
               <div className="flex" style={{ height: 24 * HOUR_PX }}>
-                <HourGutter />
+                {HourGutter()}
                 {shownRelays.map((r) => (
-                  <TimeColumn key={r.id} date={dayDate} minW="min-w-[96px]" stateColors offTint
-                    segs={stateSegsFor(r, dayDate)}
-                    onEmptyClick={(t) => openSched(dayDate, t, r.id)} />
+                  <Fragment key={r.id}>
+                    {TimeColumn({ date: dayDate, minW: 'min-w-[96px]', stateColors: true, offTint: true,
+                      segs: stateSegsFor(r, dayDate),
+                      onEmptyClick: (t) => openSched(dayDate, t, r.id) })}
+                  </Fragment>
                 ))}
               </div>
             )}
@@ -902,8 +910,8 @@ export default function Calendar() {
   };
 
   // Week = 7 bands; month = every day of the shown month at half the band height.
-  const WeekGrid = () => <MatrixGrid days={cells} bandH={96} />;
-  const MonthGrid = () => <MatrixGrid days={cells.filter((c) => c.inMonth)} bandH={48} />;
+  const WeekGrid = () => MatrixGrid({ days: cells, bandH: 96 });
+  const MonthGrid = () => MatrixGrid({ days: cells.filter((c) => c.inMonth), bandH: 48 });
 
   return (
     <>
@@ -945,7 +953,7 @@ export default function Calendar() {
         <div className={`rounded-lg px-4 py-2 text-[13px] font-medium ${notice.warn ? 'bg-off-bg text-off' : 'bg-on-bg text-on'}`}>{notice.name}: {notice.text}</div>
       )}
 
-      {view === 'month' ? <MonthGrid /> : view === 'day' ? <DayGrid /> : <WeekGrid />}
+      {view === 'month' ? MonthGrid() : view === 'day' ? DayGrid() : WeekGrid()}
       {hoverTip.node}
 
       {/* creating from the calendar stays in the calendar */}
