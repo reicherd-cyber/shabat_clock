@@ -190,7 +190,7 @@ async function mainMenu(session, message = null) {
     // shared menu tree. TTS until a recording exists (Edge TTS is down).
     // Per-number rollout (ivr.service_phones, '' = nobody): only listed callers hear them.
     if (await phoneAllowed('ivr.service_phones', session.phone)) {
-      items.push(...await speak('ivr.main_menu_service', {}, 'לשירות לקוחות, הקישו 6, למה קורה בשבת הקרובה, הקישו 7'));
+      items.push(...await speak('ivr.main_menu_service', {}, 'לשירות לקוחות, הקישו 6'));
     }
   } else {
     const audio = await getSetting('ivr.audio.main_menu');
@@ -712,9 +712,10 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
             return res.send(await schedBrowse(session));
           }
           if (input === '5') return res.send(await runStatus(session));
-          if ((input === '6' || input === '7') && await phoneAllowed('ivr.service_phones', session.phone)) {
-            await appendPath(session.callLogId, input === '6' ? 'svc' : 'svc_week');
-            const r = await menuStep(svcCtx(session), { node: input === '6' ? 'service' : 'week', data: {}, _render: true }, null);
+          if (input === '6' && await phoneAllowed('ivr.service_phones', session.phone)) {
+            // 7 (מה קורה בשבת הקרובה) left the menu 2026-10-27 with the shared tree's 6/8.
+            await appendPath(session.callLogId, 'svc');
+            const r = await menuStep(svcCtx(session), { node: 'service', data: {}, _render: true }, null);
             return res.send(await svcDeliver(session, r));
           }
         } else {

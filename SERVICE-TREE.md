@@ -72,18 +72,18 @@ Navigation everywhere: `9` = main menu, `0` on the main menu = a person.
 ├─ 5  🔒 מצב הערוצים                                             ✅
 │   └─ "🟢 מטבח – דולק / ⚪ סלון – כבוי …"
 │
-├─ 6  🔒 ✅ תזמון מהיר                                            ⚡
+├─ (off the menu since 2026-10-27, router-only) 🔒 ✅ תזמון מהיר       ⚡
 │   ├─ איזה ערוץ?  1..n
 │   ├─ מה?  1 הדלקה · 2 כיבוי
 │   ├─ מתי?  1 בעוד שעה · 2 בעוד שעתיים · 3 הערב ב-20:00 · 4 📝 שעה (HH:MM היום)
 │   └─ confirm → one-off schedule today (created_via = channel) → "נקבע: {ערוץ} {פעולה} ב-{שעה}"
 │
-├─ 7  🔒 ✅ התוכניות שלי
+├─ 6  🔒 ✅ התוכניות שלי
 │   ├─ רשימה  1..n  "{שם התוכנית} — פעילה/מושבתת"
 │   ├─ 1 עצירה · 2 הפעלה   (same as the web toggle: is_enabled per member row, nothing deleted)
 │   └─ confirm → "התוכנית {שם} הושבתה / הופעלה"   (exists today as the phone intent plan_toggle ✅)
 │
-├─ 8  🔒 ✅ מה קורה השבוע / בשבת הקרובה
+├─ (off the menu since 2026-10-27, router-only) 🔒 ✅ מה קורה השבוע / בשבת הקרובה
 │   └─ the next 7 days per channel from GET /schedules/calendar (same data as the site's מועדים קרובים ✅):
 │      "שבת: מטבח 🟢 18:12 כניסת שבת → ⚪ 20:30 … סלון …"   (read-only, no confirm)
 │

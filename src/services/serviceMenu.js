@@ -239,9 +239,10 @@ function mainMenu(ctx) {
     { n: 2, label: 'שירות לקוחות' },
     { n: 3, label: 'מידע כללי' },
   ];
+  // תזמון מהיר and מה קורה השבוע left the menu (user, 2026-10-27); their nodes
+  // stay for the free-text router ("תדליק את הדוד בעוד שעה", "מה יש השבוע").
   if (ctx.user) {
-    options.push({ n: 4, label: 'הדלקה / כיבוי של ערוץ' }, { n: 5, label: 'מצב הערוצים' },
-      { n: 6, label: 'תזמון מהיר' }, { n: 7, label: 'התוכניות שלי' }, { n: 8, label: 'מה קורה השבוע' });
+    options.push({ n: 4, label: 'הדלקה / כיבוי של ערוץ' }, { n: 5, label: 'מצב הערוצים' }, { n: 6, label: 'התוכניות שלי' });
   }
   options.push({ n: 0, label: 'נציג אנושי' });
   const hello = ctx.user ? `שלום ${firstName(ctx.user)}, ` : 'שלום, ';
@@ -283,9 +284,7 @@ export async function step(ctx, state, input, io = realIo) {
       if (d === 3) { s.node = 'info'; return render(ctx, s, io); }
       if (d === 4 && ctx.user) { s.node = 'switch_relay'; return render(ctx, s, io); }
       if (d === 5 && ctx.user) { s.node = 'status'; return render(ctx, s, io); }
-      if (d === 6 && ctx.user) { s.node = 'quick_relay'; return render(ctx, s, io); }
-      if (d === 7 && ctx.user) { s.node = 'plans'; return render(ctx, s, io); }
-      if (d === 8 && ctx.user) { s.node = 'week'; return render(ctx, s, io); }
+      if (d === 6 && ctx.user) { s.node = 'plans'; return render(ctx, s, io); }
       if (d === 0) { s.node = 'agent'; return render(ctx, s, io); }
       return notUnderstood(menuStart(ctx));
     }
