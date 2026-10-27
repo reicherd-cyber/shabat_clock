@@ -63,17 +63,23 @@ async function sessionIdentity(req) {
 
 // מוקד שירות on the site (the chat on /help and its POST /support/menu): open
 // to every customer only where SERVICE_MENU_WEB=1 (staging); everywhere else
-// only a superadmin sees it (user decision 2026-10-27) — a session whose
-// verified address is an active superadmin's, or one a superadmin is
-// impersonating. A phone login carries no address and is a plain customer.
+// only a superadmin sees it (user decision 2026-10-27) — on their OWN account
+// (the session's verified address is an active superadmin's and is the
+// account's address), or while impersonating from the admin panel. Stepping
+// into another account through the switcher shows that account as its
+// customers see it, without the chat. A phone login carries no address and is
+// a plain customer.
 async function menuWebAllowed(req) {
   if (env.serviceMenuWeb) return true;
   const adminId = req.auth.imp ?? 0;
   const email = req.auth.email ?? '';
   if (!adminId && !email) return false;
   const [a] = await query(
-    "SELECT 1 AS ok FROM admins WHERE is_active = TRUE AND role = 'superadmin' AND (id = ? OR email = ?) LIMIT 1",
-    [adminId, email],
+    `SELECT 1 AS ok FROM admins a
+      WHERE a.is_active = TRUE AND a.role = 'superadmin'
+        AND (a.id = ? OR (a.email = ? AND EXISTS (SELECT 1 FROM users u WHERE u.id = ? AND u.email = a.email)))
+      LIMIT 1`,
+    [adminId, email, req.auth.userId],
   );
   return Boolean(a);
 }
