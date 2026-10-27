@@ -20,7 +20,7 @@ import { logAction } from '../services/audit.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, saveSession, resetSession } from './session.js';
 import { sendText, sendButtons, markRead } from './client.js';
-import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion } from './parse.js';
+import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion, isBareDigit, strayConfirmWord } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
 import { menuStart, step as menuStep, renderText } from '../services/serviceMenu.js';
 import { menuInput } from '../services/menuRouter.js';
@@ -32,7 +32,6 @@ import { phoneAllowed } from '../services/rollout.js';
 // menu a sentence is still handed to the existing paths (command / question),
 // so nothing a customer could do before is lost. A leaf that carries an order
 // goes through the usual confirm buttons; a status leaf answers at once.
-const isBareDigit = (t) => /^\s*\d{1,2}\s*$/.test(String(t || ''));
 const menuCtx = (user, phone) => ({
   user, phone, source: 'whatsapp',
   actor: user ? `whatsapp:${user.id}` : 'whatsapp',
@@ -229,7 +228,7 @@ export async function handleInbound(msg) {
     // A bare digit is never a stray confirmation: "1" / "2" are menu choices
     // (the menu comes back under every result), so only yes/no WORDS and the
     // confirm buttons mean "the order I was asked about".
-    if (user && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || (msg.text != null && !isBareDigit(msg.text) && confirmWord(msg.text)))) {
+    if (user && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || strayConfirmWord(msg.text))) {
       await sendText({ phone, userId, text: await getText('whatsapp.confirm_expired') });
       return;
     }
