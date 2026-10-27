@@ -74,8 +74,8 @@ export const realIo = {
   async lead({ ctx, name, city, channels, when }) {
     const notes = `מהתפריט (${ctx.source === 'whatsapp' ? 'וואטסאפ' : 'אתר'}): ${channels === 4 ? '4+' : channels} ערוצים, מועד נוח: ${when}`;
     const r = await query(
-      'INSERT INTO crm_leads (name, phone, city, source, status, user_id, notes, created_by) VALUES (?,?,?,?,?,?,?,?)',
-      [name, ctx.phone ?? null, city || null, `bot_${ctx.source}`, 'new', ctx.user?.id ?? null, notes, ctx.actor],
+      'INSERT INTO crm_leads (name, phone, city, source, devices, status, user_id, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?)',
+      [name, ctx.phone ?? null, city || null, `bot_${ctx.source}`, Number(channels) || null, 'new', ctx.user?.id ?? null, notes, ctx.actor],
     );
     await logAction(ctx.actorObj, 'create', 'crm_lead', r.insertId, { after: { name, via: 'menu' } }).catch(() => {});
     return r.insertId;
@@ -95,6 +95,19 @@ const firstName = (user) => String(user?.full_name || '').trim().split(/\s+/)[0]
 const reply = (state, text, { options = [], free = false, done = false, ...rest } = {}) => ({ text, options, free, done, state, ...rest });
 const digit = (input) => { const m = /^\s*(\d{1,2})\s*$/.exec(String(input ?? '')); return m ? Number(m[1]) : null; };
 const withBack = (options) => [...options, BACK];
+// Lists are numbered 1..8, then 10, 11, … — 9 and 0 are navigation everywhere
+// (9 = main menu, 0 = a person), so the 9th item used to be unreachable.
+const numbered = (items) => items.map((it, i) => ({ ...it, n: i < 8 ? i + 1 : i + 2 }));
+const pickNumbered = (list, d) => list.find((x) => x.n === d) || null;
+// The state comes back from the channel (the site page, a WhatsApp session)
+// and is NOT trusted: an id inside it is honoured only when it is the
+// customer's own — the switch and the device check re-read the lists.
+const ownRelay = async (ctx, io, id) => (ctx.user ? (await io.relays(ctx.user.id)).find((r) => Number(r.id) === Number(id)) || null : null);
+const ownDevice = async (ctx, io, id) => (ctx.user ? (await io.devices(ctx.user.id)).find((x) => Number(x.id) === Number(id)) || null : null);
+// Nodes that only a registered customer may stand on — a guest's state naming
+// one of them (crafted, or a session that lost its user) restarts at the menu.
+const USER_NODES = new Set(['service', 'fault_device', 'fault_check', 'fault_online_helped', 'fault_steps', 'fault_offer_ticket', 'fault_ticket',
+  'sched_problem', 'sched_relay', 'order_status', 'order_status_helped', 'switch_relay', 'switch_action', 'status']);
 const ORDER_STATUS_HE = { open: 'בטיפול — ההזמנה נקלטה ואנחנו עובדים עליה', delivered: 'סופקה', cancelled: 'בוטלה' };
 
 function mainMenu(ctx) {
@@ -124,7 +137,8 @@ async function render(ctx, state, io) {
 // The one entry point. Returns the next reply; `state` inside it is what the
 // channel must persist and hand back with the customer's next message.
 export async function step(ctx, state, input, io = realIo) {
-  const s = { node: state?.node || 'main', data: { ...(state?.data || {}) } };
+  const s = { node: String(state?.node || 'main'), data: { ...(state && typeof state.data === 'object' && state.data ? state.data : {}) } };
+  if (USER_NODES.has(s.node) && !ctx.user) return menuStart(ctx);
   const rendering = state?._render === true;
   const d = rendering ? null : digit(input);
   const text = rendering ? '' : String(input ?? '').trim();
@@ -216,16 +230,20 @@ export async function step(ctx, state, input, io = realIo) {
         return reply({ node: 'main', data: {} }, 'לחשבון שלכם אין עדיין מכשיר רשום. לחצו 0 לנציג.', { options: [{ n: 0, label: 'נציג אנושי' }, BACK] });
       }
       if (devices.length === 1) { s.data.device = { id: devices[0].id, name: devices[0].name }; s.node = 'fault_check'; return render(ctx, s, io); }
-      const options = withBack(devices.map((x, i) => ({ n: i + 1, label: x.name })));
+      const list = numbered(devices.map((x) => ({ device: x, label: x.name })));
+      const options = withBack(list.map(({ n, label }) => ({ n, label })));
       if (rendering) return reply(s, 'על איזה מכשיר מדובר?', { options });
-      const pick = devices[d - 1];
-      if (!pick || d < 1) return notUnderstood(await render(ctx, s, io));
+      const pick = pickNumbered(list, d)?.device;
+      if (!pick) return notUnderstood(await render(ctx, s, io));
       s.data.device = { id: pick.id, name: pick.name }; s.node = 'fault_check';
       return render(ctx, s, io);
     }
     case 'fault_check': {
+      const dev = await ownDevice(ctx, io, s.data.device?.id);
+      if (!dev) return menuStart(ctx);
+      s.data.device = { id: dev.id, name: dev.name };
       // Live check first — a unit that answers needs no steps.
-      const online = await io.deviceOnline(s.data.device.id);
+      const online = await io.deviceOnline(dev.id);
       if (online) {
         s.node = 'fault_online_helped';
         return reply(s, `המכשיר "${s.data.device.name}" מחובר אלינו כרגע ומגיב ✅. אם ערוץ מסוים לא פועל, נסו להדליק ולכבות אותו מהמסך הראשי.\nזה עזר?`, { options: withBack(HELPED) });
@@ -240,6 +258,9 @@ export async function step(ctx, state, input, io = realIo) {
       return notUnderstood(await render(ctx, s, io));
     }
     case 'fault_steps': {
+      const dev = await ownDevice(ctx, io, s.data.device?.id);
+      if (!dev) return menuStart(ctx);
+      s.data.device = { id: dev.id, name: dev.name };
       const STEPS = [
         'בדקו שהמכשיר מחובר לחשמל ושיש מתח בשקע (נסו מכשיר אחר באותו שקע).',
         'בדקו שהאינטרנט בבית פועל — הראוטר דולק ואפשר לגלוש ממכשיר אחר.',
@@ -261,6 +282,7 @@ export async function step(ctx, state, input, io = realIo) {
       return render(ctx, s, io);
     }
     case 'fault_offer_ticket': {
+      if (!(await ownDevice(ctx, io, s.data.device?.id))) return menuStart(ctx);
       // The verdict itself (power / internet / filter) is the admin's — the
       // customer hears only that something is wrong and is offered a ticket.
       const options = withBack([{ n: 1, label: 'פתיחת פנייה' }]);
@@ -269,7 +291,10 @@ export async function step(ctx, state, input, io = realIo) {
       return notUnderstood(await render(ctx, s, io));
     }
     case 'fault_ticket': {
-      const diag = await io.diagnose(s.data.device.id);
+      const dev = await ownDevice(ctx, io, s.data.device?.id);
+      if (!dev) return menuStart(ctx);
+      s.data.device = { id: dev.id, name: dev.name };
+      const diag = await io.diagnose(dev.id);
       const id = await io.ticket({
         ctx, topic: 'device_offline',
         body: `המכשיר "${s.data.device.name}" לא מגיב גם אחרי צעדי הבדיקה (חשמל, אינטרנט, הפעלה מחדש).`,
@@ -287,10 +312,11 @@ export async function step(ctx, state, input, io = realIo) {
     case 'sched_relay': {
       const relays = await io.relays(ctx.user.id);
       if (!relays.length) { s.node = 'service_other'; return render(ctx, s, io); }
-      const options = withBack(relays.map((r, i) => ({ n: i + 1, label: relays.length > 1 && r.device_name ? `${r.name} (${r.device_name})` : r.name })));
+      const list = numbered(relays.map((r) => ({ relay: r, label: relays.length > 1 && r.device_name ? `${r.name} (${r.device_name})` : r.name })));
+      const options = withBack(list.map(({ n, label }) => ({ n, label })));
       if (rendering) return reply(s, 'באיזה ערוץ?', { options });
-      const pick = relays[d - 1];
-      if (!pick || d < 1) return notUnderstood(await render(ctx, s, io));
+      const pick = pickNumbered(list, d)?.relay;
+      if (!pick) return notUnderstood(await render(ctx, s, io));
       const id = await io.ticket({
         ctx, topic: 'schedule',
         body: `תזמון בערוץ "${pick.name}" — ${s.data.problem}.`,
@@ -351,14 +377,18 @@ export async function step(ctx, state, input, io = realIo) {
     case 'switch_relay': {
       const relays = await io.relays(ctx.user.id);
       if (!relays.length) return reply({ node: 'main', data: {} }, 'לחשבון שלכם אין עדיין ערוצים פעילים.', { options: [BACK] });
-      const options = withBack(relays.map((r, i) => ({ n: i + 1, label: `${r.name}${r.current_state === 'on' ? ' (דולק)' : ' (כבוי)'}` })));
+      const list = numbered(relays.map((r) => ({ relay: r, label: `${r.name}${r.current_state === 'on' ? ' (דולק)' : ' (כבוי)'}` })));
+      const options = withBack(list.map(({ n, label }) => ({ n, label })));
       if (rendering) return reply(s, 'איזה ערוץ?', { options });
-      const pick = relays[d - 1];
-      if (!pick || d < 1) return notUnderstood(await render(ctx, s, io));
+      const pick = pickNumbered(list, d)?.relay;
+      if (!pick) return notUnderstood(await render(ctx, s, io));
       s.data.relay = { id: pick.id, name: pick.name }; s.node = 'switch_action';
       return render(ctx, s, io);
     }
     case 'switch_action': {
+      const relay = await ownRelay(ctx, io, s.data.relay?.id);
+      if (!relay) return menuStart(ctx);
+      s.data.relay = { id: relay.id, name: relay.name };
       const options = withBack([{ n: 1, label: 'הדלקה' }, { n: 2, label: 'כיבוי' }]);
       if (rendering) return reply(s, `"${s.data.relay.name}" — מה לעשות?`, { options });
       if (d !== 1 && d !== 2) return notUnderstood(await render(ctx, s, io));

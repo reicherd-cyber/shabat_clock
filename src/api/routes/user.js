@@ -1,5 +1,6 @@
 // §3.2 user panel — every query implicitly scoped WHERE user_id = :sub.
 import { Router } from 'express';
+import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireUser, signUserToken, invalidateSession, supportAskLimiter, supportMessageLimiter, supportMenuLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
@@ -46,7 +47,7 @@ userRouter.get('/me', async (req, res, next) => {
     // select box; a lone entry hides it.
     const identity = await sessionIdentity(req);
     const accounts = await accountsForEmail(identity);
-    res.json({ user, phones, emails, demo, accounts, identity_email: identity });
+    res.json({ user, phones, emails, demo, accounts, identity_email: identity, menu_web: env.serviceMenuWeb });
   } catch (e) { next(e); }
 });
 
@@ -527,6 +528,8 @@ userRouter.get('/history', async (req, res, next) => {
 // customer's own panel) and reported in the reply text.
 userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
   try {
+    // Staging only until the user opens it (SERVICE_MENU_WEB=1 in that .env).
+    if (!env.serviceMenuWeb) throw errors.forbidden('מוקד השירות באתר עדיין לא פתוח');
     const { menuStart, step } = await import('../../services/serviceMenu.js');
     const user = await getUser(req.auth.userId);
     const [primary] = await query(
@@ -540,8 +543,12 @@ userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
       const ok = results[0]?.status === 'acked';
       r = { ...r, action: undefined, text: ok ? `✅ ${r.action.relay_name} ${r.action.action === 'on' ? 'הודלק' : 'כובה'}` : `⚠️ ${r.action.relay_name} — המכשיר לא אישר (${results[0]?.fail_reason || 'לא ידוע'})` };
     } else if (r.action?.kind === 'status') {
-      const relays = await listDevicesWithRelays(req.auth.userId);
-      const lines = relays.filter((d) => d.is_enabled).flatMap((d) => d.relays.filter((x) => x.is_enabled).map((x) => `${x.current_state === 'on' ? '🟢' : '⚪'} ${x.name} – ${x.current_state === 'on' ? 'דולק' : 'כבוי'}`));
+      const devices = await listDevicesWithRelays(req.auth.userId);
+      // One line per live relay, each relay once (a relay belongs to one device,
+      // but the guard costs nothing and the list is what the customer reads).
+      const seen = new Set();
+      const lines = devices.filter((d) => d.is_enabled).flatMap((d) => d.relays.filter((x) => x.is_enabled && !seen.has(x.id) && seen.add(x.id))
+        .map((x) => `${x.current_state === 'on' ? '🟢' : '⚪'} ${x.name} – ${x.current_state === 'on' ? 'דולק' : 'כבוי'}`));
       r = { ...r, action: undefined, text: lines.join('\n') || 'אין ערוצים פעילים.' };
     }
     res.json(r);

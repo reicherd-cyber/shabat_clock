@@ -177,3 +177,73 @@ test('renderText lists the options with keycaps under the text', () => {
   assert.match(t, /\n1️⃣ הזמנה \/ מכירה\n/);
   assert.match(t, /0️⃣ נציג אנושי$/);
 });
+
+// ── the state is the channel's, not ours: ids in it are honoured only when they are the customer's ──
+test('a crafted state naming another customer\'s relay or device does nothing', async () => {
+  const io = fakeIo();
+  // switch_action with a relay id the customer does not own → back to the main menu, no action
+  const sw = await step(ctxUser, { node: 'switch_action', data: { relay: { id: 999, name: 'של מישהו אחר' } } }, '2', io);
+  assert.equal(sw.action, undefined);
+  assert.equal(sw.state.node, 'main');
+  // fault_ticket with a foreign device id → no diagnosis, no ticket
+  const ft = await step(ctxUser, { node: 'fault_ticket', data: { device: { id: 999, name: 'זר' } } }, null, io);
+  assert.equal(ft.state.node, 'main');
+  assert.deepEqual(io.log.diagnosed, []);
+  assert.deepEqual(io.log.tickets, []);
+  // fault_check with no device at all → no crash, main menu
+  const fc = await step(ctxUser, { node: 'fault_check', data: {} }, null, io);
+  assert.equal(fc.state.node, 'main');
+  // an own relay named in the state still works
+  const ok = await step(ctxUser, { node: 'switch_action', data: { relay: { id: 15, name: 'x' } } }, '1', io);
+  assert.equal(ok.action.relay_id, 15);
+  assert.equal(ok.action.relay_name, 'דוד'); // the name is re-read, not trusted
+});
+
+test('a guest whose state names a customer-only node restarts at the main menu', async () => {
+  const io = fakeIo();
+  for (const node of ['switch_relay', 'status', 'service', 'fault_device', 'sched_relay']) {
+    const r = await step(ctxGuest, { node, data: {} }, '1', io);
+    assert.equal(r.state.node, 'main', node);
+    assert.equal(r.action, undefined, node);
+  }
+});
+
+test('lists skip 9 and 0: the 9th item is 10 and still reachable', async () => {
+  const many = Array.from({ length: 11 }, (_, i) => ({ id: 100 + i, name: `ערוץ ${i + 1}`, ivr_digit: i + 1, current_state: 'off', device_name: 'ראשי', device_id: 7 }));
+  const io = { ...fakeIo(), relays: async () => many };
+  const list = await run(ctxUser, io, ['4']);
+  const ns = list.last.options.map((o) => o.n);
+  assert.deepEqual(ns, [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 9]); // items, then 9 = main menu
+  const ninth = await step(ctxUser, io ? list.last.state : null, '10', io);
+  assert.equal(ninth.state.data.relay.name, 'ערוץ 9');
+  const back = await step(ctxUser, list.last.state, '9', io);
+  assert.equal(back.state.node, 'main');
+});
+
+test('an order lead records the channel count', async () => {
+  const io = fakeIo();
+  await run(ctxGuest, io, ['1', '3', '2', 'משה לוי', 'בני ברק']);
+  assert.equal(io.log.leads.length, 1);
+  assert.equal(io.log.leads[0].channels, 3);
+});
+
+// SPEC §10.5 #22: every escalation = a ticket with a topic + details, and the
+// customer hears the one callback promise.
+test('every escalation writes a ticket with a topic and the customer hears the 3-hour promise', async () => {
+  const io = fakeIo({ online: false });
+  const paths = [
+    { ctx: ctxUser, inputs: ['0'] },                                   // נציג
+    { ctx: ctxUser, inputs: ['2', '4', 'הכל מהבהב'] },                 // משהו אחר
+    { ctx: ctxUser, inputs: ['2', '1', '1', '1', '1', '1', '1'] },     // device check: pick unit, three steps, open the ticket
+    { ctx: ctxGuest, inputs: ['2', '0501234567 המכשיר לא עובד'] },     // guest service
+    { ctx: ctxUser, inputs: ['3', '1', '2'] },                         // info → לא עזר
+  ];
+  for (const p of paths) {
+    const io2 = fakeIo({ online: false });
+    const { last } = await run(p.ctx, io2, p.inputs);
+    assert.equal(io2.log.tickets.length, 1, p.inputs.join(' '));
+    assert.ok(io2.log.tickets[0].topic, 'topic');
+    assert.match(last.text, /תוך 3 שעות בשעות הפעילות/, p.inputs.join(' '));
+  }
+  assert.equal(io.log.tickets.length, 0);
+});
