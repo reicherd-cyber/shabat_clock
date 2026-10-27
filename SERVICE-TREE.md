@@ -138,8 +138,8 @@ call arrives → caller-ID → verified phone?
 │   ├─ 4  תזמונים → browse one by one · delete · weekly add (relay → day → HHMM → day → HHMM → confirm) ✅
 │   ├─ 5  מצב   → "מטבח דולק, סלון כבוי…"                                                        ✅
 │   ├─ 0  חזרה על התפריט · * חזרה                                                                 ✅
-│   └─ 🆕 6  שירות לקוחות → the shared tree node 2 (device check with live verdict, schedule problem, 0 נציג)
-│        🆕 7  מה קורה בשבת הקרובה → the shared node 8, spoken
+│   └─ 🔧 6  שירות לקוחות → the shared tree node 2 (device check with live verdict, schedule problem, 0 נציג)
+│        🔧 7  מה קורה בשבת הקרובה → the shared node 8, spoken
 │
 └─ unregistered → sales menu (migration 53)                                                      ✅
     ├─ 1  מתעניין בהזמנה  → info + voice message  🎫 [order]

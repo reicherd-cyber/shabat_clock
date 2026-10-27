@@ -73,14 +73,14 @@ export const realIo = {
   async ticket({ ctx, topic, body, details }) {
     const r = await query(
       `INSERT INTO support_messages (user_id, source, phone, topic, body, transcript, created_by) VALUES (?,?,?,?,?,?,?)`,
-      [ctx.user?.id ?? null, ctx.source === 'whatsapp' ? 'whatsapp' : 'web', ctx.phone ?? null, topic, body,
+      [ctx.user?.id ?? null, ['whatsapp', 'phone'].includes(ctx.source) ? ctx.source : 'web', ctx.phone ?? null, topic, body,
         details ? JSON.stringify(details) : null, ctx.actor],
     );
     await logAction(ctx.actorObj, 'create', 'support_message', r.insertId, { after: { source: ctx.source, topic, via: 'menu' } }).catch(() => {});
     return r.insertId;
   },
   async lead({ ctx, name, city, channels, when }) {
-    const notes = `מהתפריט (${ctx.source === 'whatsapp' ? 'וואטסאפ' : 'אתר'}): ${channels === 4 ? '4+' : channels} ערוצים, מועד נוח: ${when}`;
+    const notes = `מהתפריט (${{ whatsapp: 'וואטסאפ', phone: 'טלפון' }[ctx.source] || 'אתר'}): ${channels === 4 ? '4+' : channels} ערוצים, מועד נוח: ${when}`;
     const r = await query(
       'INSERT INTO crm_leads (name, phone, city, source, devices, status, user_id, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?)',
       [name, ctx.phone ?? null, city || null, `bot_${ctx.source}`, Number(channels) || null, 'new', ctx.user?.id ?? null, notes, ctx.actor],
