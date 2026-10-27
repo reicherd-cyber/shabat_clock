@@ -21,7 +21,7 @@ import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
 import { runNluActions, ymdForDay } from '../services/nluExec.js';
 import { shiftDate } from '../services/time.js';
-import { step as menuStep } from '../services/serviceMenu.js';
+import { step as menuStep, choiceOptions } from '../services/serviceMenu.js';
 import { phoneAllowed } from '../services/rollout.js';
 
 function nextYmd(ymd) {
@@ -123,7 +123,7 @@ async function svcDeliver(session, r) {
     session.data.svc = r.state; session.data.svcPrompt = speech(r.text); session.data.svcRetries = 0; session.state = 'SVC_VOICE';
     return askVoice(spoken, { maxSilence: 3 });
   }
-  const opts = (r.options || []).filter((o) => o.n !== 9 && o.n !== '*'); // main menu: * and 0 do that on the line
+  const opts = choiceOptions(r); // without the way-back entry: * and 0 do that on the line (a channel may own 9)
   if (r.done || !opts.length) return mainMenu(session, spoken);
   session.data.svc = r.state; session.state = 'SVC_MENU';
   // Fixed-width collection (min === max) is the only mode that submitted

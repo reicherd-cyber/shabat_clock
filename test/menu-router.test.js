@@ -82,3 +82,10 @@ test('menuInput: a long bare number (a phone number, a year) is for the tree, ne
   assert.equal(calls, 0);
   assert.match(r.text, /^לא הבנתי/);
 });
+
+test('isMenuKey: any bare number or * is for the tree, words are not', async () => {
+  const { isMenuKey, isIvrChoice } = await import('../src/services/ivrCode.js');
+  for (const t of ['1', ' 12 ', '123', '1234', '0501234567', '*', ' * ']) assert.equal(isMenuKey(t), true, t);
+  for (const t of ['כן', '1a', '', null, undefined, '**']) assert.equal(isMenuKey(t), false, String(t));
+  assert.equal(isIvrChoice('0501234567'), false); // a choice is code-sized; a key is any number
+});

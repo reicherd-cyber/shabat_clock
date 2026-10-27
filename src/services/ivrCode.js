@@ -15,3 +15,6 @@ const CHOICE_RE = new RegExp(`^\\s*(\\d{1,${IVR_DIGIT_WIDTH}}|\\*)\\s*$`);
 export const isIvrChoice = (text) => CHOICE_RE.test(String(text ?? ''));
 // Any bare number: never words for the router, whatever its length.
 export const isBareNumber = (text) => /^\s*\d+\s*$/.test(String(text ?? ''));
+// What a channel hands to the tree untouched: any bare number or * — a choice,
+// the way back, or the tree's own re-prompt — never a paid routing call.
+export const isMenuKey = (text) => isBareNumber(text) || String(text ?? '').trim() === '*';

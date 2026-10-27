@@ -14,7 +14,7 @@
 // Side effects (tickets, leads, device checks, the support bot) go through
 // `io`, injected by the caller — the pure tree is unit-tested with a fake io.
 import { query } from '../db/pool.js';
-import { IVR_DIGIT_WIDTH } from './ivrCode.js';
+import { IVR_DIGIT_WIDTH, isValidIvrDigit } from './ivrCode.js';
 import { getSetting } from './settings.js';
 import { diagnoseDevice } from './device-diagnosis.js';
 import { logAction } from './audit.js';
@@ -28,10 +28,14 @@ import { env } from '../config/env.js';
 
 export const MENU_MAIN = '9';
 export const FREE_NODES = new Set(['order_name', 'order_city', 'service_unknown', 'service_other', 'feature', 'quick_time', 'assistant_ask']);
-const BACK = { n: 9, label: 'תפריט ראשי' };
+// `back` marks the way-back entry so a channel can tell it from a choice that
+// happens to sit on 9 (the phone drops it: * and 0 do that on the line).
+const BACK = { n: 9, label: 'תפריט ראשי', back: true };
 // Channel lists are keyed by the customer's own IVR codes (the numbers they
 // already press on the phone); when one of those codes is 9 the way back is *.
-const BACK_STAR = { n: '*', label: 'תפריט ראשי' };
+const BACK_STAR = { n: '*', label: 'תפריט ראשי', back: true };
+// The choices of a reply without its way-back entry.
+export const choiceOptions = (r) => (r?.options || []).filter((o) => !o.back);
 
 const CHANNEL_OPTIONS = [
   { n: 1, label: 'ערוץ אחד', value: 1 }, { n: 2, label: 'שני ערוצים', value: 2 },
@@ -126,11 +130,26 @@ const numbered = (items) => items.map((it, i) => ({ ...it, n: i < 8 ? i + 1 : i 
 const pickNumbered = (list, d) => list.find((x) => x.n === d) || null;
 // Channel lists: each channel under its own IVR code, in IVR order — the same
 // numbers the customer presses on the phone (unique per user, 1–IVR_DIGIT_MAX).
-const byCode = (relays, labelOf) => relays.map((r) => ({ relay: r, label: labelOf(r), n: Number(r.ivr_digit) }));
+const byCode = (relays, labelOf) => relays.map((r) => ({ relay: r, label: labelOf(r, relays), n: Number(r.ivr_digit) }));
 // 9 is "main menu" everywhere, except in a channel list where a channel owns 9:
 // there the way back is * (its own keycap on WhatsApp, the star key on the phone).
 const withBackFor = (list) => [...list.map(({ n, label }) => ({ n, label })), list.some((x) => x.n === 9) ? BACK_STAR : BACK];
 const RELAY_LISTS = new Set(['sched_relay', 'switch_relay', 'quick_relay']);
+// The one channel list behind the three relay nodes. Only channels with a
+// valid IVR code are offered: a code-less one has nothing to press on the
+// phone and would land on 0, the agent key. 9 is the way back unless a channel
+// owns it — decided before the empty-account branch, so 9 always works. Returns
+// either the reply to send or the channel the customer picked.
+async function channelList(ctx, s, { d, rendering, io, prompt, labelOf, onEmpty }) {
+  const relays = (await io.relays(ctx.user.id)).filter((r) => isValidIvrDigit(Number(r.ivr_digit)));
+  const list = byCode(relays, labelOf);
+  if (!rendering && d === 9 && !pickNumbered(list, 9)) return { out: menuStart(ctx) };
+  if (!relays.length) return { out: await onEmpty() };
+  if (rendering) return { out: reply(s, prompt, { options: withBackFor(list) }) };
+  const pick = pickNumbered(list, d)?.relay;
+  if (!pick) return { out: notUnderstood(await render(ctx, s, io)) };
+  return { pick };
+}
 // The state comes back from the channel (the site page, a WhatsApp session)
 // and is NOT trusted: an id inside it is honoured only when it is the
 // customer's own — the switch and the device check re-read the lists.
@@ -250,10 +269,11 @@ export async function step(ctx, state, input, io = realIo) {
   const d = rendering ? null : digit(input);
   const text = rendering ? '' : String(input ?? '').trim();
 
-  // 9 = main menu from anywhere (except while the main menu itself is shown);
-  // * always is. In a channel list 9 may be a channel's own code — the list
-  // itself sends an unmatched 9 back to the main menu.
-  if (!rendering && s.node !== 'main' && (text === '*' || (d === 9 && !RELAY_LISTS.has(s.node)))) return menuStart(ctx);
+  // 9 = main menu from anywhere, * always is — on the main menu too, where they
+  // simply show it again (a customer's first message of * is not a mistake).
+  // In a channel list 9 may be a channel's own code — the list itself sends an
+  // unmatched 9 back to the main menu (channelList).
+  if (!rendering && (text === '*' || (d === 9 && !RELAY_LISTS.has(s.node)))) return menuStart(ctx);
 
   switch (s.node) {
     case 'main': {
@@ -422,14 +442,12 @@ export async function step(ctx, state, input, io = realIo) {
       return render(ctx, s, io);
     }
     case 'sched_relay': {
-      const relays = await io.relays(ctx.user.id);
-      if (!relays.length) { s.node = 'service_other'; return render(ctx, s, io); }
-      const list = byCode(relays, (r) => (relays.length > 1 && r.device_name ? `${r.name} (${r.device_name})` : r.name));
-      const options = withBackFor(list);
-      if (rendering) return reply(s, 'באיזה ערוץ?', { options });
-      const pick = pickNumbered(list, d)?.relay;
-      if (!pick && d === 9) return menuStart(ctx);
-      if (!pick) return notUnderstood(await render(ctx, s, io));
+      const { out, pick } = await channelList(ctx, s, {
+        d, rendering, io, prompt: 'באיזה ערוץ?',
+        labelOf: (r, all) => (all.length > 1 && r.device_name ? `${r.name} (${r.device_name})` : r.name),
+        onEmpty: () => { s.node = 'service_other'; return render(ctx, s, io); },
+      });
+      if (out) return out;
       const id = await io.ticket({
         ctx, topic: 'schedule',
         body: `תזמון בערוץ "${pick.name}" — ${s.data.problem}.`,
@@ -487,14 +505,12 @@ export async function step(ctx, state, input, io = realIo) {
 
     // ── 4 הדלקה / כיבוי (registered users) ──
     case 'switch_relay': {
-      const relays = await io.relays(ctx.user.id);
-      if (!relays.length) return reply({ node: 'main', data: {} }, 'לחשבון שלכם אין עדיין ערוצים פעילים.', { options: [BACK] });
-      const list = byCode(relays, (r) => `${r.name}${r.current_state === 'on' ? ' (דולק)' : ' (כבוי)'}`);
-      const options = withBackFor(list);
-      if (rendering) return reply(s, 'איזה ערוץ?', { options });
-      const pick = pickNumbered(list, d)?.relay;
-      if (!pick && d === 9) return menuStart(ctx);
-      if (!pick) return notUnderstood(await render(ctx, s, io));
+      const { out, pick } = await channelList(ctx, s, {
+        d, rendering, io, prompt: 'איזה ערוץ?',
+        labelOf: (r) => `${r.name}${r.current_state === 'on' ? ' (דולק)' : ' (כבוי)'}`,
+        onEmpty: () => reply({ node: 'main', data: {} }, 'לחשבון שלכם אין עדיין ערוצים פעילים.', { options: [BACK] }),
+      });
+      if (out) return out;
       s.data.relay = { id: pick.id, name: pick.name }; s.node = 'switch_action';
       return render(ctx, s, io);
     }
@@ -518,14 +534,12 @@ export async function step(ctx, state, input, io = realIo) {
 
     // ── 6 תזמון מהיר: a one-off on/off later today (or tomorrow if the time passed) ──
     case 'quick_relay': {
-      const relays = await io.relays(ctx.user.id);
-      if (!relays.length) return reply({ node: 'main', data: {} }, 'לחשבון שלכם אין עדיין ערוצים פעילים.', { options: [BACK] });
-      const list = byCode(relays, (r) => r.name);
-      const options = withBackFor(list);
-      if (rendering) return reply(s, 'תזמון מהיר — איזה ערוץ?', { options });
-      const pick = pickNumbered(list, d)?.relay;
-      if (!pick && d === 9) return menuStart(ctx);
-      if (!pick) return notUnderstood(await render(ctx, s, io));
+      const { out, pick } = await channelList(ctx, s, {
+        d, rendering, io, prompt: 'תזמון מהיר — איזה ערוץ?',
+        labelOf: (r) => r.name,
+        onEmpty: () => reply({ node: 'main', data: {} }, 'לחשבון שלכם אין עדיין ערוצים פעילים.', { options: [BACK] }),
+      });
+      if (out) return out;
       s.data.relay = { id: pick.id, name: pick.name }; s.node = 'quick_action';
       return render(ctx, s, io);
     }

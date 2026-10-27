@@ -176,12 +176,16 @@ export default function Devices() {
 
   // IVR codes default to the customer's first free ones (1, 2, 3… skipping
   // codes their existing channels already use) — the admin may still edit.
-  const freeIvrDigits = async (userId, n) => {
+  // `n` is the channel count the unit needs: fewer free codes than that is an
+  // error. With `need: false` it is only an upper bound (as many as are free),
+  // for a unit whose channel count is not known yet.
+  const noFreeCodes = (n) => new Error(`ללקוח לא נותרו ${n} קודי IVR פנויים (1–${IVR_DIGIT_MAX})`);
+  const freeIvrDigits = async (userId, n, { need = true } = {}) => {
     const fleet = await adminApi.get('/relays');
     const taken = new Set(fleet.filter((r) => String(r.user_id) === String(userId) && r.ivr_digit != null).map((r) => Number(r.ivr_digit)));
     const out = [];
     for (let d = 1; out.length < n && d <= IVR_DIGIT_MAX; d++) if (!taken.has(d)) out.push(d);
-    if (out.length < n) throw new Error(`ללקוח לא נותרו קודי IVR פנויים (1–${IVR_DIGIT_MAX})`);
+    if (need && out.length < n) throw noFreeCodes(n);
     return out;
   };
   const shellyProbe = () => run(async () => {
@@ -204,18 +208,26 @@ export default function Devices() {
   });
   // Register without a connection: the admin states the channel count; the
   // hardware side is completed automatically on the device's first hello.
-  const offlineRelays = (n, digits = []) => Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, name: `ערוץ ${i + 1}`, ivr_digit: digits[i] ?? i + 1, state: 'unknown' }));
+  const offlineRelays = (n, digits = []) => Array.from({ length: n }, (_, i) => ({ relay_no: i + 1, name: `ערוץ ${i + 1}`, ivr_digit: digits[i] ?? '', state: 'unknown' }));
+  const OFFLINE_MAX_CHANNELS = 4; // the largest unit the picker offers (Pro 4PM)
   // The channel count is the unit's own (model code in the inventory); the
-  // admin only states it for a unit the inventory never saw.
+  // admin only states it for a unit the inventory never saw. Free codes are
+  // required for exactly that count — a known 1-channel unit needs one; for an
+  // unknown unit as many as are free are fetched and the picker offers only
+  // the counts they cover.
   const shellyOffline = () => run(async () => {
     const mac = normalizeMac(shelly.mac);
     if (!mac) throw new Error('כתובת MAC לא תקינה — 12 תווים הקסדצימליים');
     const model = inventory.find((p) => p.mac === mac)?.model || null;
     const known = shellyModelInfo(model);
-    const digits = await freeIvrDigits(shelly.user_id, 4);
+    const digits = known
+      ? await freeIvrDigits(shelly.user_id, known.channels)
+      : await freeIvrDigits(shelly.user_id, OFFLINE_MAX_CHANNELS, { need: false });
+    if (!known && !digits.length) throw noFreeCodes(1);
+    const kept = shelly.relays?.length && shelly.relays.length <= digits.length ? shelly.relays : [];
     setShelly({
       ...shelly, step: 'offline', offline: true, mac, model, freeDigits: digits,
-      relays: known ? offlineRelays(known.channels, digits) : (shelly.relays?.length ? shelly.relays : []),
+      relays: known ? offlineRelays(known.channels, digits) : kept,
     });
   });
 
@@ -662,10 +674,11 @@ export default function Devices() {
                   setShelly({ ...shelly, relays: n ? offlineRelays(n, shelly.freeDigits).map((r, i) => shelly.relays[i] ? { ...shelly.relays[i], relay_no: r.relay_no } : r) : [] });
                 }}>
                 <option value="" disabled>בחרו…</option>
-                <option value="1">1 — Pro 1 / Plus 1</option>
-                <option value="2">2 — Pro 2</option>
-                <option value="3">3 — Pro 3</option>
-                <option value="4">4 — Pro 4PM</option>
+                {[['1', 'Pro 1 / Plus 1'], ['2', 'Pro 2'], ['3', 'Pro 3'], ['4', 'Pro 4PM']].map(([n, name]) => (
+                  <option key={n} value={n} disabled={Number(n) > (shelly.freeDigits?.length ?? 0)}>
+                    {n} — {name}{Number(n) > (shelly.freeDigits?.length ?? 0) ? ' (אין מספיק קודי IVR פנויים)' : ''}
+                  </option>
+                ))}
               </Select>
             </label>
             )}

@@ -7,5 +7,7 @@ export default defineConfig({
   build: { outDir: 'dist' },
   server: {
     proxy: { '/api': 'http://localhost:3001' },
+    // src/ivrCode.js re-exports the server's services/ivrCode.js, outside this package.
+    fs: { allow: ['..', '../..'] },
   },
 });

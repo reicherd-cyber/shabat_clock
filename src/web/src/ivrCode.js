@@ -1,4 +1,3 @@
-// The IVR code rule as the browser sees it — mirrors src/services/ivrCode.js
-// (the server validates; this only sizes the inputs and the wizard's proposals).
-export const IVR_DIGIT_MAX = 999;
-export const IVR_DIGIT_WIDTH = String(IVR_DIGIT_MAX).length;
+// The IVR code rule as the browser sees it: the server's own module (pure, no
+// I/O), bundled by Vite — one source of truth for the cap and the input width.
+export { IVR_DIGIT_MAX, IVR_DIGIT_WIDTH } from '../../services/ivrCode.js';
