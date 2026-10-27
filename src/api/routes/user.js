@@ -47,7 +47,7 @@ userRouter.get('/me', async (req, res, next) => {
     // select box; a lone entry hides it.
     const identity = await sessionIdentity(req);
     const accounts = await accountsForEmail(identity);
-    res.json({ user, phones, emails, demo, accounts, identity_email: identity, menu_web: env.serviceMenuWeb });
+    res.json({ user, phones, emails, demo, accounts, identity_email: identity, menu_web: await menuWebAllowed(req) });
   } catch (e) { next(e); }
 });
 
@@ -59,6 +59,23 @@ userRouter.get('/me', async (req, res, next) => {
 async function sessionIdentity(req) {
   if (req.auth.imp) return null;
   return req.auth.email || null;
+}
+
+// מוקד שירות on the site (the chat on /help and its POST /support/menu): open
+// to every customer only where SERVICE_MENU_WEB=1 (staging); everywhere else
+// only a superadmin sees it (user decision 2026-10-27) — a session whose
+// verified address is an active superadmin's, or one a superadmin is
+// impersonating. A phone login carries no address and is a plain customer.
+async function menuWebAllowed(req) {
+  if (env.serviceMenuWeb) return true;
+  const adminId = req.auth.imp ?? 0;
+  const email = req.auth.email ?? '';
+  if (!adminId && !email) return false;
+  const [a] = await query(
+    "SELECT 1 AS ok FROM admins WHERE is_active = TRUE AND role = 'superadmin' AND (id = ? OR email = ?) LIMIT 1",
+    [adminId, email],
+  );
+  return Boolean(a);
 }
 
 // Switch the session into another account the identity may enter: a fresh
@@ -528,8 +545,8 @@ userRouter.get('/history', async (req, res, next) => {
 // customer's own panel) and reported in the reply text.
 userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
   try {
-    // Staging only until the user opens it (SERVICE_MENU_WEB=1 in that .env).
-    if (!env.serviceMenuWeb) throw errors.forbidden('מוקד השירות באתר עדיין לא פתוח');
+    // Superadmins only, unless SERVICE_MENU_WEB=1 opens it to everyone (staging).
+    if (!(await menuWebAllowed(req))) throw errors.forbidden('מוקד השירות באתר עדיין לא פתוח');
     const { menuStart, step } = await import('../../services/serviceMenu.js');
     const user = await getUser(req.auth.userId);
     const [primary] = await query(

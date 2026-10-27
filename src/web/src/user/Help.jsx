@@ -242,7 +242,7 @@ export default function Help() {
       </SectionHead>
 
       {/* הפניות שלי — רק אם יש כאלה, מעל הנושאים */}
-      {/* מוקד שירות as a chat — staging only (flag menu_web from /me), phase 1 2026-10-27 */}
+      {/* מוקד שירות as a chat — superadmins only unless the server opens it to all (flag menu_web from /me) */}
       {!topic && <ServiceChat />}
       {!topic && mine?.length > 0 && <MyTickets rows={mine} reload={loadMine} />}
 
