@@ -17,10 +17,10 @@ import 'dotenv/config';
 
 // The voice in production is Avri (deploy/ivr-audio.json records what was used);
 // every prompt is synthesised with the same voice and rate so the IVR sounds like
-// one speaker. Rate +30% since 2026-10-27 (user: "much faster"); a relative
+// one speaker. Rate +15% since 2026-10-27 (+30% was too fast); a relative
 // percentage per the SSML prosody rule, see msedge-tts ProsodyOptions.
 const VOICE = process.env.IVR_TTS_VOICE || 'he-IL-AvriNeural';
-const RATE = process.env.IVR_TTS_RATE || '+30%';
+const RATE = process.env.IVR_TTS_RATE || '+15%';
 const YEMOT_FOLDER = '99';
 const MANIFEST = fileURLToPath(new URL('../deploy/ivr-audio.json', import.meta.url));
 
