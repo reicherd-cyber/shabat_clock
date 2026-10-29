@@ -62,6 +62,28 @@ async function nluConfirmItems(actions) {
   return items;
 }
 
+// Interpret an order's text. Answered inline when the model is quick (the usual
+// ~3s); past 20s a spoken ack goes out so the caller knows we're still working,
+// and the result is delivered on Yemot's poll-back (NLU_WAIT). Shared by the
+// main menu's voice order and the tree's 7 פקודה חופשית.
+async function nluInterpret(session, text, { prevText = null } = {}) {
+  session.data.nluSpoken = text;
+  const pending = interpretCommand({ userId: session.userId, text, phone: session.phone, prevText, source: 'phone' })
+    .then((r) => ({ ok: true, r }), (e) => ({ ok: false, e }));
+  let ackTimer;
+  const first = await Promise.race([
+    pending,
+    new Promise((resolve) => { ackTimer = setTimeout(resolve, 20_000, null); }),
+  ]);
+  clearTimeout(ackTimer);
+  if (first === null) {
+    session.data.nluPromise = pending;
+    session.state = 'NLU_WAIT';
+    return say(await speak('ivr.nlu_thinking', {}, 'קיבלתי, מעבד את הבקשה'));
+  }
+  return nluDeliver(session, first);
+}
+
 // Interpretation finished — build the next IVR response: confirmation read, guided
 // re-listen, or error. Shared by the fast inline path (model answered within the
 // ack window) and the NLU_WAIT poll-back path.
@@ -116,12 +138,10 @@ async function svcDeliver(session, r) {
   if (r.action?.kind === 'order_text') {
     // 7 פקודה חופשית spoken into the tree → the same interpret → confirm → run
     // path as the main menu's voice order (nluDeliver re-listens on a miss).
-    session.data.nluSpoken = r.action.text;
     session.data.nluRetries = 0;
+    session.data.nluPrev = null;
     await appendPath(session.callLogId, 'nlu');
-    const out = await interpretCommand({ userId: session.userId, text: r.action.text, phone: session.phone, source: 'phone' })
-      .then((res) => ({ ok: true, r: res }), (e) => ({ ok: false, e }));
-    return nluDeliver(session, out);
+    return nluInterpret(session, r.action.text);
   }
   if (r.action) {
     session.data.nluActions = [r.action];
@@ -778,23 +798,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         // Interpret and answer inline when the model is quick (the usual ~3s).
         // Past 20s a spoken ack goes out so the caller knows we're still working,
         // and the result is delivered on Yemot's poll-back (NLU_WAIT).
-        session.data.nluSpoken = spoken;
-        const pending = interpretCommand({
-          userId: session.userId, text: spoken, phone: session.phone,
-          prevText: session.data.nluPrev || null, source: 'phone',
-        }).then((r) => ({ ok: true, r }), (e) => ({ ok: false, e }));
-        let ackTimer;
-        const first = await Promise.race([
-          pending,
-          new Promise((resolve) => { ackTimer = setTimeout(resolve, 20_000, null); }),
-        ]);
-        clearTimeout(ackTimer);
-        if (first === null) {
-          session.data.nluPromise = pending;
-          session.state = 'NLU_WAIT';
-          return res.send(say(await speak('ivr.nlu_thinking', {}, 'קיבלתי, מעבד את הבקשה')));
-        }
-        return res.send(await nluDeliver(session, first));
+        return res.send(await nluInterpret(session, spoken, { prevText: session.data.nluPrev || null }));
       }
       case 'NLU_WAIT': {
         const pending = session.data.nluPromise;
