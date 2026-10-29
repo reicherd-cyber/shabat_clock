@@ -167,24 +167,26 @@ export default function Schedules() {
   return (
     <>
       <SectionHead title="תוכניות">
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          <div className="inline-flex rounded-[10px] border border-line bg-surface p-0.5 shrink-0" role="group" aria-label="תצוגה">
-            <button type="button" className={segBtn(view === 'plans')} aria-pressed={view === 'plans'} title="רשימת התוכניות"
+        {/* On a phone the three views take a full row under the title (each a
+            third wide) and the add button a row of its own; desktop keeps one line. */}
+        <div className="flex items-center gap-2 flex-wrap justify-end w-full sm:w-auto">
+          <div className="flex w-full sm:w-auto sm:inline-flex rounded-[10px] border border-line bg-surface p-0.5 shrink-0" role="group" aria-label="תצוגה">
+            <button type="button" className={`${segBtn(view === 'plans')} flex-1 justify-center sm:flex-none`} aria-pressed={view === 'plans'} title="רשימת התוכניות"
               onClick={() => setView('plans')}>
               <List size={15} />תוכניות
             </button>
-            <button type="button" className={segBtn(view === 'upcoming')} aria-pressed={view === 'upcoming'} title="המועדים הקרובים לפי מכשיר"
+            <button type="button" className={`${segBtn(view === 'upcoming')} flex-1 justify-center sm:flex-none`} aria-pressed={view === 'upcoming'} title="המועדים הקרובים לפי מכשיר"
               onClick={() => setView('upcoming')}>
               <CalendarClock size={15} />מועדים קרובים
             </button>
             {readOnly === false && (
-              <button type="button" className={segBtn(view === 'history')} aria-pressed={view === 'history'} title="פעילות אחרונה: פקודות, תזמונים ושיחות"
+              <button type="button" className={`${segBtn(view === 'history')} flex-1 justify-center sm:flex-none`} aria-pressed={view === 'history'} title="פעילות אחרונה: פקודות, תזמונים ושיחות"
                 onClick={() => setView('history')}>
                 <HistoryIcon size={15} />היסטוריה
               </button>
             )}
           </div>
-          <Button disabled={busy} onClick={() => setPlanInit({ ...emptyPlan })}>
+          <Button className="w-full sm:w-auto" disabled={busy} onClick={() => setPlanInit({ ...emptyPlan })}>
             <span className="inline-flex items-center gap-1"><Plus size={15} />הוסף תוכנית</span>
           </Button>
         </div>
