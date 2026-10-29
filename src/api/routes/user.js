@@ -635,7 +635,7 @@ userRouter.get('/support/unread', async (req, res, next) => {
   try {
     const [row] = await query(
       `SELECT COUNT(*) AS n FROM support_replies r JOIN support_messages m ON m.id = r.message_id
-        WHERE m.user_id = ? AND m.deleted_at IS NULL AND r.sender = 'admin' AND r.seen_at IS NULL AND r.deleted_at IS NULL`,
+        WHERE m.user_id = ? AND m.source <> 'phone' AND m.deleted_at IS NULL AND r.sender = 'admin' AND r.seen_at IS NULL AND r.deleted_at IS NULL`,
       [req.auth.userId],
     );
     res.json({ unread: row.n });
@@ -644,7 +644,7 @@ userRouter.get('/support/unread', async (req, res, next) => {
 
 const ownTicket = async (req) => {
   const [m] = await query(
-    'SELECT id, status FROM support_messages WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
+    "SELECT id, status FROM support_messages WHERE id = ? AND user_id = ? AND source <> 'phone' AND deleted_at IS NULL",
     [Number(req.params.id), req.auth.userId],
   );
   if (!m) throw errors.notFound();
