@@ -509,3 +509,14 @@ test('נציג on the phone without the rollout flag is still a callback ticket'
   assert.equal(r.action, undefined);
   assert.deepEqual(io.log.tickets.map((t) => t.topic), ['agent']);
 });
+
+test('a customer with no device asking about a fault is offered 0 נציג — and 0 works there', async () => {
+  const io = { ...fakeIo(), devices: async () => [] };
+  const r = await run(ctxUser, io, ['2', '1']);
+  assert.match(r.last.text, /אין עדיין מכשיר רשום/);
+  assert.deepEqual(r.last.options.map((o) => o.n), [0, 9]);
+  const agent = await step(ctxUser, r.last.state, '0', io);
+  assert.equal(agent.done, true);
+  assert.deepEqual(io.log.tickets.map((t) => t.topic), ['agent']);
+  assert.equal((await step(ctxUser, r.last.state, '9', io)).state.node, 'main');
+});

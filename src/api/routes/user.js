@@ -1,6 +1,5 @@
 // §3.2 user panel — every query implicitly scoped WHERE user_id = :sub.
 import { Router } from 'express';
-import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireUser, signUserToken, invalidateSession, supportAskLimiter, supportMessageLimiter, supportMenuLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
@@ -529,6 +528,18 @@ userRouter.get('/history', async (req, res, next) => {
 // menu. The page keeps the returned state and sends it back with each tap.
 // A "switch" or "status" leaf is executed here (the site is already the
 // customer's own panel) and reported in the reply text.
+// The opening menu as a read: the chat on /help fetches it on mount, so nothing
+// is executed and no mutation confirmation fires under impersonation (2026-10-29).
+userRouter.get('/support/menu', async (req, res, next) => {
+  try {
+    const { menuStart } = await import('../../services/serviceMenu.js');
+    const user = await getUser(req.auth.userId);
+    const [primary] = await query(
+      'SELECT phone FROM user_phones WHERE user_id = ? AND deleted_at IS NULL ORDER BY is_primary DESC, id LIMIT 1', [req.auth.userId]);
+    res.json(menuStart({ user, phone: primary?.phone ?? null, source: 'web', actor: actorStr(actorOf(req)), actorObj: actorOf(req) }));
+  } catch (e) { next(e); }
+});
+
 userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
   try {
     const { menuStart, step } = await import('../../services/serviceMenu.js');
@@ -602,7 +613,9 @@ userRouter.post('/support/messages', supportMessageLimiter, async (req, res, nex
 userRouter.get('/support/messages', async (req, res, next) => {
   try {
     const rows = await query(
-      'SELECT id, topic, body, status, created_at FROM support_messages WHERE user_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 50',
+      // Phone (voicemail) tickets carry the caller's account for the inbox, but the
+      // admin's replies to them are internal notes — they are not the customer's thread.
+      "SELECT id, topic, body, status, created_at FROM support_messages WHERE user_id = ? AND source <> 'phone' AND deleted_at IS NULL ORDER BY id DESC LIMIT 50",
       [req.auth.userId],
     );
     const replies = await listReplies(rows.map((m) => m.id));

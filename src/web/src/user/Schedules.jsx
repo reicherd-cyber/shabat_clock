@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useOutletContext } from 'react-router-dom';
 import { api } from '../api.js';
 import { Card, Button, SectionHead, ErrorNote, useAsync, DAY_NAMES, Toggle, SyncNote, channelColorOf } from '../ui.jsx';
 import { Layers, Trash2, Plus, Check, RefreshCw, Pencil, List, CalendarClock, History as HistoryIcon } from 'lucide-react';
@@ -28,9 +28,9 @@ export default function Schedules() {
     if (v === 'plans') next.delete('view'); else next.set('view', v);
     return next;
   }, { replace: true });
-  // A read-only (showcase) session: the server refuses היסטוריה, so the tab is not offered.
-  const [readOnly, setReadOnly] = useState(false);
-  useEffect(() => { api.get('/me').then((m) => setReadOnly(Boolean(m?.read_only))).catch(() => {}); }, []);
+  // A read-only (showcase) session: the server refuses היסטוריה, so the tab is
+  // not offered — and not mounted before the layout knows (null = unknown yet).
+  const { readOnly = null } = useOutletContext() || {};
   const { busy, error, run, setError } = useAsync();
   // Channel identity color (shared app-wide assignment — same as the calendar).
   const colorOf = useMemo(() => channelColorOf(relays.map((r) => r.id)), [relays]);
@@ -175,7 +175,7 @@ export default function Schedules() {
               onClick={() => setView('upcoming')}>
               <CalendarClock size={15} />מועדים קרובים
             </button>
-            {!readOnly && (
+            {readOnly === false && (
               <button type="button" className={segBtn(view === 'history')} aria-pressed={view === 'history'} title="פעילות אחרונה: פקודות, תזמונים ושיחות"
                 onClick={() => setView('history')}>
                 <HistoryIcon size={15} />היסטוריה
@@ -190,7 +190,7 @@ export default function Schedules() {
       <ErrorNote error={error} />
 
       {view === 'upcoming' && <Upcoming relays={relays} schedules={schedules} colorOf={colorOf} />}
-      {view === 'history' && !readOnly && <History embedded />}
+      {view === 'history' && readOnly === false && <History embedded />}
 
       {view === 'plans' && (
       <Card flush className="overflow-hidden border-accent/30">
