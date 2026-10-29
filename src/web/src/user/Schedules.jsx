@@ -159,7 +159,9 @@ export default function Schedules() {
     ].sort((a, b) => a.key - b.key);
   }, [schedules]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!schedules) return <p className="text-muted">טוען…</p>;
+  // The history view has its own data (History.jsx) — it must not wait for, or
+  // fail with, the schedules and devices requests the other two views need.
+  if (!schedules && view !== 'history') return <p className="text-muted">טוען…</p>;
   const segBtn = (active) => `inline-flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-[13px] font-medium cursor-pointer transition ${
     active ? 'bg-accent text-white' : 'text-muted hover:text-ink'}`;
   return (
