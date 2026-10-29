@@ -556,6 +556,34 @@ userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
       // A guess from the free-text router: ask before running (confirm_action).
       r = await step(ctx, { node: 'confirm_action', data: { action: r.action }, _render: true }, null);
     }
+    if (r.action?.kind === 'order_text') {
+      // 7 פקודה חופשית: the customer's words → the order interpreter (the same
+      // one behind a spoken order and a WhatsApp sentence). Understood orders run
+      // at once, as every other order leaf does on the site; otherwise the node
+      // re-asks with the interpreter's clarification.
+      const { interpretCommand } = await import('../../services/nlu.js');
+      const { runNluActions } = await import('../../services/nluExec.js');
+      let interp;
+      try {
+        interp = await interpretCommand({ userId: req.auth.userId, text: r.action.text, phone: primary?.phone ?? null, source: 'web' });
+      } catch (e) {
+        if (e?.code === 'VALIDATION') return res.json({ ...r, action: undefined, done: false, free: true, options: [], state: { node: 'free_order', data: {} }, text: e.message });
+        throw e;
+      }
+      if (interp.exhausted) return res.json({ ...r, action: undefined, text: interp.clarification });
+      if (!interp.understood) {
+        return res.json({ ...r, action: undefined, done: false, free: true, options: [], state: { node: 'free_order', data: {} },
+          text: `${interp.clarification || 'לא הבנתי את הפקודה.'}\nכתבו שוב, למשל: כבה את רכיב 1 2 3` });
+      }
+      const { results } = await runNluActions({ userId: req.auth.userId, actions: interp.actions, tz: interp.tz, source: 'web', actor: actorOf(req) });
+      const lines = interp.actions.map((a, i) => {
+        if (a.kind !== 'immediate') return `✅ ${a.summary}`;
+        const ok = results[i]?.status === 'acked';
+        return ok ? `✅ ${a.summary}` : `⚠️ ${a.summary} — המכשיר לא אישר (${results[i]?.fail_reason || 'לא ידוע'})`;
+      });
+      if (interp.clarification) lines.unshift(interp.clarification);
+      return res.json({ ...r, action: undefined, text: lines.join('\n') });
+    }
     if (r.action && r.action.kind !== 'status') {
       // The site is the customer's own panel: a switch, a quick one-off timing or
       // a plan stop/start runs at once (the page already showed the choice).

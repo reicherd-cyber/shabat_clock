@@ -78,6 +78,7 @@ Navigation everywhere: `9` = main menu. `0` = a person where a node offers it (t
 │   ├─ מתי?  1 בעוד שעה · 2 בעוד שעתיים · 3 הערב ב-20:00 · 4 📝 שעה (HH:MM היום)
 │   └─ confirm → one-off schedule today (created_via = channel) → "נקבע: {ערוץ} {פעולה} ב-{שעה}"
 │
+├─ 7  🔒 ✅ פקודה חופשית  📝 "כבה את רכיב 1 2 3" → the order interpreter (nlu.js) on every channel; confirm buttons on WhatsApp, runs at once on the site, confirm read-back on the phone (2026-10-29)
 ├─ 6  🔒 ✅ התוכניות שלי
 │   ├─ רשימה  1..n  "{שם התוכנית} — פעילה/מושבתת"
 │   ├─ 1 עצירה · 2 הפעלה   (same as the web toggle: is_enabled per member row, nothing deleted)

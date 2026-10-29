@@ -44,6 +44,13 @@ async function sendMenu({ phone, user, r }) {
     await sendText({ phone, userId, text: await statusText(user.id), kind: 'status' });
     return;
   }
+  // 7 פקודה חופשית: the customer's words go to the interpreter exactly like a
+  // sentence typed outside the menu (confirm buttons, then executePending).
+  if (r.action?.kind === 'order_text' && user) {
+    await resetSession(phone, userId);
+    await commandReply({ phone, user, text: r.action.text });
+    return;
+  }
   // An order leaf (switch now, a quick one-off timing, stop/start a plan) goes
   // through the same confirm buttons as a spoken order; executePending runs it.
   if (r.action && r.action.kind !== 'status' && user) {
