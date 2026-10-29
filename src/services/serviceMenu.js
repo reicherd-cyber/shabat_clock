@@ -28,7 +28,7 @@ import { aiAllowed } from './aiBudget.js';
 import { env } from '../config/env.js';
 
 export const MENU_MAIN = '9';
-export const FREE_NODES = new Set(['order_name', 'order_city', 'service_unknown', 'service_other', 'feature', 'quick_time', 'assistant_ask']);
+export const FREE_NODES = new Set(['order_name', 'order_city', 'service_unknown', 'service_other', 'feature', 'quick_time', 'assistant_ask', 'free_order']);
 // `back` marks the way-back entry so a channel can tell it from a choice that
 // happens to sit on 9 (the phone drops it: * and 0 do that on the line).
 const BACK = { n: 9, label: 'תפריט ראשי', back: true };
@@ -158,7 +158,7 @@ const ownRelay = async (ctx, io, id) => (ctx.user ? (await io.relays(ctx.user.id
 const ownDevice = async (ctx, io, id) => (ctx.user ? (await io.devices(ctx.user.id)).find((x) => Number(x.id) === Number(id)) || null : null);
 // Nodes that only a registered customer may stand on — a guest's state naming
 // one of them (crafted, or a session that lost its user) restarts at the menu.
-const USER_NODES = new Set(['service', 'no_device', 'fault_device', 'fault_check', 'fault_online_helped', 'fault_steps', 'fault_offer_ticket', 'fault_ticket',
+const USER_NODES = new Set(['service', 'no_device', 'free_order', 'fault_device', 'fault_check', 'fault_online_helped', 'fault_steps', 'fault_offer_ticket', 'fault_ticket',
   'sched_problem', 'sched_relay', 'order_status', 'order_status_helped', 'switch_relay', 'switch_action', 'status',
   'quick_relay', 'quick_action', 'quick_when', 'quick_time', 'plans', 'plan_action', 'week', 'confirm_action']);
 // ── phase 2: quick timing / plans / the coming week ──
@@ -243,7 +243,11 @@ function mainMenu(ctx) {
   // תזמון מהיר and מה קורה השבוע left the menu (user, 2026-10-27); their nodes
   // stay for the free-text router ("תדליק את הדוד בעוד שעה", "מה יש השבוע").
   if (ctx.user) {
-    options.push({ n: 4, label: 'הדלקה / כיבוי של ערוץ' }, { n: 5, label: 'מצב הערוצים' }, { n: 6, label: 'התוכניות שלי' });
+    options.push({ n: 4, label: 'הדלקה / כיבוי של ערוץ' }, { n: 5, label: 'מצב הערוצים' }, { n: 6, label: 'התוכניות שלי' },
+      // 7 (2026-10-29): an order in the customer's own words — "כבה את רכיב 1 2 3",
+      // "הדלק את הדוד בעוד שעה" — handed to the order interpreter (services/nlu.js)
+      // by the channel, exactly like a sentence typed outside the menu.
+      { n: 7, label: 'פקודה חופשית' });
   }
   // 0 נציג left the main menu too (user, 2026-10-27): a person is offered inside
   // the service branches (and by the free-text router), not as a first choice.
@@ -287,6 +291,7 @@ export async function step(ctx, state, input, io = realIo) {
       if (d === 4 && ctx.user) { s.node = 'switch_relay'; return render(ctx, s, io); }
       if (d === 5 && ctx.user) { s.node = 'status'; return render(ctx, s, io); }
       if (d === 6 && ctx.user) { s.node = 'plans'; return render(ctx, s, io); }
+      if (d === 7 && ctx.user) { s.node = 'free_order'; return render(ctx, s, io); }
       return notUnderstood(menuStart(ctx));
     }
 
@@ -355,6 +360,13 @@ export async function step(ctx, state, input, io = realIo) {
       if (d === 4) { s.node = (await io.assistAvailable(ctx)) ? 'assistant_offer' : 'service_other'; s.data.fallback = 'service_other'; return render(ctx, s, io); }
       if (d === 5) { s.node = 'feature'; return render(ctx, s, io); }
       return notUnderstood(await render(ctx, s, io));
+    }
+    // ── 7 פקודה חופשית: the order in words; the channel runs the interpreter ──
+    case 'free_order': {
+      const prompt = 'כתבו את הפקודה במילים שלכם, למשל: כבה את רכיב 1 2 3, או: הדלק את הדוד בעוד שעה';
+      if (rendering) return reply(s, prompt, { free: true });
+      if (text.length < 3) return reply(s, `כתבו את הפקודה במילים. ${prompt}`, { free: true });
+      return reply({ node: 'main', data: {} }, '', { done: true, options: [BACK], action: { kind: 'order_text', text: text.slice(0, 1000) } });
     }
     case 'no_device': {
       if (rendering) return reply(s, 'לחשבון שלכם אין עדיין מכשיר רשום. לחצו 0 לנציג.', { options: [{ n: 0, label: 'נציג אנושי' }, BACK] });

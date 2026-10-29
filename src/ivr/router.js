@@ -113,6 +113,16 @@ const svcCtx = (session) => ({
 async function svcDeliver(session, r) {
   if (r.action?.kind === 'status') return runStatus(session);
   if (r.action?.kind === 'agent') return agentTransfer(session);
+  if (r.action?.kind === 'order_text') {
+    // 7 פקודה חופשית spoken into the tree → the same interpret → confirm → run
+    // path as the main menu's voice order (nluDeliver re-listens on a miss).
+    session.data.nluSpoken = r.action.text;
+    session.data.nluRetries = 0;
+    await appendPath(session.callLogId, 'nlu');
+    const out = await interpretCommand({ userId: session.userId, text: r.action.text, phone: session.phone, source: 'phone' })
+      .then((res) => ({ ok: true, r: res }), (e) => ({ ok: false, e }));
+    return nluDeliver(session, out);
+  }
   if (r.action) {
     session.data.nluActions = [r.action];
     session.data.nluTz = 'Asia/Jerusalem';
