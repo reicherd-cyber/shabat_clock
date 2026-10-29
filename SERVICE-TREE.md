@@ -14,7 +14,7 @@ Legend
 - 📝 free text asked (only where a digit cannot carry the answer)
 - 🔒 registered customers only (verified phone / logged in)
 
-Navigation everywhere: `9` = main menu, `0` on the main menu = a person.
+Navigation everywhere: `9` = main menu. `0` = a person where a node offers it (the service branches); off the main menu since 2026-10-27.
 
 ---
 
@@ -72,22 +72,22 @@ Navigation everywhere: `9` = main menu, `0` on the main menu = a person.
 ├─ 5  🔒 מצב הערוצים                                             ✅
 │   └─ "🟢 מטבח – דולק / ⚪ סלון – כבוי …"
 │
-├─ 6  🔒 ✅ תזמון מהיר                                            ⚡
+├─ (off the menu since 2026-10-27, router-only) 🔒 ✅ תזמון מהיר       ⚡
 │   ├─ איזה ערוץ?  1..n
 │   ├─ מה?  1 הדלקה · 2 כיבוי
 │   ├─ מתי?  1 בעוד שעה · 2 בעוד שעתיים · 3 הערב ב-20:00 · 4 📝 שעה (HH:MM היום)
 │   └─ confirm → one-off schedule today (created_via = channel) → "נקבע: {ערוץ} {פעולה} ב-{שעה}"
 │
-├─ 7  🔒 ✅ התוכניות שלי
+├─ 6  🔒 ✅ התוכניות שלי
 │   ├─ רשימה  1..n  "{שם התוכנית} — פעילה/מושבתת"
 │   ├─ 1 עצירה · 2 הפעלה   (same as the web toggle: is_enabled per member row, nothing deleted)
 │   └─ confirm → "התוכנית {שם} הושבתה / הופעלה"   (exists today as the phone intent plan_toggle ✅)
 │
-├─ 8  🔒 ✅ מה קורה השבוע / בשבת הקרובה
+├─ (off the menu since 2026-10-27, router-only) 🔒 ✅ מה קורה השבוע / בשבת הקרובה
 │   └─ the next 7 days per channel from GET /schedules/calendar (same data as the site's מועדים קרובים ✅):
 │      "שבת: מטבח 🟢 18:12 כניסת שבת → ⚪ 20:30 … סלון …"   (read-only, no confirm)
 │
-├─ 0  נציג אנושי                                                  ✅  phone: transfers to ivr.agent_phone, no answer → voice message 🎫 [agent] (2026-10-27)
+├─ (off the main menu since 2026-10-27; offered inside the service branches) נציג אנושי ✅  phone: transfers to ivr.agent_phone, no answer → voice message 🎫 [agent] (2026-10-27)
 │   └─ 🎫 [agent] "הלקוח ביקש נציג — לחזור אליו"  (nothing to type)
 │
 └─ free text where a digit was expected
@@ -153,11 +153,11 @@ call arrives → caller-ID → verified phone?
 ## C. Site — "פניות" / help page ✅ (→ ✅ numbered menu)
 
 ```
-/help  (round headset button in the header, every screen)
+/help  (the מוקד השירות tab in the main nav, in place of היסטוריה since 2026-10-29; היסטוריה is the third view of תוכניות)
 ├─ 6 topic cards with static self-help steps                                                     ✅
 │   מכשיר מנותק (incl. NetFree) · תזמון לא פעל · התחברות · המענה הקולי · האתר והאפליקציה · משהו אחר
 ├─ free question → answer bot 🤖 (rules → reuse → cached prompt → model) → guide or "לפתוח פנייה"  ✅
-├─ ✅ the numbered menu (POST /support/menu) — the same tree as WhatsApp, actions run in the route; superadmins only until SERVICE_MENU_WEB=1 opens it (2026-10-27)
+├─ ✅ the numbered menu (POST /support/menu) — the same tree as WhatsApp, actions run in the route; open to every customer (2026-10-29)
 ├─ "הפניות שלי": threads, admin replies, user reply re-opens (status new)                          ✅
 └─ unread admin answers = red count on the "?"                                                   ✅
 ```

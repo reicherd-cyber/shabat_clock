@@ -7,7 +7,6 @@ import Schedules from './user/Schedules.jsx';
 // Lazy: the calendar pulls in the Hebrew-calendar engine (~60KB gzip) — load it
 // only when the לוח tab is opened.
 const Calendar = lazy(() => import('./user/Calendar.jsx'));
-import History from './user/History.jsx';
 import Settings from './user/Settings.jsx';
 import Help from './user/Help.jsx';
 import { ReadOnlyBanner } from './user/ReadOnlyBanner.jsx';
@@ -67,7 +66,9 @@ const TABS = [
   { to: '/', label: 'ראשי', Icon: LayoutGrid, end: true },
   { to: '/schedules', label: 'תוכניות', Icon: CalendarClock },
   { to: '/calendar', label: 'לוח', Icon: CalendarDays },
-  { to: '/history', label: 'היסטוריה', Icon: HistoryIcon },
+  // מוקד השירות took היסטוריה's slot (user, 2026-10-29); the activity log is
+  // now the third view of תוכניות (/schedules?view=history).
+  { to: '/help', label: 'מוקד השירות', Icon: Headset },
   { to: '/settings', label: 'הגדרות', Icon: SettingsIcon },
 ];
 
@@ -75,10 +76,10 @@ function UserLayout() {
   const nav = useNavigate();
   const [name, setName] = useState('');
   const [demo, setDemo] = useState(false);
-  // A read-only (showcase) session: the server refuses היסטוריה and the private
-  // parts of הגדרות, so those tabs are not offered at all.
+  // A read-only (showcase) session: the server refuses the private parts of
+  // הגדרות, so that tab is not offered (היסטוריה hides itself inside תוכניות).
   const [readOnly, setReadOnly] = useState(false);
-  const tabs = readOnly ? TABS.filter((t) => t.to !== '/history' && t.to !== '/settings') : TABS;
+  const tabs = readOnly ? TABS.filter((t) => t.to !== '/settings') : TABS;
   // Shared accounts: every account this login's address may enter (own first).
   // More than one → the name in the header becomes a select box.
   const [accounts, setAccounts] = useState([]);
@@ -133,6 +134,12 @@ function UserLayout() {
     `px-3 py-1.5 rounded-[10px] text-sm font-medium ${isActive ? 'bg-[#E4EFFE] text-accent-dk font-bold' : 'text-muted hover:text-ink'}`;
   const tabCls = ({ isActive }) =>
     `flex-1 text-center text-xs no-underline py-1.5 rounded-[10px] ${isActive ? 'text-accent-dk bg-[#E4EFFE] font-bold' : 'text-muted'}`;
+  // Unread team answers — a red count on the מוקד השירות tab (desktop and mobile).
+  const unreadBadge = supportUnread > 0 ? (
+    <span className="absolute -top-2 -start-3 min-w-[18px] h-[18px] px-1 rounded-full bg-[#e11d48] text-white text-[11px] font-bold grid place-items-center leading-none">
+      {supportUnread}
+    </span>
+  ) : null;
 
   return (
     <div className="min-h-screen pb-[84px] md:pb-10">
@@ -158,24 +165,12 @@ function UserLayout() {
         </div>
         <nav className="hidden md:flex gap-1 items-center">
           {tabs.map((t) => (
-            <NavLink key={t.to} to={t.to} end={t.end} className={deskCls}>
-              <span className="flex items-center gap-1.5"><t.Icon size={15} strokeWidth={2} />{t.label}</span>
+            <NavLink key={t.to} to={t.to} end={t.end} className={deskCls} title={t.to === '/help' && supportUnread ? `${supportUnread} תשובות חדשות` : undefined}>
+              <span className="relative flex items-center gap-1.5"><t.Icon size={15} strokeWidth={2} />{t.label}{t.to === '/help' && unreadBadge}</span>
             </NavLink>
           ))}
         </nav>
         <div className="flex items-center gap-2.5 font-medium text-muted">
-          {/* מוקד שירות בפינה, לא בניווט — כפתור קבוע בכל מסך. Headset (a support
-              desk), not the lifebuoy ring that read as a gear at 17px (user, 2026-10-27);
-              the chat on the page uses the same icon. */}
-          <NavLink to="/help" title={supportUnread ? `עזרה ותמיכה — ${supportUnread} תשובות חדשות` : 'עזרה ותמיכה'} className={({ isActive }) =>
-            `relative w-8 h-8 rounded-full border grid place-items-center transition-colors ${isActive ? 'bg-accent text-white border-accent' : 'border-line text-muted hover:text-accent-dk hover:border-accent'}`}>
-            <Headset size={17} strokeWidth={2} />
-            {supportUnread > 0 && (
-              <span className="absolute -top-1.5 -start-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#e11d48] text-white text-[11px] font-bold grid place-items-center leading-none">
-                {supportUnread}
-              </span>
-            )}
-          </NavLink>
           {accounts.length > 1 ? accountSelect('hidden md:block max-w-[220px] truncate') : (
             <span className="hidden sm:inline">{name}</span>
           )}
@@ -200,7 +195,8 @@ function UserLayout() {
       <nav className="fixed bottom-0 inset-x-0 z-20 flex bg-surface border-t border-line px-2.5 pt-2 pb-[calc(8px+env(safe-area-inset-bottom))] md:hidden">
         {tabs.map((t) => (
           <NavLink key={t.to} to={t.to} end={t.end} className={tabCls}>
-            <t.Icon size={20} strokeWidth={1.9} className="mx-auto mb-0.5" />{t.label}
+            <span className="relative inline-block"><t.Icon size={20} strokeWidth={1.9} className="mx-auto mb-0.5" />{t.to === '/help' && unreadBadge}</span>
+            <span className="block">{t.label}</span>
           </NavLink>
         ))}
       </nav>
@@ -420,7 +416,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/schedules" element={<Schedules />} />
           <Route path="/calendar" element={<Suspense fallback={<p className="text-muted">טוען…</p>}><Calendar /></Suspense>} />
-          <Route path="/history" element={<History />} />
+          <Route path="/history" element={<Navigate to="/schedules?view=history" replace />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/help" element={<Help />} />
         </Route>

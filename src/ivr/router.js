@@ -16,6 +16,7 @@ import { query } from '../db/pool.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, createSession, endSession } from './session.js';
 import { ask, askVoice, askRecord, say, sayAndHangup, transfer } from './responses.js';
+import { spokenText, spokenOption } from './speech.js';
 import { voicemailFolder, voicemailFileName, createPhoneTicket, fetchVoicemailInBackground } from '../services/voicemail.js';
 import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
@@ -105,11 +106,10 @@ async function nluDeliver(session, out) {
 const svcCtx = (session) => ({
   user: { id: session.userId, full_name: session.userName || '' }, phone: session.phone || null, source: 'phone',
   actor: `ivr:${session.userId}`, actorObj: { type: 'ivr', id: session.userId },
+  transferAgent: session.agentTransfer === true, // נציג rings a person (rollout list), else a callback ticket
 });
-// Screen text → something a voice can read: no emoji, no slashes, no dashes.
-const speech = (t) => String(t || '')
-  .replace(/🟢/g, 'הדלקה').replace(/⚪/g, 'כיבוי').replace(/✅/g, '').replace(/⚠️/g, 'שימו לב,')
-  .replace(/ \/ /g, ' או ').replace(/[—–]/g, ',').replace(/…/g, '').replace(/\s*\n\s*/g, ', ').replace(/\s{2,}/g, ' ').trim();
+// The tree's sentences and option labels are played from the phrase bank
+// (recordings, ./speech.js) when they are static, else spoken by Yemot's TTS.
 async function svcDeliver(session, r) {
   if (r.action?.kind === 'status') return runStatus(session);
   if (r.action?.kind === 'agent') return agentTransfer(session);
@@ -119,9 +119,9 @@ async function svcDeliver(session, r) {
     session.state = 'NLU_CONFIRM';
     return ask(await nluConfirmItems([r.action]));
   }
-  const spoken = [{ t: speech(r.text) }];
+  const spoken = spokenText(r.text);
   if (r.free) {
-    session.data.svc = r.state; session.data.svcPrompt = speech(r.text); session.data.svcRetries = 0; session.state = 'SVC_VOICE';
+    session.data.svc = r.state; session.data.svcPrompt = spoken; session.data.svcRetries = 0; session.state = 'SVC_VOICE';
     return askVoice(spoken, { maxSilence: 3 });
   }
   const opts = choiceOptions(r); // without the way-back entry: * and 0 do that on the line (a channel may own 9)
@@ -133,7 +133,7 @@ async function svcDeliver(session, r) {
   // and shorter choices are spoken with leading zeros ("הקישו 01").
   const width = Math.max(1, ...opts.map((o) => String(o.n).length));
   session.data.svcWidth = width;
-  const menuItems = opts.map((o) => ({ t: `${speech(o.label)}, הקישו ${String(o.n).padStart(width, '0')},` }));
+  const menuItems = opts.flatMap((o) => spokenOption(o.label, String(o.n).padStart(width, '0')));
   return ask([...spoken, ...menuItems], { min: width, max: width });
 }
 
@@ -190,7 +190,7 @@ async function mainMenu(session, message = null) {
     // shared menu tree. TTS until a recording exists (Edge TTS is down).
     // Per-number rollout (ivr.service_phones, '' = nobody): only listed callers hear them.
     if (await phoneAllowed('ivr.service_phones', session.phone)) {
-      items.push(...await speak('ivr.main_menu_service', {}, 'לשירות לקוחות, הקישו 6, למה קורה בשבת הקרובה, הקישו 7'));
+      items.push(...await speak('ivr.main_menu_service', {}, 'לשירות לקוחות, הקישו 6'));
     }
   } else {
     const audio = await getSetting('ivr.audio.main_menu');
@@ -594,7 +594,12 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       const user = asGuest ? null : await findUserByPhone(phone);
       // Suspended → treated as not found (no info leak).
       if (user && user.status === 'active') {
-        session = createSession(callId, { callLogId, phone, userId: user.id, userName: user.full_name, requirePin: Boolean(user.require_pin) });
+        session = createSession(callId, {
+          callLogId, phone, userId: user.id, userName: user.full_name, requirePin: Boolean(user.require_pin),
+          // Per-number rollout of the נציג transfer (ivr.agent_transfer_phones, '' = nobody):
+          // other callers keep the callback ticket.
+          agentTransfer: await phoneAllowed('ivr.agent_transfer_phones', phone),
+        });
         await setCallUser(callLogId, user.id);
         if (user.require_pin) {
           session.state = 'AUTH_PIN';
@@ -707,9 +712,10 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
             return res.send(await schedBrowse(session));
           }
           if (input === '5') return res.send(await runStatus(session));
-          if ((input === '6' || input === '7') && await phoneAllowed('ivr.service_phones', session.phone)) {
-            await appendPath(session.callLogId, input === '6' ? 'svc' : 'svc_week');
-            const r = await menuStep(svcCtx(session), { node: input === '6' ? 'service' : 'week', data: {}, _render: true }, null);
+          if (input === '6' && await phoneAllowed('ivr.service_phones', session.phone)) {
+            // 7 (מה קורה בשבת הקרובה) left the menu 2026-10-27 with the shared tree's 6/8.
+            await appendPath(session.callLogId, 'svc');
+            const r = await menuStep(svcCtx(session), { node: 'service', data: {}, _render: true }, null);
             return res.send(await svcDeliver(session, r));
           }
         } else {
@@ -802,7 +808,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         const spoken = String(Array.isArray(raw) ? raw[raw.length - 1] : (raw ?? '')).trim();
         if (!spoken) {
           session.data.svcRetries = (session.data.svcRetries || 0) + 1;
-          if (session.data.svcRetries <= 2) return res.send(askVoice([{ t: session.data.svcPrompt || 'אמרו את התשובה לאחר הצפצוף' }], { maxSilence: 3 }));
+          if (session.data.svcRetries <= 2) return res.send(askVoice(session.data.svcPrompt?.length ? session.data.svcPrompt : [{ t: 'אמרו את התשובה לאחר הצפצוף' }], { maxSilence: 3 }));
           return res.send(await mainMenu(session, await speak('ivr.nlu_giveup', {}, 'לא זוהה דיבור, חוזרים לתפריט הראשי')));
         }
         const r = await menuStep(svcCtx(session), session.data.svc || { node: 'service', data: {} }, spoken);

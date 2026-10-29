@@ -26,7 +26,7 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "mqtt": "^5.10.1",
-    "msedge-tts": "^2.1.0",
+    "msedge-tts": "^2.1.1",
     "mysql2": "^3.11.3",
     "nodemailer": "^10.2.1",
     "qrcode": "^1.5.4",

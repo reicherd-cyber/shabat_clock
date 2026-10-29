@@ -56,7 +56,9 @@ function Row({ item, first, colorOf }) {
   );
 }
 
-export default function History() {
+// `embedded`: rendered as the היסטוריה view inside תוכניות (2026-10-29) — the
+// page's own title is skipped, the host page carries the heading and the tabs.
+export default function History({ embedded = false } = {}) {
   const [items, setItems] = useState([]);
   const [cursor, setCursor] = useState(null);
   const [done, setDone] = useState(false);
@@ -97,7 +99,7 @@ export default function History() {
 
   return (
     <>
-      <SectionHead title="פעילות אחרונה" />
+      {!embedded && <SectionHead title="פעילות אחרונה" />}
       {isImpersonating() && (
         <p className="text-xs text-muted -mt-2 mb-2">שורות באדום הן אבחון המד אחרי הפקודה (הממסר נסגר אך המכשיר לא צורך) — הן מוצגות רק למנהל שנכנס בשם הלקוח; הלקוח עצמו לא רואה אותן.</p>
       )}

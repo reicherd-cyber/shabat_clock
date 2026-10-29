@@ -2,7 +2,7 @@
 // engine (services/serviceMenu.js) drives it through POST /support/menu
 // {state, input}. Bot bubbles on one side, the customer's taps and words on
 // the other; the numbered options are tap buttons, and a text box appears only
-// where the tree asks for free text. Hidden unless /me says menu_web.
+// where the tree asks for free text. Shown once /me answers (open to every customer).
 import { useEffect, useRef, useState } from 'react';
 import { Headset, Send, RotateCcw } from 'lucide-react';
 import { api } from '../api.js';

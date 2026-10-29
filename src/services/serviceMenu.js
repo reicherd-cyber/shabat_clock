@@ -10,7 +10,8 @@
 // State = { node, data, trail } — serialisable, channel-agnostic. step() takes
 // the customer's input (a digit or free text) and returns the next reply:
 //   { text, options:[{n,label}], free:boolean, done:boolean, state }
-// Navigation everywhere: 9 = main menu. 0 on the main menu = a person.
+// Navigation everywhere: 9 = main menu. 0 = a person where a node offers it
+// (the service branches); the main menu itself no longer lists it (2026-10-27).
 // Side effects (tickets, leads, device checks, the support bot) go through
 // `io`, injected by the caller — the pure tree is unit-tested with a fake io.
 import { query } from '../db/pool.js';
@@ -239,11 +240,13 @@ function mainMenu(ctx) {
     { n: 2, label: 'שירות לקוחות' },
     { n: 3, label: 'מידע כללי' },
   ];
+  // תזמון מהיר and מה קורה השבוע left the menu (user, 2026-10-27); their nodes
+  // stay for the free-text router ("תדליק את הדוד בעוד שעה", "מה יש השבוע").
   if (ctx.user) {
-    options.push({ n: 4, label: 'הדלקה / כיבוי של ערוץ' }, { n: 5, label: 'מצב הערוצים' },
-      { n: 6, label: 'תזמון מהיר' }, { n: 7, label: 'התוכניות שלי' }, { n: 8, label: 'מה קורה השבוע' });
+    options.push({ n: 4, label: 'הדלקה / כיבוי של ערוץ' }, { n: 5, label: 'מצב הערוצים' }, { n: 6, label: 'התוכניות שלי' });
   }
-  options.push({ n: 0, label: 'נציג אנושי' });
+  // 0 נציג left the main menu too (user, 2026-10-27): a person is offered inside
+  // the service branches (and by the free-text router), not as a first choice.
   const hello = ctx.user ? `שלום ${firstName(ctx.user)}, ` : 'שלום, ';
   return { text: `${hello}כאן מוקד השירות של TelTech. במה נוכל לעזור?`, options };
 }
@@ -283,10 +286,7 @@ export async function step(ctx, state, input, io = realIo) {
       if (d === 3) { s.node = 'info'; return render(ctx, s, io); }
       if (d === 4 && ctx.user) { s.node = 'switch_relay'; return render(ctx, s, io); }
       if (d === 5 && ctx.user) { s.node = 'status'; return render(ctx, s, io); }
-      if (d === 6 && ctx.user) { s.node = 'quick_relay'; return render(ctx, s, io); }
-      if (d === 7 && ctx.user) { s.node = 'plans'; return render(ctx, s, io); }
-      if (d === 8 && ctx.user) { s.node = 'week'; return render(ctx, s, io); }
-      if (d === 0) { s.node = 'agent'; return render(ctx, s, io); }
+      if (d === 6 && ctx.user) { s.node = 'plans'; return render(ctx, s, io); }
       return notUnderstood(menuStart(ctx));
     }
 
@@ -646,10 +646,11 @@ export async function step(ctx, state, input, io = realIo) {
 
     // ── 0 נציג ──
     case 'agent': {
-      // On the phone the call itself goes to a person (ivr/router.js agentTransfer:
-      // ring the agent; no answer → a voice message is the ticket) — no callback
-      // ticket from here. Elsewhere, nothing to type: the request is the ticket.
-      if (ctx.source === 'phone') return reply({ node: 'main', data: {} }, '', { done: true, options: [BACK], action: { kind: 'agent' } });
+      // On the phone, for callers in the rollout list (ctx.transferAgent, from
+      // ivr.agent_transfer_phones), the call itself goes to a person (ivr/router.js
+      // agentTransfer: ring the agent; no answer → a voice message is the ticket) —
+      // no callback ticket from here. Otherwise, nothing to type: the request is the ticket.
+      if (ctx.source === 'phone' && ctx.transferAgent) return reply({ node: 'main', data: {} }, '', { done: true, options: [BACK], action: { kind: 'agent' } });
       const id = await io.ticket({ ctx, topic: 'agent', body: 'הלקוח ביקש נציג — לחזור אליו.' });
       return reply({ node: 'main', data: {} }, `הפנייה נרשמה (מס׳ ${id}). נציג יחזור אליכם ${CALLBACK_HE}.`, { options: [BACK], done: true });
     }

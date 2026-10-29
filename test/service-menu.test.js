@@ -32,13 +32,20 @@ async function run(ctx, io, inputs) {
   for (const input of inputs) { r = await step(ctx, r.state, input, io); replies.push(r); }
   return { last: r, replies };
 }
+// Start at a node the menu no longer lists (reached through the free-text router).
+async function runFrom(ctx, io, node, inputs) {
+  let r = await step(ctx, { node, data: {}, _render: true }, null, io);
+  const replies = [r];
+  for (const input of inputs) { r = await step(ctx, r.state, input, io); replies.push(r); }
+  return { last: r, replies };
+}
 
 test('main menu: a known customer is greeted by name and sees the device options; a guest does not', () => {
   const r = menuStart(ctxUser);
   assert.match(r.text, /שלום דוד/);
-  assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3, 4, 5, 6, 7, 8, 0]);
+  assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3, 4, 5, 6]);
   const g = menuStart(ctxGuest);
-  assert.deepEqual(g.options.map((o) => o.n), [1, 2, 3, 0]);
+  assert.deepEqual(g.options.map((o) => o.n), [1, 2, 3]);
 });
 
 test('order branch: numbered answers, then name (guest only) and city, and a CRM lead', async () => {
@@ -139,8 +146,9 @@ test('feature request lives inside שירות לקוחות (one free text); נצ
   const io = fakeIo();
   const f = await run(ctxUser, io, ['2', '5', 'תוסיפו טיימר לשעה']);
   assert.equal(f.last.done, true);
-  const a = await run(ctxGuest, io, ['0']);
+  const a = await runFrom(ctxGuest, io, 'agent', []);
   assert.equal(a.last.done, true, 'one tap, no typing');
+  assert.match((await step(ctxUser, menuStart(ctxUser).state, '0', io)).text, /^לא הבנתי/); // 0 is no longer a main-menu key
   assert.deepEqual(io.log.tickets.map((t) => t.topic), ['feature', 'agent']);
   assert.equal(io.log.tickets[0].body, 'תוסיפו טיימר לשעה');
 });
@@ -148,7 +156,7 @@ test('feature request lives inside שירות לקוחות (one free text); נצ
 test('free text is asked only inside הזמנה and שירות לקוחות — every other reply offers numbers', async () => {
   const io = fakeIo({ online: true });
   const seen = [];
-  for (const inputs of [['3'], ['3', '2'], ['4'], ['4', '1'], ['5'], ['0']]) {
+  for (const inputs of [['3'], ['3', '2'], ['4'], ['4', '1'], ['5'], ['2']]) {
     const { replies } = await run(ctxUser, io, inputs);
     for (const r of replies) seen.push(r);
   }
@@ -176,7 +184,7 @@ test('renderText lists the options with keycaps under the text', () => {
   const t = renderText(r);
   assert.match(t, /^שלום, כאן מוקד השירות/);
   assert.match(t, /\n1️⃣ הזמנה \/ מכירה\n/);
-  assert.match(t, /0️⃣ נציג אנושי$/);
+  assert.match(t, /3️⃣ מידע כללי$/); // 0 נציג is off the main menu (2026-10-27)
 });
 
 // ── the state is the channel's, not ours: ids in it are honoured only when they are the customer's ──
@@ -216,8 +224,8 @@ test('channel lists carry the customer\'s own IVR codes, in IVR order, and rende
     { id: 103, name: 'דוד', ivr_digit: 120, current_state: 'off', device_name: 'ראשי', device_id: 7 },
   ];
   const io = { ...fakeIo(), relays: async () => relays };
-  for (const first of ['4', '6']) {
-    const list = await run(ctxUser, io, [first]);
+  for (const first of ['switch', 'quick']) {
+    const list = first === 'switch' ? await run(ctxUser, io, ['4']) : await runFrom(ctxUser, io, 'quick_relay', []);
     assert.deepEqual(list.last.options.map((o) => o.n), [12, 3, 120, 9], first); // as the io lists them (ORDER BY ivr_digit), then 9 = main menu
     const pick = await step(ctxUser, list.last.state, '120', io);
     assert.equal(pick.state.data.relay.name, 'דוד', first);
@@ -247,7 +255,7 @@ test('a channel whose IVR code is 9 keeps its 9; the way back is then *', async 
   const star = await step(ctxUser, list.last.state, '*', io);
   assert.equal(star.state.node, 'main');
   // * is a way back from any node, 9 still is outside channel lists
-  const plans = await run(ctxUser, { ...io, plans: async () => [{ key: 'p1', name: 'שבת', enabled: true }] }, ['7']);
+  const plans = await run(ctxUser, { ...io, plans: async () => [{ key: 'p1', name: 'שבת', enabled: true }] }, ['6']);
   assert.equal((await step(ctxUser, plans.last.state, '*', io)).state.node, 'main');
   assert.equal((await step(ctxUser, plans.last.state, '9', io)).state.node, 'main');
 });
@@ -255,7 +263,7 @@ test('a channel whose IVR code is 9 keeps its 9; the way back is then *', async 
 test('other lists skip 9 and 0: the 9th item is 10 and still reachable', async () => {
   const many = Array.from({ length: 11 }, (_, i) => ({ key: `p${i + 1}`, name: `תוכנית ${i + 1}`, enabled: true }));
   const io = { ...fakeIo(), plans: async () => many };
-  const list = await run(ctxUser, io, ['7']);
+  const list = await run(ctxUser, io, ['6']);
   const ns = list.last.options.map((o) => o.n);
   assert.deepEqual(ns, [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 9]); // items, then 9 = main menu
   const ninth = await step(ctxUser, list.last.state, '10', io);
@@ -276,7 +284,7 @@ test('an order lead records the channel count', async () => {
 test('every escalation writes a ticket with a topic and the customer hears the 3-hour promise', async () => {
   const io = fakeIo({ online: false });
   const paths = [
-    { ctx: ctxUser, inputs: ['0'] },                                   // נציג
+    { ctx: ctxUser, node: 'agent', inputs: [] },                       // נציג (reached inside the branches, not from the main menu)
     { ctx: ctxUser, inputs: ['2', '4', 'הכל מהבהב'] },                 // משהו אחר
     { ctx: ctxUser, inputs: ['2', '1', '1', '1', '1', '1', '1'] },     // device check: pick unit, three steps, open the ticket
     { ctx: ctxGuest, inputs: ['2', '0501234567 המכשיר לא עובד'] },     // guest service
@@ -284,7 +292,7 @@ test('every escalation writes a ticket with a topic and the customer hears the 3
   ];
   for (const p of paths) {
     const io2 = fakeIo({ online: false });
-    const { last } = await run(p.ctx, io2, p.inputs);
+    const { last } = p.node ? await runFrom(p.ctx, io2, p.node, p.inputs) : await run(p.ctx, io2, p.inputs);
     assert.equal(io2.log.tickets.length, 1, p.inputs.join(' '));
     assert.ok(io2.log.tickets[0].topic, 'topic');
     assert.match(last.text, /תוך 3 שעות בשעות הפעילות/, p.inputs.join(' '));
@@ -310,19 +318,19 @@ const fakeIo2 = (over = {}) => ({
   ...over,
 });
 
-test('6 תזמון מהיר: relay, on/off, when → a timed action for the channel to run; a passed clock time rolls to tomorrow', async () => {
+test('תזמון מהיר (off the menu, router-only): relay, on/off, when → a timed action for the channel to run; a passed clock time rolls to tomorrow', async () => {
   const io = fakeIo2();
-  const hour = await run(ctxUser, io, ['6', '1', '1', '1']);
+  const hour = await runFrom(ctxUser, io, 'quick_relay', ['1', '1', '1']);
   assert.deepEqual(hour.last.action, { kind: 'timed', relay_id: 15, relay_name: 'דוד', action: 'on', time: '19:30', day: 'today', summary: 'הדלקה של "דוד" היום בשעה 19:30' });
-  const evening = await run(ctxUser, io, ['6', '2', '2', '3']);
+  const evening = await runFrom(ctxUser, io, 'quick_relay', ['2', '2', '3']);
   assert.equal(evening.last.action.time, '20:00');
   assert.equal(evening.last.action.day, 'today');          // 18:30 now → 20:00 is still today
-  const custom = await run(ctxUser, io, ['6', '1', '2', '4', '17:30']);
+  const custom = await runFrom(ctxUser, io, 'quick_relay', ['1', '2', '4', '17:30']);
   assert.equal(custom.last.action.day, 'tomorrow');        // 17:30 already passed today
   assert.equal(custom.last.action.action, 'off');
-  const bad = await run(ctxUser, io, ['6', '1', '2', '4', 'בערב']);
+  const bad = await runFrom(ctxUser, io, 'quick_relay', ['1', '2', '4', 'בערב']);
   assert.equal(bad.last.free, true);                       // re-asks the hour
-  const late = await run(ctxUser, { ...io, clock: () => ({ y: 2026, mo: 10, d: 27, hh: 23, mm: 30 }) }, ['6', '1', '1', '1']);
+  const late = await runFrom(ctxUser, { ...io, clock: () => ({ y: 2026, mo: 10, d: 27, hh: 23, mm: 30 }) }, 'quick_relay', ['1', '1', '1']);
   assert.deepEqual([late.last.action.time, late.last.action.day], ['00:30', 'tomorrow']);
   // a crafted state with a foreign relay goes nowhere
   const foreign = await step(ctxUser, { node: 'quick_when', data: { relay: { id: 999 }, action: 'on' } }, '1', io);
@@ -330,22 +338,22 @@ test('6 תזמון מהיר: relay, on/off, when → a timed action for the chan
   assert.equal(foreign.state.node, 'main');
 });
 
-test('7 התוכניות שלי: a plan by number, stop/start → a plan_toggle action with the "already" note', async () => {
+test('6 התוכניות שלי: a plan by number, stop/start → a plan_toggle action with the "already" note', async () => {
   const io = fakeIo2();
-  const stop = await run(ctxUser, io, ['7', '1', '1']);
+  const stop = await run(ctxUser, io, ['6', '1', '1']);
   assert.deepEqual(stop.last.action, { kind: 'plan_toggle', plan_key: 'pA', plan_name: 'שבת', action: 'off', schedule_ids: [1, 2], summary: 'עצירת התוכנית שבת' });
-  const start = await run(ctxUser, io, ['7', '1', '2']);
+  const start = await run(ctxUser, io, ['6', '1', '2']);
   assert.match(start.last.action.summary, /היא כבר פעילה$/);
-  const loose = await run(ctxUser, io, ['7', '2', '2']);
+  const loose = await run(ctxUser, io, ['6', '2', '2']);
   assert.equal(loose.last.action.plan_key, 's9');
-  const none = await run(ctxUser, { ...io, plans: async () => [] }, ['7']);
+  const none = await run(ctxUser, { ...io, plans: async () => [] }, ['6']);
   assert.match(none.last.text, /אין עדיין תוכניות/);
   assert.equal(none.last.state.node, 'main');
 });
 
-test('8 מה קורה השבוע: the coming firings by day, future only, no manual switches', async () => {
+test('מה קורה השבוע (off the menu, router-only): the coming firings by day, future only, no manual switches', async () => {
   const io = fakeIo2();
-  const { last } = await run(ctxUser, io, ['8']);
+  const { last } = await runFrom(ctxUser, io, 'week', []);
   assert.equal(last.action, undefined);
   assert.match(last.text, /^מה קורה בשבוע הקרוב:/);
   assert.match(last.text, /יום שלישי 27\.10 \(היום\):\n  ⚪ 20:00 דוד/);
@@ -353,15 +361,16 @@ test('8 מה קורה השבוע: the coming firings by day, future only, no man
   assert.match(last.text, /יום שישי 30\.10:\n  🟢 16:41 פלטה\n/);
   assert.doesNotMatch(last.text, /16:41 דוד/);
   assert.match(last.text, /יום שבת 31\.10:\n  ⚪ 20:30 פלטה/);
-  const empty = await run(ctxUser, { ...io, upcoming: async () => [] }, ['8']);
+  const empty = await runFrom(ctxUser, { ...io, upcoming: async () => [] }, 'week', []);
   assert.equal(empty.last.text, 'אין תזמונים בשבוע הקרוב.');
 });
 
-test('guests do not see 6–8 and cannot reach them', async () => {
+test('guests do not see 4–6 and cannot reach them; 7 and 8 are gone for everyone', async () => {
   const io = fakeIo2();
   const r = menuStart(ctxGuest);
-  assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3, 0]);
-  for (const n of ['6', '7', '8']) assert.match((await step(ctxGuest, r.state, n, io)).text, /^לא הבנתי/);
+  assert.deepEqual(r.options.map((o) => o.n), [1, 2, 3]);
+  for (const n of ['4', '5', '6', '7', '8']) assert.match((await step(ctxGuest, r.state, n, io)).text, /^לא הבנתי/);
+  for (const n of ['7', '8']) assert.match((await step(ctxUser, menuStart(ctxUser).state, n, io)).text, /^לא הבנתי/);
 });
 
 // ── phase 3: the assistant is offered only after the menu failed, and only when available ──
@@ -434,8 +443,8 @@ test('a channel without an IVR code (or one above the cap) is not offered: nothi
     { id: 103, name: 'דוד', ivr_digit: 1234, current_state: 'off', device_name: 'ראשי', device_id: 7 },
   ];
   const io = { ...fakeIo(), relays: async () => relays };
-  for (const first of ['4', '6']) {
-    const list = await run(ctxUser, io, [first]);
+  for (const first of ['switch', 'quick']) {
+    const list = first === 'switch' ? await run(ctxUser, io, ['4']) : await runFrom(ctxUser, io, 'quick_relay', []);
     assert.deepEqual(list.last.options.map((o) => o.n), [2, 9], first);
     assert.match((await step(ctxUser, list.last.state, '0', io)).text, /^לא הבנתי/, first);
   }
@@ -473,14 +482,14 @@ test('choiceOptions: the phone keeps a channel that owns 9 and drops only the wa
   ] };
   const list = await run(ctxUser, io, ['4']);
   assert.deepEqual(choiceOptions(list.last).map((o) => o.n), [9, 1]); // * (back) dropped, the channel on 9 kept
-  const plans = await run(ctxUser, { ...io, plans: async () => [{ key: 'p1', name: 'שבת', enabled: true }] }, ['7']);
+  const plans = await run(ctxUser, { ...io, plans: async () => [{ key: 'p1', name: 'שבת', enabled: true }] }, ['6']);
   assert.deepEqual(choiceOptions(plans.last).map((o) => o.n), [1]); // 9 (back) dropped
-  assert.deepEqual(choiceOptions(menuStart(ctxUser)).map((o) => o.n), [1, 2, 3, 4, 5, 6, 7, 8, 0]);
+  assert.deepEqual(choiceOptions(menuStart(ctxUser)).map((o) => o.n), [1, 2, 3, 4, 5, 6]);
 });
 
 test('נציג on the phone is a transfer, not a callback ticket; other channels still file the ticket', async () => {
   const io = fakeIo();
-  const phoneCtx = { ...ctxUser, source: 'phone', actor: 'ivr:3', actorObj: { type: 'ivr', id: 3 } };
+  const phoneCtx = { ...ctxUser, source: 'phone', actor: 'ivr:3', actorObj: { type: 'ivr', id: 3 }, transferAgent: true };
   const phone = await step(phoneCtx, { node: 'agent', data: {} }, null, io);
   // the phone reaches the leaf by rendering it (no digit); the reply is a transfer order
   const r = await step(phoneCtx, { node: 'agent', data: {}, _render: true }, null, io);
@@ -490,5 +499,13 @@ test('נציג on the phone is a transfer, not a callback ticket; other channels
   assert.equal(phone.action?.kind, 'agent');
   const wa = await step(ctxUser, { node: 'agent', data: {}, _render: true }, null, io);
   assert.equal(wa.action, undefined);
+  assert.deepEqual(io.log.tickets.map((t) => t.topic), ['agent']);
+});
+
+test('נציג on the phone without the rollout flag is still a callback ticket', async () => {
+  const io = fakeIo();
+  const phoneCtx = { ...ctxUser, source: 'phone', actor: 'ivr:3', actorObj: { type: 'ivr', id: 3 } };
+  const r = await step(phoneCtx, { node: 'agent', data: {}, _render: true }, null, io);
+  assert.equal(r.action, undefined);
   assert.deepEqual(io.log.tickets.map((t) => t.topic), ['agent']);
 });

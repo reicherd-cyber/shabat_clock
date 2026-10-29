@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import { Card, Button, SectionHead, ErrorNote, useAsync, DAY_NAMES, Toggle, SyncNote, channelColorOf } from '../ui.jsx';
-import { Layers, Trash2, Plus, Check, RefreshCw, Pencil, List, CalendarClock } from 'lucide-react';
+import { Layers, Trash2, Plus, Check, RefreshCw, Pencil, List, CalendarClock, History as HistoryIcon } from 'lucide-react';
 import { PlanEditorModal, planFromMembers, schedulerSummary, exclusionSummary, emptyPlan } from './PlanEditor.jsx';
 import Upcoming from './Upcoming.jsx';
+import History from './History.jsx';
 
 // תוכניות (redesign 2026-08-30): the page is ONE list of plans. A plan = channels
 // × single-action schedulers (+ exclusions) sharing a plan_id; standalone rows
@@ -14,9 +16,21 @@ export default function Schedules() {
   const [schedules, setSchedules] = useState(null);
   const [relays, setRelays] = useState([]);
   const [planInit, setPlanInit] = useState(null); // the תוכנית editor (PlanEditor.jsx)
-  // Two views: the plans themselves, or their coming firing times as one list
-  // per device (Upcoming.jsx) — the same toggle the dashboard has.
-  const [view, setView] = useState('plans');
+  // Three views: the plans themselves, their coming firing times as one list per
+  // device (Upcoming.jsx), and the activity log (History.jsx — moved here from
+  // its own nav tab on 2026-10-29, when מוקד השירות took that slot). The view
+  // lives in the URL (?view=) so /history can redirect here and links survive.
+  const [params, setParams] = useSearchParams();
+  const VIEWS = ['plans', 'upcoming', 'history'];
+  const view = VIEWS.includes(params.get('view')) ? params.get('view') : 'plans';
+  const setView = (v) => setParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (v === 'plans') next.delete('view'); else next.set('view', v);
+    return next;
+  }, { replace: true });
+  // A read-only (showcase) session: the server refuses היסטוריה, so the tab is not offered.
+  const [readOnly, setReadOnly] = useState(false);
+  useEffect(() => { api.get('/me').then((m) => setReadOnly(Boolean(m?.read_only))).catch(() => {}); }, []);
   const { busy, error, run, setError } = useAsync();
   // Channel identity color (shared app-wide assignment — same as the calendar).
   const colorOf = useMemo(() => channelColorOf(relays.map((r) => r.id)), [relays]);
@@ -161,6 +175,12 @@ export default function Schedules() {
               onClick={() => setView('upcoming')}>
               <CalendarClock size={15} />מועדים קרובים
             </button>
+            {!readOnly && (
+              <button type="button" className={segBtn(view === 'history')} aria-pressed={view === 'history'} title="פעילות אחרונה: פקודות, תזמונים ושיחות"
+                onClick={() => setView('history')}>
+                <HistoryIcon size={15} />היסטוריה
+              </button>
+            )}
           </div>
           <Button disabled={busy} onClick={() => setPlanInit({ ...emptyPlan })}>
             <span className="inline-flex items-center gap-1"><Plus size={15} />הוסף תוכנית</span>
@@ -170,6 +190,7 @@ export default function Schedules() {
       <ErrorNote error={error} />
 
       {view === 'upcoming' && <Upcoming relays={relays} schedules={schedules} colorOf={colorOf} />}
+      {view === 'history' && !readOnly && <History embedded />}
 
       {view === 'plans' && (
       <Card flush className="overflow-hidden border-accent/30">
