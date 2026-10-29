@@ -285,7 +285,9 @@ export function SupportInbox() {
                 </>
               )}
               {open.topic && <span>נושא: {TOPIC_LABELS[open.topic] || open.topic}</span>}
-              {isPhone(open) && <span>{open.voicemail_hangup ? 'התקשר לתפריט המכירות וניתק לפני שהשאיר הודעה' : 'הודעה קולית מתפריט המכירות'}</span>}
+              {isPhone(open) && <span>{open.topic === 'agent'
+                ? (open.voicemail_hangup ? 'ביקש נציג בטלפון, לא נענה, וניתק לפני שהשאיר הודעה' : 'הודעה קולית לנציג (העברת השיחה לא נענתה)')
+                : (open.voicemail_hangup ? 'התקשר לתפריט המכירות וניתק לפני שהשאיר הודעה' : 'הודעה קולית מתפריט המכירות')}</span>}
               {isWa(open) && <span className="flex items-center gap-1"><MessageCircle size={13} className="text-[#25d366]" />פנייה מוואטסאפ{open.phone ? <> · <a dir="ltr" className="text-accent hover:underline" href={`https://wa.me/${waDigits(open.phone)}`} target="_blank" rel="noreferrer">{open.phone}</a></> : null}</span>}
             </div>
 

@@ -158,7 +158,7 @@ const ownRelay = async (ctx, io, id) => (ctx.user ? (await io.relays(ctx.user.id
 const ownDevice = async (ctx, io, id) => (ctx.user ? (await io.devices(ctx.user.id)).find((x) => Number(x.id) === Number(id)) || null : null);
 // Nodes that only a registered customer may stand on — a guest's state naming
 // one of them (crafted, or a session that lost its user) restarts at the menu.
-const USER_NODES = new Set(['service', 'fault_device', 'fault_check', 'fault_online_helped', 'fault_steps', 'fault_offer_ticket', 'fault_ticket',
+const USER_NODES = new Set(['service', 'no_device', 'fault_device', 'fault_check', 'fault_online_helped', 'fault_steps', 'fault_offer_ticket', 'fault_ticket',
   'sched_problem', 'sched_relay', 'order_status', 'order_status_helped', 'switch_relay', 'switch_action', 'status',
   'quick_relay', 'quick_action', 'quick_when', 'quick_time', 'plans', 'plan_action', 'week', 'confirm_action']);
 // ── phase 2: quick timing / plans / the coming week ──
@@ -356,10 +356,17 @@ export async function step(ctx, state, input, io = realIo) {
       if (d === 5) { s.node = 'feature'; return render(ctx, s, io); }
       return notUnderstood(await render(ctx, s, io));
     }
+    case 'no_device': {
+      if (rendering) return reply(s, 'לחשבון שלכם אין עדיין מכשיר רשום. לחצו 0 לנציג.', { options: [{ n: 0, label: 'נציג אנושי' }, BACK] });
+      if (d === 0) { s.node = 'agent'; return render(ctx, s, io); }
+      return notUnderstood(await render(ctx, s, io));
+    }
     case 'fault_device': {
       const devices = await io.devices(ctx.user.id);
       if (!devices.length) {
-        return reply({ node: 'main', data: {} }, 'לחשבון שלכם אין עדיין מכשיר רשום. לחצו 0 לנציג.', { options: [{ n: 0, label: 'נציג אנושי' }, BACK] });
+        // Its own node: 0 is no longer a main-menu key (2026-10-29), so the reply
+        // must be able to answer it itself.
+        return reply({ node: 'no_device', data: {} }, 'לחשבון שלכם אין עדיין מכשיר רשום. לחצו 0 לנציג.', { options: [{ n: 0, label: 'נציג אנושי' }, BACK] });
       }
       if (devices.length === 1) { s.data.device = { id: devices[0].id, name: devices[0].name }; s.node = 'fault_check'; return render(ctx, s, io); }
       const list = numbered(devices.map((x) => ({ device: x, label: x.name })));

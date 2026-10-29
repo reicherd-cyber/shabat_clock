@@ -77,8 +77,10 @@ function UserLayout() {
   const [name, setName] = useState('');
   const [demo, setDemo] = useState(false);
   // A read-only (showcase) session: the server refuses the private parts of
-  // הגדרות, so that tab is not offered (היסטוריה hides itself inside תוכניות).
-  const [readOnly, setReadOnly] = useState(false);
+  // הגדרות, so that tab is not offered. null = not known yet; pages that must
+  // not even ask (היסטוריה inside תוכניות) read it from the outlet context and
+  // wait for a real answer instead of fetching /me again.
+  const [readOnly, setReadOnly] = useState(null);
   const tabs = readOnly ? TABS.filter((t) => t.to !== '/settings') : TABS;
   // Shared accounts: every account this login's address may enter (own first).
   // More than one → the name in the header becomes a select box.
@@ -190,7 +192,7 @@ function UserLayout() {
         <div className="bg-[#fde8ec] text-[#e11d48] text-sm px-6 py-2 text-center">{switchErr}</div>
       )}
       <main className="max-w-[1040px] mx-auto px-6 py-8">
-        <Outlet />
+        <Outlet context={{ readOnly }} />
       </main>
       <nav className="fixed bottom-0 inset-x-0 z-20 flex bg-surface border-t border-line px-2.5 pt-2 pb-[calc(8px+env(safe-area-inset-bottom))] md:hidden">
         {tabs.map((t) => (

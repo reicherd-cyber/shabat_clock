@@ -1422,7 +1422,9 @@ adminRouter.post('/support/:id/replies', requireWrite, async (req, res, next) =>
       await query('UPDATE support_messages SET status = ?, updated_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?', [status, adminActor(req), id]);
     }
     audit(req, 'support_reply', 'support_message', id, { reply_id: replyId });
-    if (m.user_id) notifyUserOfReply({ userId: m.user_id, messageId: id, body });
+    // A phone (voicemail) ticket may carry the caller's account, but the admin's
+    // reply to it is an internal note (the inbox says so) — never emailed or listed.
+    if (m.user_id && m.source !== 'phone') notifyUserOfReply({ userId: m.user_id, messageId: id, body });
     // A WhatsApp ticket gets the answer in the same chat (24h window — see whatsapp/bot.js).
     if (m.source === 'whatsapp') notifyWhatsappReply({ phone: m.phone, userId: m.user_id, messageId: id, body }).catch((e) => console.error('whatsapp reply push failed:', e.message));
     res.status(201).json({ id: replyId, status });

@@ -237,14 +237,22 @@ async function recordMessage(session, topic, { state, prompt }) {
 // With no agent number configured the caller goes straight to the message.
 async function agentTransfer(session) {
   const phone = String(await getSetting('ivr.agent_phone', '')).replace(/\D/g, '');
+  const returnFolder = String(await getSetting('ivr.agent_return_folder', '')).trim();
   if (!phone) return agentRecord(session);
+  if (!returnFolder) {
+    // Without the API extension's path Yemot would drop an unanswered caller one
+    // folder up, never back here — the voicemail promise could not be kept, so
+    // the message is taken straight away until הגדרות carries the path.
+    console.warn('[ivr] ivr.agent_return_folder is empty — נציג goes to voicemail without ringing');
+    return agentRecord(session);
+  }
   session.state = 'AGENT_TRANSFER';
   session.data.transferAt = Date.now();
   session.data.transferRing = Math.min(120, Math.max(5, Number(await getSetting('ivr.agent_ring_seconds', '25')) || 25));
   session.invalidCount = 0;
   await appendPath(session.callLogId, 'agent');
   return transfer(await speak('ivr.agent_transfer', {}, 'מעבירים אתכם לנציג, אנא המתינו'), {
-    phone, ringSeconds: session.data.transferRing, goto: await getSetting('ivr.agent_return_folder', ''),
+    phone, ringSeconds: session.data.transferRing, goto: returnFolder,
   });
 }
 async function agentRecord(session) {
@@ -568,8 +576,8 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           // Hung up during the record step — file the number; Yemot has not
           // kept the audio on any such call despite the keep-on-hangup flag.
           await salesVoicemailDone(session, { hungUp: true });
-        } else if (session.state === 'AGENT_TRANSFER') {
-          // Hung up while ringing the agent, or after talking to them.
+        } else if (session.state === 'AGENT_TRANSFER' || session.state === 'AGENT_RETURN') {
+          // Hung up while ringing the agent, after talking to them, or at the return question.
           await finishCall(session.callLogId, 'agent');
           endSession(callId);
         } else {
@@ -665,15 +673,25 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       }
       // ── נציג: the call is back from the transfer ──
       case 'AGENT_TRANSFER': {
-        // Yemot does not say whether the agent answered. Back within the ring
-        // window (plus grace) = nobody picked up → offer a message; later = a
-        // conversation happened and ended → thank and hang up.
-        const elapsed = (Date.now() - (session.data.transferAt || 0)) / 1000;
-        if (elapsed <= (session.data.transferRing || 25) + 15) return res.send(await agentRecord(session));
-        await appendPath(session.callLogId, 'agent_done');
-        await finishCall(session.callLogId, 'agent');
-        endSession(callId);
-        return res.send(sayAndHangup(await speak('ivr.agent_done', {}, 'תודה, להתראות')));
+        // Yemot does not say whether the agent answered, and timing cannot tell a
+        // short conversation from a no-answer — so the caller is asked (one key).
+        session.state = 'AGENT_RETURN';
+        session.invalidCount = 0;
+        return res.send(ask(await speak('ivr.agent_return', {},
+          'אם דיברתם עם הנציג, הקישו 1 לסיום, אם לא היה מענה, הקישו 2 להשארת הודעה')));
+      }
+      case 'AGENT_RETURN': {
+        if (input === '2') return res.send(await agentRecord(session));
+        if (input === '1' || input === '*' || input === '0') {
+          await appendPath(session.callLogId, 'agent_done');
+          await finishCall(session.callLogId, 'agent');
+          endSession(callId);
+          return res.send(sayAndHangup(await speak('ivr.agent_done', {}, 'תודה, להתראות')));
+        }
+        session.invalidCount = (session.invalidCount || 0) + 1;
+        if (session.invalidCount >= 3) return res.send(await agentRecord(session)); // the safe default: take the message
+        return res.send(ask(await speak('ivr.agent_return', {},
+          'אם דיברתם עם הנציג, הקישו 1 לסיום, אם לא היה מענה, הקישו 2 להשארת הודעה')));
       }
 
       // ── auth: known caller with require_pin ──

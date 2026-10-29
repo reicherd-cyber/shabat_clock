@@ -22,5 +22,10 @@ export function endSession(callId) {
 
 setInterval(() => {
   const cutoff = Date.now() - IVR_SESSION_TTL_MS;
-  for (const [k, s] of sessions) if (s.updatedAt < cutoff) sessions.delete(k);
+  // A call handed to the agent (AGENT_TRANSFER) sends nothing while they talk;
+  // keep it up to two hours so the return to the API still finds the session.
+  const transferCutoff = Date.now() - 2 * 60 * 60 * 1000;
+  for (const [k, s] of sessions) {
+    if (s.updatedAt < (s.state === 'AGENT_TRANSFER' ? transferCutoff : cutoff)) sessions.delete(k);
+  }
 }, 60_000).unref();

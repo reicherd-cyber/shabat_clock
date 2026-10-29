@@ -2,14 +2,13 @@
 // engine (services/serviceMenu.js) drives it through POST /support/menu
 // {state, input}. Bot bubbles on one side, the customer's taps and words on
 // the other; the numbered options are tap buttons, and a text box appears only
-// where the tree asks for free text. Shown once /me answers (open to every customer).
+// where the tree asks for free text. Open to every customer.
 import { useEffect, useRef, useState } from 'react';
 import { Headset, Send, RotateCcw } from 'lucide-react';
 import { api } from '../api.js';
 import { Card, Button, Input, ErrorNote } from '../ui.jsx';
 
 export default function ServiceChat() {
-  const [enabled, setEnabled] = useState(false);
   const [msgs, setMsgs] = useState([]); // { who: 'bot' | 'me', text }
   const [reply, setReply] = useState(null); // the last engine reply: options / free / state
   const [input, setInput] = useState('');
@@ -17,10 +16,13 @@ export default function ServiceChat() {
   const [error, setError] = useState(null);
   const endRef = useRef(null);
 
+  // The opening menu is a read (GET): nothing runs, so it costs no mutation
+  // confirmation under impersonation and no rate-limit budget; a tap or words
+  // go through POST as before.
   const ask = async (state, text) => {
     setBusy(true); setError(null);
     try {
-      const r = await api.post('/support/menu', { state, input: text ?? '' });
+      const r = text == null && state == null ? await api.get('/support/menu') : await api.post('/support/menu', { state, input: text ?? '' });
       setMsgs((m) => [...m, ...(text != null ? [{ who: 'me', text }] : []), ...(r.text ? [{ who: 'bot', text: r.text }] : [])]);
       setReply(r);
       setInput('');
@@ -28,12 +30,9 @@ export default function ServiceChat() {
   };
   const restart = () => { setMsgs([]); setReply(null); ask(null, null); };
 
-  useEffect(() => {
-    api.get('/me').then((m) => { if (m?.menu_web) { setEnabled(true); ask(null, null); } }).catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { ask(null, null); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'nearest' }); }, [msgs]);
 
-  if (!enabled) return null;
   const options = reply?.options || [];
   const pick = (o) => ask(reply.state, String(o.n));
   const send = () => { if (input.trim()) ask(reply?.state ?? null, input.trim()); };
