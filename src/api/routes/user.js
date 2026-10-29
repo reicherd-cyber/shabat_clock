@@ -576,10 +576,13 @@ userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
           text: `${interp.clarification || 'לא הבנתי את הפקודה.'}\nכתבו שוב, למשל: כבה את רכיב 1 2 3` });
       }
       const { results } = await runNluActions({ userId: req.auth.userId, actions: interp.actions, tz: interp.tz, source: 'web', actor: actorOf(req) });
-      const lines = interp.actions.map((a, i) => {
+      // `results` covers the immediate orders only, in their own order — a
+      // schedule or plan action has no entry, so they are counted separately.
+      let imm = 0;
+      const lines = interp.actions.map((a) => {
         if (a.kind !== 'immediate') return `✅ ${a.summary}`;
-        const ok = results[i]?.status === 'acked';
-        return ok ? `✅ ${a.summary}` : `⚠️ ${a.summary} — המכשיר לא אישר (${results[i]?.fail_reason || 'לא ידוע'})`;
+        const res = results[imm++];
+        return res?.status === 'acked' ? `✅ ${a.summary}` : `⚠️ ${a.summary} — המכשיר לא אישר (${res?.fail_reason || 'לא ידוע'})`;
       });
       if (interp.clarification) lines.unshift(interp.clarification);
       return res.json({ ...r, action: undefined, text: lines.join('\n') });
