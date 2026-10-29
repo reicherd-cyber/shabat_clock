@@ -233,7 +233,7 @@ export function ErrorNote({ error }) {
 
 // mockup .section-head — serif h2
 export const SectionHead = ({ title, children }) => (
-  <div className="flex items-baseline justify-between mt-8 mb-3.5">
+  <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2 mt-8 mb-3.5">
     <h2 className="font-serif font-bold text-[22px]">{title}</h2>
     {children}
   </div>
