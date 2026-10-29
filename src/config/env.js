@@ -79,11 +79,6 @@ export const env = {
   // Emergency escape hatch: ADMIN_PASSWORD_LOGIN=1 re-enables the email+password
   // admin login if Google sign-in is ever unavailable. Off by default — Google only.
   adminPasswordLogin: process.env.ADMIN_PASSWORD_LOGIN === '1',
-  // מוקד שירות as a chat on the site (phase 1, 2026-10-27): 1 opens it to every
-  // customer (staging). Wherever this is unset only superadmins see it — by the
-  // session's verified address or under impersonation (routes/user.js
-  // menuWebAllowed) — so a production deploy changes nothing for customers.
-  serviceMenuWeb: process.env.SERVICE_MENU_WEB === '1',
   smtp: {
     host: process.env.SMTP_HOST || '',
     port: Number(process.env.SMTP_PORT || 587),
