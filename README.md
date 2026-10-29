@@ -68,9 +68,5 @@ VALUES ('Admin', 'you@example.com', '<bcrypt hash>', 'superadmin');
   test phones in setting `ivr.dev_forward_phones` (admin → הגדרות). Every webhook step from
   those numbers is proxied to staging. Numbers in `ivr.dev_guest_phones` get the
   new-customer menu on staging even though they are registered (shared DB).
-- **Testing WhatsApp on staging**: list the test phones in setting `whatsapp.dev_forward_phones`;
-  the production webhook hands their messages (bytes + signature) to the same origin as
-  `IVR_DEV_FORWARD_URL`, and staging answers from the business number — so the staging
-  .env needs the same `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` and `WHATSAPP_APP_SECRET`.
 
 Pilot ships only when the Phase-6 acceptance checklist (PLAN §6 + SPEC §9) is all green.

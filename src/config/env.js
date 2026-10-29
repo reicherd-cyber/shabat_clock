@@ -40,8 +40,6 @@ export const env = {
   // are proxied to this dev/staging server (origin, e.g. https://dev.example.com —
   // /ivr/<token> is appended; a full URL containing /ivr is used as-is). Empty =
   // no forwarding. The dev server leaves it empty (see router.js loop guard).
-  // Its origin also carries WhatsApp messages from whatsapp.dev_forward_phones
-  // to the same staging server (whatsapp/router.js, 2026-10-27).
   ivrDevForwardUrl: process.env.IVR_DEV_FORWARD_URL || '',
   mqtt: {
     url: process.env.MQTT_URL || 'mqtt://localhost:1883',
