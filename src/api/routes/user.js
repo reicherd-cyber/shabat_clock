@@ -47,7 +47,9 @@ userRouter.get('/me', async (req, res, next) => {
     // select box; a lone entry hides it.
     const identity = await sessionIdentity(req);
     const accounts = await accountsForEmail(identity);
-    res.json({ user, phones, emails, demo, accounts, identity_email: identity, menu_web: await menuWebAllowed(req) });
+    // menu_web: the service chat on /help is open to every customer (2026-10-29,
+    // after two days superadmin-only); the key stays so older panels keep working.
+    res.json({ user, phones, emails, demo, accounts, identity_email: identity, menu_web: true });
   } catch (e) { next(e); }
 });
 
@@ -61,26 +63,6 @@ async function sessionIdentity(req) {
   return req.auth.email || null;
 }
 
-// מוקד שירות on the site (the chat on /help and its POST /support/menu): open
-// to every customer only where SERVICE_MENU_WEB=1 (staging); everywhere else
-// only a superadmin sees it (user decision 2026-10-27), and only on their OWN
-// account: the session's verified address is an active superadmin's and is the
-// account's address. Impersonation from the admin panel and stepping into
-// another account through the switcher show that account exactly as its
-// customers see it — without the chat. A phone login carries no address and
-// is a plain customer.
-async function menuWebAllowed(req) {
-  if (env.serviceMenuWeb) return true;
-  const email = req.auth.email;
-  if (req.auth.imp || !email) return false;
-  const [a] = await query(
-    `SELECT 1 AS ok FROM admins a JOIN users u ON u.email = a.email
-      WHERE a.is_active = TRUE AND a.role = 'superadmin' AND a.email = ? AND u.id = ?
-      LIMIT 1`,
-    [email, req.auth.userId],
-  );
-  return Boolean(a);
-}
 
 // Switch the session into another account the identity may enter: a fresh
 // token for that account, same identity. Not under impersonation (an admin
@@ -549,8 +531,6 @@ userRouter.get('/history', async (req, res, next) => {
 // customer's own panel) and reported in the reply text.
 userRouter.post('/support/menu', supportMenuLimiter, async (req, res, next) => {
   try {
-    // Superadmins only, unless SERVICE_MENU_WEB=1 opens it to everyone (staging).
-    if (!(await menuWebAllowed(req))) throw errors.forbidden('מוקד השירות באתר עדיין לא פתוח');
     const { menuStart, step } = await import('../../services/serviceMenu.js');
     const user = await getUser(req.auth.userId);
     const [primary] = await query(

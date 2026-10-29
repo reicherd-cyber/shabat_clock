@@ -157,7 +157,7 @@ call arrives → caller-ID → verified phone?
 ├─ 6 topic cards with static self-help steps                                                     ✅
 │   מכשיר מנותק (incl. NetFree) · תזמון לא פעל · התחברות · המענה הקולי · האתר והאפליקציה · משהו אחר
 ├─ free question → answer bot 🤖 (rules → reuse → cached prompt → model) → guide or "לפתוח פנייה"  ✅
-├─ ✅ the numbered menu (POST /support/menu) — the same tree as WhatsApp, actions run in the route; superadmins only until SERVICE_MENU_WEB=1 opens it (2026-10-27)
+├─ ✅ the numbered menu (POST /support/menu) — the same tree as WhatsApp, actions run in the route; open to every customer (2026-10-29)
 ├─ "הפניות שלי": threads, admin replies, user reply re-opens (status new)                          ✅
 └─ unread admin answers = red count on the "?"                                                   ✅
 ```
