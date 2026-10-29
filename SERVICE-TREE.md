@@ -153,7 +153,7 @@ call arrives → caller-ID → verified phone?
 ## C. Site — "פניות" / help page ✅ (→ ✅ numbered menu)
 
 ```
-/help  (round headset button in the header, every screen)
+/help  (the מוקד השירות tab in the main nav, in place of היסטוריה since 2026-10-29; היסטוריה is the third view of תוכניות)
 ├─ 6 topic cards with static self-help steps                                                     ✅
 │   מכשיר מנותק (incl. NetFree) · תזמון לא פעל · התחברות · המענה הקולי · האתר והאפליקציה · משהו אחר
 ├─ free question → answer bot 🤖 (rules → reuse → cached prompt → model) → guide or "לפתוח פנייה"  ✅
