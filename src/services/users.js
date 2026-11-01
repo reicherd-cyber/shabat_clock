@@ -300,10 +300,11 @@ export const bcryptCompare = (v, hash) => bcrypt.compareSync(String(v), hash);
 //   (an invited collaborator is not the owner);
 // - a session with no address (a phone-code login): the owner — only the
 //   account's own verified phones can log in that way (user decision 2026-10-26);
-// - impersonation: never — an admin changes addresses in the admin panel, audited there.
+// - impersonation: yes — the action is attributed to the admin (routes/user.js
+//   actorOf) and audited; the admin panel itself manages only the primary address.
 // Pure, so it is unit-tested without a database.
 export function canManageAccess({ identity, imp, primaryEmail }) {
-  if (imp) return false;
+  if (imp) return true;
   if (!identity) return true;
   if (!primaryEmail) return false;
   return String(identity).trim().toLowerCase() === String(primaryEmail).trim().toLowerCase();

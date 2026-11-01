@@ -54,18 +54,19 @@ export async function downloadMedia(mediaId, { maxBytes = Infinity, fetchImpl = 
   const meta = await fetchImpl(`${GRAPH}/${env.whatsapp.apiVersion}/${encodeURIComponent(mediaId)}`, { headers, signal: AbortSignal.timeout(15_000) });
   const info = await meta.json().catch(() => ({}));
   if (!meta.ok || !info?.url) throw new Error(info?.error?.message || `media lookup HTTP ${meta.status}`);
-  if (Number(info.file_size) > maxBytes) throw new Error(`media too large (${info.file_size} bytes, limit ${maxBytes})`);
+  const tooLarge = (what) => Object.assign(new Error(`media too large (${what}, limit ${maxBytes})`), { code: 'MEDIA_TOO_LARGE' });
+  if (Number(info.file_size) > maxBytes) throw tooLarge(`${info.file_size} bytes declared`);
   const res = await fetchImpl(info.url, { headers, signal: AbortSignal.timeout(30_000) });
   if (!res.ok) throw new Error(`media download HTTP ${res.status}`);
-  if (Number(res.headers?.get?.('content-length')) > maxBytes) throw new Error(`media too large (${res.headers.get('content-length')} bytes, limit ${maxBytes})`);
+  if (Number(res.headers?.get?.('content-length')) > maxBytes) throw tooLarge(`${res.headers.get('content-length')} bytes`);
   const chunks = []; let total = 0;
   const reader = res.body.getReader();
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     total += value.byteLength;
-    if (total > maxBytes) { await reader.cancel().catch(() => {}); throw new Error(`media too large (over ${maxBytes} bytes)`); }
-    chunks.push(Buffer.from(value));
+    if (total > maxBytes) { await reader.cancel().catch(() => {}); throw tooLarge('stream cut'); }
+    chunks.push(value); // Buffer.concat takes Uint8Array as is — one copy, not two
   }
   const buffer = Buffer.concat(chunks);
   return { buffer, mime: info.mime_type || res.headers?.get?.('content-type') || 'audio/ogg', bytes: buffer.length };

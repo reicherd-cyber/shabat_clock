@@ -3,8 +3,7 @@
 // read-only session never gets here (the guard refuses its writes).
 import { Router } from 'express';
 import { requireUser } from '../middleware.js';
-import { errors } from '../../config/errors.js';
-import { setMemberLevel, isOwnerSession } from '../../services/accessLevel.js';
+import { setMemberLevel, requireOwner } from '../../services/accessLevel.js';
 import { addUserEmail } from '../../services/users.js';
 import { logAction } from '../../services/audit.js';
 
@@ -16,9 +15,7 @@ accessLevelRouter.use(requireUser);
 // full control where the owner chose צפייה בלבד. Owner-only, like the level.
 accessLevelRouter.post('/me/emails/with-level', async (req, res, next) => {
   try {
-    if (req.auth.imp) throw errors.forbidden('לא במצב התחזות');
-    const identity = req.auth.email || null;
-    if (!(await isOwnerSession({ userId: req.auth.userId, identity }))) throw errors.forbidden('רק בעל החשבון יכול להוסיף כתובות');
+    await requireOwner(req);
     const readOnly = req.body?.read_only === true;
     const row = await addUserEmail({ userId: req.auth.userId, email: req.body?.email, actor: `user:${req.auth.userId}`, readOnly });
     await logAction({ type: 'user', id: req.auth.userId }, 'create', 'user_email', row.id, { after: { email: row.email, read_only: readOnly && !row.is_primary } }).catch(() => {});
@@ -28,9 +25,9 @@ accessLevelRouter.post('/me/emails/with-level', async (req, res, next) => {
 
 accessLevelRouter.patch('/me/emails/:id/level', async (req, res, next) => {
   try {
-    if (req.auth.imp) throw errors.forbidden('לא במצב התחזות');
+    await requireOwner(req);
     res.json(await setMemberLevel({
-      ownerId: req.auth.userId, identity: req.auth.email || null, emailId: Number(req.params.id),
+      ownerId: req.auth.userId, identity: req.auth.email || null, imp: req.auth.imp, emailId: Number(req.params.id),
       readOnly: req.body?.read_only === true, actor: `user:${req.auth.userId}`,
     }));
   } catch (e) { next(e); }

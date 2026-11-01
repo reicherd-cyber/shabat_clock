@@ -21,6 +21,7 @@ import { getText, getSetting } from '../services/settings.js';
 import { getSession, saveSession, resetSession } from './session.js';
 import { sendText, sendButtons, markRead, downloadMedia } from './client.js';
 import { transcribeVoice, sttEnabled } from './stt.js';
+import { serialByKey } from './queue.js';
 import { env } from '../config/env.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion, isBareDigit, strayConfirmWord } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
@@ -194,7 +195,11 @@ async function isIgnoredSender(phone, msg) {
   return list.includes(phone);
 }
 
-export async function handleInbound(msg) {
+// Messages from one number are handled strictly in arrival order (queue.js):
+// a voice note's seconds of transcription must not let the next text overtake it.
+export const handleInbound = (msg) => serialByKey(normalizePhone(msg.from) || String(msg.from), () => handleInboundNow(msg));
+
+async function handleInboundNow(msg) {
   const phone = normalizePhone(msg.from);
   if (!phone) return;
   if (overQuota(phone)) {
@@ -218,17 +223,18 @@ export async function handleInbound(msg) {
   if (!(await recordInbound({ waId: msg.waId, phone, userId, kind: msg.buttonId ? 'button' : msg.type, body: msg.text ?? `[${msg.type}]` }))) return;
   markRead(msg.waId);
   let voiceFailed = false;
+  let voiceTooLong = false;
   if (msg.text == null && msg.media && user && sttEnabled()) {
     try {
       const media = await downloadMedia(msg.media.id, { maxBytes: env.stt.maxBytes });
-      const transcript = await transcribeVoice({ buffer: media.buffer, mime: media.mime });
+      const transcript = await transcribeVoice({ buffer: media.buffer, mime: media.mime, language: user.language || null });
       if (transcript) {
         msg = { ...msg, text: transcript };
         await query('UPDATE whatsapp_messages SET body = ? WHERE wa_message_id = ? AND direction = ?', [`🎤 ${transcript}`, msg.waId, 'in']).catch(() => {});
       } else voiceFailed = true;
     } catch (e) {
       console.error(`[whatsapp] voice note from ${phone} not transcribed:`, e.message);
-      voiceFailed = true;
+      if (e.code === 'MEDIA_TOO_LARGE') voiceTooLong = true; else voiceFailed = true;
     }
   }
 
@@ -261,10 +267,8 @@ export async function handleInbound(msg) {
     }
 
     if (msg.text == null) {
-      if (voiceFailed) {
-        await sendText({ phone, userId, text: 'לא הצלחתי להבין את ההקלטה. נסו שוב בהקלטה ברורה, או כתבו במילים מה תרצו לעשות.' });
-        return;
-      }
+      if (voiceTooLong) { await sendText({ phone, userId, text: await getText('whatsapp.voice_too_long') }); return; }
+      if (voiceFailed) { await sendText({ phone, userId, text: await getText('whatsapp.voice_failed') }); return; }
       // Media / location / sticker — we only read text (a voice note without a
       // transcription service configured lands here too).
       await sendText({ phone, userId, text: 'קיבלתי, אבל אני יודע לקרוא רק הודעות טקסט. כתבו לי במילים מה תרצו לעשות.' });

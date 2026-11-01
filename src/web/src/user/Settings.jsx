@@ -198,6 +198,7 @@ export default function Settings() {
                   </span>
                 </>
               ) : (
+                me.owner ? (
                 <>
                   {/* The owner picks the level of every invited address (showcase, 2026-10-25) */}
                   <select value={em.read_only ? 'ro' : 'full'} disabled={busy} title="רמת הגישה של הכתובת לחשבון"
@@ -213,10 +214,14 @@ export default function Settings() {
                     className={`ms-auto text-muted ${busy ? 'opacity-40 cursor-not-allowed' : 'hover:text-off cursor-pointer'}`}
                     onClick={() => setRemovingEmail(em)}><Trash2 size={15} /></button>
                 </>
+                ) : (
+                  // an invited address sees the others, but only the owner manages them
+                  <span className="ms-auto text-muted text-xs">{em.read_only ? 'צפייה בלבד' : 'שליטה מלאה'}</span>
+                )
               )}
             </div>
           ))}
-          {emailAdd == null ? (
+          {me.owner && (emailAdd == null ? (
             <Button variant="ghost" onClick={() => setEmailAdd('')}>
               <span className="inline-flex items-center gap-1"><Plus size={15} />הוספת אימייל</span>
             </Button>
@@ -236,7 +241,7 @@ export default function Settings() {
               <Button disabled={busy || !emailAdd.trim()} onClick={addEmail}>הוסף</Button>
               <Button variant="ghost" onClick={closeEmailForm}>ביטול</Button>
             </div>
-          )}
+          ))}
           {emailAdd != null && <ErrorNote error={error} />}
         </div>
         <p className="text-muted text-xs mt-1">

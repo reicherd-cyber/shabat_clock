@@ -5,7 +5,7 @@ import { errors } from '../../config/errors.js';
 import { requireUser, signUserToken, invalidateSession, supportAskLimiter, supportMessageLimiter, supportMenuLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, accountsForEmail, parseUiPrefs, validateUiPrefs } from '../../services/users.js';
-import { isOwnerSession } from '../../services/accessLevel.js';
+import { isOwnerSession, requireOwner } from '../../services/accessLevel.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { ensureDemoState } from '../../services/demo.js';
@@ -49,7 +49,10 @@ userRouter.get('/me', async (req, res, next) => {
     const accounts = await accountsForEmail(identity);
     // menu_web: the service chat on /help is open to every customer (2026-10-29,
     // after two days superadmin-only); the key stays so older panels keep working.
-    res.json({ user, phones, emails, demo, accounts, identity_email: identity, menu_web: true });
+    // owner: may this session manage the account's access (invite/remove/level)?
+    // The settings page shows those controls only when it is true.
+    const owner = await isOwnerSession({ userId: req.auth.userId, identity: req.auth.email || null, imp: req.auth.imp });
+    res.json({ user, phones, emails, demo, accounts, identity_email: identity, menu_web: true, owner });
   } catch (e) { next(e); }
 });
 
@@ -146,18 +149,10 @@ userRouter.post('/me/pin', async (req, res, next) => {
 // identity; every further address INVITES its owner into this account (they
 // switch in from their own account). Login codes by email go to the primary.
 // No verification step and no PIN gate — the login session suffices.
-// Only the OWNER manages access (2026-11-01) — the one policy shared with
-// /me/emails/with-level and /me/emails/:id/level (services/accessLevel.js
-// isOwnerSession → users.js canManageAccess): an address session must be the
-// account's primary address; a phone-code login (no address) is the owner, as
-// only the account's own verified phones can log in that way; impersonation is
-// refused (an admin changes addresses through the admin panel, audited there).
-// An invited collaborator can neither invite a third address nor remove others.
-async function requireOwner(req) {
-  if (!(await isOwnerSession({ userId: req.auth.userId, identity: req.auth.email || null, imp: req.auth.imp }))) {
-    throw errors.forbidden('רק בעל החשבון יכול לנהל את הגישות לחשבון');
-  }
-}
+// Only the OWNER manages access (2026-11-01): requireOwner in
+// services/accessLevel.js — the one policy shared with /me/emails/with-level
+// and /me/emails/:id/level. An invited collaborator can neither invite a third
+// address nor remove others; an admin impersonating may (audited as the admin).
 userRouter.post('/me/emails', async (req, res, next) => {
   try {
     await requireOwner(req);

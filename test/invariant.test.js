@@ -53,12 +53,13 @@ import { assertRelayOwner } from '../src/services/commands.js';
 import { readFileSync } from 'node:fs';
 
 test('assertRelayOwner: own relay passes, a foreign relay is refused, the system may drive any relay', () => {
-  assert.doesNotThrow(() => assertRelayOwner({ id: 15, user_id: 3 }, 3));
-  assert.doesNotThrow(() => assertRelayOwner({ id: 15, user_id: '3' }, 3)); // DB drivers hand ids back as strings too
-  assert.throws(() => assertRelayOwner({ id: 15, user_id: 4 }, 3), /FORBIDDEN|RELAY_NOT_YOURS/);
-  assert.throws(() => assertRelayOwner(null, 3), /FORBIDDEN|RELAY_NOT_YOURS/);
-  assert.doesNotThrow(() => assertRelayOwner({ id: 15, user_id: 4 }, null));      // scheduler / health monitor
-  assert.doesNotThrow(() => assertRelayOwner({ id: 15, user_id: 4 }, undefined));
+  assert.doesNotThrow(() => assertRelayOwner({ id: 15, user_id: 3 }, 3, 'web'));
+  assert.doesNotThrow(() => assertRelayOwner({ id: 15, user_id: '3' }, 3, 'ivr')); // DB drivers hand ids back as strings too
+  assert.throws(() => assertRelayOwner({ id: 15, user_id: 4 }, 3, 'web'), /FORBIDDEN|RELAY_NOT_YOURS/);
+  assert.throws(() => assertRelayOwner(null, 3, 'web'), /FORBIDDEN|RELAY_NOT_YOURS/);
+  assert.throws(() => assertRelayOwner({ id: 15, user_id: 4 }, null, 'ivr'), /FORBIDDEN|RELAY_NOT_YOURS/);      // a missing account is never a pass
+  assert.throws(() => assertRelayOwner({ id: 15, user_id: 4 }, undefined, 'whatsapp'), /FORBIDDEN|RELAY_NOT_YOURS/);
+  assert.doesNotThrow(() => assertRelayOwner({ id: 15, user_id: 4 }, null, 'system'));  // scheduler / health monitor
 });
 
 test('every customer-facing caller of sendImmediateCommand passes the account id', () => {
@@ -74,14 +75,14 @@ test('every customer-facing caller of sendImmediateCommand passes the account id
 // Access management (invite / remove addresses) is the owner's alone (2026-11-01).
 import { canManageAccess } from '../src/services/users.js';
 
-test('canManageAccess: the primary address may, a phone login (no address) is the owner, an invited address and impersonation may not', () => {
+test('canManageAccess: the primary address may, a phone login (no address) is the owner, an impersonating admin may (audited), an invited address may not', () => {
   const primaryEmail = 'Owner@Example.com';
   assert.equal(canManageAccess({ identity: 'owner@example.com', imp: null, primaryEmail }), true);
   assert.equal(canManageAccess({ identity: 'guest@example.com', imp: null, primaryEmail }), false); // collaborator
   assert.equal(canManageAccess({ identity: null, imp: null, primaryEmail }), true);                 // phone-code login = the owner
   assert.equal(canManageAccess({ identity: 'owner@example.com', imp: null, primaryEmail: null }), false);
-  assert.equal(canManageAccess({ identity: null, imp: 7, primaryEmail }), false);                  // impersonation: admin panel only
-  assert.equal(canManageAccess({ identity: 'owner@example.com', imp: 7, primaryEmail }), false);
+  assert.equal(canManageAccess({ identity: null, imp: 7, primaryEmail }), true);                   // impersonation: attributed to the admin
+  assert.equal(canManageAccess({ identity: 'guest@example.com', imp: 7, primaryEmail }), true);
 });
 
 test('both access-management routes call requireOwner, and an impersonation token checks its admin', () => {
@@ -93,7 +94,10 @@ test('both access-management routes call requireOwner, and an impersonation toke
   }
   const access = readFileSync(new URL('../src/services/accessLevel.js', import.meta.url), 'utf8');
   assert.match(access, /canManageAccess\(/, 'isOwnerSession must delegate to the one policy');
-  assert.match(user, /isOwnerSession({ userId: req.auth.userId, identity: req.auth.email || null, imp: req.auth.imp })/);
+  assert.match(access, /export async function requireOwner\(req\)/);
+  const levelRoutes = readFileSync(new URL('../src/api/routes/accessLevel.js', import.meta.url), 'utf8');
+  assert.equal((levelRoutes.match(/await requireOwner\(req\)/g) || []).length, 2, 'both level routes use the shared guard');
+  assert.doesNotMatch(levelRoutes, /req\.auth\.imp\) throw/, 'no private impersonation rule beside the shared one');
   const mw = readFileSync(new URL('../src/api/middleware.js', import.meta.url), 'utf8');
   assert.match(mw, /t\.imp && !\(await subjectAlive\('admin', Number\(t\.imp\), 'superadmin'\)\)/);
   const compose = readFileSync(new URL('../docker-compose.yml', import.meta.url), 'utf8');

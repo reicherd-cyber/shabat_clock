@@ -15,19 +15,24 @@ import { canManageAccess } from './users.js';
 // address must be the primary one; no address = a phone login = the owner;
 // impersonation never. Only the primary-address lookup touches the database.
 export async function isOwnerSession({ userId, identity, imp = null }) {
-  if (imp) return false;
-  if (!identity) return true;
-  const [row] = await query(
-    'SELECT email FROM user_emails WHERE user_id = ? AND is_primary = 1 AND deleted_at IS NULL LIMIT 1',
-    [userId],
-  );
+  const [row] = identity && !imp
+    ? await query('SELECT email FROM user_emails WHERE user_id = ? AND is_primary = 1 AND deleted_at IS NULL LIMIT 1', [userId])
+    : [];
   return canManageAccess({ identity, imp, primaryEmail: row?.email ?? null });
+}
+
+// The guard every access-management route calls (invite, remove, level):
+// one place, one message.
+export async function requireOwner(req) {
+  if (!(await isOwnerSession({ userId: req.auth.userId, identity: req.auth.email || null, imp: req.auth.imp }))) {
+    throw errors.forbidden('רק בעל החשבון יכול לנהל את הגישות לחשבון');
+  }
 }
 
 // Never the primary (it is the owner), never an address that is not on this
 // account. The read-only cache is dropped so the change bites at once.
-export async function setMemberLevel({ ownerId, identity, emailId, readOnly, actor = null }) {
-  if (!(await isOwnerSession({ userId: ownerId, identity }))) throw errors.forbidden('רק בעל החשבון יכול לשנות רמות גישה');
+export async function setMemberLevel({ ownerId, identity, imp = null, emailId, readOnly, actor = null }) {
+  if (!(await isOwnerSession({ userId: ownerId, identity, imp }))) throw errors.forbidden('רק בעל החשבון יכול לנהל את הגישות לחשבון');
   const [row] = await query(
     'SELECT id, email, is_primary FROM user_emails WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
     [emailId, ownerId],

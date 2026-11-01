@@ -13,14 +13,14 @@ export const sttEnabled = () => Boolean(env.stt.apiKey && env.stt.url);
 
 // `buffer` + `mime` as WhatsApp delivered them (voice notes: audio/ogg; codecs=opus).
 // Returns the transcript ('' when the note was silent); throws on a provider error.
-export async function transcribeVoice({ buffer, mime, fetchImpl = fetch }) {
+export async function transcribeVoice({ buffer, mime, language = null, fetchImpl = fetch }) {
   if (!sttEnabled()) return null;
   const type = String(mime || 'audio/ogg').split(';')[0].trim();
   const ext = type.includes('ogg') ? 'ogg' : type.includes('mpeg') || type.includes('mp3') ? 'mp3' : type.includes('mp4') || type.includes('m4a') ? 'm4a' : type.includes('wav') ? 'wav' : 'bin';
   const form = new FormData();
   form.set('file', new Blob([buffer], { type }), `voice.${ext}`);
   form.set('model', env.stt.model);
-  form.set('language', env.stt.language);
+  form.set('language', language || env.stt.language);
   form.set('response_format', 'json');
   const res = await fetchImpl(env.stt.url, {
     method: 'POST',
