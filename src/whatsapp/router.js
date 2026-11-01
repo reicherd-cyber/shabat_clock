@@ -30,9 +30,10 @@ whatsappRouter.post('/webhook', raw({ type: () => true, limit: '1mb' }), (req, r
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
   if (env.whatsapp.appSecret) {
     if (!signatureValid(body, req.get('x-hub-signature-256'), env.whatsapp.appSecret)) return res.sendStatus(403);
-  } else if (env.nodeEnv === 'production') {
-    // Never accept unsigned traffic in production — a forged POST could order
-    // a customer's relays off.
+  } else if (env.nodeEnv !== 'development' && env.nodeEnv !== 'test') {
+    // Unsigned traffic is accepted only on a developer's machine. Production
+    // AND staging refuse it (staging shares the production database, so a
+    // forged POST there could order a real customer's relays off).
     console.error('[whatsapp] WHATSAPP_APP_SECRET is not set — webhook refused');
     return res.sendStatus(403);
   }

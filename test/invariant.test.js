@@ -70,3 +70,28 @@ test('every customer-facing caller of sendImmediateCommand passes the account id
     for (const c of calls) assert.match(c, /userId/, `${f}: ${c.replace(/\s+/g, ' ')}`);
   }
 });
+
+// Access management (invite / remove addresses) is the owner's alone (2026-11-01).
+import { canManageAccess } from '../src/services/users.js';
+
+test('canManageAccess: the primary address may, an invited address or a phone login may not, an impersonating admin may', () => {
+  const primaryEmail = 'Owner@Example.com';
+  assert.equal(canManageAccess({ identity: 'owner@example.com', imp: null, primaryEmail }), true);
+  assert.equal(canManageAccess({ identity: 'guest@example.com', imp: null, primaryEmail }), false); // collaborator
+  assert.equal(canManageAccess({ identity: null, imp: null, primaryEmail }), false);                // phone-code login
+  assert.equal(canManageAccess({ identity: 'owner@example.com', imp: null, primaryEmail: null }), false);
+  assert.equal(canManageAccess({ identity: null, imp: 7, primaryEmail }), true);                   // admin impersonating
+});
+
+test('both access-management routes call requireOwner, and an impersonation token checks its admin', () => {
+  const user = readFileSync(new URL('../src/api/routes/user.js', import.meta.url), 'utf8');
+  for (const route of [`userRouter.post('/me/emails'`, `userRouter.delete('/me/emails/:id'`]) {
+    const i = user.indexOf(route);
+    assert.ok(i > 0, route);
+    assert.match(user.slice(i, i + 400), /await requireOwner\(req\)/, route);
+  }
+  const mw = readFileSync(new URL('../src/api/middleware.js', import.meta.url), 'utf8');
+  assert.match(mw, /t\.imp && !\(await subjectAlive\('admin', Number\(t\.imp\), 'superadmin'\)\)/);
+  const compose = readFileSync(new URL('../docker-compose.yml', import.meta.url), 'utf8');
+  assert.doesNotMatch(compose, /- "(3306|1883):/, 'dev ports must bind to 127.0.0.1');
+});

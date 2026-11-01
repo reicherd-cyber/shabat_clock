@@ -293,3 +293,14 @@ export async function setPin(userId, newPin, actor = null) {
 
 export const bcryptHash = (v) => bcrypt.hashSync(String(v), BCRYPT_COST);
 export const bcryptCompare = (v, hash) => bcrypt.compareSync(String(v), hash);
+
+// Who may manage an account's access (invite / remove addresses, 2026-11-01):
+// the owner — a session whose verified address IS the account's primary one —
+// or an admin impersonating from the admin panel (`imp`, audited there). A
+// collaborator (invited address) or a phone-code login (no address) may not.
+// Pure, so it is unit-tested without a database.
+export function canManageAccess({ identity, imp, primaryEmail }) {
+  if (imp) return true;
+  if (!identity || !primaryEmail) return false;
+  return String(identity).trim().toLowerCase() === String(primaryEmail).trim().toLowerCase();
+}
