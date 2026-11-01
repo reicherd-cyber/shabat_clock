@@ -42,6 +42,20 @@ async function post(path, body) {
   return data;
 }
 
+// Inbound media (a voice note): GET /{media-id} gives a short-lived signed URL,
+// which must be fetched with the same bearer token. Returns the bytes + mime.
+export async function downloadMedia(mediaId) {
+  if (!env.whatsapp.token) throw new Error('WHATSAPP_TOKEN is not set');
+  const headers = { Authorization: `Bearer ${env.whatsapp.token}` };
+  const meta = await fetch(`${GRAPH}/${env.whatsapp.apiVersion}/${encodeURIComponent(mediaId)}`, { headers, signal: AbortSignal.timeout(15_000) });
+  const info = await meta.json().catch(() => ({}));
+  if (!meta.ok || !info?.url) throw new Error(info?.error?.message || `media lookup HTTP ${meta.status}`);
+  const res = await fetch(info.url, { headers, signal: AbortSignal.timeout(30_000) });
+  if (!res.ok) throw new Error(`media download HTTP ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return { buffer, mime: info.mime_type || res.headers.get('content-type') || 'audio/ogg', bytes: buffer.length };
+}
+
 async function send({ phone, userId, kind, body, payload }) {
   if (!env.whatsapp.token || !env.whatsapp.phoneNumberId) {
     console.log(`[whatsapp:dev] → ${phone} (${kind}):\n${body}`);

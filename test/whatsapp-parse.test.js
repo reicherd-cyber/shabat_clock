@@ -76,3 +76,39 @@ test('a bare digit is a menu choice, not a stray yes/no; words still are', async
   assert.equal(confirmWord('1'), 'yes');        // inside a live confirmation 1 / 2 still count
   assert.equal(confirmWord('2'), 'no');
 });
+
+test('extractInbound: a voice note carries its media id for transcription; a text message shape is unchanged', () => {
+  const p = payload([
+    { id: 'wamid.9', from: '972501234567', type: 'audio', audio: { id: 'media-1', mime_type: 'audio/ogg; codecs=opus', voice: true } },
+    { id: 'wamid.10', from: '972501234567', type: 'text', text: { body: 'שלום' } },
+  ]);
+  const out = extractInbound(p);
+  assert.equal(out[0].text, null);
+  assert.deepEqual(out[0].media, { id: 'media-1', mime: 'audio/ogg; codecs=opus', voice: true });
+  assert.equal('media' in out[1], false);
+});
+
+test('transcribeVoice: off without a key; with one it posts the note as a Whisper-style multipart and returns the text', async () => {
+  const { env } = await import('../src/config/env.js');
+  const { transcribeVoice, sttEnabled } = await import('../src/whatsapp/stt.js');
+  const saved = { ...env.stt };
+  try {
+    env.stt.apiKey = '';
+    assert.equal(sttEnabled(), false);
+    assert.equal(await transcribeVoice({ buffer: Buffer.from('x'), mime: 'audio/ogg' }), null);
+
+    Object.assign(env.stt, { apiKey: 'k', url: 'https://stt.example/v1/audio/transcriptions', model: 'whisper-1', language: 'he', timeoutMs: 5000 });
+    let seen = null;
+    const fetchImpl = async (url, init) => {
+      const file = init.body.get('file');
+      seen = { url, auth: init.headers.Authorization, model: init.body.get('model'), language: init.body.get('language'), name: file.name, type: file.type, size: file.size };
+      return { ok: true, status: 200, json: async () => ({ text: ' כבה את הדוד ' }) };
+    };
+    const text = await transcribeVoice({ buffer: Buffer.from('ogg-bytes'), mime: 'audio/ogg; codecs=opus', fetchImpl });
+    assert.equal(text, 'כבה את הדוד');
+    assert.deepEqual(seen, { url: 'https://stt.example/v1/audio/transcriptions', auth: 'Bearer k', model: 'whisper-1', language: 'he', name: 'voice.ogg', type: 'audio/ogg', size: 9 });
+
+    const failing = async () => ({ ok: false, status: 429, json: async () => ({ error: { message: 'rate limited' } }) });
+    await assert.rejects(() => transcribeVoice({ buffer: Buffer.from('x'), mime: 'audio/ogg', fetchImpl: failing }), /rate limited/);
+  } finally { Object.assign(env.stt, saved); }
+});

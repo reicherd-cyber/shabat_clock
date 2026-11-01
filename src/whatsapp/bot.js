@@ -19,7 +19,9 @@ import { answerSupportQuestion } from '../services/support.js';
 import { logAction } from '../services/audit.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, saveSession, resetSession } from './session.js';
-import { sendText, sendButtons, markRead } from './client.js';
+import { sendText, sendButtons, markRead, downloadMedia } from './client.js';
+import { transcribeVoice, sttEnabled } from './stt.js';
+import { env } from '../config/env.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion, isBareDigit, strayConfirmWord } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
 import { menuStart, step as menuStep, renderText } from '../services/serviceMenu.js';
@@ -195,13 +197,12 @@ async function isIgnoredSender(phone, msg) {
 export async function handleInbound(msg) {
   const phone = normalizePhone(msg.from);
   if (!phone) return;
-  const body = msg.text ?? `[${msg.type}]`;
   if (overQuota(phone)) {
     console.warn(`[whatsapp] ${phone} over per-minute quota — dropped`);
     return;
   }
   if (await isIgnoredSender(phone, msg)) {
-    await recordInbound({ waId: msg.waId, phone, userId: null, kind: msg.buttonId ? 'button' : msg.type, body });
+    await recordInbound({ waId: msg.waId, phone, userId: null, kind: msg.buttonId ? 'button' : msg.type, body: msg.text ?? `[${msg.type}]` });
     console.log(`[whatsapp] system notification from ${phone} recorded, not answered`);
     return;
   }
@@ -209,6 +210,22 @@ export async function handleInbound(msg) {
   const found = await findUserByPhone(phone);
   const user = found && found.status !== 'suspended' ? found : null;
   const userId = user?.id ?? null;
+  // A voice note from a customer is transcribed (whatsapp/stt.js) and then
+  // handled exactly like the same words typed; the log keeps the transcript.
+  // Unknown numbers are not transcribed (a paid call per note): text only.
+  let body = msg.text ?? `[${msg.type}]`;
+  let voiceFailed = false;
+  if (msg.text == null && msg.media && user && sttEnabled()) {
+    try {
+      const media = await downloadMedia(msg.media.id);
+      if (media.bytes > env.stt.maxBytes) throw new Error(`voice note too large (${media.bytes} bytes)`);
+      const transcript = await transcribeVoice({ buffer: media.buffer, mime: media.mime });
+      if (transcript) { msg = { ...msg, text: transcript }; body = `🎤 ${transcript}`; } else voiceFailed = true;
+    } catch (e) {
+      console.error(`[whatsapp] voice note from ${phone} not transcribed:`, e.message);
+      voiceFailed = true;
+    }
+  }
   if (!(await recordInbound({ waId: msg.waId, phone, userId, kind: msg.buttonId ? 'button' : msg.type, body }))) return;
   markRead(msg.waId);
 
@@ -241,7 +258,12 @@ export async function handleInbound(msg) {
     }
 
     if (msg.text == null) {
-      // Media / location / sticker — we only read text.
+      if (voiceFailed) {
+        await sendText({ phone, userId, text: 'לא הצלחתי להבין את ההקלטה. נסו שוב בהקלטה ברורה, או כתבו במילים מה תרצו לעשות.' });
+        return;
+      }
+      // Media / location / sticker — we only read text (a voice note without a
+      // transcription service configured lands here too).
       await sendText({ phone, userId, text: 'קיבלתי, אבל אני יודע לקרוא רק הודעות טקסט. כתבו לי במילים מה תרצו לעשות.' });
       return;
     }

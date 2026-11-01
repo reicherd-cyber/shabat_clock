@@ -96,3 +96,13 @@ action log (יומן פעולות) and in history with the וואטסאפ source
   monthly allowance; the first 1,000 are free, beyond that per-conversation
   pricing applies.
 - Per-sender guard: 12 messages/minute, then dropped silently.
+
+## Voice notes (2026-11-01)
+
+A customer's voice note is downloaded from Meta, transcribed through a Whisper-style
+speech-to-text endpoint (`STT_URL`, `STT_API_KEY`, `STT_MODEL`, `STT_LANGUAGE=he` in
+`.env`; OpenAI `whisper-1` / `gpt-4o-mini-transcribe`, or Groq `whisper-large-v3` at
+`https://api.groq.com/openai/v1/audio/transcriptions`) and then handled exactly like the
+same words typed — the menu, the free-text router, the order interpreter. The inbound
+log keeps the transcript with a 🎤 prefix. Without a key the bot answers "text only", as
+before. Unknown numbers are never transcribed (a paid call per note).

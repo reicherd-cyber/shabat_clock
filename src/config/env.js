@@ -115,4 +115,15 @@ export const env = {
     appSecret: process.env.WHATSAPP_APP_SECRET || '',
     apiVersion: process.env.WHATSAPP_API_VERSION || 'v21.0',
   },
+  // Speech-to-text for WhatsApp voice notes (whatsapp/stt.js): any Whisper-style
+  // endpoint (OpenAI /v1/audio/transcriptions by default; Groq is the same shape).
+  // No key = voice notes are declined with "text only", as before.
+  stt: {
+    url: process.env.STT_URL || 'https://api.openai.com/v1/audio/transcriptions',
+    apiKey: process.env.STT_API_KEY || '',
+    model: process.env.STT_MODEL || 'whisper-1',
+    language: process.env.STT_LANGUAGE || 'he',
+    timeoutMs: Number(process.env.STT_TIMEOUT_MS || 30_000),
+    maxBytes: Number(process.env.STT_MAX_BYTES || 5 * 1024 * 1024),
+  },
 };
