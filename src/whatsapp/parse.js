@@ -39,11 +39,15 @@ export function extractInbound(payload) {
           buttonId = m.button?.payload ?? null;
           text = m.button?.text ?? null;
         }
-        out.push({
+        const entry = {
           waId: m.id, from: m.from, name: names.get(m.from) || null,
           type: m.type, text: text == null ? null : String(text), buttonId,
           timestamp: m.timestamp ? Number(m.timestamp) : null,
-        });
+        };
+        // A voice note (type audio, voice: true) or any audio: the media id the
+        // bot downloads and transcribes (stt.js). Other media stays text-less.
+        if (m.type === 'audio' && m.audio?.id) entry.media = { id: String(m.audio.id), mime: m.audio.mime_type || 'audio/ogg', voice: Boolean(m.audio.voice) };
+        out.push(entry);
       }
     }
   }

@@ -294,13 +294,18 @@ export async function setPin(userId, newPin, actor = null) {
 export const bcryptHash = (v) => bcrypt.hashSync(String(v), BCRYPT_COST);
 export const bcryptCompare = (v, hash) => bcrypt.compareSync(String(v), hash);
 
-// Who may manage an account's access (invite / remove addresses, 2026-11-01):
-// the owner — a session whose verified address IS the account's primary one —
-// or an admin impersonating from the admin panel (`imp`, audited there). A
-// collaborator (invited address) or a phone-code login (no address) may not.
+// Who may manage an account's access (invite / remove addresses, set a level) —
+// THE one policy, used by every access route (2026-11-01):
+// - a session with an address: only when it is the account's primary address
+//   (an invited collaborator is not the owner);
+// - a session with no address (a phone-code login): the owner — only the
+//   account's own verified phones can log in that way (user decision 2026-10-26);
+// - impersonation: yes — the action is attributed to the admin (routes/user.js
+//   actorOf) and audited; the admin panel itself manages only the primary address.
 // Pure, so it is unit-tested without a database.
 export function canManageAccess({ identity, imp, primaryEmail }) {
   if (imp) return true;
-  if (!identity || !primaryEmail) return false;
+  if (!identity) return true;
+  if (!primaryEmail) return false;
   return String(identity).trim().toLowerCase() === String(primaryEmail).trim().toLowerCase();
 }

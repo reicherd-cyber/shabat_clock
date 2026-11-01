@@ -104,12 +104,13 @@ async function verifyCommand(relay, action, commandId) {
 }
 
 // Ownership guard for a command issued on a customer's behalf (2026-11-01):
-// the relay must belong to `userId`. `userId` null = the system itself
-// (scheduler, health monitor), which may drive any relay. Pure, so it is
+// the relay must belong to `userId`. Only the system itself (scheduler,
+// health monitor — source 'system') may drive any relay; a customer-facing
+// source with no account id is refused, never waved through. Pure, so it is
 // unit-tested without a database; sendImmediateCommand enforces it.
-export function assertRelayOwner(relay, userId) {
-  if (userId == null) return;
-  if (relay == null || Number(relay.user_id) !== Number(userId)) {
+export function assertRelayOwner(relay, userId, source = null) {
+  if (source === 'system') return;
+  if (userId == null || relay == null || Number(relay.user_id) !== Number(userId)) {
     throw errors.forbidden('RELAY_NOT_YOURS');
   }
 }
@@ -126,7 +127,7 @@ export async function sendImmediateCommand({ relayId, action, source, callId = n
     [relayId],
   );
   if (!relay) throw errors.notFound('RELAY_NOT_FOUND', 'Relay not found');
-  assertRelayOwner(relay, userId);
+  assertRelayOwner(relay, userId, source);
 
   const commandId = await createCommand({ relayId, action, source, callId });
 

@@ -19,7 +19,10 @@ import { answerSupportQuestion } from '../services/support.js';
 import { logAction } from '../services/audit.js';
 import { getText, getSetting } from '../services/settings.js';
 import { getSession, saveSession, resetSession } from './session.js';
-import { sendText, sendButtons, markRead } from './client.js';
+import { sendText, sendButtons, markRead, downloadMedia } from './client.js';
+import { transcribeVoice, sttEnabled } from './stt.js';
+import { serialByKey } from './queue.js';
+import { env } from '../config/env.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion, isBareDigit, strayConfirmWord } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
 import { menuStart, step as menuStep, renderText } from '../services/serviceMenu.js';
@@ -192,16 +195,31 @@ async function isIgnoredSender(phone, msg) {
   return list.includes(phone);
 }
 
+// Messages from one number are handled strictly in arrival order (queue.js):
+// a voice note's seconds of transcription must not let the next text overtake it.
+// The per-minute quota is spent HERE, at arrival, so a flood is dropped before
+// it reaches the lane (and cannot smear across windows while a slow job runs);
+// the lane itself is bounded, so a burst can never pile up paid work.
 export async function handleInbound(msg) {
   const phone = normalizePhone(msg.from);
   if (!phone) return;
-  const body = msg.text ?? `[${msg.type}]`;
   if (overQuota(phone)) {
     console.warn(`[whatsapp] ${phone} over per-minute quota — dropped`);
     return;
   }
+  try {
+    await serialByKey(phone, () => handleInboundNow(msg), { max: PER_PHONE_PER_MIN });
+  } catch (e) {
+    if (e?.code === 'QUEUE_FULL') { console.warn(`[whatsapp] ${phone} lane full — dropped`); return; }
+    throw e;
+  }
+}
+
+async function handleInboundNow(msg) {
+  const phone = normalizePhone(msg.from);
+  if (!phone) return;
   if (await isIgnoredSender(phone, msg)) {
-    await recordInbound({ waId: msg.waId, phone, userId: null, kind: msg.buttonId ? 'button' : msg.type, body });
+    await recordInbound({ waId: msg.waId, phone, userId: null, kind: msg.buttonId ? 'button' : msg.type, body: msg.text ?? `[${msg.type}]` });
     console.log(`[whatsapp] system notification from ${phone} recorded, not answered`);
     return;
   }
@@ -209,8 +227,28 @@ export async function handleInbound(msg) {
   const found = await findUserByPhone(phone);
   const user = found && found.status !== 'suspended' ? found : null;
   const userId = user?.id ?? null;
-  if (!(await recordInbound({ waId: msg.waId, phone, userId, kind: msg.buttonId ? 'button' : msg.type, body }))) return;
+  // A voice note from a customer is transcribed (whatsapp/stt.js) and then
+  // handled exactly like the same words typed; the log keeps the transcript.
+  // Unknown numbers are not transcribed (a paid call per note): text only.
+  // The message id is claimed FIRST (INSERT IGNORE): a redelivered note is
+  // dropped here and never downloaded or transcribed twice (paid calls).
+  if (!(await recordInbound({ waId: msg.waId, phone, userId, kind: msg.buttonId ? 'button' : msg.type, body: msg.text ?? `[${msg.type}]` }))) return;
   markRead(msg.waId);
+  let voiceFailed = false;
+  let voiceTooLong = false;
+  if (msg.text == null && msg.media && user && sttEnabled()) {
+    try {
+      const media = await downloadMedia(msg.media.id, { maxBytes: env.stt.maxBytes });
+      const transcript = await transcribeVoice({ buffer: media.buffer, mime: media.mime, language: user.language || null });
+      if (transcript) {
+        msg = { ...msg, text: transcript };
+        await query('UPDATE whatsapp_messages SET body = ? WHERE wa_message_id = ? AND direction = ?', [`🎤 ${transcript}`, msg.waId, 'in']).catch(() => {});
+      } else voiceFailed = true;
+    } catch (e) {
+      console.error(`[whatsapp] voice note from ${phone} not transcribed:`, e.message);
+      if (e.code === 'MEDIA_TOO_LARGE') voiceTooLong = true; else voiceFailed = true;
+    }
+  }
 
   try {
     const session = await getSession(phone);
@@ -241,7 +279,10 @@ export async function handleInbound(msg) {
     }
 
     if (msg.text == null) {
-      // Media / location / sticker — we only read text.
+      if (voiceTooLong) { await sendText({ phone, userId, text: await getText('whatsapp.voice_too_long') }); return; }
+      if (voiceFailed) { await sendText({ phone, userId, text: await getText('whatsapp.voice_failed') }); return; }
+      // Media / location / sticker — we only read text (a voice note without a
+      // transcription service configured lands here too).
       await sendText({ phone, userId, text: 'קיבלתי, אבל אני יודע לקרוא רק הודעות טקסט. כתבו לי במילים מה תרצו לעשות.' });
       return;
     }
