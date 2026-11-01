@@ -28,6 +28,17 @@ export async function adminByPhone(phone) {
   return a || null;
 }
 
+// The admin stored with a pending action is checked again at execution time:
+// still active, still a superadmin, still the owner of that number. Pure, so it
+// is unit-tested; runAdminAction looks the live row up and calls it.
+export function assertAdminLive(stored, live) {
+  if (!live || Number(live.id) !== Number(stored?.id)) {
+    const err = new Error('ההרשאה פגה — המנהל אינו פעיל או שהמספר כבר אינו שלו');
+    err.code = 'ADMIN_REVOKED';
+    throw err;
+  }
+}
+
 // A WhatsApp message meant for the assistant: "#..." or "מנהל ..." / "מנהל: ...".
 // Returns the request text without the trigger, or null when it is not one.
 export function adminTrigger(text) {
@@ -60,6 +71,8 @@ const SCHEMA = {
     },
     // create_order / add_payment / find_lead: who — a name fragment or a phone, as said
     lead_ref: { type: ['string', 'null'] },
+    // add_payment: which order, when the customer has several open ones — the number said ("על הזמנה 12")
+    order_ref: { type: ['string', 'null'] },
     order: {
       type: ['object', 'null'], additionalProperties: false,
       properties: { description: { type: 'string' }, amount: { type: 'number' }, notes: { type: ['string', 'null'] } },
@@ -86,14 +99,14 @@ const SCHEMA = {
     // when something is missing or ambiguous: the question to ask, else null
     clarification: { type: ['string', 'null'] },
   },
-  required: ['intent', 'lead', 'lead_ref', 'order', 'payment', 'entry', 'period', 'summary', 'clarification'],
+  required: ['intent', 'lead', 'lead_ref', 'order_ref', 'order', 'payment', 'entry', 'period', 'summary', 'clarification'],
 };
 
 const RULES = `אתה העוזר המשרדי של TelTech (שעון שבת חכם). מנהל-על כותב או אומר בקשה קצרה בעברית, ואתה מתרגם אותה לפעולה מובנית אחת — לא מבצע, רק מתרגם.
 הפעולות:
 - create_lead: ליד / מתעניין חדש. "ליד דוד כהן 0501234567 ירושלים, מעוניין ב-4 ערוצים" → lead: name, phone, city, notes, devices_count, device_channels.
 - create_order: הזמנה ללקוח/ליד קיים. "הזמנה לדוד כהן מערכת 4 ערוצים 1800" → lead_ref: "דוד כהן", order: description, amount.
-- add_payment: תשלום על הזמנה פתוחה. "דוד כהן שילם 500 בביט" → lead_ref + payment (amount, method, paid_on=היום אם לא נאמר).
+- add_payment: תשלום על הזמנה פתוחה. "דוד כהן שילם 500 בביט" → lead_ref + payment (amount, method, paid_on=היום אם לא נאמר). אם נאמר מספר הזמנה ("על הזמנה 12", "הזמנה מספר 12") → order_ref: "12".
 - add_income: הכנסה לספר ההכנסות וההוצאות. "הכנסה 1200 התקנה אצל לוי" → entry: title, amount, category (אם נאמרה), entry_date (היום אם לא נאמר), recurrence once.
 - add_expense: הוצאה. "הוצאה 300 דלק" → entry כנ"ל. "כל חודש" → recurrence monthly.
 - open_orders: מה פתוח / הזמנות פתוחות (אפשר עם lead_ref לסינון).
@@ -198,8 +211,14 @@ export async function prepareAdminAction(parsed) {
     }
     const open = await listOpenOrders({ leadId: a.lead_id });
     if (!open.length) return { ok: false, text: `ל${a.lead_name} אין הזמנה פתוחה. לפתוח הזמנה? כתבו: הזמנה ל${a.lead_name} <תיאור> <סכום>` };
-    if (open.length > 1) return { ok: false, text: `ל${a.lead_name} יש ${open.length} הזמנות פתוחות: ${open.map((o) => `#${o.id} ${o.description} (${ils(o.amount)})`).join(' · ')}. על איזו? כתבו את המספר.` };
-    a.order_id = open[0].id; a.order_desc = open[0].description;
+    // Several open orders: the request must name one ("על הזמנה 12"); the
+    // assistant keeps no selection state, so the whole request is resent with it.
+    const wanted = String(a.order_ref || '').replace(/\D/g, '');
+    const chosen = open.length === 1 ? open[0] : open.find((o) => String(o.id) === wanted);
+    if (!chosen) {
+      return { ok: false, text: `ל${a.lead_name} יש ${open.length} הזמנות פתוחות: ${open.map((o) => `#${o.id} ${o.description} (${ils(o.amount)})`).join(' · ')}. כתבו שוב עם מספר ההזמנה, למשל: ${a.lead_name} שילם ${a.payment?.amount || 500} על הזמנה ${open[0].id}` };
+    }
+    a.order_id = chosen.id; a.order_desc = chosen.description;
     if (!(a.payment?.amount > 0)) return { ok: false, text: 'כמה שולם?' };
     a.payment = { ...a.payment, paid_on: settleDate(a.payment.paid_on), method: PAYMENT_METHODS.includes(a.payment.method) ? a.payment.method : 'cash' };
     return { ok: true, action: a, text: a.summary || `לרשום תשלום של ${ils(a.payment.amount)} מ${a.lead_name} על ${a.order_desc}` };
@@ -213,6 +232,9 @@ export async function prepareAdminAction(parsed) {
 
 // The write itself, audited as the admin. Returns the Hebrew result line.
 export async function runAdminAction({ admin, action, source = 'whatsapp' }) {
+  // Confirmation may come minutes after the read-back: the admin must still be
+  // an active superadmin who owns this number (revoked → nothing is written).
+  assertAdminLive(admin, await adminByPhone(admin.phone));
   const actor = `admin:${admin.id}`;
   const who = { type: 'admin', id: admin.id };
   const via = { via: source, assistant: true };

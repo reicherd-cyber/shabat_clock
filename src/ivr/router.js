@@ -225,6 +225,8 @@ async function mainMenu(session, message = null) {
     }
     // The admin assistant (services/adminAssistant.js) — only a superadmin's own number hears it.
     if (session.admin) items.push(...await speak('ivr.main_menu_admin', {}, 'למנהל, הקישו 8'));
+    // An admin whose number is not a customer account: the admin line is the whole menu.
+    if (session.admin && !session.userId) items = [...greeting, ...await speak('ivr.main_menu_admin', {}, 'למנהל, הקישו 8')];
   } else {
     const audio = await getSetting('ivr.audio.main_menu');
     items = audio
@@ -653,6 +655,14 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         await appendPath(callLogId, 'main');
         return res.send(await mainMenu(session));
       }
+      // A superadmin's own number that is not a customer account: the admin
+      // assistant alone (services/adminAssistant.js), never the sales menu.
+      const adminOnly = asGuest ? null : await adminByPhone(phone);
+      if (adminOnly) {
+        session = createSession(callId, { callLogId, phone, userId: null, userName: adminOnly.name, admin: adminOnly });
+        await appendPath(callLogId, 'admin_menu');
+        return res.send(await mainMenu(session));
+      }
       // Unknown caller with a pending phone-add verification: the campaign call may
       // not have reached them (filtered/kosher lines) — calling US from the new
       // number proves the same ownership, so read the code back instead of refusing.
@@ -742,6 +752,8 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       // ── main menu ──
       case 'MAIN': {
         if (input === '0' || input === '*') return res.send(await mainMenu(session));
+        // No customer account behind this call (admin-only number): 8 is the only key.
+        if (!session.userId && session.admin && input !== '8') return res.send(await invalidInput(session));
         if (env.anthropic.apiKey) {
           // Voice-command build: 1=voice, 2=on, 3=off, 4=schedule, 5=status.
           if (input === '1') {

@@ -60,3 +60,11 @@ test('review fixes: the trigger word stands alone, dates and category settle bef
   assert.equal(devicesCsv(3, null), null);
   assert.equal(devicesCsv(99, '1').split(',').length, 20);
 });
+
+test('assertAdminLive: the stored admin must still be the live owner of the number', async () => {
+  const { assertAdminLive } = await import('../src/services/adminAssistant.js');
+  assert.doesNotThrow(() => assertAdminLive({ id: 1 }, { id: 1, name: 'x' }));
+  assert.doesNotThrow(() => assertAdminLive({ id: '1' }, { id: 1 }));
+  assert.throws(() => assertAdminLive({ id: 1 }, null), (e) => e.code === 'ADMIN_REVOKED');      // deactivated / demoted / phone removed
+  assert.throws(() => assertAdminLive({ id: 1 }, { id: 2 }), (e) => e.code === 'ADMIN_REVOKED'); // the number moved to another admin
+});
