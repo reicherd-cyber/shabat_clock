@@ -16,7 +16,7 @@ import { normalizePhone } from './phone.js';
 import { localParts } from './time.js';
 import { costUsd, totalInputTokens, quickAnswerParams } from './aiPricing.js';
 import { aiAllowed } from './aiBudget.js';
-import { createLead, findLeads, createOrder, addPayment, listOpenOrders, PAYMENT_METHODS } from './crm.js';
+import { createLead, findLeads, createOrder, addPayment, listOpenOrders, PAYMENT_METHODS, devicesCsv } from './crm.js';
 import { createFinanceEntry, getFinance } from './finance.js';
 
 // ── identity ─────────────────────────────────────────────────────────────
@@ -32,12 +32,13 @@ export async function adminByPhone(phone) {
 // Returns the request text without the trigger, or null when it is not one.
 export function adminTrigger(text) {
   const t = String(text || '').trim();
-  const m = /^(?:#|מנהל\s*[:,\-–]?\s*)\s*(.*)$/s.exec(t);
+  const m = /^(?:#|מנהל(?=\s|[:,\-–]|$)\s*[:,\-–]?\s*)\s*(.*)$/s.exec(t);
   if (!m) return null;
   return m[1].trim();
 }
 
 // ── the structured action ───────────────────────────────────────────────
+export const ADMIN_DAILY_MAX = 200;
 export const INTENTS = ['create_lead', 'create_order', 'add_payment', 'add_income', 'add_expense', 'open_orders', 'finance_summary', 'find_lead', 'unknown'];
 export const WRITE_INTENTS = new Set(['create_lead', 'create_order', 'add_payment', 'add_income', 'add_expense']);
 
@@ -119,7 +120,7 @@ async function logUsage({ admin, source, text, model, usage }) {
   try {
     await query(
       "INSERT INTO nlu_usage (user_id, phone, source, kind, text, model, input_tokens, output_tokens, cost_usd) VALUES (NULL,?,?,'admin',?,?,?,?,?)",
-      [admin.phone ?? null, source, text.slice(0, 1000), model, totalInputTokens(usage), usage.output_tokens, costUsd(model, usage)],
+      [admin.phone ?? null, source, text.slice(0, 500), model, totalInputTokens(usage), usage.output_tokens, costUsd(model, usage)],
     );
   } catch (e) { console.error('[admin-assistant] usage log failed:', e.message); }
 }
@@ -129,7 +130,10 @@ export async function interpretAdminRequest({ admin, text, source = 'whatsapp' }
   const clean = String(text || '').trim().slice(0, 1000);
   if (!clean) return { intent: 'unknown', clarification: 'מה לרשום? למשל: הוצאה 300 דלק', summary: '' };
   if (!env.anthropic.apiKey) return { intent: 'unknown', clarification: 'העוזר לא מוגדר בשרת (ANTHROPIC_API_KEY)', summary: '' };
-  if (!(await aiAllowed({ kind: 'command' }))) return { intent: 'unknown', clarification: 'העוזר לא זמין כרגע (תקציב)', summary: '' };
+  if (!(await aiAllowed({}))) return { intent: 'unknown', clarification: 'העוזר לא זמין כרגע (תקציב)', summary: '' };
+  // A per-admin daily cap of its own: the phone is the key (usage rows carry no user_id).
+  const [{ n: today }] = await query("SELECT COUNT(*) AS n FROM nlu_usage WHERE kind = 'admin' AND phone = ? AND created_at >= UTC_DATE()", [admin.phone ?? '']);
+  if (Number(today) >= ADMIN_DAILY_MAX) return { intent: 'unknown', clarification: 'הגעתם למכסת הבקשות היומית של העוזר', summary: '' };
   const client = new Anthropic({ apiKey: env.anthropic.apiKey });
   const model = env.anthropic.model;
   let response;
@@ -168,6 +172,11 @@ export async function resolveLead(ref) {
 }
 
 const ils = (n) => `₪${Number(n).toLocaleString('he-IL', { maximumFractionDigits: 2 })}`;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+export const todayStr = () => { const p = localParts(new Date(), 'Asia/Jerusalem'); return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
+// A date the model may have left empty or relative falls back to today.
+export const settleDate = (d) => (ISO_DATE.test(String(d || '')) ? d : todayStr());
+export const DEFAULT_CATEGORY = 'כללי';
 
 // Everything the channel needs before confirming a write: the resolved target
 // and a read-back line. Returns { ok, text, action } or { ok: false, text }.
@@ -192,12 +201,14 @@ export async function prepareAdminAction(parsed) {
     if (open.length > 1) return { ok: false, text: `ל${a.lead_name} יש ${open.length} הזמנות פתוחות: ${open.map((o) => `#${o.id} ${o.description} (${ils(o.amount)})`).join(' · ')}. על איזו? כתבו את המספר.` };
     a.order_id = open[0].id; a.order_desc = open[0].description;
     if (!(a.payment?.amount > 0)) return { ok: false, text: 'כמה שולם?' };
+    a.payment = { ...a.payment, paid_on: settleDate(a.payment.paid_on), method: PAYMENT_METHODS.includes(a.payment.method) ? a.payment.method : 'cash' };
     return { ok: true, action: a, text: a.summary || `לרשום תשלום של ${ils(a.payment.amount)} מ${a.lead_name} על ${a.order_desc}` };
   }
-  // add_income / add_expense
+  // add_income / add_expense — the ledger requires a category and a real date
   if (!a.entry?.title || !(a.entry.amount > 0)) return { ok: false, text: a.clarification || 'מה הסכום ועל מה?' };
+  a.entry = { ...a.entry, category: String(a.entry.category || '').trim() || DEFAULT_CATEGORY, entry_date: settleDate(a.entry.entry_date), recurrence: ['once', 'monthly', 'yearly'].includes(a.entry.recurrence) ? a.entry.recurrence : 'once' };
   const kind = a.intent === 'add_income' ? 'הכנסה' : 'הוצאה';
-  return { ok: true, action: a, text: a.summary || `לרשום ${kind} של ${ils(a.entry.amount)}: ${a.entry.title}${a.entry.category ? ` (${a.entry.category})` : ''}, ${a.entry.entry_date}` };
+  return { ok: true, action: a, text: `לרשום ${kind} של ${ils(a.entry.amount)}: ${a.entry.title} (${a.entry.category}), ${a.entry.entry_date}${a.entry.recurrence !== 'once' ? `, ${a.entry.recurrence === 'monthly' ? 'כל חודש' : 'כל שנה'}` : ''}` };
 }
 
 // The write itself, audited as the admin. Returns the Hebrew result line.
@@ -207,7 +218,8 @@ export async function runAdminAction({ admin, action, source = 'whatsapp' }) {
   const via = { via: source, assistant: true };
   switch (action.intent) {
     case 'create_lead': {
-      const r = await createLead({ ...action.lead, source: `assistant_${source}`, actor });
+      const { devices_count, device_channels, ...lead } = action.lead;
+      const r = await createLead({ ...lead, devices: devicesCsv(devices_count, device_channels), source: `assistant_${source}`, actor });
       await logAction(who, 'crm_lead_create', 'crm_lead', r.id, { after: { name: r.name, ...via } });
       return `✅ נפתח ליד #${r.id}: ${r.name}${action.lead.phone ? `, ${action.lead.phone}` : ''}${action.lead.city ? `, ${action.lead.city}` : ''}`;
     }
@@ -225,7 +237,7 @@ export async function runAdminAction({ admin, action, source = 'whatsapp' }) {
     case 'add_expense': {
       const kind = action.intent === 'add_income' ? 'income' : 'expense';
       const e = action.entry;
-      const r = await createFinanceEntry({ kind, title: e.title, amount: e.amount, category: e.category || null, entry_date: e.entry_date, recurrence: e.recurrence || 'once', note: e.note || null, admin_id: admin.id });
+      const r = await createFinanceEntry({ kind, title: e.title, amount: e.amount, category: e.category || DEFAULT_CATEGORY, entry_date: settleDate(e.entry_date), recurrence: e.recurrence || 'once', note: e.note || null, admin_id: admin.id });
       await logAction(who, 'finance.create', 'finance_entry', r.id, { after: { kind, title: e.title, amount: e.amount, entry_date: e.entry_date, ...via } });
       return `✅ נרשמה ${kind === 'income' ? 'הכנסה' : 'הוצאה'} #${r.id}: ${e.title}, ${ils(e.amount)}${e.category ? ` (${e.category})` : ''}, ${e.entry_date}${e.recurrence !== 'once' ? ` — ${e.recurrence === 'monthly' ? 'חודשי' : 'שנתי'}` : ''}`;
     }
@@ -250,8 +262,9 @@ export async function answerAdminQuery(parsed) {
     case 'finance_summary': {
       const p = parsed.period || {};
       const f = await getFinance({ from: p.from, to: p.to });
-      const inc = Number(f.totals?.income || 0); const exp = Number(f.totals?.expense || 0);
-      const top = (kind) => (f.by_category?.[kind] || []).slice(0, 4).map((c) => `${c.category}: ${ils(c.amount)}`).join(' · ');
+      const stats = f.stats || {};
+      const inc = Number(stats.totals?.income || 0); const exp = Number(stats.totals?.expense || 0);
+      const top = (kind) => (stats.by_category?.[kind] || []).slice(0, 4).map((c) => `${c.category}: ${ils(c.amount)}`).join(' · ');
       return `${p.label || 'התקופה'}: הכנסות ${ils(inc)}, הוצאות ${ils(exp)}, נטו ${ils(inc - exp)}${top('expense') ? `\nהוצאות עיקריות: ${top('expense')}` : ''}`;
     }
     case 'find_lead': {

@@ -25,8 +25,9 @@ test('prepareAdminAction: a lead or a ledger entry is read back without touching
   assert.match(expense.text, /לרשום הוצאה של ₪300: דלק \(רכב\), 2026-11-01/);
   const noAmount = await prepareAdminAction({ intent: 'add_income', entry: { title: 'התקנה', amount: 0 }, clarification: null });
   assert.equal(noAmount.ok, false);
-  const summaryWins = await prepareAdminAction({ intent: 'add_income', entry: { title: 'התקנה', amount: 1200, entry_date: '2026-11-01' }, summary: 'לרשום הכנסה של 1200 שקל, התקנה אצל לוי' });
-  assert.equal(summaryWins.text, 'לרשום הכנסה של 1200 שקל, התקנה אצל לוי');
+  // a ledger read-back always shows what will be written (settled category and date), not the model's own phrasing
+  const settled = await prepareAdminAction({ intent: 'add_income', entry: { title: 'התקנה', amount: 1200, entry_date: '2026-11-01' }, summary: 'לרשום הכנסה של 1200 שקל, התקנה אצל לוי' });
+  assert.equal(settled.text, 'לרשום הכנסה של ₪1,200: התקנה (כללי), 2026-11-01');
   const unknown = await prepareAdminAction({ intent: 'unknown', clarification: 'על מה?' });
   assert.deepEqual(unknown, { ok: false, text: 'על מה?' });
   const query = await prepareAdminAction({ intent: 'open_orders' });
@@ -37,4 +38,25 @@ test('intents: every write intent is a known intent; the help lists the forms', 
   for (const i of WRITE_INTENTS) assert.ok(INTENTS.includes(i), i);
   assert.ok(INTENTS.includes('unknown') && INTENTS.includes('open_orders') && INTENTS.includes('finance_summary'));
   assert.match(ADMIN_HELP, /#הוצאה 300 דלק/);
+});
+
+test('review fixes: the trigger word stands alone, dates and category settle before the read-back, devices fold into the list, LIKE text is safe', async () => {
+  const { settleDate, todayStr, DEFAULT_CATEGORY } = await import('../src/services/adminAssistant.js');
+  const { devicesCsv } = await import('../src/services/crm.js');
+  assert.equal(adminTrigger('מנהלת החשבונות ביקשה חשבונית'), null);
+  assert.equal(adminTrigger('מנהל: הוצאה 300'), 'הוצאה 300');
+  assert.equal(adminTrigger('מנהל'), '');
+  assert.equal(settleDate('2026-11-02'), '2026-11-02');
+  assert.equal(settleDate(''), todayStr());
+  assert.equal(settleDate('היום'), todayStr());
+  const e = await prepareAdminAction({ intent: 'add_expense', entry: { title: 'דלק', amount: 300, category: null, entry_date: 'today', recurrence: 'weekly', note: null }, summary: '' });
+  assert.equal(e.ok, true);
+  assert.equal(e.action.entry.category, DEFAULT_CATEGORY);
+  assert.equal(e.action.entry.entry_date, todayStr());
+  assert.equal(e.action.entry.recurrence, 'once');
+  assert.match(e.text, new RegExp(`דלק \\(${DEFAULT_CATEGORY}\\), ${todayStr()}`));
+  assert.equal(devicesCsv(2, '4'), '4,4');
+  assert.equal(devicesCsv(null, '2'), '2');
+  assert.equal(devicesCsv(3, null), null);
+  assert.equal(devicesCsv(99, '1').split(',').length, 20);
 });

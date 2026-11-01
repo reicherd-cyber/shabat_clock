@@ -9,17 +9,29 @@ import { normalizePhone } from './phone.js';
 export const CRM_STATUSES = ['new', 'interested', 'not_interested', 'customer'];
 export const PAYMENT_METHODS = ['cash', 'transfer', 'bit', 'credit', 'check', 'other'];
 
-export async function createLead({ name, phone = null, email = null, city = null, source = null, notes = null, devices_count = null, device_channels = null, follow_up = null, actor = null }) {
+// crm_leads.devices is a LIST since migration 33: one entry per physical device,
+// each its channel count ("4,4" = two 4-channel units). The assistant hears a
+// count and a channel size; this folds them into that list.
+export const devicesCsv = (count, channels) => {
+  const n = Number(count); const c = String(channels || '').trim();
+  if (!c || !['1', '2', '3', '4'].includes(c)) return null;
+  return Array.from({ length: Number.isInteger(n) && n > 0 ? Math.min(n, 20) : 1 }, () => c).join(',');
+};
+
+export async function createLead({ name, phone = null, email = null, city = null, source = null, notes = null, devices = null, follow_up = null, actor = null }) {
   const clean = String(name || '').trim();
   if (clean.length < 2) throw errors.validation('name required', { name: '2+ chars' });
   const r = await query(
-    `INSERT INTO crm_leads (name, phone, email, city, source, notes, devices_count, device_channels, follow_up, created_by)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO crm_leads (name, phone, email, city, source, notes, devices, follow_up, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
     [clean.slice(0, 100), phone ? normalizePhone(phone) || String(phone).slice(0, 20) : null, email || null, city ? String(city).slice(0, 60) : null,
-      source || null, notes || null, devices_count ?? null, device_channels ?? null, follow_up || null, actor],
+      source || null, notes || null, devices ? String(devices).slice(0, 100) : null, follow_up || null, actor],
   );
   return { id: r.insertId, name: clean };
 }
+
+// A LIKE pattern from user text: % and _ are wildcards, so they are escaped.
+const likeEscape = (t) => String(t).replace(/[\\%_]/g, (ch) => '\\' + ch);
 
 // Leads whose name or phone matches `q` (a name fragment or digits), live only.
 export async function findLeads(q, { limit = 8 } = {}) {
@@ -32,7 +44,7 @@ export async function findLeads(q, { limit = 8 } = {}) {
        FROM crm_leads l
       WHERE l.deleted_at IS NULL AND (l.name LIKE ? ${digits.length >= 7 ? 'OR l.phone LIKE ?' : ''})
       ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`,
-    digits.length >= 7 ? [`%${text}%`, `%${normalizePhone(digits) || digits}%`, limit] : [`%${text}%`, limit],
+    digits.length >= 7 ? [`%${likeEscape(text)}%`, `%${normalizePhone(digits) || digits}%`, limit] : [`%${likeEscape(text)}%`, limit],
   );
   return rows;
 }

@@ -171,17 +171,19 @@ async function adminReply({ phone, userId, admin, text }) {
   await sendButtons({ phone, userId, text: `${prep.text}\nלאשר?`, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
 }
 
-async function executePending({ phone, user, session }) {
-  if (session.pending?.admin) {
-    const { admin, action } = session.pending.admin;
-    await resetSession(phone, user.id);
-    try {
-      await sendText({ phone, userId: user.id, text: await runAdminAction({ admin, action, source: 'whatsapp' }), kind: 'result' });
-    } catch (e) {
-      await sendText({ phone, userId: user.id, text: `⚠️ לא בוצע: ${e.message}` });
-    }
-    return;
+// The admin's confirmed action — keyed on the phone, so a superadmin whose
+// number is not also a customer account can confirm as well.
+async function executeAdminPending({ phone, userId, session }) {
+  const { admin, action } = session.pending.admin;
+  await resetSession(phone, userId);
+  try {
+    await sendText({ phone, userId, text: await runAdminAction({ admin, action, source: 'whatsapp' }), kind: 'result' });
+  } catch (e) {
+    await sendText({ phone, userId, text: `⚠️ לא בוצע: ${e.message}` });
   }
+}
+
+async function executePending({ phone, user, session }) {
   const { actions, tz } = session.pending || {};
   await resetSession(phone, user.id);
   if (!actions?.length) {
@@ -276,6 +278,18 @@ async function handleInboundNow(msg) {
 
   try {
     const session = await getSession(phone);
+
+    // An admin action awaiting confirmation (no customer account needed).
+    if (session.state === 'CONFIRM' && session.pending?.admin) {
+      const word = msg.buttonId === BTN_YES ? 'yes' : msg.buttonId === BTN_NO ? 'no' : confirmWord(msg.text);
+      if (word === 'yes') { await executeAdminPending({ phone, userId, session }); return; }
+      if (word === 'no') {
+        await resetSession(phone, userId);
+        await sendText({ phone, userId, text: await getText('whatsapp.cancelled') });
+        return;
+      }
+      await resetSession(phone, userId); // anything else = a new request; the pending one is dropped
+    }
 
     // Outstanding confirm: button id, or a typed yes/no.
     if (session.state === 'CONFIRM' && user) {

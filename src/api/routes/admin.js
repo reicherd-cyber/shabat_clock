@@ -1056,11 +1056,20 @@ adminRouter.patch('/admins/:id', async (req, res, next) => {
     if (req.body?.role !== undefined) fields.role = req.body.role === 'superadmin' ? 'superadmin' : 'support';
     if (req.body?.is_active !== undefined) fields.is_active = Boolean(req.body.is_active);
     // The admin's own phone: unlocks the admin assistant on WhatsApp and the phone (migration 87).
-    if (req.body?.phone !== undefined) fields.phone = req.body.phone ? (normalizePhone(req.body.phone) || null) : null;
+    if (req.body?.phone !== undefined) {
+      const phone = req.body.phone ? normalizePhone(req.body.phone) : '';
+      if (phone && !isValidIsraeliPhone(phone)) throw errors.validation('מספר טלפון לא תקין', { phone: '0XXXXXXXXX' });
+      fields.phone = phone || null;
+    }
     if (req.body?.password) fields.password_hash = bcryptHash(req.body.password);
     if (Object.keys(fields).length) {
       const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
-      await query(`UPDATE admins SET ${sets} WHERE id = ?`, [...Object.values(fields), req.params.id]);
+      try {
+        await query(`UPDATE admins SET ${sets} WHERE id = ?`, [...Object.values(fields), req.params.id]);
+      } catch (e) {
+        if (e?.code === 'ER_DUP_ENTRY') throw errors.conflict('CONFLICT', 'מספר הטלפון כבר רשום למנהל אחר');
+        throw e;
+      }
       invalidateSession('admin', Number(req.params.id)); // deactivation / re-role bites now, not in 60s
     }
     await audit(req, 'update', 'admin', Number(req.params.id), { after: { ...fields, password_hash: undefined } });
