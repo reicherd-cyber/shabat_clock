@@ -103,3 +103,13 @@ test('both access-management routes call requireOwner, and an impersonation toke
   const compose = readFileSync(new URL('../docker-compose.yml', import.meta.url), 'utf8');
   assert.doesNotMatch(compose, /- "(3306|1883):/, 'dev ports must bind to 127.0.0.1');
 });
+
+test('WhatsApp: the per-number quota is spent before a message enters its lane; level routes attribute to the impersonating admin', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const quota = bot.indexOf('if (overQuota(phone))');
+  const lane = bot.indexOf('await serialByKey(phone');
+  assert.ok(quota > 0 && lane > 0 && quota < lane, 'overQuota must run before serialByKey');
+  const routes = readFileSync(new URL('../src/api/routes/accessLevel.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(routes, /actor: `user:\$\{req\.auth\.userId\}`/, 'no hard-coded customer actor');
+  assert.match(routes, /req\.auth\.imp \? \{ type: 'admin', id: req\.auth\.imp \}/);
+});

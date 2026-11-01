@@ -197,15 +197,27 @@ async function isIgnoredSender(phone, msg) {
 
 // Messages from one number are handled strictly in arrival order (queue.js):
 // a voice note's seconds of transcription must not let the next text overtake it.
-export const handleInbound = (msg) => serialByKey(normalizePhone(msg.from) || String(msg.from), () => handleInboundNow(msg));
-
-async function handleInboundNow(msg) {
+// The per-minute quota is spent HERE, at arrival, so a flood is dropped before
+// it reaches the lane (and cannot smear across windows while a slow job runs);
+// the lane itself is bounded, so a burst can never pile up paid work.
+export async function handleInbound(msg) {
   const phone = normalizePhone(msg.from);
   if (!phone) return;
   if (overQuota(phone)) {
     console.warn(`[whatsapp] ${phone} over per-minute quota — dropped`);
     return;
   }
+  try {
+    await serialByKey(phone, () => handleInboundNow(msg), { max: PER_PHONE_PER_MIN });
+  } catch (e) {
+    if (e?.code === 'QUEUE_FULL') { console.warn(`[whatsapp] ${phone} lane full — dropped`); return; }
+    throw e;
+  }
+}
+
+async function handleInboundNow(msg) {
+  const phone = normalizePhone(msg.from);
+  if (!phone) return;
   if (await isIgnoredSender(phone, msg)) {
     await recordInbound({ waId: msg.waId, phone, userId: null, kind: msg.buttonId ? 'button' : msg.type, body: msg.text ?? `[${msg.type}]` });
     console.log(`[whatsapp] system notification from ${phone} recorded, not answered`);

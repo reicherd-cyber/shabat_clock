@@ -31,7 +31,7 @@ export async function requireOwner(req) {
 
 // Never the primary (it is the owner), never an address that is not on this
 // account. The read-only cache is dropped so the change bites at once.
-export async function setMemberLevel({ ownerId, identity, imp = null, emailId, readOnly, actor = null }) {
+export async function setMemberLevel({ ownerId, identity, imp = null, emailId, readOnly, actor = null, actorObj = null }) {
   if (!(await isOwnerSession({ userId: ownerId, identity, imp }))) throw errors.forbidden('רק בעל החשבון יכול לנהל את הגישות לחשבון');
   const [row] = await query(
     'SELECT id, email, is_primary FROM user_emails WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
@@ -42,6 +42,6 @@ export async function setMemberLevel({ ownerId, identity, imp = null, emailId, r
   await query('UPDATE user_emails SET read_only = ?, updated_by = ? WHERE id = ?', [readOnly ? 1 : 0, actor, row.id]);
   const { forgetReadOnly } = await import('../api/readOnly.js');
   forgetReadOnly(ownerId, row.email);
-  await logAction({ type: 'user', id: ownerId }, 'update', 'user_email', row.id, { after: { email: row.email, read_only: Boolean(readOnly) } }).catch(() => {});
+  await logAction(actorObj || { type: 'user', id: ownerId }, 'update', 'user_email', row.id, { after: { email: row.email, read_only: Boolean(readOnly) } }).catch(() => {});
   return { id: Number(row.id), email: row.email, read_only: Boolean(readOnly) };
 }

@@ -22,3 +22,18 @@ test('serialByKey: a failed job does not block the next one, and idle lanes are 
   await sleep(5);
   assert.equal(pendingLanes(), 0);
 });
+
+test('serialByKey: a lane is bounded — past `max` waiting jobs the next one is refused with QUEUE_FULL', async () => {
+  const { pendingIn } = await import('../src/whatsapp/queue.js');
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const first = serialByKey('0509', () => gate, { max: 2 });
+  const second = serialByKey('0509', async () => 'ok', { max: 2 });
+  assert.equal(pendingIn('0509'), 2);
+  await assert.rejects(serialByKey('0509', async () => 'never', { max: 2 }), (e) => e.code === 'QUEUE_FULL');
+  release('done');
+  assert.equal(await first, 'done');
+  assert.equal(await second, 'ok');
+  await sleep(5);
+  assert.equal(pendingIn('0509'), 0);
+});
