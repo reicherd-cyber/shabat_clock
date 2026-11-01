@@ -139,6 +139,8 @@ call arrives → caller-ID → verified phone?
 │   ├─ 4  תזמונים → browse one by one · delete · weekly add (relay → day → HHMM → day → HHMM → confirm) ✅
 │   ├─ 5  מצב   → "מטבח דולק, סלון כבוי…"                                                        ✅
 │   ├─ 0  חזרה על התפריט · * חזרה                                                                 ✅
+│   ├─ ✅ 8  למנהל (a superadmin's own number only, 2026-11-01) → say it → read-back → 1 אישור / 2 ביטול
+│   │        ליד · הזמנה ללקוח · תשלום · הכנסה · הוצאה · הזמנות פתוחות · סיכום תקופה  (services/adminAssistant.js)
 │   └─ ✅ 6  שירות לקוחות → the shared tree node 2 (device check with live verdict, schedule problem, 0 נציג)
 │        ✅ 7  מה קורה בשבת הקרובה → the shared node 8, spoken
 │

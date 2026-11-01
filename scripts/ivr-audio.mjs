@@ -103,6 +103,9 @@ const PROMPTS = {
   agent_done: 'תודה, להתראות',
   // Back from the transfer: Yemot does not say whether the agent answered, so the caller does.
   agent_return: 'אם דיברתם עם הנציג, הַקִּישׁוּ 1 לסיום, אם לא היה מענה, הַקִּישׁוּ 2 להשארת הודעה',
+  // — the admin assistant (2026-11-01): heard only by a superadmin's own number —
+  main_menu_admin: 'למנהל, הַקִּישׁוּ 8',
+  admin_listen: 'אמרו את הפעולה לאחר הצפצוף, למשל: הוצאה 300 שקל דלק, לְחַץ סולמית לסיום',
 };
 
 async function synthToMp3(text, outFile) {

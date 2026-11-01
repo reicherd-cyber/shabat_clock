@@ -106,3 +106,13 @@ speech-to-text endpoint (`STT_URL`, `STT_API_KEY`, `STT_MODEL`, `STT_LANGUAGE=he
 same words typed — the menu, the free-text router, the order interpreter. The inbound
 log keeps the transcript with a 🎤 prefix. Without a key the bot answers "text only", as
 before. Unknown numbers are never transcribed (a paid call per note).
+
+## The admin assistant (2026-11-01)
+
+A superadmin whose own phone is set on their admin row (`admins.phone`, PATCH /admins/:id)
+can add office rows by chat: a message starting with `#` (or `מנהל`) goes to
+`services/adminAssistant.js` — the model turns the words into one typed action, the bot
+reads it back with the usual confirm buttons, and the write goes through the same
+`services/crm.js` / `services/finance.js` code as the panel, audited as the admin.
+`#עזרה` lists the forms. Questions (`#הזמנות פתוחות`, `#סיכום החודש`, `#חפש כהן`) answer at once.
+On the phone the same number hears "למנהל, הקישו 8" on the main menu.

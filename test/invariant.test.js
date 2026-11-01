@@ -113,3 +113,11 @@ test('WhatsApp: the per-number quota is spent before a message enters its lane; 
   assert.doesNotMatch(routes, /actor: `user:\$\{req\.auth\.userId\}`/, 'no hard-coded customer actor');
   assert.match(routes, /req\.auth\.imp \? \{ type: 'admin', id: req\.auth\.imp \}/);
 });
+
+test('admin assistant: every write re-checks the admin at execution; the phone resolves an admin number without a customer account', () => {
+  const svc = readFileSync(new URL('../src/services/adminAssistant.js', import.meta.url), 'utf8');
+  const run = svc.indexOf('export async function runAdminAction');
+  assert.ok(run > 0 && svc.indexOf('assertAdminLive(admin, await adminByPhone(admin.phone))', run) > run, 'runAdminAction must re-validate the admin first');
+  const ivr = readFileSync(new URL('../src/ivr/router.js', import.meta.url), 'utf8');
+  assert.match(ivr, /const adminOnly = asGuest \? null : await adminByPhone\(phone\);/);
+});
