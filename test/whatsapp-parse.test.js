@@ -112,3 +112,42 @@ test('transcribeVoice: off without a key; with one it posts the note as a Whispe
     await assert.rejects(() => transcribeVoice({ buffer: Buffer.from('x'), mime: 'audio/ogg', fetchImpl: failing }), /rate limited/);
   } finally { Object.assign(env.stt, saved); }
 });
+
+test('downloadMedia: refuses by declared size before fetching, cuts a stream that passes the cap, returns the bytes otherwise', async () => {
+  const { env } = await import('../src/config/env.js');
+  const { downloadMedia } = await import('../src/whatsapp/client.js');
+  const savedToken = env.whatsapp.token; env.whatsapp.token = 't';
+  try {
+    const stream = (parts) => new ReadableStream({ start(c) { for (const p of parts) c.enqueue(new Uint8Array(p)); c.close(); } });
+    const mk = (meta, parts, headers = {}) => {
+      const calls = [];
+      const fetchImpl = async (url) => {
+        calls.push(url);
+        if (calls.length === 1) return { ok: true, status: 200, json: async () => meta };
+        return { ok: true, status: 200, headers: { get: (k) => headers[k] ?? null }, body: stream(parts) };
+      };
+      return { fetchImpl, calls };
+    };
+    // declared too large → metadata only, no second request
+    const big = mk({ url: 'https://cdn/x', mime_type: 'audio/ogg', file_size: 10_000 }, [[1, 2, 3]]);
+    await assert.rejects(() => downloadMedia('m1', { maxBytes: 5_000, fetchImpl: big.fetchImpl }), /too large/);
+    assert.equal(big.calls.length, 1);
+    // undeclared size, stream passes the cap mid-way → rejected
+    const over = mk({ url: 'https://cdn/x', mime_type: 'audio/ogg' }, [[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+    await assert.rejects(() => downloadMedia('m2', { maxBytes: 5, fetchImpl: over.fetchImpl }), /too large/);
+    // within the cap → the bytes
+    const ok = mk({ url: 'https://cdn/x', mime_type: 'audio/ogg; codecs=opus', file_size: 4 }, [[1, 2], [3, 4]]);
+    const got = await downloadMedia('m3', { maxBytes: 1_000, fetchImpl: ok.fetchImpl });
+    assert.deepEqual([...got.buffer], [1, 2, 3, 4]);
+    assert.equal(got.mime, 'audio/ogg; codecs=opus');
+    assert.equal(got.bytes, 4);
+  } finally { env.whatsapp.token = savedToken; }
+});
+
+test('a voice note is claimed (recordInbound) before it is downloaded or transcribed', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const claim = src.indexOf('await recordInbound({ waId: msg.waId, phone, userId,');
+  const download = src.indexOf('await downloadMedia(msg.media.id');
+  assert.ok(claim > 0 && download > 0 && claim < download, 'recordInbound must come before downloadMedia');
+});

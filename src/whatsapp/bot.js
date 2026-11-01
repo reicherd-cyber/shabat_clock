@@ -213,21 +213,24 @@ export async function handleInbound(msg) {
   // A voice note from a customer is transcribed (whatsapp/stt.js) and then
   // handled exactly like the same words typed; the log keeps the transcript.
   // Unknown numbers are not transcribed (a paid call per note): text only.
-  let body = msg.text ?? `[${msg.type}]`;
+  // The message id is claimed FIRST (INSERT IGNORE): a redelivered note is
+  // dropped here and never downloaded or transcribed twice (paid calls).
+  if (!(await recordInbound({ waId: msg.waId, phone, userId, kind: msg.buttonId ? 'button' : msg.type, body: msg.text ?? `[${msg.type}]` }))) return;
+  markRead(msg.waId);
   let voiceFailed = false;
   if (msg.text == null && msg.media && user && sttEnabled()) {
     try {
-      const media = await downloadMedia(msg.media.id);
-      if (media.bytes > env.stt.maxBytes) throw new Error(`voice note too large (${media.bytes} bytes)`);
+      const media = await downloadMedia(msg.media.id, { maxBytes: env.stt.maxBytes });
       const transcript = await transcribeVoice({ buffer: media.buffer, mime: media.mime });
-      if (transcript) { msg = { ...msg, text: transcript }; body = `🎤 ${transcript}`; } else voiceFailed = true;
+      if (transcript) {
+        msg = { ...msg, text: transcript };
+        await query('UPDATE whatsapp_messages SET body = ? WHERE wa_message_id = ? AND direction = ?', [`🎤 ${transcript}`, msg.waId, 'in']).catch(() => {});
+      } else voiceFailed = true;
     } catch (e) {
       console.error(`[whatsapp] voice note from ${phone} not transcribed:`, e.message);
       voiceFailed = true;
     }
   }
-  if (!(await recordInbound({ waId: msg.waId, phone, userId, kind: msg.buttonId ? 'button' : msg.type, body }))) return;
-  markRead(msg.waId);
 
   try {
     const session = await getSession(phone);
