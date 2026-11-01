@@ -103,16 +103,30 @@ async function verifyCommand(relay, action, commandId) {
   }
 }
 
+// Ownership guard for a command issued on a customer's behalf (2026-11-01):
+// the relay must belong to `userId`. `userId` null = the system itself
+// (scheduler, health monitor), which may drive any relay. Pure, so it is
+// unit-tested without a database; sendImmediateCommand enforces it.
+export function assertRelayOwner(relay, userId) {
+  if (userId == null) return;
+  if (relay == null || Number(relay.user_id) !== Number(userId)) {
+    throw errors.forbidden('RELAY_NOT_YOURS');
+  }
+}
+
 // Full immediate flow: insert → offline check → publish → block ≤5s for ack.
 // Returns {command_id, status, fail_reason} — the caller (IVR or web) reports truth.
-export async function sendImmediateCommand({ relayId, action, source, callId = null }) {
+// Every caller acting for a customer passes `userId`; the relay is refused
+// when it is not theirs, whatever the caller checked before.
+export async function sendImmediateCommand({ relayId, action, source, callId = null, userId = null }) {
   const [relay] = await query(
-    `SELECT r.id, r.relay_no, d.id AS device_id, d.device_uid, d.is_online, d.device_type, d.ip_address, d.transport
+    `SELECT r.id, r.relay_no, r.user_id, d.id AS device_id, d.device_uid, d.is_online, d.device_type, d.ip_address, d.transport
      FROM relays r JOIN devices d ON d.id = r.device_id
      WHERE r.id = ? AND r.deleted_at IS NULL`,
     [relayId],
   );
   if (!relay) throw errors.notFound('RELAY_NOT_FOUND', 'Relay not found');
+  assertRelayOwner(relay, userId);
 
   const commandId = await createCommand({ relayId, action, source, callId });
 

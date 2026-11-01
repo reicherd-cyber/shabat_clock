@@ -356,7 +356,7 @@ userRouter.post('/relays/:id/command', async (req, res, next) => {
     if (!relay) throw errors.notFound('RELAY_NOT_FOUND', 'Relay not found');
     const action = req.body?.action;
     if (!['on', 'off'].includes(action)) throw errors.validation('action must be on|off', { action: 'on|off' });
-    const result = await sendImmediateCommand({ relayId: relay.id, action, source: 'web' });
+    const result = await sendImmediateCommand({ relayId: relay.id, action, source: 'web', userId: req.auth.userId });
     await act(req, 'command', 'relay', relay.id, { after: { action, status: result.status } });
     res.json(result);
   } catch (e) { next(e); }

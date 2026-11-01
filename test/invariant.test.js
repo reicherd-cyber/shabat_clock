@@ -46,3 +46,27 @@ test('due occurrences sort deterministically', () => {
     ['2026-03-27T02:00|1|on', '2026-03-27T02:00|1|off', '2026-03-27T02:00|2|on', '2026-03-27T02:30|2|off'],
   );
 });
+
+// A command issued for a customer must land on that customer's own relay —
+// enforced by the primitive itself, not only by whoever called it (2026-11-01).
+import { assertRelayOwner } from '../src/services/commands.js';
+import { readFileSync } from 'node:fs';
+
+test('assertRelayOwner: own relay passes, a foreign relay is refused, the system may drive any relay', () => {
+  assert.doesNotThrow(() => assertRelayOwner({ id: 15, user_id: 3 }, 3));
+  assert.doesNotThrow(() => assertRelayOwner({ id: 15, user_id: '3' }, 3)); // DB drivers hand ids back as strings too
+  assert.throws(() => assertRelayOwner({ id: 15, user_id: 4 }, 3), /FORBIDDEN|RELAY_NOT_YOURS/);
+  assert.throws(() => assertRelayOwner(null, 3), /FORBIDDEN|RELAY_NOT_YOURS/);
+  assert.doesNotThrow(() => assertRelayOwner({ id: 15, user_id: 4 }, null));      // scheduler / health monitor
+  assert.doesNotThrow(() => assertRelayOwner({ id: 15, user_id: 4 }, undefined));
+});
+
+test('every customer-facing caller of sendImmediateCommand passes the account id', () => {
+  const customerFiles = ['src/api/routes/user.js', 'src/ivr/router.js', 'src/services/nluExec.js'];
+  for (const f of customerFiles) {
+    const src = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+    const calls = src.match(/sendImmediateCommand\(\{[\s\S]*?\}\)/g) || [];
+    assert.ok(calls.length > 0, `${f} calls sendImmediateCommand`);
+    for (const c of calls) assert.match(c, /userId/, `${f}: ${c.replace(/\s+/g, ' ')}`);
+  }
+});

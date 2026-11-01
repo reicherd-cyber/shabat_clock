@@ -460,7 +460,7 @@ async function runImmediate(session, relay) {
   const action = session.data.ctx;
   await appendPath(session.callLogId, `relay:${relay.ivr_digit}`);
   const result = await sendImmediateCommand({
-    relayId: relay.id, action, source: 'ivr', callId: session.callLogId,
+    relayId: relay.id, action, source: 'ivr', callId: session.callLogId, userId: session.userId,
   });
   await logAction({ type: 'ivr', id: session.userId }, 'command', 'relay', relay.id, { after: { action, status: result.status } });
   await appendPath(session.callLogId, result.status === 'acked' ? `ok:${result.verify || 'acked'}` : `fail:${result.fail_reason}`);
