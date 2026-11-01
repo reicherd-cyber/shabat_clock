@@ -51,7 +51,9 @@ const SCHEMA = {
       type: ['object', 'null'], additionalProperties: false,
       properties: {
         name: { type: 'string' }, phone: { type: ['string', 'null'] }, city: { type: ['string', 'null'] },
-        notes: { type: ['string', 'null'] }, devices_count: { type: ['integer', 'null'] }, device_channels: { type: ['string', 'null'], enum: ['1', '2', '3', '4', null] },
+        notes: { type: ['string', 'null'] }, devices_count: { type: ['integer', 'null'] },
+        // anyOf, not type+enum union — the API schema validator rejects an enum that mixes a string and null
+        device_channels: { anyOf: [{ type: 'string', enum: ['1', '2', '3', '4'] }, { type: 'null' }] },
       },
       required: ['name', 'phone', 'city', 'notes', 'devices_count', 'device_channels'],
     },
@@ -130,7 +132,9 @@ export async function interpretAdminRequest({ admin, text, source = 'whatsapp' }
   if (!(await aiAllowed({ kind: 'command' }))) return { intent: 'unknown', clarification: 'העוזר לא זמין כרגע (תקציב)', summary: '' };
   const client = new Anthropic({ apiKey: env.anthropic.apiKey });
   const model = env.anthropic.model;
-  const response = await client.messages.create({
+  let response;
+  try {
+    response = await client.messages.create({
     model,
     max_tokens: 1024,
     ...quickAnswerParams(model),
@@ -140,7 +144,11 @@ export async function interpretAdminRequest({ admin, text, source = 'whatsapp' }
       { type: 'text', text: await contextBlock() },
     ],
     messages: [{ role: 'user', content: clean }],
-  });
+    });
+  } catch (e) {
+    console.error('[admin-assistant] interpret failed:', e.message);
+    return { intent: 'unknown', clarification: 'העוזר לא זמין כרגע, נסו שוב מאוחר יותר', summary: '' };
+  }
   logUsage({ admin, source, text: clean, model, usage: response.usage });
   if (response.stop_reason === 'refusal') return { intent: 'unknown', clarification: 'לא הבנתי, נסו לנסח אחרת', summary: '' };
   const block = response.content.find((b) => b.type === 'text');
