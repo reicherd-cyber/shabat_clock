@@ -92,7 +92,7 @@ test('both access-management routes call requireOwner, and an impersonation toke
     assert.match(user.slice(i, i + 400), /await requireOwner\(req\)/, route);
   }
   const access = readFileSync(new URL('../src/services/accessLevel.js', import.meta.url), 'utf8');
-  assert.match(access, /canManageAccess(/, 'isOwnerSession must delegate to the one policy');
+  assert.match(access, /canManageAccess\(/, 'isOwnerSession must delegate to the one policy');
   assert.match(user, /isOwnerSession({ userId: req.auth.userId, identity: req.auth.email || null, imp: req.auth.imp })/);
   const mw = readFileSync(new URL('../src/api/middleware.js', import.meta.url), 'utf8');
   assert.match(mw, /t\.imp && !\(await subjectAlive\('admin', Number\(t\.imp\), 'superadmin'\)\)/);
