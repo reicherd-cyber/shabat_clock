@@ -8,18 +8,20 @@
 import { query } from '../db/pool.js';
 import { errors } from '../config/errors.js';
 import { logAction } from './audit.js';
+import { canManageAccess } from './users.js';
 
-// Owner-level decisions belong to the account's owner: the session's identity
-// is the account's primary address — or the session has no identity at all,
-// which is a phone login, and only the owner can log in by phone (invited
-// addresses enter with an identity).
-export async function isOwnerSession({ userId, identity }) {
+// Owner-level decisions belong to the account's owner. The rule itself is
+// users.js canManageAccess (one policy for every access route): the session's
+// address must be the primary one; no address = a phone login = the owner;
+// impersonation never. Only the primary-address lookup touches the database.
+export async function isOwnerSession({ userId, identity, imp = null }) {
+  if (imp) return false;
   if (!identity) return true;
   const [row] = await query(
-    'SELECT 1 AS ok FROM user_emails WHERE user_id = ? AND email = ? AND is_primary = 1 AND deleted_at IS NULL LIMIT 1',
-    [userId, identity],
+    'SELECT email FROM user_emails WHERE user_id = ? AND is_primary = 1 AND deleted_at IS NULL LIMIT 1',
+    [userId],
   );
-  return Boolean(row);
+  return canManageAccess({ identity, imp, primaryEmail: row?.email ?? null });
 }
 
 // Never the primary (it is the owner), never an address that is not on this

@@ -74,13 +74,14 @@ test('every customer-facing caller of sendImmediateCommand passes the account id
 // Access management (invite / remove addresses) is the owner's alone (2026-11-01).
 import { canManageAccess } from '../src/services/users.js';
 
-test('canManageAccess: the primary address may, an invited address or a phone login may not, an impersonating admin may', () => {
+test('canManageAccess: the primary address may, a phone login (no address) is the owner, an invited address and impersonation may not', () => {
   const primaryEmail = 'Owner@Example.com';
   assert.equal(canManageAccess({ identity: 'owner@example.com', imp: null, primaryEmail }), true);
   assert.equal(canManageAccess({ identity: 'guest@example.com', imp: null, primaryEmail }), false); // collaborator
-  assert.equal(canManageAccess({ identity: null, imp: null, primaryEmail }), false);                // phone-code login
+  assert.equal(canManageAccess({ identity: null, imp: null, primaryEmail }), true);                 // phone-code login = the owner
   assert.equal(canManageAccess({ identity: 'owner@example.com', imp: null, primaryEmail: null }), false);
-  assert.equal(canManageAccess({ identity: null, imp: 7, primaryEmail }), true);                   // admin impersonating
+  assert.equal(canManageAccess({ identity: null, imp: 7, primaryEmail }), false);                  // impersonation: admin panel only
+  assert.equal(canManageAccess({ identity: 'owner@example.com', imp: 7, primaryEmail }), false);
 });
 
 test('both access-management routes call requireOwner, and an impersonation token checks its admin', () => {
@@ -90,6 +91,9 @@ test('both access-management routes call requireOwner, and an impersonation toke
     assert.ok(i > 0, route);
     assert.match(user.slice(i, i + 400), /await requireOwner\(req\)/, route);
   }
+  const access = readFileSync(new URL('../src/services/accessLevel.js', import.meta.url), 'utf8');
+  assert.match(access, /canManageAccess(/, 'isOwnerSession must delegate to the one policy');
+  assert.match(user, /isOwnerSession({ userId: req.auth.userId, identity: req.auth.email || null, imp: req.auth.imp })/);
   const mw = readFileSync(new URL('../src/api/middleware.js', import.meta.url), 'utf8');
   assert.match(mw, /t\.imp && !\(await subjectAlive\('admin', Number\(t\.imp\), 'superadmin'\)\)/);
   const compose = readFileSync(new URL('../docker-compose.yml', import.meta.url), 'utf8');

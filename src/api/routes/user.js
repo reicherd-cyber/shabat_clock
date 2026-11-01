@@ -4,7 +4,8 @@ import { query, withTransaction } from '../../db/pool.js';
 import { errors } from '../../config/errors.js';
 import { requireUser, signUserToken, invalidateSession, supportAskLimiter, supportMessageLimiter, supportMenuLimiter, phoneAddLimiter, previewLimiter, deviceWifiLimiter } from '../middleware.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, accountsForEmail, parseUiPrefs, validateUiPrefs, canManageAccess } from '../../services/users.js';
+import { getUser, verifyPin, setPin, listUserEmails, addUserEmail, removeUserEmail, accountsForEmail, parseUiPrefs, validateUiPrefs } from '../../services/users.js';
+import { isOwnerSession } from '../../services/accessLevel.js';
 import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { ensureDemoState } from '../../services/demo.js';
@@ -145,16 +146,16 @@ userRouter.post('/me/pin', async (req, res, next) => {
 // identity; every further address INVITES its owner into this account (they
 // switch in from their own account). Login codes by email go to the primary.
 // No verification step and no PIN gate — the login session suffices.
-// Only the OWNER manages access (2026-11-01): the session's verified address
-// must be the account's primary one. An invited collaborator cannot invite a
-// third address or remove others (that would outlive their own revocation);
-// a phone-code login proves no address and cannot manage access either. An
-// admin impersonating the customer may (audited through the admin panel).
+// Only the OWNER manages access (2026-11-01) — the one policy shared with
+// /me/emails/with-level and /me/emails/:id/level (services/accessLevel.js
+// isOwnerSession → users.js canManageAccess): an address session must be the
+// account's primary address; a phone-code login (no address) is the owner, as
+// only the account's own verified phones can log in that way; impersonation is
+// refused (an admin changes addresses through the admin panel, audited there).
+// An invited collaborator can neither invite a third address nor remove others.
 async function requireOwner(req) {
-  const [primary] = await query(
-    'SELECT email FROM user_emails WHERE user_id = ? AND is_primary = TRUE AND deleted_at IS NULL LIMIT 1', [req.auth.userId]);
-  if (!canManageAccess({ identity: req.auth.email, imp: req.auth.imp, primaryEmail: primary?.email })) {
-    throw errors.forbidden('רק בעל החשבון (הכתובת הראשית) יכול לנהל את הגישות לחשבון');
+  if (!(await isOwnerSession({ userId: req.auth.userId, identity: req.auth.email || null, imp: req.auth.imp }))) {
+    throw errors.forbidden('רק בעל החשבון יכול לנהל את הגישות לחשבון');
   }
 }
 userRouter.post('/me/emails', async (req, res, next) => {
