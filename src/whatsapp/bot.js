@@ -22,6 +22,7 @@ import { getSession, saveSession, resetSession } from './session.js';
 import { sendText, sendButtons, markRead, downloadMedia } from './client.js';
 import { transcribeVoice, sttEnabled } from './stt.js';
 import { serialByKey } from './queue.js';
+import { adminByPhone, adminTrigger, interpretAdminRequest, prepareAdminAction, runAdminAction, answerAdminQuery, WRITE_INTENTS, ADMIN_HELP } from '../services/adminAssistant.js';
 import { env } from '../config/env.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion, isBareDigit, strayConfirmWord } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
@@ -157,7 +158,30 @@ async function commandReply({ phone, user, text }) {
   await sendButtons({ phone, userId: user.id, text: body, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
 }
 
+// The admin assistant (services/adminAssistant.js): a superadmin's own number,
+// a message starting with # or מנהל. Writes are read back and need the same
+// confirm buttons as an order; questions are answered at once.
+async function adminReply({ phone, userId, admin, text }) {
+  if (!text || /^(עזרה|help|\?)$/i.test(text)) { await sendText({ phone, userId, text: ADMIN_HELP }); return; }
+  const parsed = await interpretAdminRequest({ admin: { ...admin, phone }, text, source: 'whatsapp' });
+  if (!WRITE_INTENTS.has(parsed.intent)) { await sendText({ phone, userId, text: await answerAdminQuery(parsed) }); return; }
+  const prep = await prepareAdminAction(parsed);
+  if (!prep.ok) { await sendText({ phone, userId, text: prep.text }); return; }
+  await saveSession({ phone, userId, state: 'CONFIRM', pending: { admin: { admin: { id: admin.id, name: admin.name, phone }, action: prep.action }, text } });
+  await sendButtons({ phone, userId, text: `${prep.text}\nלאשר?`, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
+}
+
 async function executePending({ phone, user, session }) {
+  if (session.pending?.admin) {
+    const { admin, action } = session.pending.admin;
+    await resetSession(phone, user.id);
+    try {
+      await sendText({ phone, userId: user.id, text: await runAdminAction({ admin, action, source: 'whatsapp' }), kind: 'result' });
+    } catch (e) {
+      await sendText({ phone, userId: user.id, text: `⚠️ לא בוצע: ${e.message}` });
+    }
+    return;
+  }
   const { actions, tz } = session.pending || {};
   await resetSession(phone, user.id);
   if (!actions?.length) {
@@ -287,6 +311,13 @@ async function handleInboundNow(msg) {
       return;
     }
     const text = msg.text.trim();
+
+    // ── the admin assistant: a superadmin's own number, "#…" or "מנהל …" ──
+    const adminReq = adminTrigger(text);
+    if (adminReq != null) {
+      const admin = await adminByPhone(phone);
+      if (admin) { await adminReply({ phone, userId, admin, text: adminReq }); return; }
+    }
 
     // The numbered menu, for customers and guests alike — but only for the
     // numbers listed in whatsapp.menu_phones (per-number rollout, '' = nobody).

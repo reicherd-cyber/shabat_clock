@@ -19,6 +19,7 @@ const cleanLanIp = (transport, ip) => {
   return v;
 };
 import { createUser, getUser, setPin, bcryptHash, setUserEmailAdmin } from '../../services/users.js';
+import { createOrder, addPayment } from '../../services/crm.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview, returnDeviceToStock } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
@@ -1054,6 +1055,8 @@ adminRouter.patch('/admins/:id', async (req, res, next) => {
     if (req.body?.name !== undefined) fields.name = String(req.body.name).trim().slice(0, 100);
     if (req.body?.role !== undefined) fields.role = req.body.role === 'superadmin' ? 'superadmin' : 'support';
     if (req.body?.is_active !== undefined) fields.is_active = Boolean(req.body.is_active);
+    // The admin's own phone: unlocks the admin assistant on WhatsApp and the phone (migration 87).
+    if (req.body?.phone !== undefined) fields.phone = req.body.phone ? (normalizePhone(req.body.phone) || null) : null;
     if (req.body?.password) fields.password_hash = bcryptHash(req.body.password);
     if (Object.keys(fields).length) {
       const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
@@ -1680,20 +1683,10 @@ adminRouter.patch('/crm/leads/:id', requireWrite, async (req, res, next) => {
 
 adminRouter.post('/crm/leads/:id/orders', requireWrite, async (req, res, next) => {
   try {
-    const description = String(req.body?.description || '').trim();
-    const amount = Number(req.body?.amount);
-    if (!description) throw errors.validation('description required', { description: 'required' });
-    if (!Number.isFinite(amount) || amount < 0) throw errors.validation('amount must be >= 0', { amount: '>=0' });
-    const [lead] = await query('SELECT id FROM crm_leads WHERE id = ? AND deleted_at IS NULL', [Number(req.params.id)]);
-    if (!lead) throw errors.notFound();
-    const r = await query(
-      'INSERT INTO crm_orders (lead_id, description, amount, notes, created_by) VALUES (?,?,?,?,?)',
-      [lead.id, description, amount, req.body?.notes || null, adminActor(req)],
-    );
-    // An order makes the lead a customer — the pipeline moves by itself.
-    await query("UPDATE crm_leads SET status = 'customer', updated_by = ? WHERE id = ? AND status <> 'customer'", [adminActor(req), lead.id]);
-    audit(req, 'crm_order_create', 'crm_order', r.insertId, { after: { lead_id: lead.id, description, amount } });
-    res.status(201).json({ id: r.insertId });
+    // Same rows as the admin assistant writes (services/crm.js).
+    const r = await createOrder({ leadId: Number(req.params.id), description: req.body?.description, amount: req.body?.amount, notes: req.body?.notes, actor: adminActor(req) });
+    audit(req, 'crm_order_create', 'crm_order', r.id, { after: { lead_id: r.lead_id, description: r.description, amount: r.amount } });
+    res.status(201).json({ id: r.id });
   } catch (e) { next(e); }
 });
 
@@ -1727,20 +1720,10 @@ adminRouter.patch('/crm/orders/:id', requireWrite, async (req, res, next) => {
 
 adminRouter.post('/crm/orders/:id/payments', requireWrite, async (req, res, next) => {
   try {
-    const amount = Number(req.body?.amount);
-    const method = String(req.body?.method || 'cash');
-    const paid_on = String(req.body?.paid_on || '').slice(0, 10);
-    if (!Number.isFinite(amount) || amount <= 0) throw errors.validation('amount must be > 0', { amount: '>0' });
-    if (!['cash', 'transfer', 'bit', 'credit', 'check', 'other'].includes(method)) throw errors.validation('unknown method');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(paid_on)) throw errors.validation('paid_on must be YYYY-MM-DD', { paid_on: 'date' });
-    const [order] = await query('SELECT id FROM crm_orders WHERE id = ? AND deleted_at IS NULL', [Number(req.params.id)]);
-    if (!order) throw errors.notFound();
-    const r = await query(
-      'INSERT INTO crm_payments (order_id, amount, method, paid_on, note, created_by) VALUES (?,?,?,?,?,?)',
-      [order.id, amount, method, paid_on, req.body?.note || null, adminActor(req)],
-    );
-    audit(req, 'crm_payment_create', 'crm_payment', r.insertId, { after: { order_id: order.id, amount, method, paid_on } });
-    res.status(201).json({ id: r.insertId });
+    // Same rows as the admin assistant writes (services/crm.js).
+    const r = await addPayment({ orderId: Number(req.params.id), amount: req.body?.amount, method: String(req.body?.method || 'cash'), paidOn: String(req.body?.paid_on || '').slice(0, 10), note: req.body?.note, actor: adminActor(req) });
+    audit(req, 'crm_payment_create', 'crm_payment', r.id, { after: { order_id: r.order_id, amount: r.amount, method: r.method, paid_on: r.paid_on } });
+    res.status(201).json({ id: r.id });
   } catch (e) { next(e); }
 });
 
