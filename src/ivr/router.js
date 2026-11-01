@@ -17,7 +17,7 @@ import { getText, getSetting } from '../services/settings.js';
 import { getSession, createSession, endSession } from './session.js';
 import { ask, askVoice, askRecord, say, sayAndHangup, transfer } from './responses.js';
 import { spokenText, spokenOption, speech } from './speech.js';
-import { adminByPhone, interpretAdminRequest, prepareAdminAction, runAdminAction, answerAdminQuery, WRITE_INTENTS } from '../services/adminAssistant.js';
+import { adminByPhone, interpretAdminRequest, prepareAdminAction, runAdminAction, answerAdminQuery, WRITE_INTENTS, mergeDraft } from '../services/adminAssistant.js';
 import { voicemailFolder, voicemailFileName, createPhoneTicket, fetchVoicemailInBackground } from '../services/voicemail.js';
 import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
@@ -853,10 +853,24 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         const raw = req.query.nlu;
         const spoken = String(Array.isArray(raw) ? raw[raw.length - 1] : (raw ?? '')).trim();
         if (!spoken) return res.send(await mainMenu(session, await speak('ivr.nlu_giveup', {}, 'לא זוהה דיבור, חוזרים לתפריט הראשי')));
-        const parsed = await interpretAdminRequest({ admin: { ...session.admin, phone: session.phone }, text: spoken, source: 'phone' });
-        if (!WRITE_INTENTS.has(parsed.intent)) return res.send(await mainMenu(session, [{ t: speech(await answerAdminQuery(parsed)) }]));
+        // A question back (missing amount, unknown name…) re-listens at most
+        // twice, with the earlier words kept as a draft the answer completes.
+        const full = mergeDraft(session.data.adminDraft, spoken);
+        const askAgain = async (question) => {
+          session.data.adminRetries = (session.data.adminRetries || 0) + 1;
+          if (session.data.adminRetries > 2) { session.data.adminDraft = null; session.data.adminRetries = 0; return mainMenu(session, [{ t: speech(question) }]); }
+          session.data.adminDraft = full;
+          return askVoice([{ t: speech(question) }], { maxSilence: 3 });
+        };
+        const parsed = await interpretAdminRequest({ admin: { ...session.admin, phone: session.phone }, text: full, source: 'phone' });
+        if (!WRITE_INTENTS.has(parsed.intent)) {
+          if (parsed.intent === 'unknown' && parsed.clarification) return res.send(await askAgain(parsed.clarification));
+          session.data.adminDraft = null; session.data.adminRetries = 0;
+          return res.send(await mainMenu(session, [{ t: speech(await answerAdminQuery(parsed)) }]));
+        }
         const prep = await prepareAdminAction(parsed);
-        if (!prep.ok) return res.send(await mainMenu(session, [{ t: speech(prep.text) }]));
+        if (!prep.ok) return res.send(await askAgain(prep.text));
+        session.data.adminDraft = null; session.data.adminRetries = 0;
         session.data.adminAction = prep.action;
         session.state = 'ADMIN_CONFIRM';
         return res.send(ask([{ t: speech(prep.text) }, ...await speak('ivr.nlu_confirm', {}, 'להקיש 1 לאישור, 2 לביטול')]));

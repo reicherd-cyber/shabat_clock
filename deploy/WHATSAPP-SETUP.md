@@ -116,3 +116,7 @@ reads it back with the usual confirm buttons, and the write goes through the sam
 `services/crm.js` / `services/finance.js` code as the panel, audited as the admin.
 `#עזרה` lists the forms. Questions (`#הזמנות פתוחות`, `#סיכום החודש`, `#חפש כהן`) answer at once.
 On the phone the same number hears "למנהל, הקישו 8" on the main menu.
+
+Admin mode: a bare `#` opens ten minutes in which every message — voice notes and the
+bare answer to a question the assistant asked — goes to the assistant; `#סיום` ends it.
+An order for a name the CRM does not know offers to open the lead and the order together.

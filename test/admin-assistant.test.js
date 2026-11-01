@@ -1,7 +1,7 @@
 import './helpers/env.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { adminTrigger, prepareAdminAction, INTENTS, WRITE_INTENTS, ADMIN_HELP } from '../src/services/adminAssistant.js';
+import { adminTrigger, prepareAdminAction, INTENTS, WRITE_INTENTS, ADMIN_HELP, mergeDraft } from '../src/services/adminAssistant.js';
 
 test('adminTrigger: # or מנהל opens the assistant; ordinary messages do not', () => {
   assert.equal(adminTrigger('#הוצאה 300 דלק'), 'הוצאה 300 דלק');
@@ -35,7 +35,7 @@ test('prepareAdminAction: a lead or a ledger entry is read back without touching
 });
 
 test('intents: every write intent is a known intent; the help lists the forms', () => {
-  for (const i of WRITE_INTENTS) assert.ok(INTENTS.includes(i), i);
+  for (const i of WRITE_INTENTS) if (i !== 'create_lead_and_order') assert.ok(INTENTS.includes(i), i); // the combined one is internal
   assert.ok(INTENTS.includes('unknown') && INTENTS.includes('open_orders') && INTENTS.includes('finance_summary'));
   assert.match(ADMIN_HELP, /#הוצאה 300 דלק/);
 });
@@ -67,4 +67,15 @@ test('assertAdminLive: the stored admin must still be the live owner of the numb
   assert.doesNotThrow(() => assertAdminLive({ id: '1' }, { id: 1 }));
   assert.throws(() => assertAdminLive({ id: 1 }, null), (e) => e.code === 'ADMIN_REVOKED');      // deactivated / demoted / phone removed
   assert.throws(() => assertAdminLive({ id: 1 }, { id: 2 }), (e) => e.code === 'ADMIN_REVOKED'); // the number moved to another admin
+});
+
+test('mergeDraft: a bare answer completes the earlier request; admin mode expires after ten minutes of silence', async () => {
+  const { settleState, ADMIN_TTL_MS } = await import('../src/whatsapp/session.js');
+  assert.equal(mergeDraft('משה כהן הזמנה 4 בקרים', '6000'), 'משה כהן הזמנה 4 בקרים. 6000');
+  assert.equal(mergeDraft('הוצאה דלק.', '300'), 'הוצאה דלק. 300');
+  assert.equal(mergeDraft(null, 'הוצאה 300 דלק'), 'הוצאה 300 דלק');
+  const now = Date.now();
+  assert.equal(settleState({ state: 'ADMIN', updated_at: new Date(now - ADMIN_TTL_MS + 1000) }, now), 'ADMIN');
+  assert.equal(settleState({ state: 'ADMIN', updated_at: new Date(now - ADMIN_TTL_MS - 1000) }, now), 'IDLE');
+  assert.ok(WRITE_INTENTS.has('create_lead_and_order'));
 });
