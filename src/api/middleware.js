@@ -84,6 +84,11 @@ export async function requireUser(req, res, next) {
     if (!(await subjectAlive('user', Number(t.sub), 'user', t.em || null))) {
       throw new ApiError(401, 'SESSION_EXPIRED', 'החשבון אינו פעיל או שהגישה אליו הוסרה — יש להתחבר מחדש');
     }
+    // An impersonation token (`imp`) is only as alive as the superadmin behind
+    // it: disabled or demoted → the token dies with them, not an hour later.
+    if (t.imp && !(await subjectAlive('admin', Number(t.imp), 'superadmin'))) {
+      throw new ApiError(401, 'SESSION_EXPIRED', 'ההתחזות הסתיימה — המנהל אינו פעיל');
+    }
     auth = { userId: Number(t.sub), role: 'user', imp: t.imp ? Number(t.imp) : null, email: t.em || null };
   } catch (e) {
     return next(e);
