@@ -33,7 +33,7 @@ export async function runNluActions({ userId, actions, tz, source, callId = null
   const immediate = [];
   for (const a of actions) {
     if (a.kind === 'immediate') {
-      immediate.push(sendImmediateCommand({ relayId: a.relay_id, action: a.action, source, callId })
+      immediate.push(sendImmediateCommand({ relayId: a.relay_id, action: a.action, source, callId, userId })
         .then(async (result) => {
           await logAction(actor, 'command', 'relay', a.relay_id, { after: { action: a.action, status: result.status, verify: result.verify, via: 'nlu' } });
           return { ...result, relay_name: a.relay_name, action: a.action };
