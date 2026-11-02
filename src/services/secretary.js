@@ -1,9 +1,12 @@
 // The office secretary (2026-11-02): a superadmin's own WhatsApp number talks
 // to a Claude agent that holds the office keys — leads, orders, payments, the
 // ledger, the task board, the support inbox, customer accounts and devices —
-// and acts the way a human secretary would: a clear instruction is carried
-// out at once and reported in one line; an unclear one gets one short
-// question. Memory is the chat itself: the last hours of whatsapp_messages
+// and acts the way a human secretary would: a clear instruction is read back
+// and carried out once the admin confirms; an unclear one gets one short
+// question. The confirm is enforced here, not left to the model: a write tool
+// runs only in a turn whose message IS the admin's confirmation of the last
+// proposal (isConfirmation + a fresh proposal), otherwise it is refused and
+// the model is told to propose. Memory is the chat itself: the last hours of whatsapp_messages
 // are replayed to the model, so "6000" after "what is the amount?" completes
 // the order, and "cancel that" finds the id in the secretary's own last line.
 //
@@ -27,6 +30,14 @@ import { runNluActions } from './nluExec.js';
 import { adminByPhone, assertAdminLive, todayStr } from './adminAssistant.js';
 
 export const SECRETARY_DAILY_MAX = 300; // model calls per admin per day
+// A proposal the admin has not answered within this long is stale: a "כן"
+// after it re-proposes instead of writing.
+export const PROPOSAL_TTL_MS = 15 * 60 * 1000;
+
+// The admin's "yes" to the secretary's read-back: the confirm button, or a
+// bare word of assent (with trailing punctuation / a thumbs-up). Pure.
+const YES = /^(כן|אישור|מאשר|מאשרת|אשר|בצע|בצעי|תבצע|תבצעי|אוקיי|אוקי|אוקי?י|או קיי|בסדר|סבבה|יאללה|מעולה|נכון|ok|okay|yes|y|go)[\s!.,✅👍🙏]*$/i;
+export const isConfirmation = (text, buttonId = null) => buttonId === 'confirm_yes' || YES.test(String(text || '').trim());
 const MAX_TOOL_ROUNDS = 8;
 const HISTORY_HOURS = 6;
 const HISTORY_MAX = 30;
@@ -54,13 +65,14 @@ export function historyToMessages(rows) {
 
 async function loadHistory({ phone, excludeWaId }) {
   const rows = await query(
-    `SELECT direction, body FROM whatsapp_messages
+    `SELECT direction, body, created_at FROM whatsapp_messages
       WHERE phone = ? AND created_at >= UTC_TIMESTAMP() - INTERVAL ? HOUR
         AND (wa_message_id IS NULL OR wa_message_id <> ?)
       ORDER BY id DESC LIMIT ?`,
     [phone, HISTORY_HOURS, excludeWaId || '', HISTORY_MAX],
   );
-  return historyToMessages(rows.reverse());
+  const lastOut = rows.find((r) => r.direction === 'out');
+  return { messages: historyToMessages(rows.reverse()), lastOutAt: lastOut ? new Date(lastOut.created_at).getTime() : 0 };
 }
 
 // ── what the secretary can do ────────────────────────────────────────
@@ -138,6 +150,10 @@ async function runTool(name, input, ctx) {
   const { admin, actor, who, source } = ctx;
   // A dry run (live probes against the shared database) answers every write
   // as if it happened, without touching a row.
+  if (!READ_TOOLS.has(name) && !ctx.writesAllowed) {
+    ctx.proposed = true;
+    return { not_done: true, needs_confirmation: true, note: 'לא בוצע — כל פעולה דורשת אישור של המנהל. כתבו למנהל במדויק מה ייעשה (כל הפרטים והסכומים, בשורה אחת לפעולה) וסיימו ב"לאשר?". אל תקראו לכלי כתיבה נוסף בתור הזה. אחרי שהמנהל יאשר, קראו לכלי שוב בדיוק כפי שהוצע.' };
+  }
   if (ctx.dryRun && !READ_TOOLS.has(name)) return { ok: true, dry_run: true, would: name, input, note: 'מצב בדיקה — לא נכתב בפועל', id: 999 };
   const via = { via: source, secretary: true };
   switch (name) {
@@ -351,7 +367,7 @@ const RULES = `את/ה המזכיר/ה של משרד TelTech (שעון שבת ח
 התפקיד: להבין מה המנהל רוצה ולבצע, בעזרת הכלים — ליד חדש, הזמנה, תשלום, הכנסה/הוצאה, משימה/תזכורת, תשובה לפנייה, בירור על לקוח או על המערכת. יש לך גישה מלאה; כל פעולה נרשמת על שם המנהל.
 
 איך לפעול:
-1. בקשה ברורה — לבצע מיד, בלי לבקש אישור, ולדווח בשורה אחת-שתיים מה נעשה (עם המספר שנוצר: ליד #12, הזמנה #30).
+1. שום פעולה לא מתבצעת בלי אישור של המנהל. בקשה ברורה — לקרוא לכלי הכתיבה; המערכת תעצור אותו ותחזיר needs_confirmation, ואז לכתוב למנהל במדויק מה ייעשה (שורה אחת לכל פעולה: מי, מה, כמה, מתי) ולסיים ב"לאשר?". כשהמנהל מאשר ("כן", "אישור", הכפתור) — לבצע בדיוק מה שהוצע, בלי לשאול שוב, ולדווח בשורה אחת-שתיים עם המספר שנוצר (ליד #12, הזמנה #30). אם המנהל מאשר עם שינוי ("כן אבל 5000") — להציג את ההצעה המתוקנת ולשאול שוב. "לא"/"בטל" להצעה — לא לבצע, לענות "בוטל". שאלות ובירורים (קריאה בלבד) — לענות מיד, בלי אישור.
 2. ספק אמיתי — לשאול שאלה אחת קצרה ולחכות. ספק = חסר פרט הכרחי (סכום להזמנה, על מה ההוצאה), או כמה התאמות לשם, או בקשה שאפשר להבין בשתי דרכים. לא לנחש סכומים. תאריך/קטגוריה/אמצעי תשלום שלא נאמרו — ברירת מחדל סבירה (היום, "כללי", מזומן) בלי לשאול.
 3. שם של אדם: קודם לבדוק ברשימת הלידים שבהקשר, ואם אינו שם — find_contacts פעם אחת עם החלק היציב של השם (השם הפרטי או שם המשפחה; תמלול משבש שמות, ולכן חלק מהשם עדיף על השם המלא). אם יש התאמה אחת סבירה — לפעול עליה. אם אין — להזמנה: לפתוח ליד חדש בשם שנאמר ואז את ההזמנה, ולומר למנהל שזה איש קשר חדש (ואפשר להוסיף טלפון/עיר). לא לפתוח ליד כפול.
 3א. יש שני סוגי רשומות: ליד ב-CRM (מכירה: הזמנות ותשלומים) וחשבון לקוח במערכת (users: טלפונים, מכשירים, ממסרים). שאלה על מכשירים, חיבור, מצב או תזמונים של לקוח — זה חשבון לקוח: find_contacts ואז customer_details (לא lead_details). רשימת הלידים שבהקשר אינה רשימת חשבונות הלקוח.
@@ -395,24 +411,32 @@ const clip = (v) => { const s = JSON.stringify(v, (k, x) => (x instanceof Date ?
 // One turn of the conversation: the admin's words (text, or a voice note's
 // transcript) → the secretary's reply, after whatever tools it needed.
 // Never throws on a model miss; returns a Hebrew line to send.
-export async function secretaryTurn({ admin, phone, userId = null, text, excludeWaId = null, source = 'whatsapp', dryRun = false, history = null, onTool = null }) {
+// Returns { text, proposed }: proposed = the secretary read a write back and is
+// waiting for the admin's yes (the channel shows confirm buttons).
+// `confirmed` = the admin's message is that yes; writes run only then, and
+// only while the last proposal is fresh (PROPOSAL_TTL_MS).
+export async function secretaryTurn({ admin, phone, userId = null, text, excludeWaId = null, source = 'whatsapp', confirmed = false, dryRun = false, history = null, lastOutAt = null, onTool = null }) {
   const clean = String(text || '').trim().slice(0, 2000);
-  if (!clean) return 'מה לעשות?';
-  if (!env.anthropic.apiKey) return 'המזכירה לא מוגדרת בשרת (ANTHROPIC_API_KEY)';
-  if (!(await aiAllowed({}))) return 'המזכירה לא זמינה כרגע (תקציב ה-AI היומי נגמר)';
+  const plain = (t) => ({ text: t, proposed: false });
+  if (!clean) return plain('מה לעשות?');
+  if (!env.anthropic.apiKey) return plain('המזכירה לא מוגדרת בשרת (ANTHROPIC_API_KEY)');
+  if (!(await aiAllowed({}))) return plain('המזכירה לא זמינה כרגע (תקציב ה-AI היומי נגמר)');
   const [{ n: today }] = await query("SELECT COUNT(*) AS n FROM nlu_usage WHERE kind = 'admin' AND phone = ? AND created_at >= UTC_DATE()", [phone]);
-  if (Number(today) >= SECRETARY_DAILY_MAX) return 'הגעתם למכסת הפניות היומית של המזכירה';
+  if (Number(today) >= SECRETARY_DAILY_MAX) return plain('הגעתם למכסת הפניות היומית של המזכירה');
   // The admin is re-checked on every turn: a revoked number writes nothing.
   assertAdminLive(admin, await adminByPhone(phone));
 
-  const ctx = { admin: { ...admin, phone }, actor: `admin:${admin.id}`, who: { type: 'admin', id: admin.id }, userId, phone, source, dryRun };
+  const loaded = history ? { messages: history, lastOutAt: lastOutAt ?? Date.now() } : await loadHistory({ phone, excludeWaId });
+  const fresh = Date.now() - loaded.lastOutAt <= PROPOSAL_TTL_MS;
+  const ctx = { admin: { ...admin, phone }, actor: `admin:${admin.id}`, who: { type: 'admin', id: admin.id }, userId, phone, source, dryRun, writesAllowed: confirmed && fresh, proposed: false };
   const client = new Anthropic({ apiKey: env.anthropic.apiKey });
   const model = env.anthropic.model;
   const system = [
     { type: 'text', text: RULES, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: await contextBlock(admin) },
   ];
-  const messages = [...(history ?? await loadHistory({ phone, excludeWaId })), { role: 'user', content: clean }];
+  const messages = [...loaded.messages, { role: 'user', content: clean }];
+  if (confirmed && !fresh) messages[messages.length - 1] = { role: 'user', content: `${clean}\n(הערת מערכת: עבר זמן מאז ההצעה האחרונה — הציגו אותה שוב ושאלו לאשר, בלי לבצע)` };
   // The reply is the text of the LAST model response: what it writes before a
   // tool call ("אבדוק…") is narration, not an answer, and stays out of the chat.
   let replies = [];
@@ -422,7 +446,7 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
       resp = await client.messages.create({ model, max_tokens: 1500, ...quickAnswerParams(model), system, tools: TOOLS, messages });
     } catch (e) {
       console.error('[secretary] model call failed:', e.message);
-      return replies.length ? replies.join('\n') : 'המזכירה לא זמינה כרגע, נסו שוב בעוד רגע';
+      return plain(replies.length ? replies.join('\n') : 'המזכירה לא זמינה כרגע, נסו שוב בעוד רגע');
     }
     logUsage({ admin: ctx.admin, source, text: clean, model, usage: resp.usage });
     const texts = resp.content.filter((b) => b.type === 'text' && b.text.trim()).map((b) => b.text.trim());
@@ -445,7 +469,7 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
     messages.push({ role: 'user', content: results });
     if (round === MAX_TOOL_ROUNDS) replies.push('(עצרתי אחרי הרבה צעדים — אם משהו לא הושלם, כתבו שוב)');
   }
-  return toWhatsApp(replies.join('\n')) || 'בוצע.';
+  return { text: toWhatsApp(replies.join('\n')) || 'בוצע.', proposed: ctx.proposed };
 }
 
 export const SECRETARY_HELP = `אני המזכירה של המשרד. כתבו או הקליטו חופשי, למשל:

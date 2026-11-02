@@ -42,3 +42,12 @@ test('toWhatsApp: markdown the model slips into becomes WhatsApp formatting', as
   assert.equal(toWhatsApp('  נטו: -₪411  '), 'נטו: -₪411');
   assert.equal(toWhatsApp(''), '');
 });
+
+test('isConfirmation: the confirm button or a bare yes word; anything else is a new message', async () => {
+  const { isConfirmation } = await import('../src/services/secretary.js');
+  for (const t of ['כן', 'כן!', 'אישור', 'אישור ✅', 'מאשר', 'אוקיי', 'בסדר', 'יאללה', 'ok', 'Yes', 'כן 👍']) assert.equal(isConfirmation(t), true, t);
+  for (const t of ['כן אבל 5000', 'לא', 'ביטול', '6000', 'משה כהן הזמין 4 בקרים', '', null]) assert.equal(isConfirmation(t), false, String(t));
+  assert.equal(isConfirmation('אישור ✅', 'confirm_yes'), true);
+  assert.equal(isConfirmation('whatever', 'confirm_yes'), true);
+  assert.equal(isConfirmation('ביטול ❌', 'confirm_no'), false);
+});
