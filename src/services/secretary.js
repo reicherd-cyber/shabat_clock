@@ -125,7 +125,7 @@ export function historyToMessages(rows) {
   return out;
 }
 
-async function loadHistory({ phone, excludeWaId }) {
+export async function loadHistory({ phone, excludeWaId }) {
   const rows = await query(
     `SELECT direction, body FROM whatsapp_messages
       WHERE phone = ? AND created_at >= UTC_TIMESTAMP() - INTERVAL ? HOUR

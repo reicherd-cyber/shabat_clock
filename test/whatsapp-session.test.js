@@ -10,5 +10,7 @@ test('settleState: a confirm expires after 10 minutes, a menu after 30, idle sta
   assert.equal(settleState({ state: 'MENU', ...at(29) }), 'MENU');
   assert.equal(settleState({ state: 'MENU', ...at(31) }), 'IDLE');
   assert.equal(settleState({ state: 'MENU', ...at(60 * 24 * 3) }), 'IDLE'); // three days later: a fresh conversation
+  assert.equal(settleState({ state: 'SECRETARY', ...at(29) }), 'SECRETARY');
+  assert.equal(settleState({ state: 'SECRETARY', ...at(31) }), 'IDLE');
   assert.equal(settleState({ state: 'IDLE', ...at(0) }), 'IDLE');
 });

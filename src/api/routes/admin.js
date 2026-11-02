@@ -1031,7 +1031,7 @@ adminRouter.put('/settings', requireSuperadmin, async (req, res, next) => {
 
 adminRouter.get('/admins', async (req, res, next) => {
   try {
-    res.json(await query('SELECT id, name, email, role, is_active, last_login_at, created_at FROM admins ORDER BY id'));
+    res.json(await query('SELECT id, name, email, phone, role, is_active, last_login_at, created_at FROM admins ORDER BY id'));
   } catch (e) { next(e); }
 });
 

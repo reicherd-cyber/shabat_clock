@@ -577,6 +577,15 @@ export function Admins() {
   const refresh = async () => setAdmins(await adminApi.get('/admins'));
   useEffect(() => { refresh().catch(setError); }, []);
   const create = () => run(async () => { await adminApi.post('/admins', form); setForm(null); await refresh(); });
+  // The admin's own phone: the number that gets the WhatsApp secretary and the
+  // phone line's admin menu (admins.phone, superadmin rows only). Edited inline.
+  const [phones, setPhones] = useState({});
+  const phoneOf = (a) => (phones[a.id] ?? a.phone ?? '');
+  const savePhone = (a) => run(async () => {
+    await adminApi.patch(`/admins/${a.id}`, { phone: phoneOf(a).trim() });
+    setPhones((prev) => { const next = { ...prev }; delete next[a.id]; return next; });
+    await refresh();
+  });
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -586,9 +595,17 @@ export function Admins() {
       <TwoFactorCard />
       <ErrorNote error={error} />
       {(admins || []).map((a) => (
-        <Card key={a.id} className="flex items-center justify-between py-3">
+        <Card key={a.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
           <div><b>{a.name}</b> <span className="text-muted text-sm" dir="ltr">{a.email}</span></div>
-          <div className="flex gap-2 items-center">
+          <div className="flex gap-2 items-center flex-wrap">
+            {a.role === 'superadmin' && (
+              <span className="flex gap-1 items-center">
+                <Input dir="ltr" className="w-36" placeholder="טלפון (מזכירה)" value={phoneOf(a)}
+                  onChange={(e) => setPhones((prev) => ({ ...prev, [a.id]: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') savePhone(a); }} />
+                {phones[a.id] !== undefined && phones[a.id] !== (a.phone ?? '') && <Button disabled={busy} onClick={() => savePhone(a)}>שמור</Button>}
+              </span>
+            )}
             <Badge ok={a.role === 'superadmin'}>{a.role}</Badge>
             <Badge ok={!!a.is_active}>{a.is_active ? 'פעיל' : 'מנוטרל'}</Badge>
           </div>

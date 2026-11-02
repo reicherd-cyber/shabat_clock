@@ -121,3 +121,39 @@ test('admin assistant: every write re-checks the admin at execution; the phone r
   const ivr = readFileSync(new URL('../src/ivr/router.js', import.meta.url), 'utf8');
   assert.match(ivr, /const adminOnly = asGuest \? null : await adminByPhone\(phone\);/);
 });
+
+test('WhatsApp: a support ticket is opened only after the customer confirmed (confirmTicket → openTicket on yes)', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const inserts = bot.match(/INSERT INTO support_messages/g) || [];
+  assert.equal(inserts.length, 1, 'one insert, inside openTicket');
+  assert.ok(/async function openTicket[\s\S]*?INSERT INTO support_messages/.test(bot));
+  assert.ok(!/async function supportReply[\s\S]*?INSERT INTO support_messages[\s\S]*?\n}/.test(bot.slice(bot.indexOf('async function supportReply'), bot.indexOf('async function commandReply'))), 'supportReply must not insert');
+  assert.ok(/if \(word === 'yes'\) \{ await openTicket\(/.test(bot), 'the insert runs on the yes only');
+});
+
+test('WhatsApp: the customer secretary is entered only from the menu, and the plain menu stays for everyone else', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const entries = bot.match(/await enterSecretary\(/g) || [];
+  assert.equal(entries.length, 2, 'two entry points: 7 פקודה חופשית and the asked-for words inside the tree');
+  assert.ok(/const SECRETARY_NODES = \['assistant_ask', 'order_channels', 'order_time'\]/.test(bot));
+  // a lead is recorded only on the customer's yes, through the menu's own writer
+  assert.ok(/if \(word === 'yes' && session\.pending\?\.lead\)[\s\S]*?await realIo\.lead\(/.test(bot));
+  const sec = readFileSync(new URL('../src/services/userSecretary.js', import.meta.url), 'utf8');
+  assert.ok(!/INSERT INTO crm_leads/.test(sec), 'the secretary never writes a lead itself');
+});
+
+test('WhatsApp: a confirmed ticket is inserted with the text taken BEFORE the confirm is left (review 2026-11-03)', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const block = bot.slice(bot.indexOf("session.pending?.ticket && !admin"), bot.indexOf('// anything else: a new message; the offer is dropped'));
+  assert.ok(block.indexOf('const ticketText = session.pending.ticket.text') < block.indexOf('await leaveConfirm('), 'text read first');
+  assert.ok(/openTicket\(\{ phone, userId, text: ticketText/.test(block));
+  // every confirm is shown and left through the shared helpers
+  assert.equal((bot.match(/getText\('whatsapp\.confirm'/g) || []).length, 1, 'one place renders the confirm body');
+  assert.ok(!/resumeAfter\(/.test(bot));
+});
+
+test('WhatsApp: leaving secretary mode with 0 / תפריט renders the main menu directly, never as a digit the tree rejects', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const block = bot.slice(bot.indexOf("session.state === 'SECRETARY' && user && !admin"), bot.indexOf('// The numbered menu, for customers and guests alike'));
+  assert.ok(/await sendMenu\(\{ phone, user, r: menuStart\(menuCtx\(user, phone\)\) \}\); return;/.test(block));
+});

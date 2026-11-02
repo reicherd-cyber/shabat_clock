@@ -128,3 +128,31 @@ Model calls are capped at 300 per admin per day (`nlu_usage` kind `admin`).
 
 On the phone the same number hears "למנהל, הקישו 8" — the structured assistant in
 `services/adminAssistant.js` (one action, read back, key 1 to confirm).
+
+## Tickets need the customer's yes (2026-11-03)
+
+Nothing on WhatsApp opens a support ticket behind the customer's back. A question the
+knowledge base cannot answer — on the plain bot or through the customer's secretary — is
+read back with "שלח לנציג ✅ / לא, תודה ❌" buttons (text `whatsapp.ticket_confirm`, migration
+89); the ticket is inserted and the handoff line sent only on the yes. The numbered menu's
+own ticket leaves (an explicit "לא עזר" / "נציג" choice) are unchanged.
+
+## The customer's secretary (2026-11-03)
+
+The numbered menu is unchanged for everyone. Registered numbers listed in the setting
+`whatsapp.secretary_phones` ('' = nobody, '*' = everybody; they must be on the menu list too)
+reach `services/userSecretary.js` from inside the menu: 7 פקודה חופשית, the service branch's
+"לשאול את העוזר" question, and a sentence typed in the sales branch open the secretary mode
+(session state SECRETARY, 30 min; 0 / תפריט / a greeting returns to the menu, and the mode
+resumes after a confirmed or cancelled proposal). It is a tool-using agent that sees only the
+sender's own account — relays and live state, plans, the next days' firings, history, their
+tickets — plus the product knowledge base. A switch (on/off now or once at a time
+today/tomorrow, pause or resume a plan) goes to the command interpreter, whose validated
+actions are stored on the session and run through the same confirm buttons and
+`executePending` as a typed order; a standing weekly timing or deleting a timing is refused
+(the app does that). A sales request (`order_request`: channels, city, a good time to call)
+is read back with the confirm buttons and recorded as the same CRM lead the menu's sales
+branch records, on the yes only. A ticket needs the customer's yes as well. Every tool takes
+the user from the verified sender; none has a user argument (test/user-secretary.test.js).
+Model calls are logged under `nlu_usage` kind `secretary` and count against the per-user AI
+budget.

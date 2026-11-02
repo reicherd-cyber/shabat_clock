@@ -14,6 +14,7 @@ export function settleState(row, now = Date.now()) {
   const age = now - new Date(row.updated_at).getTime();
   if (row.state === 'CONFIRM' && age > CONFIRM_TTL_MS) return 'IDLE';
   if (row.state === 'MENU' && age > MENU_TTL_MS) return 'IDLE';
+  if (row.state === 'SECRETARY' && age > MENU_TTL_MS) return 'IDLE'; // the customer's secretary, entered from the menu
   return row.state;
 }
 
