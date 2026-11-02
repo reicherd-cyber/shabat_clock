@@ -413,7 +413,10 @@ async function handleInboundNow(msg) {
     // ── secretary mode: every message, until 0 / תפריט / a greeting ──
     if (session.state === 'SECRETARY' && user && !admin) {
       if (!isSecretaryExit(text) && await secretaryAllowed(user, phone)) { await secretaryModeReply({ phone, user, text, waId: msg.waId }); return; }
-      await resetSession(phone, userId); // back to the menu (rendered below) or the old paths
+      // An exit word (0 / תפריט / a greeting): the main menu itself, not the
+      // word handed to the tree as an unknown digit. Without the menu, the old paths.
+      await resetSession(phone, userId);
+      if (await phoneAllowed('whatsapp.menu_phones', phone)) { await sendMenu({ phone, user, r: menuStart(menuCtx(user, phone)) }); return; }
     }
 
     // The numbered menu, for customers and guests alike — but only for the

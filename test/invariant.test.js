@@ -151,3 +151,9 @@ test('WhatsApp: a confirmed ticket is inserted with the text taken BEFORE the co
   assert.equal((bot.match(/getText\('whatsapp\.confirm'/g) || []).length, 1, 'one place renders the confirm body');
   assert.ok(!/resumeAfter\(/.test(bot));
 });
+
+test('WhatsApp: leaving secretary mode with 0 / תפריט renders the main menu directly, never as a digit the tree rejects', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const block = bot.slice(bot.indexOf("session.state === 'SECRETARY' && user && !admin"), bot.indexOf('// The numbered menu, for customers and guests alike'));
+  assert.ok(/await sendMenu\(\{ phone, user, r: menuStart\(menuCtx\(user, phone\)\) \}\); return;/.test(block));
+});
