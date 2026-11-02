@@ -7,6 +7,8 @@
 //                        becomes a ticket in the admin inbox (source 'whatsapp')
 //   superadmin's own   → the office secretary (services/secretary.js): every
 //   number               message, text or voice, is an instruction it carries out
+//   registered number  → the customer's secretary (services/userSecretary.js),
+//   on the rollout list  own account only; a switch still takes the confirm buttons
 //
 // Same rules as the phone line: nothing executes without the explicit confirm,
 // ids come only from the interpreter's own validated output, and every
@@ -26,6 +28,7 @@ import { transcribeVoice, sttEnabled } from './stt.js';
 import { serialByKey } from './queue.js';
 import { adminByPhone, adminTrigger } from '../services/adminAssistant.js';
 import { secretaryTurn, executeProposals, isConfirmation, SECRETARY_HELP } from '../services/secretary.js';
+import { userSecretaryTurn } from '../services/userSecretary.js';
 import { env } from '../config/env.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion, isBareDigit, strayConfirmWord } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
@@ -358,6 +361,19 @@ async function handleInboundNow(msg) {
     }
 
     if (session.fresh) await saveSession({ phone, userId: user.id });
+    // ── the customer's secretary (per-number rollout: whatsapp.secretary_phones) ──
+    // Read-only over the customer's own account; a switch comes back as the
+    // interpreter's validated actions and takes the SAME confirm path as a
+    // typed order (state CONFIRM → executePending → runNluActions).
+    if (await phoneAllowed('whatsapp.secretary_phones', phone)) {
+      const r = await userSecretaryTurn({ user, phone, text, excludeWaId: msg.waId });
+      if (!r.pending) { await sendText({ phone, userId, text: r.text, kind: 'secretary' }); return; }
+      await saveSession({ phone, userId: user.id, state: 'CONFIRM', pending: { actions: r.pending.actions, tz: r.pending.tz, text: r.pending.text } });
+      const summary = r.pending.actions.map((a) => `• ${a.summary}`).join('\n');
+      const body = (r.text ? `${r.text}\n\n` : '') + await getText('whatsapp.confirm', { summary });
+      await sendButtons({ phone, userId, text: body, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
+      return;
+    }
     if (isGreeting(text)) {
       await sendText({ phone, userId, text: await getText('whatsapp.greeting', { name: firstName(user) }) });
       return;

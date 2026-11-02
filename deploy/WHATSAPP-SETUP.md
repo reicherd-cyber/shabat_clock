@@ -128,3 +128,17 @@ Model calls are capped at 300 per admin per day (`nlu_usage` kind `admin`).
 
 On the phone the same number hears "למנהל, הקישו 8" — the structured assistant in
 `services/adminAssistant.js` (one action, read back, key 1 to confirm).
+
+## The customer's secretary (2026-11-03)
+
+Registered numbers listed in the setting `whatsapp.secretary_phones` ('' = nobody,
+'*' = everybody) talk to `services/userSecretary.js` instead of the greeting / status /
+command / question paths: a tool-using agent that sees only the sender's own account —
+relays and live state, plans, the next days' firings, history, their tickets — plus the
+product knowledge base. The only change it can propose is a switch (on/off now, pause or
+resume a plan): the words go to the command interpreter, whose validated actions are
+stored on the session and run through the same confirm buttons and `executePending` as a
+typed order. Creating or deleting timings is refused (the app does that). Every tool
+takes the user from the verified sender; none has a user argument
+(test/user-secretary.test.js). Model calls are logged under `nlu_usage` kind
+`secretary` and count against the per-user AI budget.
