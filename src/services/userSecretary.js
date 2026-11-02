@@ -30,9 +30,11 @@ import { loadHistory, toWhatsApp } from './secretary.js';
 
 const MAX_TOOL_ROUNDS = 6;
 const RESULT_MAX_CHARS = 6000;
-// The switch kinds the secretary may propose. 'recurring' (a new timing) and
-// 'delete_schedule' are what the app's plan editor is for — refused here.
-export const ALLOWED_ACTION_KINDS = new Set(['immediate', 'plan_toggle']);
+// The switch kinds the secretary may propose: now, once at a time today or
+// tomorrow (a one-off that fires and expires — what the bot already offers),
+// and pausing or resuming a plan. A standing weekly timing ('recurring') and
+// deleting a timing are the app's plan editor — refused here.
+export const ALLOWED_ACTION_KINDS = new Set(['immediate', 'timed', 'plan_toggle']);
 
 const S = (description, extra = {}) => ({ type: 'string', description, ...extra });
 const I = (description) => ({ type: 'integer', description });
@@ -46,7 +48,7 @@ export const TOOLS = [
   { name: 'my_history', description: 'מה קרה לאחרונה: הדלקות וכיבויים שבוצעו (מתי, מאיפה, האם המכשיר אישר) ושיחות טלפון למערכת.', input_schema: { type: 'object', properties: { limit: I('כמה רשומות, עד 40 (ברירת מחדל 20)') } } },
   { name: 'my_tickets', description: 'הפניות של הלקוח לתמיכה והתשובות שקיבל.', input_schema: { type: 'object', properties: {} } },
   { name: 'knowledge_base', description: 'שאלה על המוצר, האתר, האפליקציה, ההתקנה או המענה הקולי — תשובה ממאגר הידע של TelTech. לשאלות שאינן על חשבון הלקוח עצמו.', input_schema: { type: 'object', properties: { question: S('השאלה כפי שנשאלה') }, required: ['question'] } },
-  { name: 'switch_command', description: 'הדלקה או כיבוי עכשיו של ערוץ ("כבה את הדוד", "הדלק הכל"), או עצירה/הפעלה של תוכנית ("עצור את תוכנית השבת"). מועבר למפרש הפקודות ומתבצע רק אחרי שהלקוח מאשר בכפתור. לא ליצירת תזמונים חדשים.', input_schema: { type: 'object', properties: { text: S('הפקודה במילים, כפי שהלקוח אמר') }, required: ['text'] } },
+  { name: 'switch_command', description: 'הדלקה או כיבוי של ערוץ — עכשיו ("כבה את הדוד") או פעם אחת בשעה היום/מחר ("הדלק את הפלטה מחר בשש"), או עצירה/הפעלה של תוכנית ("עצור את תוכנית השבת"). מועבר למפרש הפקודות ומתבצע רק אחרי שהלקוח מאשר בכפתור. לא לתזמון קבוע (כל שבוע) ולא למחיקת תזמונים.', input_schema: { type: 'object', properties: { text: S('הפקודה במילים, כפי שהלקוח אמר') }, required: ['text'] } },
   { name: 'open_ticket', description: 'פתיחת פנייה לנציג אנושי, כשהלקוח מבקש או כשאין תשובה. הפנייה נרשמת מיד.', input_schema: { type: 'object', properties: { text: S('מה לכתוב לנציג — הבקשה של הלקוח במילותיו') }, required: ['text'] } },
 ];
 
@@ -96,7 +98,7 @@ async function runTool(name, input, ctx) {
       const interp = await interpretCommand({ userId, text: String(input.text || '').slice(0, 1000), phone, source: 'whatsapp' });
       if (!interp.understood) return { proposed: false, clarification: interp.clarification };
       const refused = interp.actions.filter((a) => !ALLOWED_ACTION_KINDS.has(a.kind));
-      if (refused.length) return { proposed: false, refused: refused.map((a) => a.summary), note: 'יצירה ומחיקה של תזמונים נעשות באפליקציה (kosher-teltech.com) — לא כאן. אמרו זאת ללקוח.' };
+      if (refused.length) return { proposed: false, refused: refused.map((a) => a.summary), note: 'תזמון קבוע (כל שבוע) ומחיקת תזמונים נעשים באפליקציה (kosher-teltech.com) — לא כאן. אמרו זאת ללקוח.' };
       ctx.pending = { actions: interp.actions, tz: interp.tz, text: String(input.text || '') };
       return { proposed: true, awaiting_confirmation: true, actions: interp.actions.map((a) => a.summary), note: 'הפעולות ייקראו ללקוח עם כפתורי אישור על ידי המערכת — אל תפרטו אותן ואל תשאלו "לאשר?"; כתבו רק משפט קצר או כלום.' };
     }
@@ -113,13 +115,13 @@ async function runTool(name, input, ctx) {
 
 const RULES = `את/ה המזכיר/ה האישי/ת של לקוח TelTech (שעון שבת חכם: בקרים שמדליקים ומכבים דוד, פלטה, תאורה ועוד לפי תזמונים, כולל שבת וחג). הלקוח כותב בוואטסאפ בעברית חופשית, לפעמים הודעה קולית שתומללה (עם שגיאות תמלול).
 
-מה את/ה יודע/ת ויכול/ה: רק החשבון של הלקוח הזה — המכשירים והערוצים שלו ומצבם, התוכניות והתזמונים שלו, מה יקרה בימים הקרובים, מה קרה לאחרונה, הפניות שלו לתמיכה, ושאלות על המוצר ממאגר הידע. הפעולה היחידה: הדלקה/כיבוי עכשיו או עצירה/הפעלה של תוכנית, דרך switch_command — והיא מתבצעת רק אחרי שהלקוח מאשר בכפתור (המערכת מציגה את הכפתורים).
+מה את/ה יודע/ת ויכול/ה: רק החשבון של הלקוח הזה — המכשירים והערוצים שלו ומצבם, התוכניות והתזמונים שלו, מה יקרה בימים הקרובים, מה קרה לאחרונה, הפניות שלו לתמיכה, ושאלות על המוצר ממאגר הידע. הפעולה היחידה: הדלקה/כיבוי — עכשיו או פעם אחת בשעה היום/מחר — או עצירה/הפעלה של תוכנית, דרך switch_command — והיא מתבצעת רק אחרי שהלקוח מאשר בכפתור (המערכת מציגה את הכפתורים).
 
 איך לפעול:
-1. בקשת הדלקה/כיבוי/עצירת תוכנית — switch_command עם המילים של הלקוח. אם חזר proposed=true — המערכת מצרפת להודעה שלך את הפעולות וכפתורי האישור: אל תפרטו אותן ואל תכתבו "לאשר?"; כתבו משפט קצר או כלום. אם חזרה clarification — שאלו את הלקוח את השאלה. אם חזר refused — זה תזמון חדש/מחיקה: הסבירו שזה נעשה באפליקציה.
+1. בקשת הדלקה/כיבוי (עכשיו או בשעה היום/מחר) או עצירת/הפעלת תוכנית — switch_command עם המילים של הלקוח; אל תסרבו בעצמכם — המפרש מחליט. אם חזר proposed=true — המערכת מצרפת להודעה שלך את הפעולות וכפתורי האישור: אל תפרטו אותן ואל תכתבו "לאשר?"; כתבו משפט קצר או כלום. אם חזרה clarification — שאלו את הלקוח את השאלה. אם חזר refused — זה תזמון קבוע (כל שבוע) או מחיקה: הסבירו שזה נעשה באפליקציה.
 2. שאלה על החשבון ("מה דולק?", "מתי הדוד נדלק בשבת?", "למה הפלטה כבתה?") — הכלים המתאימים, ותשובה קצרה וברורה מהנתונים בלבד. לא להמציא.
 3. שאלה על המוצר/האתר/ההתקנה — knowledge_base. אם אין תשובה — להציע נציג (open_ticket) ולפתוח רק אם הלקוח רוצה, או מיד אם ביקש נציג.
-4. מה שאינו בטווח (חשבונות של אחרים, תשלומים, שינוי פרטים, יצירת תזמונים) — להגיד בנימוס שזה לא זמין כאן, ולהפנות לאפליקציה או לנציג. לעולם לא לדבר על לקוחות אחרים.
+4. מה שאינו בטווח (חשבונות של אחרים, תשלומים, שינוי פרטים, תזמונים קבועים) — להגיד בנימוס שזה לא זמין כאן, ולהפנות לאפליקציה או לנציג. לעולם לא לדבר על לקוחות אחרים.
 5. סגנון: עברית קצרה וחמה, כמו הודעת וואטסאפ, בלי הקדמות ובלי לספר מה אתה בודק. ✅ להודעת ביצוע, ❓ לשאלה. בלי markdown (בלי **, בלי #); *מודגש* בכוכבית אחת אם צריך.
 6. "תודה"/"שלום" — תשובה קצרה וחמה, בלי כלים.`;
 

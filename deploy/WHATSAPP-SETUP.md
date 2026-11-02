@@ -138,7 +138,7 @@ relays and live state, plans, the next days' firings, history, their tickets —
 product knowledge base. The only change it can propose is a switch (on/off now, pause or
 resume a plan): the words go to the command interpreter, whose validated actions are
 stored on the session and run through the same confirm buttons and `executePending` as a
-typed order. Creating or deleting timings is refused (the app does that). Every tool
+typed order. A standing weekly timing or deleting a timing is refused (the app does that). Every tool
 takes the user from the verified sender; none has a user argument
 (test/user-secretary.test.js). Model calls are logged under `nlu_usage` kind
 `secretary` and count against the per-user AI budget.

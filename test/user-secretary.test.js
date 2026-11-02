@@ -22,5 +22,5 @@ test('customer secretary: every SQL it runs is scoped to the user; writes are on
   assert.ok(!/UPDATE |DELETE /i.test(src), 'no updates or deletes');
   assert.ok(src.includes('interpretCommand({ userId, text'), 'the switch goes through the interpreter with the session user');
   assert.ok(!/import[^\n]*runNluActions|runNluActions\(/.test(src), 'the secretary never executes a switch itself — the confirm path does'); // the comment may name it
-  assert.deepEqual([...ALLOWED_ACTION_KINDS].sort(), ['immediate', 'plan_toggle']);
+  assert.deepEqual([...ALLOWED_ACTION_KINDS].sort(), ['immediate', 'plan_toggle', 'timed']); // never 'recurring' or 'delete_schedule'
 });
