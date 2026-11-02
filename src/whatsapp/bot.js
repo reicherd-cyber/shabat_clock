@@ -25,7 +25,7 @@ import { sendText, sendButtons, markRead, downloadMedia } from './client.js';
 import { transcribeVoice, sttEnabled } from './stt.js';
 import { serialByKey } from './queue.js';
 import { adminByPhone, adminTrigger } from '../services/adminAssistant.js';
-import { secretaryTurn, isConfirmation, SECRETARY_HELP } from '../services/secretary.js';
+import { secretaryTurn, executeProposals, isConfirmation, SECRETARY_HELP } from '../services/secretary.js';
 import { env } from '../config/env.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion, isBareDigit, strayConfirmWord } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
@@ -162,15 +162,34 @@ async function commandReply({ phone, user, text }) {
 }
 
 // The secretary (services/secretary.js): a superadmin's own number talks to it
-// like to a person — no trigger; it reads a write back with confirm buttons
-// and does it on the admin's yes, answers questions at once. The chat log is
-// its memory. A leading "#" (the old trigger) is still tolerated and dropped.
+// like to a person — no trigger. A write is read back with the confirm
+// buttons and the recorded calls are stored on the session (state CONFIRM,
+// 10-min TTL) only once that read-back was delivered; the admin's yes runs
+// exactly those calls (executeProposals, no model), a no drops them, anything
+// else is a new request. Questions answer at once. The chat log is its memory.
+// A leading "#" (the old trigger) is still tolerated and dropped.
 async function secretaryReply({ phone, userId, admin, text, waId, buttonId }) {
   const t = adminTrigger(text) ?? text;
   if (/^(עזרה|help|\?)$/i.test(t)) { await sendText({ phone, userId, text: SECRETARY_HELP, kind: 'secretary' }); return; }
-  const r = await secretaryTurn({ admin, phone, userId, text: t, excludeWaId: waId, source: 'whatsapp', confirmed: isConfirmation(t, buttonId) });
-  if (r.proposed) await sendButtons({ phone, userId, text: r.text, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
-  else await sendText({ phone, userId, text: r.text, kind: 'secretary' });
+  const session = await getSession(phone);
+  const proposals = session.state === 'CONFIRM' ? session.pending?.secretary?.proposals : null;
+  if (proposals?.length) {
+    await resetSession(phone, userId);
+    if (isConfirmation(t, buttonId)) {
+      await sendText({ phone, userId, text: await executeProposals({ admin, phone, userId, proposals, source: 'whatsapp' }), kind: 'result' });
+      return;
+    }
+    if (buttonId === BTN_NO || confirmWord(t) === 'no') { await sendText({ phone, userId, text: await getText('whatsapp.cancelled') }); return; }
+  } else if (buttonId === BTN_YES || buttonId === BTN_NO) {
+    await sendText({ phone, userId, text: await getText('whatsapp.confirm_expired') });
+    return;
+  }
+  const r = await secretaryTurn({ admin, phone, userId, text: t, excludeWaId: waId, source: 'whatsapp' });
+  if (!r.proposed) { await sendText({ phone, userId, text: r.text, kind: 'secretary' }); return; }
+  const sent = await sendButtons({ phone, userId, text: r.text, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
+  // Stored only once the read-back reached the admin: a yes can never approve
+  // a proposal that was never shown.
+  if (sent?.ok) await saveSession({ phone, userId, state: 'CONFIRM', pending: { secretary: { proposals: r.proposals } } });
 }
 
 async function executePending({ phone, user, session }) {

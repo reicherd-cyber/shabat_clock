@@ -52,12 +52,27 @@ test('isConfirmation: the confirm button or a bare yes word; anything else is a 
   assert.equal(isConfirmation('ביטול ❌', 'confirm_no'), false);
 });
 
-test('looksLikeProposal: a read-back ending in "לאשר?" gets the confirm buttons', async () => {
-  const { looksLikeProposal } = await import('../src/services/secretary.js');
-  assert.equal(looksLikeProposal('• ליד חדש: משה כהן\n• הזמנה: 4 בקרים — 6000 ₪\n\nלאשר?'), true);
-  assert.equal(looksLikeProposal('לאשר? '), true);
-  assert.equal(looksLikeProposal('• הוצאה 300 ₪\n*לאשר?*'), true);        // bold, as the style rule allows
-  assert.equal(looksLikeProposal('❓ לא ברור — מה לאשר?'), false);        // a question that merely ends with the word
-  assert.equal(looksLikeProposal('❓ מה הסכום?'), false);
-  assert.equal(looksLikeProposal('✅ נפתחה הזמנה #30'), false);
+test('proposals: placeholders resolve to created ids, read-backs come from the arguments, reports from the results', async () => {
+  const { PLACEHOLDER, substituteIds, describeProposal, describeResult } = await import('../src/services/secretary.js');
+  assert.equal(PLACEHOLDER(0), -1);
+  assert.deepEqual(substituteIds({ lead_id: -1, description: '4 בקרים', amount: 6000 }, [57]), { lead_id: 57, description: '4 בקרים', amount: 6000 });
+  assert.deepEqual(substituteIds({ lead_id: -2, amount: 5 }, [57]), { lead_id: -2, amount: 5 }); // nothing created for it yet
+  assert.deepEqual(substituteIds({ order_id: 30, amount: -5 }, []), { order_id: 30, amount: -5 }); // a negative amount is not an id
+  const proposals = [
+    { name: 'create_lead', input: { name: 'משה כהן', city: 'בני ברק' } },
+    { name: 'create_order', input: { lead_id: -1, description: '4 בקרים', amount: 6000 } },
+    { name: 'add_payment', input: { order_id: 30, amount: 500, method: 'bit' } },
+    { name: 'add_finance_entry', input: { kind: 'expense', title: 'דלק', amount: 300, category: 'רכב' } },
+    { name: 'update_task', input: { task_id: 7, status: 'done' } },
+  ];
+  const lookup = { orders: { 30: 'דוד לוי — מערכת 2 ערוצים' } };
+  const lines = proposals.map((p) => describeProposal(p.name, p.input, lookup, proposals));
+  assert.equal(lines[0], 'ליד חדש: משה כהן, בני ברק');
+  assert.equal(lines[1], 'הזמנה למשה כהן: 4 בקרים, ₪6,000');            // the placeholder reads the proposed lead's name
+  assert.equal(lines[2], 'תשלום ₪500 בביט על הזמנה #30 (דוד לוי — מערכת 2 ערוצים)');
+  assert.equal(lines[3], 'הוצאה: דלק, ₪300 (רכב), היום');
+  assert.equal(lines[4], 'סימון משימה #7 כבוצעה');
+  assert.equal(describeResult('create_lead', proposals[0].input, { lead_id: 57, name: 'משה כהן' }), '✅ נפתח ליד #57: משה כהן');
+  assert.equal(describeResult('create_order', proposals[1].input, { order_id: 31, lead_name: 'משה כהן', description: '4 בקרים', amount: 6000 }), '✅ נפתחה הזמנה #31 למשה כהן: 4 בקרים, ₪6,000');
+  assert.equal(describeResult('add_finance_entry', proposals[3].input, { entry_id: 412 }), '✅ נרשמה הוצאה #412: דלק, ₪300');
 });

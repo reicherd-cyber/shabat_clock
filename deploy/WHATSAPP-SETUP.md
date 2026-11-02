@@ -114,9 +114,12 @@ gets the office secretary on WhatsApp: **every** message from that number — te
 voice note — goes to `services/secretary.js`, a tool-using Claude agent with full access
 to leads, orders, payments, the ledger, the task board, the support inbox, customer
 accounts and the admin's own devices. A clear instruction is read back with confirm
-buttons and carried out on the admin's yes (enforced in code: a write tool runs only in
-the turn whose message is that yes, within 15 minutes of the proposal); an unclear one
-gets one short question; questions are answered at once. The
+buttons and carried out on the admin's yes. The confirm binds execution to the proposal:
+a write the model asks for is never run in that turn — the tool call is recorded, the
+read-back is generated from its arguments, the recorded calls are stored on the WhatsApp
+session (state CONFIRM, 10-minute TTL) only once the read-back was delivered, and the
+yes replays exactly those calls with no model in between. An unclear request gets one
+short question; questions are answered at once. The
 chat log (`whatsapp_messages`, last 6 hours) is replayed as its memory, so a bare "6000"
 answers "what is the amount?" and "cancel that" finds the id in the secretary's last
 line. Writes use the same `services/crm.js` / `services/finance.js` / SQL as the panel,

@@ -3,10 +3,12 @@
 // ledger, the task board, the support inbox, customer accounts and devices —
 // and acts the way a human secretary would: a clear instruction is read back
 // and carried out once the admin confirms; an unclear one gets one short
-// question. The confirm is enforced here, not left to the model: a write tool
-// runs only in a turn whose message IS the admin's confirmation of the last
-// proposal (isConfirmation + a fresh proposal), otherwise it is refused and
-// the model is told to propose. Memory is the chat itself: the last hours of whatsapp_messages
+// question. The confirm binds execution to the proposal, with no model in
+// between: a write the model asks for is never run in that turn — it is
+// recorded as a proposal {tool, arguments}, read back in words generated here
+// from those very arguments, stored on the WhatsApp session once the read-back
+// reached the admin, and run by executeProposals() on the admin's yes exactly
+// as recorded. Memory is the chat itself: the last hours of whatsapp_messages
 // are replayed to the model, so "6000" after "what is the amount?" completes
 // the order, and "cancel that" finds the id in the secretary's own last line.
 //
@@ -30,20 +32,74 @@ import { runNluActions } from './nluExec.js';
 import { adminByPhone, assertAdminLive, todayStr } from './adminAssistant.js';
 
 export const SECRETARY_DAILY_MAX = 300; // model calls per admin per day
-// A proposal the admin has not answered within this long is stale: a "כן"
-// after it re-proposes instead of writing.
-export const PROPOSAL_TTL_MS = 15 * 60 * 1000;
 
 // The admin's "yes" to the secretary's read-back: the confirm button, or a
 // bare word of assent (with trailing punctuation / a thumbs-up). Pure.
-const YES = /^(כן|אישור|מאשר|מאשרת|אשר|בצע|בצעי|תבצע|תבצעי|אוקיי|אוקי|אוקי?י|או קיי|בסדר|סבבה|יאללה|מעולה|נכון|ok|okay|yes|y|go)[\s!.,✅👍🙏]*$/i;
+const YES = /^(כן|אישור|מאשר|מאשרת|אשר|בצע|בצעי|תבצע|תבצעי|אוקיי|אוקי|או קיי|בסדר|סבבה|יאללה|מעולה|נכון|ok|okay|yes|y|go)[\s!.,✅👍🙏]*$/i;
 export const isConfirmation = (text, buttonId = null) => buttonId === 'confirm_yes' || YES.test(String(text || '').trim());
-// The proposal contract, in one place: a read-back ends with the word "לאשר?"
-// on its own line (bold tolerated). That line is what the confirm buttons are
-// attached to, and the only outbound message a later "כן" can unlock. The
-// regex and the sentence that tells the model so live together. Pure.
-export const looksLikeProposal = (text) => /(^|\n)\s*\*?לאשר\s*[?؟]\*?\s*$/.test(String(text || '').trim());
-const PROPOSAL_ENDING_RULE = 'לסיים בשורה נפרדת עם המילה "לאשר?" בדיוק כך (לא בניסוח אחר, בלי ❓) — זו השורה שמצמידה להודעה את כפתורי האישור, ורק הצעה כזו ניתנת לאישור. ❓ שמורה לשאלת הבהרה בלבד.';
+
+// ── proposals ────────────────────────────────────────────────────────
+// A proposal is {name, input}: the tool call the model asked for, verbatim.
+// A create_* the model needs the id of (an order for a lead that does not
+// exist yet) gets a negative placeholder — PLACEHOLDER(i) for the i-th
+// proposal — which executeProposals() replaces with the real id. Pure.
+export const PLACEHOLDER = (idx) => -(idx + 1);
+export function substituteIds(input, created) {
+  const out = {};
+  for (const [k, v] of Object.entries(input || {})) {
+    out[k] = (k.endsWith('_id') && Number.isInteger(v) && v < 0 && created[-v - 1] != null) ? created[-v - 1] : v;
+  }
+  return out;
+}
+
+const ils = (n) => `₪${Number(n).toLocaleString('he-IL', { maximumFractionDigits: 2 })}`;
+const METHOD_HE = { cash: 'מזומן', transfer: 'העברה', bit: 'ביט', credit: 'אשראי', check: "צ'ק", other: 'אחר' };
+const REC_HE = { monthly: 'כל חודש', yearly: 'כל שנה' };
+const STATUS_HE = { new: 'חדש', interested: 'מתעניין', not_interested: 'לא מעוניין', customer: 'לקוח', open: 'פתוחה', delivered: 'סופקה', cancelled: 'בוטלה', in_progress: 'בטיפול', done: 'בוצעה', low: 'נמוכה', normal: 'רגילה', high: 'גבוהה' };
+const FIELD_HE = { name: 'שם', phone: 'טלפון', email: 'אימייל', city: 'עיר', status: 'סטטוס', follow_up: 'מעקב', notes: 'הערות', notes_append: 'הערה', description: 'תיאור', amount: 'סכום', title: 'כותרת', category: 'קטגוריה', entry_date: 'תאריך', recurrence: 'תדירות', note: 'הערה', due_date: 'תאריך יעד', priority: 'עדיפות' };
+const changes = (input, skip) => Object.entries(input).filter(([k, v]) => !skip.includes(k) && v !== undefined)
+  .map(([k, v]) => `${FIELD_HE[k] || k}: ${v === '' || v === null ? '—' : k === 'amount' ? ils(v) : (STATUS_HE[v] || v)}`).join(', ');
+
+// The read-back line of one proposal, from its arguments alone — what the
+// admin approves is what runs. `lookup` carries names for ids that exist
+// ({leads: {id: name}, orders: {id: description}}); a placeholder id reads
+// from the proposal it points at. Pure.
+export function describeProposal(name, input, lookup = {}, proposals = []) {
+  const i = input || {};
+  const leadName = (id) => (id < 0 ? proposals[-id - 1]?.input?.name : lookup.leads?.[id]) || `#${id}`;
+  const orderName = (id) => (id < 0 ? proposals[-id - 1]?.input?.description : lookup.orders?.[id]) || `#${id}`;
+  switch (name) {
+    case 'create_lead': return `ליד חדש: ${i.name}${i.phone ? `, ${i.phone}` : ''}${i.city ? `, ${i.city}` : ''}${i.notes ? ` (${i.notes})` : ''}`;
+    case 'update_lead': return i.deleted === true ? `העברת ליד ${leadName(i.lead_id)} לארכיון` : `עדכון ליד ${leadName(i.lead_id)}: ${changes(i, ['lead_id', 'deleted'])}`;
+    case 'create_order': return `הזמנה ל${leadName(i.lead_id)}: ${i.description}, ${ils(i.amount)}`;
+    case 'update_order': return i.deleted === true ? `מחיקת הזמנה #${i.order_id}` : `עדכון הזמנה #${i.order_id} (${orderName(i.order_id)}): ${changes(i, ['order_id', 'deleted'])}`;
+    case 'add_payment': return `תשלום ${ils(i.amount)}${i.method ? ` ב${METHOD_HE[i.method] || i.method}` : ''} על הזמנה #${i.order_id} (${orderName(i.order_id)})${i.paid_on ? `, ${i.paid_on}` : ''}`;
+    case 'delete_payment': return `ביטול תשלום #${i.payment_id}`;
+    case 'add_finance_entry': return `${i.kind === 'income' ? 'הכנסה' : 'הוצאה'}: ${i.title}, ${ils(i.amount)} (${i.category || 'כללי'}), ${i.entry_date || 'היום'}${REC_HE[i.recurrence] ? `, ${REC_HE[i.recurrence]}` : ''}`;
+    case 'update_finance_entry': return i.deleted === true ? `מחיקת רשומה #${i.entry_id} מספר ההכנסות וההוצאות` : `עדכון רשומה #${i.entry_id}: ${changes(i, ['entry_id', 'deleted'])}`;
+    case 'create_task': return `משימה: ${i.title}${i.due_date ? `, עד ${i.due_date}` : ''}${i.priority === 'high' ? ' (דחוף)' : ''}`;
+    case 'update_task': return i.deleted === true ? `מחיקת משימה #${i.task_id}` : i.status === 'done' && Object.keys(i).length === 2 ? `סימון משימה #${i.task_id} כבוצעה` : `עדכון משימה #${i.task_id}: ${changes(i, ['task_id', 'deleted'])}`;
+    case 'reply_to_ticket': return `תשובה לפנייה #${i.ticket_id}: "${i.body}"${i.close ? ' וסגירתה' : ''}`;
+    case 'my_devices_command': return `פקודה למכשירים שלך: ${i.text}`;
+    default: return `${name} ${JSON.stringify(i)}`;
+  }
+}
+
+// The report line after a proposal ran, from the tool's own result. Pure.
+export function describeResult(name, input, out) {
+  const i = input || {}; const o = out || {};
+  switch (name) {
+    case 'create_lead': return `✅ נפתח ליד #${o.lead_id}: ${o.name || i.name}`;
+    case 'create_order': return `✅ נפתחה הזמנה #${o.order_id}${o.lead_name ? ` ל${o.lead_name}` : ''}: ${o.description || i.description}, ${ils(o.amount ?? i.amount)}`;
+    case 'add_payment': return `✅ נרשם תשלום #${o.payment_id}: ${ils(o.amount ?? i.amount)}${o.lead_name ? ` מ${o.lead_name}` : ''} על ${o.order || `הזמנה #${i.order_id}`}`;
+    case 'add_finance_entry': return `✅ נרשמה ${i.kind === 'income' ? 'הכנסה' : 'הוצאה'} #${o.entry_id}: ${i.title}, ${ils(i.amount)}`;
+    case 'create_task': return `✅ נפתחה משימה #${o.task_id}: ${o.title || i.title}${o.due_date ? ` (עד ${o.due_date})` : ''}`;
+    case 'reply_to_ticket': return `✅ נשלחה תשובה לפנייה #${i.ticket_id}${o.delivered_via ? ` (${o.delivered_via})` : ''}`;
+    case 'my_devices_command': return o.ok ? `✅ ${(o.done || []).join(', ')}${o.unacked ? ' — המכשיר לא אישר' : ''}` : `⚠️ ${o.clarification || 'הפקודה לא הובנה'}`;
+    default: return `✅ ${describeProposal(name, i)}`;
+  }
+}
+
 const MAX_TOOL_ROUNDS = 8;
 const HISTORY_HOURS = 6;
 const HISTORY_MAX = 30;
@@ -71,18 +127,14 @@ export function historyToMessages(rows) {
 
 async function loadHistory({ phone, excludeWaId }) {
   const rows = await query(
-    `SELECT direction, kind, body, created_at FROM whatsapp_messages
+    `SELECT direction, body FROM whatsapp_messages
       WHERE phone = ? AND created_at >= UTC_TIMESTAMP() - INTERVAL ? HOUR
         AND (wa_message_id IS NULL OR wa_message_id <> ?)
+        AND NOT (direction = 'out' AND status = 'failed')
       ORDER BY id DESC LIMIT ?`,
     [phone, HISTORY_HOURS, excludeWaId || '', HISTORY_MAX],
   );
-  // A "כן" unlocks writes only when the secretary's LAST message was a
-  // proposal (sent with the confirm buttons, or ending in לאשר?): a yes to a
-  // clarification question, or to a ✅ report, is just conversation.
-  const lastOut = rows.find((r) => r.direction === 'out');
-  const isProposal = lastOut && (lastOut.kind === 'confirm' || looksLikeProposal(lastOut.body));
-  return { messages: historyToMessages(rows.reverse()), lastProposalAt: isProposal ? new Date(lastOut.created_at).getTime() : 0 };
+  return historyToMessages(rows.reverse());
 }
 
 // ── what the secretary can do ────────────────────────────────────────
@@ -149,31 +201,24 @@ export const TOOLS = [
 ];
 
 // ── the tools' bodies ────────────────────────────────────────────────
-const ils = (n) => `₪${Number(n).toLocaleString('he-IL', { maximumFractionDigits: 2 })}`;
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const dateOr = (d, fallback) => (ISO.test(String(d || '')) ? d : fallback);
 const need = (v, what) => { if (!Number.isInteger(Number(v)) || Number(v) <= 0) throw new Error(`${what} חסר או לא תקין`); return Number(v); };
 
 const READ_TOOLS = new Set(['find_contacts', 'lead_details', 'list_open_orders', 'finance_summary', 'list_tasks', 'list_support', 'customer_details', 'system_status']);
 
-// The gate: a write runs only with the admin's fresh confirmation (writesAllowed);
-// otherwise the model is told to read the action back. A dry run (live probes
-// against the shared database) answers every write as if it happened.
+// A read runs at once. A write is recorded as a proposal and answered with
+// a placeholder id; it runs only in executeProposals(), on the admin's yes.
 async function runTool(name, input, ctx) {
-  if (!READ_TOOLS.has(name) && !ctx.writesAllowed) {
-    ctx.proposed = true;
-    return { not_done: true, needs_confirmation: true, note: `לא בוצע — כל פעולה דורשת אישור של המנהל. כתבו למנהל במדויק מה ייעשה (כל הפרטים והסכומים, בשורה אחת לפעולה) ו${PROPOSAL_ENDING_RULE} אל תקראו לכלי כתיבה נוסף בתור הזה. אחרי שהמנהל יאשר, קראו לכלי שוב בדיוק כפי שהוצע.` };
-  }
-  // The same write twice in one turn (a model retry after an odd result) is
-  // answered with the first result, never written again.
-  if (!READ_TOOLS.has(name)) {
-    const key = `${name}:${JSON.stringify(input)}`;
-    if (ctx.done.has(key)) return ctx.done.get(key);
-    const out = await runWrite(name, input, ctx);
-    ctx.done.set(key, out);
-    return out;
-  }
-  return runRead(name, input, ctx);
+  if (READ_TOOLS.has(name)) return runRead(name, input, ctx);
+  const key = `${name}:${JSON.stringify(input)}`;
+  let idx = ctx.proposals.findIndex((p) => p.key === key);
+  if (idx < 0) idx = ctx.proposals.push({ key, name, input }) - 1;
+  return {
+    not_done: true, recorded_for_confirmation: true,
+    ...(DRY_IDS[name] ? { [DRY_IDS[name]]: PLACEHOLDER(idx) } : {}),
+    note: 'נרשם להצעה — לא בוצע. המערכת תצרף להודעה שלכם את רשימת הפעולות בניסוח שלה ואת כפתורי האישור, ותבצע בדיוק אותן כשהמנהל יאשר. אל תפרטו את הפעולות בעצמכם ואל תכתבו "לאשר?" — רק משפט הקשר קצר אם צריך, או כלום. מזהה שלילי = רשומה שתיווצר באישור; השתמשו בו בפעולה שתלויה בה (למשל הזמנה לליד החדש).',
+  };
 }
 
 const DRY_IDS = { create_lead: 'lead_id', create_order: 'order_id', add_payment: 'payment_id', add_finance_entry: 'entry_id', create_task: 'task_id', reply_to_ticket: 'reply_id' };
@@ -384,7 +429,7 @@ async function runRead(name, input, ctx) {
       if (!ctx.userId) throw new Error('למספר הזה אין חשבון לקוח עם מכשירים');
       const interp = await interpretCommand({ userId: ctx.userId, text: String(input.text || ''), phone: ctx.phone, source });
       if (!interp.understood) return { ok: false, clarification: interp.clarification };
-      const { results, unacked } = await runNluActions({ userId: ctx.userId, actions: interp.actions, tz: interp.tz, source, actor: actor });
+      const { results, unacked } = await runNluActions({ userId: ctx.userId, actions: interp.actions, tz: interp.tz, source, actor: who });
       return { ok: true, done: interp.actions.map((a) => a.summary), results: results.map((r) => ({ relay: r.relay_name, action: r.action, status: r.status, reason: r.fail_reason || null })), unacked };
     }
     default:
@@ -398,7 +443,7 @@ const RULES = `את/ה המזכיר/ה של משרד TelTech (שעון שבת ח
 התפקיד: להבין מה המנהל רוצה ולבצע, בעזרת הכלים — ליד חדש, הזמנה, תשלום, הכנסה/הוצאה, משימה/תזכורת, תשובה לפנייה, בירור על לקוח או על המערכת. יש לך גישה מלאה; כל פעולה נרשמת על שם המנהל.
 
 איך לפעול:
-1. שום פעולה לא מתבצעת בלי אישור של המנהל. בקשה ברורה — לקרוא לכלי הכתיבה; המערכת תעצור אותו ותחזיר needs_confirmation, ואז לכתוב למנהל במדויק מה ייעשה (שורה אחת לכל פעולה: מי, מה, כמה, מתי) ו${PROPOSAL_ENDING_RULE} כשהמנהל מאשר ("כן", "אישור", הכפתור) — לבצע בדיוק מה שהוצע, בלי לשאול שוב, ולדווח בשורה אחת-שתיים עם המספר שנוצר (ליד #12, הזמנה #30). אם המנהל מאשר עם שינוי ("כן אבל 5000") — להציג את ההצעה המתוקנת ולשאול שוב. "לא"/"בטל" להצעה — לא לבצע, לענות "בוטל". שאלות ובירורים (קריאה בלבד) — לענות מיד, בלי אישור.
+1. שום פעולה לא מתבצעת בלי אישור של המנהל, והאישור נעשה על ידי המערכת, לא על ידך: בקשה ברורה — לקרוא לכלי הכתיבה עם כל הפרטים (סכום, תאריך, קטגוריה וכו'). המערכת לא מבצעת אלא רושמת הצעה, מצרפת להודעה שלך את רשימת הפעולות בניסוח שלה ואת כפתורי האישור, ומבצעת בדיוק אותן כשהמנהל מאשר. לכן בתור כזה: אל תפרטו את הפעולות בטקסט ואל תכתבו "לאשר?" — רק משפט הקשר קצר (למשל: "משה כהן לא קיים — אפתח ליד חדש"), או כלום. פעולה שתלויה ברשומה שטרם נוצרה (הזמנה לליד חדש) — קראו גם לה, עם המזהה השלילי שהוחזר. אחרי שהמנהל אישר, המערכת מדווחת בעצמה; ההודעה הבאה שלו היא בקשה חדשה. "לא"/"בטל" להצעה — המערכת מטפלת. שאלות ובירורים (קריאה בלבד) — לענות מיד, בלי אישור.
 2. ספק אמיתי — לשאול שאלה אחת קצרה ולחכות. ספק = חסר פרט הכרחי (סכום להזמנה, על מה ההוצאה), או כמה התאמות לשם, או בקשה שאפשר להבין בשתי דרכים. לא לנחש סכומים. תאריך/קטגוריה/אמצעי תשלום שלא נאמרו — ברירת מחדל סבירה (היום, "כללי", מזומן) בלי לשאול.
 3. שם של אדם: קודם לבדוק ברשימת הלידים שבהקשר, ואם אינו שם — find_contacts פעם אחת עם החלק היציב של השם (השם הפרטי או שם המשפחה; תמלול משבש שמות, ולכן חלק מהשם עדיף על השם המלא). אם יש התאמה אחת סבירה — לפעול עליה. אם אין — להזמנה: לפתוח ליד חדש בשם שנאמר ואז את ההזמנה, ולומר למנהל שזה איש קשר חדש (ואפשר להוסיף טלפון/עיר). לא לפתוח ליד כפול.
 3א. יש שני סוגי רשומות: ליד ב-CRM (מכירה: הזמנות ותשלומים) וחשבון לקוח במערכת (users: טלפונים, מכשירים, ממסרים). שאלה על מכשירים, חיבור, מצב או תזמונים של לקוח — זה חשבון לקוח: find_contacts ואז customer_details (לא lead_details). רשימת הלידים שבהקשר אינה רשימת חשבונות הלקוח.
@@ -442,13 +487,12 @@ const clip = (v) => { const s = JSON.stringify(v, (k, x) => (x instanceof Date ?
 // One turn of the conversation: the admin's words (text, or a voice note's
 // transcript) → the secretary's reply, after whatever tools it needed.
 // Never throws on a model miss; returns a Hebrew line to send.
-// Returns { text, proposed }: proposed = the secretary read a write back and is
-// waiting for the admin's yes (the channel shows confirm buttons).
-// `confirmed` = the admin's message is that yes; writes run only then, and
-// only while the last proposal is fresh (PROPOSAL_TTL_MS).
-export async function secretaryTurn({ admin, phone, userId = null, text, excludeWaId = null, source = 'whatsapp', confirmed = false, dryRun = false, history = null, lastProposalAt = null, onTool = null }) {
+// Returns { text, proposed, proposals }: proposed = writes were asked for; the
+// text then ends with their read-back and "לאשר?", and `proposals` is what
+// the channel stores and hands to executeProposals() on the admin's yes.
+export async function secretaryTurn({ admin, phone, userId = null, text, excludeWaId = null, source = 'whatsapp', dryRun = false, history = null, onTool = null }) {
   const clean = String(text || '').trim().slice(0, 2000);
-  const plain = (t) => ({ text: t, proposed: false });
+  const plain = (t) => ({ text: t, proposed: false, proposals: [] });
   if (!clean) return plain('מה לעשות?');
   if (!env.anthropic.apiKey) return plain('המזכירה לא מוגדרת בשרת (ANTHROPIC_API_KEY)');
   if (!(await aiAllowed({}))) return plain('המזכירה לא זמינה כרגע (תקציב ה-AI היומי נגמר)');
@@ -457,18 +501,14 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
   // The admin is re-checked on every turn: a revoked number writes nothing.
   assertAdminLive(admin, await adminByPhone(phone));
 
-  const loaded = history ? { messages: history, lastProposalAt: lastProposalAt ?? Date.now() } : await loadHistory({ phone, excludeWaId });
-  const fresh = Date.now() - loaded.lastProposalAt <= PROPOSAL_TTL_MS;
-  const stale = confirmed && !fresh; // a yes with no fresh proposal behind it: re-propose, never write
-  const ctx = { admin: { ...admin, phone }, actor: `admin:${admin.id}`, who: { type: 'admin', id: admin.id }, userId, phone, source, dryRun, writesAllowed: confirmed && fresh, proposed: false, done: new Map() };
+  const ctx = { admin: { ...admin, phone }, actor: `admin:${admin.id}`, who: { type: 'admin', id: admin.id }, userId, phone, source, dryRun, proposals: [] };
   const client = new Anthropic({ apiKey: env.anthropic.apiKey });
   const model = env.anthropic.model;
   const system = [
     { type: 'text', text: RULES, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: await contextBlock(admin) },
   ];
-  const messages = [...loaded.messages, { role: 'user', content: clean }];
-  if (stale) messages[messages.length - 1] = { role: 'user', content: `${clean}\n(הערת מערכת: אין הצעה טרייה לאשר — אם הייתה הצעה, הציגו אותה שוב ושאלו לאשר, בלי לבצע; אם לא, שאלו מה לעשות)` };
+  const messages = [...(history ?? await loadHistory({ phone, excludeWaId })), { role: 'user', content: clean }];
   // The reply is the text of the LAST model response: what it writes before a
   // tool call ("אבדוק…") is narration, not an answer, and stays out of the chat.
   let replies = [];
@@ -501,14 +541,53 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
     messages.push({ role: 'user', content: results });
     if (round === MAX_TOOL_ROUNDS) replies.push('(עצרתי אחרי הרבה צעדים — אם משהו לא הושלם, כתבו שוב)');
   }
-  let answer = toWhatsApp(replies.join('\n')) || 'בוצע.';
-  // Buttons go only on a message that ends with the proposal line — never on
-  // a clarification question that followed a gated write (ctx.proposed alone
-  // is not enough). The re-proposal after a stale yes is known to be one by
-  // construction: it gets the line (and so the buttons) if the model left it off.
-  let proposed = looksLikeProposal(answer);
-  if (!proposed && stale && !answer.includes('❓')) { answer = `${answer}\nלאשר?`; proposed = true; }
-  return { text: answer, proposed };
+  const answer = toWhatsApp(replies.join('\n'));
+  if (!ctx.proposals.length) return { text: answer || 'בוצע.', proposed: false, proposals: [] };
+  // The read-back is generated from the recorded calls, not by the model: the
+  // admin approves exactly what will run. The model's own line is context.
+  const proposals = ctx.proposals.map(({ name, input }) => ({ name, input }));
+  const lookup = await lookupNames(proposals);
+  const lines = proposals.map((p) => `• ${describeProposal(p.name, p.input, lookup, proposals)}`);
+  const context = answer.replace(/(^|\n)\s*\*?לאשר\s*[?؟]\*?\s*$/, '').trim();
+  return { text: [context, ...lines, 'לאשר?'].filter(Boolean).join('\n'), proposed: true, proposals };
+}
+
+// Names for the ids a read-back mentions (an order for lead #12 reads "הזמנה לדוד כהן").
+async function lookupNames(proposals) {
+  const leadIds = []; const orderIds = [];
+  for (const { name, input } of proposals) {
+    if (['create_order', 'update_lead'].includes(name) && input?.lead_id > 0) leadIds.push(Number(input.lead_id));
+    if (['add_payment', 'update_order'].includes(name) && input?.order_id > 0) orderIds.push(Number(input.order_id));
+  }
+  const leads = leadIds.length ? await query(`SELECT id, name FROM crm_leads WHERE id IN (${leadIds.map(() => '?').join(',')})`, leadIds) : [];
+  const orders = orderIds.length ? await query(`SELECT o.id, CONCAT(l.name, ' — ', o.description) AS d FROM crm_orders o JOIN crm_leads l ON l.id = o.lead_id WHERE o.id IN (${orderIds.map(() => '?').join(',')})`, orderIds) : [];
+  return { leads: Object.fromEntries(leads.map((l) => [l.id, l.name])), orders: Object.fromEntries(orders.map((o) => [o.id, o.d])) };
+}
+
+// The admin's yes: the recorded proposals run in order, exactly as recorded,
+// placeholders replaced by the ids just created. Each line reports its own
+// outcome; a step whose prerequisite failed is skipped. No model involved.
+export async function executeProposals({ admin, phone, userId = null, proposals, source = 'whatsapp', dryRun = false }) {
+  assertAdminLive(admin, await adminByPhone(phone));
+  const ctx = { admin: { ...admin, phone }, actor: `admin:${admin.id}`, who: { type: 'admin', id: admin.id }, userId, phone, source, dryRun };
+  const created = []; const lines = []; const failed = new Set();
+  for (let i = 0; i < proposals.length; i++) {
+    const { name, input } = proposals[i];
+    if (READ_TOOLS.has(name)) continue;
+    const dependsOnFailed = Object.values(input || {}).some((v) => Number.isInteger(v) && v < 0 && failed.has(-v - 1));
+    if (dependsOnFailed) { lines.push(`⏭ לא בוצע (תלוי בפעולה שנכשלה): ${describeProposal(name, input, {}, proposals)}`); failed.add(i); continue; }
+    try {
+      const out = await runWrite(name, substituteIds(input, created), ctx);
+      created[i] = DRY_IDS[name] ? out[DRY_IDS[name]] : null;
+      console.log(`[secretary] ${admin.id} ran ${name}${dryRun ? ' (dry run)' : ''} ${JSON.stringify(input).slice(0, 200)}`);
+      lines.push(describeResult(name, input, out));
+    } catch (e) {
+      console.error(`[secretary] ${name} failed:`, e.message);
+      failed.add(i);
+      lines.push(`⚠️ לא בוצע — ${describeProposal(name, input, {}, proposals)}: ${e.message}`);
+    }
+  }
+  return lines.join('\n') || 'לא היה מה לבצע.';
 }
 
 export const SECRETARY_HELP = `אני המזכירה של המשרד. כתבו או הקליטו חופשי, למשל:
