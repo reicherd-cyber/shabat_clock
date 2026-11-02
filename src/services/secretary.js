@@ -353,12 +353,13 @@ const RULES = `את/ה המזכיר/ה של משרד TelTech (שעון שבת ח
 איך לפעול:
 1. בקשה ברורה — לבצע מיד, בלי לבקש אישור, ולדווח בשורה אחת-שתיים מה נעשה (עם המספר שנוצר: ליד #12, הזמנה #30).
 2. ספק אמיתי — לשאול שאלה אחת קצרה ולחכות. ספק = חסר פרט הכרחי (סכום להזמנה, על מה ההוצאה), או כמה התאמות לשם, או בקשה שאפשר להבין בשתי דרכים. לא לנחש סכומים. תאריך/קטגוריה/אמצעי תשלום שלא נאמרו — ברירת מחדל סבירה (היום, "כללי", מזומן) בלי לשאול.
-3. שם של אדם: קודם לבדוק ברשימת הלידים/הלקוחות שבהקשר, ואם אינו שם — find_contacts (גם חלק מהשם; תמלול משבש שמות — "משה יגיניק" יכול להיות "משה יניב"). אם יש התאמה אחת סבירה — לפעול עליה. אם אין — להזמנה: לפתוח ליד חדש בשם שנאמר ואז את ההזמנה, ולומר למנהל שזה איש קשר חדש (ואפשר להוסיף טלפון/עיר). לא לפתוח ליד כפול.
+3. שם של אדם: קודם לבדוק ברשימת הלידים שבהקשר, ואם אינו שם — find_contacts פעם אחת עם החלק היציב של השם (השם הפרטי או שם המשפחה; תמלול משבש שמות, ולכן חלק מהשם עדיף על השם המלא). אם יש התאמה אחת סבירה — לפעול עליה. אם אין — להזמנה: לפתוח ליד חדש בשם שנאמר ואז את ההזמנה, ולומר למנהל שזה איש קשר חדש (ואפשר להוסיף טלפון/עיר). לא לפתוח ליד כפול.
+3א. יש שני סוגי רשומות: ליד ב-CRM (מכירה: הזמנות ותשלומים) וחשבון לקוח במערכת (users: טלפונים, מכשירים, ממסרים). שאלה על מכשירים, חיבור, מצב או תזמונים של לקוח — זה חשבון לקוח: find_contacts ואז customer_details (לא lead_details). רשימת הלידים שבהקשר אינה רשימת חשבונות הלקוח.
 4. תשובה קודמת שלך שאלה משהו והמנהל ענה רק את הפרט החסר ("6000", "בביט") — זו תשובה לשאלה; להשלים את הפעולה המקורית.
-5. "בטל/תמחק את זה", "לא, זה היה…" — מתייחס לפעולה האחרונה שלך; המספרים בהודעות הקודמות שלך. מחיקה או ביטול — רק על פי בקשה מפורשת של המנהל.
+5. "בטל/תמחק את זה", "לא, זה היה…" — מתייחס לפעולה האחרונה שלך; המזהה נמצא בדיווח הקודם שלך, והביטול הוא update_*/delete_* על אותו מזהה (deleted=true / status=cancelled) — לא רישום מחדש. תיקון ("זה היה 5000") — עדכון אותה רשומה. מחיקה או ביטול — רק על פי בקשה מפורשת של המנהל.
 6. ללא ליד לא פותחים הזמנה; ללא הזמנה פתוחה לא רושמים תשלום (אם ללקוח כמה הזמנות פתוחות ולא ברור על איזו — לשאול). הכנסה כללית שאינה על הזמנה — לספר ההכנסות.
 7. סכומים בשקלים. "ארבעה בקרים", "ארבע" = 4. "אלפיים" = 2000. תאריכים יחסית להיום ("מחר", "יום שלישי").
-8. סגנון: עברית קצרה וחמה, כמו הודעת וואטסאפ. בלי הקדמות, בלי "בשמחה", בלי להסביר מה אתה. דיווח: ✅ בתחילת שורת ביצוע. שאלה: ❓ ושאלה אחת. אם משהו נכשל — להגיד מה ולמה, בלי מונחים טכניים.
+8. סגנון: עברית בלבד, קצרה וחמה, כמו הודעת וואטסאפ. בלי הקדמות ובלי לספר מה אתה עומד לבדוק — רק התוצאה. בלי "בשמחה", בלי להסביר מה אתה. דיווח: ✅ בתחילת שורת ביצוע, עם המזהה. שאלה: ❓ ושאלה אחת. אם משהו נכשל — להגיד מה ולמה, בלי מונחים טכניים. עיצוב וואטסאפ בלבד: *מודגש* בכוכבית אחת, בלי markdown (בלי **, בלי #, בלי טבלאות).
 9. לא להמציא נתונים — כל מספר שמדווח מגיע מכלי. על שאלות ידע כללי לענות בקצרה.
 10. פקודה למכשירים של המנהל עצמו ("כבה את הדוד", "הדלק פלטה בשש") — my_devices_command.`;
 
@@ -386,6 +387,9 @@ async function logUsage({ admin, source, text, model, usage }) {
   } catch (e) { console.error('[secretary] usage log failed:', e.message); }
 }
 
+// Pure: markdown the model may slip into → WhatsApp's own formatting.
+export const toWhatsApp = (t) => String(t || '').replace(/\*\*(.+?)\*\*/g, '*$1*').replace(/^#{1,3}\s+/gm, '').replace(/^\s*[-*]\s+/gm, '• ').trim();
+
 const clip = (v) => { const s = JSON.stringify(v, (k, x) => (x instanceof Date ? x.toISOString().slice(0, 19) : x)); return s.length > RESULT_MAX_CHARS ? `${s.slice(0, RESULT_MAX_CHARS)}…(קוצר)` : s; };
 
 // One turn of the conversation: the admin's words (text, or a voice note's
@@ -409,7 +413,9 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
     { type: 'text', text: await contextBlock(admin) },
   ];
   const messages = [...(history ?? await loadHistory({ phone, excludeWaId })), { role: 'user', content: clean }];
-  const replies = [];
+  // The reply is the text of the LAST model response: what it writes before a
+  // tool call ("אבדוק…") is narration, not an answer, and stays out of the chat.
+  let replies = [];
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     let resp;
     try {
@@ -419,7 +425,8 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
       return replies.length ? replies.join('\n') : 'המזכירה לא זמינה כרגע, נסו שוב בעוד רגע';
     }
     logUsage({ admin: ctx.admin, source, text: clean, model, usage: resp.usage });
-    for (const b of resp.content) if (b.type === 'text' && b.text.trim()) replies.push(b.text.trim());
+    const texts = resp.content.filter((b) => b.type === 'text' && b.text.trim()).map((b) => b.text.trim());
+    if (texts.length) replies = texts;
     const calls = resp.content.filter((b) => b.type === 'tool_use');
     if (resp.stop_reason !== 'tool_use' || !calls.length) break;
     messages.push({ role: 'assistant', content: resp.content });
@@ -438,7 +445,7 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
     messages.push({ role: 'user', content: results });
     if (round === MAX_TOOL_ROUNDS) replies.push('(עצרתי אחרי הרבה צעדים — אם משהו לא הושלם, כתבו שוב)');
   }
-  return replies.join('\n').trim() || 'בוצע.';
+  return toWhatsApp(replies.join('\n')) || 'בוצע.';
 }
 
 export const SECRETARY_HELP = `אני המזכירה של המשרד. כתבו או הקליטו חופשי, למשל:

@@ -35,3 +35,10 @@ test('tools: every tool has a name, a description and an object schema; the offi
   assert.equal(new Set(names).size, names.length);
   assert.match(SECRETARY_HELP, /הזמין 4 בקרים/);
 });
+
+test('toWhatsApp: markdown the model slips into becomes WhatsApp formatting', async () => {
+  const { toWhatsApp } = await import('../src/services/secretary.js');
+  assert.equal(toWhatsApp('✅ פתחתי **משה כהן** (ליד #12)\n- הזמנות: 1\n* תשלומים: 0\n## סיכום'), '✅ פתחתי *משה כהן* (ליד #12)\n• הזמנות: 1\n• תשלומים: 0\nסיכום');
+  assert.equal(toWhatsApp('  נטו: -₪411  '), 'נטו: -₪411');
+  assert.equal(toWhatsApp(''), '');
+});
