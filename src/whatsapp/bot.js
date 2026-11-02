@@ -5,6 +5,8 @@
 //                        button → services/nluExec.js) / support answer
 //   unknown number     → support answers only; what the bot can't answer
 //                        becomes a ticket in the admin inbox (source 'whatsapp')
+//   superadmin's own   → the office secretary (services/secretary.js): every
+//   number               message, text or voice, is an instruction it carries out
 //
 // Same rules as the phone line: nothing executes without the explicit confirm,
 // ids come only from the interpreter's own validated output, and every
@@ -22,7 +24,8 @@ import { getSession, saveSession, resetSession } from './session.js';
 import { sendText, sendButtons, markRead, downloadMedia } from './client.js';
 import { transcribeVoice, sttEnabled } from './stt.js';
 import { serialByKey } from './queue.js';
-import { adminByPhone, adminTrigger, interpretAdminRequest, prepareAdminAction, runAdminAction, answerAdminQuery, WRITE_INTENTS, ADMIN_HELP } from '../services/adminAssistant.js';
+import { adminByPhone, adminTrigger } from '../services/adminAssistant.js';
+import { secretaryTurn, executeProposals, isConfirmation, SECRETARY_HELP } from '../services/secretary.js';
 import { env } from '../config/env.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion, isBareDigit, strayConfirmWord } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
@@ -158,29 +161,35 @@ async function commandReply({ phone, user, text }) {
   await sendButtons({ phone, userId: user.id, text: body, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
 }
 
-// The admin assistant (services/adminAssistant.js): a superadmin's own number,
-// a message starting with # or מנהל. Writes are read back and need the same
-// confirm buttons as an order; questions are answered at once.
-async function adminReply({ phone, userId, admin, text }) {
-  if (!text || /^(עזרה|help|\?)$/i.test(text)) { await sendText({ phone, userId, text: ADMIN_HELP }); return; }
-  const parsed = await interpretAdminRequest({ admin: { ...admin, phone }, text, source: 'whatsapp' });
-  if (!WRITE_INTENTS.has(parsed.intent)) { await sendText({ phone, userId, text: await answerAdminQuery(parsed) }); return; }
-  const prep = await prepareAdminAction(parsed);
-  if (!prep.ok) { await sendText({ phone, userId, text: prep.text }); return; }
-  await saveSession({ phone, userId, state: 'CONFIRM', pending: { admin: { admin: { id: admin.id, name: admin.name, phone }, action: prep.action }, text } });
-  await sendButtons({ phone, userId, text: `${prep.text}\nלאשר?`, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
-}
-
-// The admin's confirmed action — keyed on the phone, so a superadmin whose
-// number is not also a customer account can confirm as well.
-async function executeAdminPending({ phone, userId, session }) {
-  const { admin, action } = session.pending.admin;
-  await resetSession(phone, userId);
-  try {
-    await sendText({ phone, userId, text: await runAdminAction({ admin, action, source: 'whatsapp' }), kind: 'result' });
-  } catch (e) {
-    await sendText({ phone, userId, text: `⚠️ לא בוצע: ${e.message}` });
+// The secretary (services/secretary.js): a superadmin's own number talks to it
+// like to a person — no trigger. A write is read back with the confirm
+// buttons and the recorded calls are stored on the session (state CONFIRM,
+// 10-min TTL) only once that read-back was delivered; the admin's yes runs
+// exactly those calls (executeProposals, no model), a no drops them, anything
+// else is a new request. Questions answer at once. The chat log is its memory.
+// A leading "#" (the old trigger) is still tolerated and dropped.
+async function secretaryReply({ phone, userId, admin, text, waId, buttonId }) {
+  const t = adminTrigger(text) ?? text;
+  if (/^(עזרה|help|\?)$/i.test(t)) { await sendText({ phone, userId, text: SECRETARY_HELP, kind: 'secretary' }); return; }
+  const session = await getSession(phone);
+  const proposals = session.state === 'CONFIRM' ? session.pending?.secretary?.proposals : null;
+  if (proposals?.length) {
+    await resetSession(phone, userId);
+    if (isConfirmation(t, buttonId)) {
+      await sendText({ phone, userId, text: await executeProposals({ admin, phone, userId, proposals, source: 'whatsapp' }), kind: 'result' });
+      return;
+    }
+    if (buttonId === BTN_NO || confirmWord(t) === 'no') { await sendText({ phone, userId, text: await getText('whatsapp.cancelled') }); return; }
+  } else if (buttonId === BTN_YES || buttonId === BTN_NO) {
+    await sendText({ phone, userId, text: await getText('whatsapp.confirm_expired') });
+    return;
   }
+  const r = await secretaryTurn({ admin, phone, userId, text: t, excludeWaId: waId, source: 'whatsapp' });
+  if (!r.proposed) { await sendText({ phone, userId, text: r.text, kind: 'secretary' }); return; }
+  const sent = await sendButtons({ phone, userId, text: r.text, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
+  // Stored only once the read-back reached the admin: a yes can never approve
+  // a proposal that was never shown.
+  if (sent?.ok) await saveSession({ phone, userId, state: 'CONFIRM', pending: { secretary: { proposals: r.proposals } } });
 }
 
 async function executePending({ phone, user, session }) {
@@ -253,19 +262,22 @@ async function handleInboundNow(msg) {
   const found = await findUserByPhone(phone);
   const user = found && found.status !== 'suspended' ? found : null;
   const userId = user?.id ?? null;
+  // A superadmin's own number (admins.phone): the secretary answers it, below.
+  const admin = await adminByPhone(phone);
   // A voice note from a customer is transcribed (whatsapp/stt.js) and then
   // handled exactly like the same words typed; the log keeps the transcript.
-  // Unknown numbers are not transcribed (a paid call per note): text only.
+  // Unknown numbers are not transcribed (a paid call per note): text only —
+  // a superadmin's own number is, even without a customer account (admin assistant).
   // The message id is claimed FIRST (INSERT IGNORE): a redelivered note is
   // dropped here and never downloaded or transcribed twice (paid calls).
   if (!(await recordInbound({ waId: msg.waId, phone, userId, kind: msg.buttonId ? 'button' : msg.type, body: msg.text ?? `[${msg.type}]` }))) return;
   markRead(msg.waId);
   let voiceFailed = false;
   let voiceTooLong = false;
-  if (msg.text == null && msg.media && user && sttEnabled()) {
+  if (msg.text == null && msg.media && sttEnabled() && (user || admin)) {
     try {
       const media = await downloadMedia(msg.media.id, { maxBytes: env.stt.maxBytes });
-      const transcript = await transcribeVoice({ buffer: media.buffer, mime: media.mime, language: user.language || null });
+      const transcript = await transcribeVoice({ buffer: media.buffer, mime: media.mime, language: user?.language || null });
       if (transcript) {
         msg = { ...msg, text: transcript };
         await query('UPDATE whatsapp_messages SET body = ? WHERE wa_message_id = ? AND direction = ?', [`🎤 ${transcript}`, msg.waId, 'in']).catch(() => {});
@@ -279,20 +291,9 @@ async function handleInboundNow(msg) {
   try {
     const session = await getSession(phone);
 
-    // An admin action awaiting confirmation (no customer account needed).
-    if (session.state === 'CONFIRM' && session.pending?.admin) {
-      const word = msg.buttonId === BTN_YES ? 'yes' : msg.buttonId === BTN_NO ? 'no' : confirmWord(msg.text);
-      if (word === 'yes') { await executeAdminPending({ phone, userId, session }); return; }
-      if (word === 'no') {
-        await resetSession(phone, userId);
-        await sendText({ phone, userId, text: await getText('whatsapp.cancelled') });
-        return;
-      }
-      await resetSession(phone, userId); // anything else = a new request; the pending one is dropped
-    }
-
-    // Outstanding confirm: button id, or a typed yes/no.
-    if (session.state === 'CONFIRM' && user) {
+    // Outstanding confirm: button id, or a typed yes/no (never for the
+    // secretary's number — its "כן" is an answer to the secretary).
+    if (session.state === 'CONFIRM' && user && !admin) {
       const word = msg.buttonId === BTN_YES ? 'yes' : msg.buttonId === BTN_NO ? 'no' : confirmWord(msg.text);
       if (word === 'yes') { await executePending({ phone, user, session }); return; }
       if (word === 'no') {
@@ -311,7 +312,7 @@ async function handleInboundNow(msg) {
     // A bare digit is never a stray confirmation: "1" / "2" are menu choices
     // (the menu comes back under every result), so only yes/no WORDS and the
     // confirm buttons mean "the order I was asked about".
-    if (user && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || strayConfirmWord(msg.text))) {
+    if (user && !admin && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || strayConfirmWord(msg.text))) {
       await sendText({ phone, userId, text: await getText('whatsapp.confirm_expired') });
       return;
     }
@@ -326,12 +327,8 @@ async function handleInboundNow(msg) {
     }
     const text = msg.text.trim();
 
-    // ── the admin assistant: a superadmin's own number, "#…" or "מנהל …" ──
-    const adminReq = adminTrigger(text);
-    if (adminReq != null) {
-      const admin = await adminByPhone(phone);
-      if (admin) { await adminReply({ phone, userId, admin, text: adminReq }); return; }
-    }
+    // ── the secretary: a superadmin's own number, every message ──
+    if (admin) { await secretaryReply({ phone, userId, admin, text, waId: msg.waId, buttonId: msg.buttonId }); return; }
 
     // The numbered menu, for customers and guests alike — but only for the
     // numbers listed in whatsapp.menu_phones (per-number rollout, '' = nobody).

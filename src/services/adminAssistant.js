@@ -51,7 +51,18 @@ export function adminTrigger(text) {
 // ── the structured action ───────────────────────────────────────────────
 export const ADMIN_DAILY_MAX = 200;
 export const INTENTS = ['create_lead', 'create_order', 'add_payment', 'add_income', 'add_expense', 'open_orders', 'finance_summary', 'find_lead', 'unknown'];
-export const WRITE_INTENTS = new Set(['create_lead', 'create_order', 'add_payment', 'add_income', 'add_expense']);
+// create_lead_and_order is internal: an order for a name the CRM does not know
+// opens the lead and the order in one confirmed step.
+export const WRITE_INTENTS = new Set(['create_lead', 'create_order', 'create_lead_and_order', 'add_payment', 'add_income', 'add_expense']);
+
+// A clarification was asked and the admin answered just the missing bit
+// ("6000"): the next request is the draft plus the answer, so the model sees
+// the whole sentence again. Pure.
+export const mergeDraft = (draft, text) => {
+  const d = String(draft || '').trim(); const t = String(text || '').trim();
+  if (!d) return t;
+  return `${d.replace(/[.\s]+$/, '')}. ${t}`.slice(0, 1000);
+};
 
 const SCHEMA = {
   type: 'object',
@@ -180,7 +191,7 @@ export async function interpretAdminRequest({ admin, text, source = 'whatsapp' }
 export async function resolveLead(ref) {
   const matches = await findLeads(ref);
   if (matches.length === 1) return { lead: matches[0] };
-  if (matches.length === 0) return { ask: `לא מצאתי ליד או לקוח בשם ${ref}. לפתוח ליד חדש? כתבו: ליד ${ref} <טלפון> <עיר>` };
+  if (matches.length === 0) return { none: true, ask: `לא מצאתי ליד או לקוח בשם ${ref}. לפתוח ליד חדש? כתבו: ליד ${ref} <טלפון> <עיר>` };
   return { ask: `יש כמה שמתאימים ל"${ref}": ${matches.map((m) => `${m.name}${m.phone ? ` (${m.phone})` : ''}`).join(' · ')}. דייקו את השם או כתבו את הטלפון.` };
 }
 
@@ -203,10 +214,19 @@ export async function prepareAdminAction(parsed) {
   if (a.intent === 'create_order' || a.intent === 'add_payment') {
     if (!a.lead_ref) return { ok: false, text: a.clarification || 'עבור מי? כתבו את שם הלקוח' };
     const r = await resolveLead(a.lead_ref);
+    if (r.none && a.intent === 'create_order') {
+      // A new customer ordering: open the lead and the order together, in one confirm.
+      if (!a.order?.description) return { ok: false, text: 'מה ההזמנה? למשל: מערכת 4 ערוצים 1800' };
+      if (!(a.order.amount > 0)) return { ok: false, text: `מה הסכום של ההזמנה של ${a.lead_ref}?` };
+      a.intent = 'create_lead_and_order';
+      a.lead = { name: a.lead_ref, phone: a.lead?.phone ?? null, city: a.lead?.city ?? null, notes: a.lead?.notes ?? null, devices_count: a.lead?.devices_count ?? null, device_channels: a.lead?.device_channels ?? null };
+      return { ok: true, action: a, text: `${a.lead_ref} לא קיים במערכת — לפתוח ליד חדש ולרשום הזמנה: ${a.order.description}, ${ils(a.order.amount)}` };
+    }
     if (r.ask) return { ok: false, text: r.ask };
     a.lead_id = r.lead.id; a.lead_name = r.lead.name;
     if (a.intent === 'create_order') {
       if (!a.order?.description) return { ok: false, text: 'מה ההזמנה? למשל: מערכת 4 ערוצים 1800' };
+      if (!(a.order.amount > 0)) return { ok: false, text: `מה הסכום של ההזמנה של ${a.lead_name}?` };
       return { ok: true, action: a, text: a.summary || `לפתוח הזמנה ל${a.lead_name}: ${a.order.description}, ${ils(a.order.amount)}` };
     }
     const open = await listOpenOrders({ leadId: a.lead_id });
@@ -244,6 +264,14 @@ export async function runAdminAction({ admin, action, source = 'whatsapp' }) {
       const r = await createLead({ ...lead, devices: devicesCsv(devices_count, device_channels), source: `assistant_${source}`, actor });
       await logAction(who, 'crm_lead_create', 'crm_lead', r.id, { after: { name: r.name, ...via } });
       return `✅ נפתח ליד #${r.id}: ${r.name}${action.lead.phone ? `, ${action.lead.phone}` : ''}${action.lead.city ? `, ${action.lead.city}` : ''}`;
+    }
+    case 'create_lead_and_order': {
+      const { devices_count, device_channels, ...lead } = action.lead;
+      const l = await createLead({ ...lead, devices: devicesCsv(devices_count, device_channels), source: `assistant_${source}`, actor });
+      await logAction(who, 'crm_lead_create', 'crm_lead', l.id, { after: { name: l.name, ...via } });
+      const r = await createOrder({ leadId: l.id, description: action.order.description, amount: action.order.amount, notes: action.order.notes, actor });
+      await logAction(who, 'crm_order_create', 'crm_order', r.id, { after: { lead_id: r.lead_id, description: r.description, amount: r.amount, ...via } });
+      return `✅ נפתח ליד #${l.id}: ${l.name}, ונפתחה הזמנה #${r.id}: ${r.description}, ${ils(r.amount)}`;
     }
     case 'create_order': {
       const r = await createOrder({ leadId: action.lead_id, description: action.order.description, amount: action.order.amount, notes: action.order.notes, actor });
@@ -299,7 +327,7 @@ export async function answerAdminQuery(parsed) {
   }
 }
 
-export const ADMIN_HELP = `עוזר מנהל — כתבו # ואז את הבקשה, למשל:
+export const ADMIN_HELP = `עוזר מנהל — כתבו # ואז את הבקשה (או # לבד למצב מנהל של 10 דקות, שבו גם הקלטות קוליות והמשך תשובות מגיעים אליי; #סיום ליציאה), למשל:
 • #ליד דוד כהן 0501234567 ירושלים, 4 ערוצים
 • #הזמנה לדוד כהן מערכת 4 ערוצים 1800
 • #דוד כהן שילם 500 בביט
