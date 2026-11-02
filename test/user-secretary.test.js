@@ -21,6 +21,6 @@ test('customer secretary: every SQL it runs is scoped to the user; writes are on
   for (const sql of sqls) assert.ok(/user_id = \?|INSERT INTO (support_messages|nlu_usage) \(user_id/.test(sql), sql.slice(0, 80));
   assert.ok(!/UPDATE |DELETE /i.test(src), 'no updates or deletes');
   assert.ok(src.includes('interpretCommand({ userId, text'), 'the switch goes through the interpreter with the session user');
-  assert.ok(!src.includes('runNluActions'), 'the secretary never executes a switch itself — the confirm path does');
+  assert.ok(!/import[^\n]*runNluActions|runNluActions\(/.test(src), 'the secretary never executes a switch itself — the confirm path does'); // the comment may name it
   assert.deepEqual([...ALLOWED_ACTION_KINDS].sort(), ['immediate', 'plan_toggle']);
 });
