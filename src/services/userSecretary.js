@@ -49,7 +49,7 @@ export const TOOLS = [
   { name: 'my_tickets', description: 'הפניות של הלקוח לתמיכה והתשובות שקיבל.', input_schema: { type: 'object', properties: {} } },
   { name: 'knowledge_base', description: 'שאלה על המוצר, האתר, האפליקציה, ההתקנה או המענה הקולי — תשובה ממאגר הידע של TelTech. לשאלות שאינן על חשבון הלקוח עצמו.', input_schema: { type: 'object', properties: { question: S('השאלה כפי שנשאלה') }, required: ['question'] } },
   { name: 'switch_command', description: 'הדלקה או כיבוי של ערוץ — עכשיו ("כבה את הדוד") או פעם אחת בשעה היום/מחר ("הדלק את הפלטה מחר בשש"), או עצירה/הפעלה של תוכנית ("עצור את תוכנית השבת"). מועבר למפרש הפקודות ומתבצע רק אחרי שהלקוח מאשר בכפתור. לא לתזמון קבוע (כל שבוע) ולא למחיקת תזמונים.', input_schema: { type: 'object', properties: { text: S('הפקודה במילים, כפי שהלקוח אמר') }, required: ['text'] } },
-  { name: 'open_ticket', description: 'פתיחת פנייה לנציג אנושי, כשהלקוח מבקש או כשאין תשובה. הפנייה נרשמת מיד.', input_schema: { type: 'object', properties: { text: S('מה לכתוב לנציג — הבקשה של הלקוח במילותיו') }, required: ['text'] } },
+  { name: 'open_ticket', description: 'הצעת פנייה לנציג אנושי, כשהלקוח מבקש או כשאין תשובה. הנוסח מוצג ללקוח עם כפתורי אישור ונשלח רק אם אישר.', input_schema: { type: 'object', properties: { text: S('מה לכתוב לנציג — הבקשה של הלקוח במילותיו') }, required: ['text'] } },
 ];
 
 const clip = (v) => { const s = JSON.stringify(v); return s.length > RESULT_MAX_CHARS ? `${s.slice(0, RESULT_MAX_CHARS)}…(קוצר)` : s; };
@@ -103,10 +103,12 @@ async function runTool(name, input, ctx) {
       return { proposed: true, awaiting_confirmation: true, actions: interp.actions.map((a) => a.summary), note: 'הפעולות ייקראו ללקוח עם כפתורי אישור על ידי המערכת — אל תפרטו אותן ואל תשאלו "לאשר?"; כתבו רק משפט קצר או כלום.' };
     }
     case 'open_ticket': {
+      // Never inserted here: the channel reads the text back with "שלח לנציג /
+      // לא" buttons and opens the ticket only on the customer's yes.
       const body = String(input.text || '').trim().slice(0, 2000);
       if (!body) throw new Error('אין מה לרשום');
-      const ins = await query("INSERT INTO support_messages (user_id, source, phone, topic, body, created_by) VALUES (?, 'whatsapp', ?, NULL, ?, 'whatsapp')", [userId, phone, body]);
-      return { ok: true, ticket_id: ins.insertId };
+      ctx.pending = { ticket: { text: body } };
+      return { proposed: true, awaiting_confirmation: true, note: 'הנוסח יוצג ללקוח עם כפתורי "שלח לנציג / לא" על ידי המערכת — אל תכתבו שהפנייה נשלחה; כתבו משפט קצר או כלום.' };
     }
     default:
       throw new Error(`כלי לא מוכר: ${name}`);
@@ -120,7 +122,7 @@ const RULES = `את/ה המזכיר/ה האישי/ת של לקוח TelTech (שע
 איך לפעול:
 1. בקשת הדלקה/כיבוי (עכשיו או בשעה היום/מחר) או עצירת/הפעלת תוכנית — switch_command עם המילים של הלקוח; אל תסרבו בעצמכם — המפרש מחליט. אם חזר proposed=true — המערכת מצרפת להודעה שלך את הפעולות וכפתורי האישור: אל תפרטו אותן ואל תכתבו "לאשר?"; כתבו משפט קצר או כלום. אם חזרה clarification — שאלו את הלקוח את השאלה. אם חזר refused — זה תזמון קבוע (כל שבוע) או מחיקה: הסבירו שזה נעשה באפליקציה.
 2. שאלה על החשבון ("מה דולק?", "מתי הדוד נדלק בשבת?", "למה הפלטה כבתה?") — הכלים המתאימים, ותשובה קצרה וברורה מהנתונים בלבד. לא להמציא.
-3. שאלה על המוצר/האתר/ההתקנה — knowledge_base. אם אין תשובה — להציע נציג (open_ticket) ולפתוח רק אם הלקוח רוצה, או מיד אם ביקש נציג.
+3. שאלה על המוצר/האתר/ההתקנה — knowledge_base. אם אין תשובה — להציע נציג. open_ticket רק כשהלקוח ביקש נציג או הסכים להצעה; גם אז הפנייה אינה נשלחת מיד — המערכת מציגה ללקוח את הנוסח עם כפתורי אישור. לעולם לא לכתוב שהפנייה נשלחה.
 4. מה שאינו בטווח (חשבונות של אחרים, תשלומים, שינוי פרטים, תזמונים קבועים) — להגיד בנימוס שזה לא זמין כאן, ולהפנות לאפליקציה או לנציג. לעולם לא לדבר על לקוחות אחרים.
 5. סגנון: עברית קצרה וחמה, כמו הודעת וואטסאפ, בלי הקדמות ובלי לספר מה אתה בודק. ✅ להודעת ביצוע, ❓ לשאלה. בלי markdown (בלי **, בלי #); *מודגש* בכוכבית אחת אם צריך.
 6. "תודה"/"שלום" — תשובה קצרה וחמה, בלי כלים.`;
@@ -190,7 +192,7 @@ export async function userSecretaryTurn({ user, phone, text, excludeWaId = null,
   }
   const answer = toWhatsApp(replies.join('\n'));
   if (!ctx.pending) return { text: answer || 'לא הבנתי, נסו שוב', pending: null };
-  // The read-back (the interpreter's summaries) and the confirm wording are the
-  // channel's — the model's line is only context above them.
+  // The read-back (the interpreter's summaries, or the ticket text) and the
+  // confirm wording are the channel's — the model's line is only context above them.
   return { text: answer.replace(/(^|\n)\s*\*?לאשר\s*[?؟]\*?\s*$/, '').trim(), pending: ctx.pending };
 }

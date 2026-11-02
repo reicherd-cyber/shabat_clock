@@ -129,6 +129,14 @@ Model calls are capped at 300 per admin per day (`nlu_usage` kind `admin`).
 On the phone the same number hears "למנהל, הקישו 8" — the structured assistant in
 `services/adminAssistant.js` (one action, read back, key 1 to confirm).
 
+## Tickets need the customer's yes (2026-11-03)
+
+Nothing on WhatsApp opens a support ticket behind the customer's back. A question the
+knowledge base cannot answer — on the plain bot or through the customer's secretary — is
+read back with "שלח לנציג ✅ / לא, תודה ❌" buttons (text `whatsapp.ticket_confirm`, migration
+89); the ticket is inserted and the handoff line sent only on the yes. The numbered menu's
+own ticket leaves (an explicit "לא עזר" / "נציג" choice) are unchanged.
+
 ## The customer's secretary (2026-11-03)
 
 Registered numbers listed in the setting `whatsapp.secretary_phones` ('' = nobody,

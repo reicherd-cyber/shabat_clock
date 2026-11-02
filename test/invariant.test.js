@@ -121,3 +121,12 @@ test('admin assistant: every write re-checks the admin at execution; the phone r
   const ivr = readFileSync(new URL('../src/ivr/router.js', import.meta.url), 'utf8');
   assert.match(ivr, /const adminOnly = asGuest \? null : await adminByPhone\(phone\);/);
 });
+
+test('WhatsApp: a support ticket is opened only after the customer confirmed (confirmTicket → openTicket on yes)', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const inserts = bot.match(/INSERT INTO support_messages/g) || [];
+  assert.equal(inserts.length, 1, 'one insert, inside openTicket');
+  assert.ok(/async function openTicket[\s\S]*?INSERT INTO support_messages/.test(bot));
+  assert.ok(!/async function supportReply[\s\S]*?INSERT INTO support_messages[\s\S]*?\n}/.test(bot.slice(bot.indexOf('async function supportReply'), bot.indexOf('async function commandReply'))), 'supportReply must not insert');
+  assert.ok(/if \(word === 'yes'\) \{ await openTicket\(/.test(bot), 'the insert runs on the yes only');
+});

@@ -113,9 +113,26 @@ async function statusText(userId) {
   return lines.join('\n');
 }
 
-// Support path: answer from the knowledge base, else open a ticket the admin
-// inbox shows with the WhatsApp badge; the admin's reply is pushed back here
-// (see api/routes/admin.js support replies → notifyWhatsappReply).
+// A ticket is never opened behind the customer's back (owner's rule,
+// 2026-11-03): the message that would go to a person is read back with
+// "שלח לנציג / לא" buttons, stored on the session (state CONFIRM, 10-min
+// TTL), and inserted only on the yes — then the handoff line is sent.
+async function confirmTicket({ phone, userId, text }) {
+  await saveSession({ phone, userId, state: 'CONFIRM', pending: { ticket: { text: String(text).slice(0, 2000) } } });
+  await sendButtons({ phone, userId, text: await getText('whatsapp.ticket_confirm', { text }), buttons: [{ id: BTN_YES, title: 'שלח לנציג ✅' }, { id: BTN_NO, title: 'לא, תודה ❌' }], kind: 'confirm' });
+}
+async function openTicket({ phone, userId, text }) {
+  const ins = await query(
+    `INSERT INTO support_messages (user_id, source, phone, topic, body, created_by) VALUES (?, 'whatsapp', ?, NULL, ?, 'whatsapp')`,
+    [userId, phone, text],
+  );
+  await logAction({ type: 'whatsapp', id: userId }, 'create', 'support_message', ins.insertId, { after: { source: 'whatsapp', phone } });
+  await sendText({ phone, userId, text: await getText('whatsapp.handoff'), kind: 'handoff' });
+}
+
+// Support path: answer from the knowledge base; what it cannot answer is
+// offered to a person — with the customer's confirmation (confirmTicket).
+// The admin's reply is pushed back here (api/routes/admin.js → notifyWhatsappReply).
 async function supportReply({ phone, user, text }) {
   const userId = user?.id ?? null;
   let r;
@@ -129,12 +146,7 @@ async function supportReply({ phone, user, text }) {
     await sendText({ phone, userId, text: r.answer, kind: 'support' });
     return;
   }
-  const ins = await query(
-    `INSERT INTO support_messages (user_id, source, phone, topic, body, created_by) VALUES (?, 'whatsapp', ?, NULL, ?, 'whatsapp')`,
-    [userId, phone, text],
-  );
-  await logAction({ type: 'whatsapp', id: userId }, 'create', 'support_message', ins.insertId, { after: { source: 'whatsapp', phone } });
-  await sendText({ phone, userId, text: await getText('whatsapp.handoff'), kind: 'handoff' });
+  await confirmTicket({ phone, userId, text });
 }
 
 async function commandReply({ phone, user, text }) {
@@ -294,6 +306,15 @@ async function handleInboundNow(msg) {
   try {
     const session = await getSession(phone);
 
+    // A ticket waiting for the customer's yes (any number, see confirmTicket).
+    if (session.state === 'CONFIRM' && session.pending?.ticket && !admin) {
+      const word = msg.buttonId === BTN_YES ? 'yes' : msg.buttonId === BTN_NO ? 'no' : confirmWord(msg.text);
+      await resetSession(phone, userId);
+      if (word === 'yes') { await openTicket({ phone, userId, text: session.pending.ticket.text }); return; }
+      if (word === 'no') { await sendText({ phone, userId, text: await getText('whatsapp.cancelled') }); return; }
+      // anything else: a new message; the offer is dropped
+    }
+
     // Outstanding confirm: button id, or a typed yes/no (never for the
     // secretary's number — its "כן" is an answer to the secretary).
     if (session.state === 'CONFIRM' && user && !admin) {
@@ -315,7 +336,7 @@ async function handleInboundNow(msg) {
     // A bare digit is never a stray confirmation: "1" / "2" are menu choices
     // (the menu comes back under every result), so only yes/no WORDS and the
     // confirm buttons mean "the order I was asked about".
-    if (user && !admin && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || strayConfirmWord(msg.text))) {
+    if (!admin && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || (user && strayConfirmWord(msg.text)))) {
       await sendText({ phone, userId, text: await getText('whatsapp.confirm_expired') });
       return;
     }
@@ -368,6 +389,11 @@ async function handleInboundNow(msg) {
     if (await phoneAllowed('whatsapp.secretary_phones', phone)) {
       const r = await userSecretaryTurn({ user, phone, text, excludeWaId: msg.waId });
       if (!r.pending) { await sendText({ phone, userId, text: r.text, kind: 'secretary' }); return; }
+      if (r.pending.ticket) {
+        if (r.text) await sendText({ phone, userId, text: r.text, kind: 'secretary' });
+        await confirmTicket({ phone, userId, text: r.pending.ticket.text });
+        return;
+      }
       await saveSession({ phone, userId: user.id, state: 'CONFIRM', pending: { actions: r.pending.actions, tz: r.pending.tz, text: r.pending.text } });
       const summary = r.pending.actions.map((a) => `• ${a.summary}`).join('\n');
       const body = (r.text ? `${r.text}\n\n` : '') + await getText('whatsapp.confirm', { summary });

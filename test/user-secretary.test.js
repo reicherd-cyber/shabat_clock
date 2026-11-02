@@ -16,10 +16,11 @@ test('customer secretary: no tool takes a user, account, lead or admin argument 
 test('customer secretary: every SQL it runs is scoped to the user; writes are only a ticket and the interpreter\'s switch', () => {
   const src = readFileSync(new URL('../src/services/userSecretary.js', import.meta.url), 'utf8');
   const sqls = [...src.matchAll(/query\(\s*(["`'])([\s\S]*?)\1/g)].map((m) => m[2]);
-  assert.ok(sqls.length >= 2, 'expected the ticket read and write');
+  assert.ok(sqls.length >= 2, 'expected the ticket read and the usage log');
   // reads filter by the user; the two inserts (a ticket, the usage log) stamp the user in
   for (const sql of sqls) assert.ok(/user_id = \?|INSERT INTO (support_messages|nlu_usage) \(user_id/.test(sql), sql.slice(0, 80));
   assert.ok(!/UPDATE |DELETE /i.test(src), 'no updates or deletes');
+  assert.ok(!/INSERT INTO support_messages/.test(src), 'a ticket is never inserted by the secretary — the channel does, after the customer confirmed');
   assert.ok(src.includes('interpretCommand({ userId, text'), 'the switch goes through the interpreter with the session user');
   assert.ok(!/import[^\n]*runNluActions|runNluActions\(/.test(src), 'the secretary never executes a switch itself — the confirm path does'); // the comment may name it
   assert.deepEqual([...ALLOWED_ACTION_KINDS].sort(), ['immediate', 'plan_toggle', 'timed']); // never 'recurring' or 'delete_schedule'
