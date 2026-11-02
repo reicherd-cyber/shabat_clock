@@ -139,14 +139,20 @@ own ticket leaves (an explicit "לא עזר" / "נציג" choice) are unchanged.
 
 ## The customer's secretary (2026-11-03)
 
-Registered numbers listed in the setting `whatsapp.secretary_phones` ('' = nobody,
-'*' = everybody) talk to `services/userSecretary.js` instead of the numbered menu and the greeting / status /
-command / question paths (the secretary is checked before the menu, so a number on both lists gets one conversation): a tool-using agent that sees only the sender's own account —
-relays and live state, plans, the next days' firings, history, their tickets — plus the
-product knowledge base. The only change it can propose is a switch (on/off now, pause or
-resume a plan): the words go to the command interpreter, whose validated actions are
-stored on the session and run through the same confirm buttons and `executePending` as a
-typed order. A standing weekly timing or deleting a timing is refused (the app does that). Every tool
-takes the user from the verified sender; none has a user argument
-(test/user-secretary.test.js). Model calls are logged under `nlu_usage` kind
-`secretary` and count against the per-user AI budget.
+The numbered menu is unchanged for everyone. Registered numbers listed in the setting
+`whatsapp.secretary_phones` ('' = nobody, '*' = everybody; they must be on the menu list too)
+reach `services/userSecretary.js` from inside the menu: 7 פקודה חופשית, the service branch's
+"לשאול את העוזר" question, and a sentence typed in the sales branch open the secretary mode
+(session state SECRETARY, 30 min; 0 / תפריט / a greeting returns to the menu, and the mode
+resumes after a confirmed or cancelled proposal). It is a tool-using agent that sees only the
+sender's own account — relays and live state, plans, the next days' firings, history, their
+tickets — plus the product knowledge base. A switch (on/off now or once at a time
+today/tomorrow, pause or resume a plan) goes to the command interpreter, whose validated
+actions are stored on the session and run through the same confirm buttons and
+`executePending` as a typed order; a standing weekly timing or deleting a timing is refused
+(the app does that). A sales request (`order_request`: channels, city, a good time to call)
+is read back with the confirm buttons and recorded as the same CRM lead the menu's sales
+branch records, on the yes only. A ticket needs the customer's yes as well. Every tool takes
+the user from the verified sender; none has a user argument (test/user-secretary.test.js).
+Model calls are logged under `nlu_usage` kind `secretary` and count against the per-user AI
+budget.

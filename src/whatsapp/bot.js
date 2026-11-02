@@ -7,8 +7,13 @@
 //                        becomes a ticket in the admin inbox (source 'whatsapp')
 //   superadmin's own   → the office secretary (services/secretary.js): every
 //   number               message, text or voice, is an instruction it carries out
-//   registered number  → the customer's secretary (services/userSecretary.js),
-//   on the rollout list  own account only; a switch still takes the confirm buttons
+//   registered number  → the customer's secretary (services/userSecretary.js)
+//   on the rollout list  INSIDE the numbered menu: 7 פקודה חופשית, the service
+//                        branch's "לשאול את העוזר", and a sentence in the sales
+//                        branch open "secretary mode" (state SECRETARY, 30 min;
+//                        0 / תפריט returns to the menu). Own account only; a
+//                        switch, a ticket or a sales request still takes the
+//                        confirm buttons. The menu itself is unchanged.
 //
 // Same rules as the phone line: nothing executes without the explicit confirm,
 // ids come only from the interpreter's own validated output, and every
@@ -32,7 +37,7 @@ import { userSecretaryTurn } from '../services/userSecretary.js';
 import { env } from '../config/env.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion, isBareDigit, strayConfirmWord } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
-import { menuStart, step as menuStep, renderText } from '../services/serviceMenu.js';
+import { menuStart, step as menuStep, renderText, realIo } from '../services/serviceMenu.js';
 import { menuInput } from '../services/menuRouter.js';
 import { phoneAllowed } from '../services/rollout.js';
 
@@ -58,7 +63,8 @@ async function sendMenu({ phone, user, r }) {
   // sentence typed outside the menu (confirm buttons, then executePending).
   if (r.action?.kind === 'order_text' && user) {
     await resetSession(phone, userId);
-    await commandReply({ phone, user, text: r.action.text });
+    if (await secretaryAllowed(user, phone)) await enterSecretary({ phone, user, text: r.action.text, waId: r.waId });
+    else await commandReply({ phone, user, text: r.action.text });
     return;
   }
   // An order leaf (switch now, a quick one-off timing, stop/start a plan) goes
@@ -117,8 +123,8 @@ async function statusText(userId) {
 // 2026-11-03): the message that would go to a person is read back with
 // "שלח לנציג / לא" buttons, stored on the session (state CONFIRM, 10-min
 // TTL), and inserted only on the yes — then the handoff line is sent.
-async function confirmTicket({ phone, userId, text }) {
-  await saveSession({ phone, userId, state: 'CONFIRM', pending: { ticket: { text: String(text).slice(0, 2000) } } });
+async function confirmTicket({ phone, userId, text, resume = null }) {
+  await saveSession({ phone, userId, state: 'CONFIRM', pending: { ticket: { text: String(text).slice(0, 2000) }, resume } });
   await sendButtons({ phone, userId, text: await getText('whatsapp.ticket_confirm', { text }), buttons: [{ id: BTN_YES, title: 'שלח לנציג ✅' }, { id: BTN_NO, title: 'לא, תודה ❌' }], kind: 'confirm' });
 }
 async function openTicket({ phone, userId, text }) {
@@ -148,6 +154,38 @@ async function supportReply({ phone, user, text }) {
   }
   await confirmTicket({ phone, userId, text });
 }
+
+// ── the customer's secretary mode (services/userSecretary.js) ──
+// Entered from the menu for numbers on whatsapp.secretary_phones. Every
+// message in the mode goes to the secretary; "0" / "תפריט" / a greeting
+// returns to the menu. A proposal (switch, ticket, sales request) is stored
+// with resume: 'secretary' so the mode comes back after the yes or no.
+const SECRETARY_FOOTER = '\n\n0️⃣ לתפריט';
+const secretaryAllowed = (user, phone) => Boolean(user) && phoneAllowed('whatsapp.secretary_phones', phone);
+const isSecretaryExit = (text) => isGreeting(text) || /^(0|9|\*|תפריט)$/.test(String(text || '').trim());
+async function secretaryModeReply({ phone, user, text, waId }) {
+  const userId = user.id;
+  const r = await userSecretaryTurn({ user, phone, text, excludeWaId: waId });
+  if (!r.pending) { await sendText({ phone, userId, text: `${r.text}${SECRETARY_FOOTER}`, kind: 'secretary' }); return; }
+  if (r.text) await sendText({ phone, userId, text: r.text, kind: 'secretary' });
+  if (r.pending.ticket) { await confirmTicket({ phone, userId, text: r.pending.ticket.text, resume: 'secretary' }); return; }
+  if (r.pending.lead) {
+    const l = r.pending.lead;
+    await saveSession({ phone, userId, state: 'CONFIRM', pending: { lead: l, resume: 'secretary' } });
+    const summary = `• בקשת הזמנה: ${l.channels === 4 ? '4+' : l.channels} ערוצים, ${l.city}, מועד נוח: ${l.when}${l.notes ? ` (${l.notes})` : ''} — נציג מכירות יחזור אליכם`;
+    await sendButtons({ phone, userId, text: await getText('whatsapp.confirm', { summary }), buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
+    return;
+  }
+  await saveSession({ phone, userId, state: 'CONFIRM', pending: { actions: r.pending.actions, tz: r.pending.tz, text: r.pending.text, resume: 'secretary' } });
+  const summary = r.pending.actions.map((a) => `• ${a.summary}`).join('\n');
+  await sendButtons({ phone, userId, text: await getText('whatsapp.confirm', { summary }), buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
+}
+async function enterSecretary({ phone, user, text, waId }) {
+  await saveSession({ phone, userId: user.id, state: 'SECRETARY', pending: {} });
+  await secretaryModeReply({ phone, user, text, waId });
+}
+// After a confirmed or cancelled proposal: back to the mode it came from.
+const resumeAfter = (session) => session.pending?.resume === 'secretary' ? 'secretary' : null;
 
 async function commandReply({ phone, user, text }) {
   let interp;
@@ -209,6 +247,7 @@ async function secretaryReply({ phone, userId, admin, text, waId, buttonId }) {
 
 async function executePending({ phone, user, session }) {
   const { actions, tz } = session.pending || {};
+  const resume = resumeAfter(session);
   await resetSession(phone, user.id);
   if (!actions?.length) {
     await sendText({ phone, userId: user.id, text: await getText('whatsapp.cancelled') });
@@ -225,8 +264,12 @@ async function executePending({ phone, user, session }) {
   const head = unacked ? await getText('whatsapp.done_unacked') : await getText('whatsapp.done');
   const parts = [head, ...lines, ...scheduled];
   // Where the menu is offered, it comes back under the result so the chat goes
-  // on without a new greeting.
-  if (await phoneAllowed('whatsapp.menu_phones', phone)) {
+  // on without a new greeting — unless the order came from the secretary mode,
+  // which simply continues.
+  if (resume === 'secretary') {
+    await saveSession({ phone, userId: user.id, state: 'SECRETARY', pending: {} });
+    parts.push(SECRETARY_FOOTER.trim());
+  } else if (await phoneAllowed('whatsapp.menu_phones', phone)) {
     const r = menuStart(menuCtx(user, phone));
     await saveSession({ phone, userId: user.id, state: 'MENU', pending: { menu: r.state } });
     parts.push('', renderText(r));
@@ -309,8 +352,9 @@ async function handleInboundNow(msg) {
     // A ticket waiting for the customer's yes (any number, see confirmTicket).
     if (session.state === 'CONFIRM' && session.pending?.ticket && !admin) {
       const word = msg.buttonId === BTN_YES ? 'yes' : msg.buttonId === BTN_NO ? 'no' : confirmWord(msg.text);
-      await resetSession(phone, userId);
-      if (word === 'yes') { await openTicket({ phone, userId, text: session.pending.ticket.text }); return; }
+      const resume = resumeAfter(session);
+      if (resume === 'secretary' && user) { session.state = 'SECRETARY'; session.pending = {}; await saveSession({ phone, userId, state: 'SECRETARY', pending: {} }); } else await resetSession(phone, userId);
+      if (word === 'yes') { await openTicket({ phone, userId, text: session.pending?.ticket?.text ?? '' }); return; }
       if (word === 'no') { await sendText({ phone, userId, text: await getText('whatsapp.cancelled') }); return; }
       // anything else: a new message; the offer is dropped
     }
@@ -319,14 +363,24 @@ async function handleInboundNow(msg) {
     // secretary's number — its "כן" is an answer to the secretary).
     if (session.state === 'CONFIRM' && user && !admin) {
       const word = msg.buttonId === BTN_YES ? 'yes' : msg.buttonId === BTN_NO ? 'no' : confirmWord(msg.text);
+      const resume = resumeAfter(session);
+      if (word === 'yes' && session.pending?.lead) {
+        // The sales request the secretary read back: the same lead row the menu's
+        // sales branch records (serviceMenu realIo.lead), on the yes only.
+        const l = session.pending.lead;
+        if (resume === 'secretary') await saveSession({ phone, userId, state: 'SECRETARY', pending: {} }); else await resetSession(phone, user.id);
+        const id = await realIo.lead({ ctx: menuCtx(user, phone), name: user.full_name || phone, city: l.city, channels: l.channels, when: `${l.when}${l.notes ? ` — ${l.notes}` : ''}` });
+        await sendText({ phone, userId, text: `הבקשה נרשמה (מס׳ ${id}). נציג מכירות יחזור אליכם ב${l.when}.${resume === 'secretary' ? SECRETARY_FOOTER : ''}`, kind: 'result' });
+        return;
+      }
       if (word === 'yes') { await executePending({ phone, user, session }); return; }
       if (word === 'no') {
-        await resetSession(phone, user.id);
-        await sendText({ phone, userId, text: await getText('whatsapp.cancelled') });
+        if (resume === 'secretary') await saveSession({ phone, userId, state: 'SECRETARY', pending: {} }); else await resetSession(phone, user.id);
+        await sendText({ phone, userId, text: `${await getText('whatsapp.cancelled')}${resume === 'secretary' ? SECRETARY_FOOTER : ''}` });
         return;
       }
       // Anything else = a new request; the old pending is dropped, not run.
-      await resetSession(phone, user.id);
+      if (resume === 'secretary') { session.state = 'SECRETARY'; session.pending = {}; await saveSession({ phone, userId, state: 'SECRETARY', pending: {} }); } else await resetSession(phone, user.id);
     }
 
     // A confirm button (or a typed כן/לא) with nothing pending: the order expired
@@ -354,32 +408,26 @@ async function handleInboundNow(msg) {
     // ── the secretary: a superadmin's own number, every message ──
     if (admin) { await secretaryReply({ phone, userId, admin, text, waId: msg.waId, buttonId: msg.buttonId }); return; }
 
-    // ── the customer's secretary (per-number rollout: whatsapp.secretary_phones) ──
-    // Comes BEFORE the numbered menu: a listed customer gets one conversation.
-    // Read-only over the customer's own account; a switch comes back as the
-    // interpreter's validated actions and takes the SAME confirm path as a
-    // typed order (state CONFIRM → executePending → runNluActions).
-    if (user && await phoneAllowed('whatsapp.secretary_phones', phone)) {
-      if (session.state === 'MENU' || session.fresh) await saveSession({ phone, userId: user.id }); // a menu left open earlier is forgotten
-      const r = await userSecretaryTurn({ user, phone, text, excludeWaId: msg.waId });
-      if (!r.pending) { await sendText({ phone, userId, text: r.text, kind: 'secretary' }); return; }
-      if (r.pending.ticket) {
-        if (r.text) await sendText({ phone, userId, text: r.text, kind: 'secretary' });
-        await confirmTicket({ phone, userId, text: r.pending.ticket.text });
-        return;
-      }
-      await saveSession({ phone, userId: user.id, state: 'CONFIRM', pending: { actions: r.pending.actions, tz: r.pending.tz, text: r.pending.text } });
-      const summary = r.pending.actions.map((a) => `• ${a.summary}`).join('\n');
-      const body = (r.text ? `${r.text}\n\n` : '') + await getText('whatsapp.confirm', { summary });
-      await sendButtons({ phone, userId, text: body, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
-      return;
+    // ── secretary mode: every message, until 0 / תפריט / a greeting ──
+    if (session.state === 'SECRETARY' && user && !admin) {
+      if (!isSecretaryExit(text) && await secretaryAllowed(user, phone)) { await secretaryModeReply({ phone, user, text, waId: msg.waId }); return; }
+      await resetSession(phone, userId); // back to the menu (rendered below) or the old paths
     }
+
     // The numbered menu, for customers and guests alike — but only for the
     // numbers listed in whatsapp.menu_phones (per-number rollout, '' = nobody).
     const menuState = session.state === 'MENU' && session.pending?.menu ? session.pending.menu : null;
     if ((menuState || isGreeting(text) || isBareDigit(text)) && await phoneAllowed('whatsapp.menu_phones', phone)) {
       const ctx = menuCtx(user, phone);
       let r = null;
+      // Where the tree asks for words and the number is on the secretary list,
+      // the words open the secretary mode instead: the service branch's
+      // "לשאול את העוזר" question, and a sentence in the sales branch.
+      const SECRETARY_NODES = ['assistant_ask', 'order_channels', 'order_time'];
+      if (menuState && !isBareDigit(text) && !isGreeting(text) && SECRETARY_NODES.includes(menuState.node) && text.length >= 3 && await secretaryAllowed(user, phone)) {
+        await enterSecretary({ phone, user, text, waId: msg.waId });
+        return;
+      }
       if (isGreeting(text)) r = menuStart(ctx);
       else if (menuState) {
         const inside = menuState.node && menuState.node !== 'main';
@@ -388,7 +436,7 @@ async function handleInboundNow(msg) {
         if (inside || isBareDigit(text)) r = await menuInput({ ctx, state: menuState, text });
         else await resetSession(phone, userId); // a sentence at the main menu: the old paths below
       } else r = await menuStep(ctx, menuStart(ctx).state, text); // a bare digit with no menu open
-      if (r) { await sendMenu({ phone, user, r }); return; }
+      if (r) { await sendMenu({ phone, user, r: { ...r, waId: msg.waId } }); return; }
     }
 
     if (!user) {

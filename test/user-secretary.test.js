@@ -11,6 +11,7 @@ test('customer secretary: no tool takes a user, account, lead or admin argument 
   }
   const names = TOOLS.map((t) => t.name);
   for (const n of ['find_contacts', 'lead_details', 'create_lead', 'create_order', 'add_payment', 'add_finance_entry', 'finance_summary', 'customer_details', 'reply_to_ticket', 'system_status', 'list_support']) assert.ok(!names.includes(n), n);
+  assert.ok(names.includes('order_request') && names.includes('switch_command') && names.includes('open_ticket'));
 });
 
 test('customer secretary: every SQL it runs is scoped to the user; writes are only a ticket and the interpreter\'s switch', () => {
