@@ -69,13 +69,9 @@ test('assertAdminLive: the stored admin must still be the live owner of the numb
   assert.throws(() => assertAdminLive({ id: 1 }, { id: 2 }), (e) => e.code === 'ADMIN_REVOKED'); // the number moved to another admin
 });
 
-test('mergeDraft: a bare answer completes the earlier request; admin mode expires after ten minutes of silence', async () => {
-  const { settleState, ADMIN_TTL_MS } = await import('../src/whatsapp/session.js');
+test('mergeDraft (the phone): a bare answer completes the earlier request', () => {
   assert.equal(mergeDraft('משה כהן הזמנה 4 בקרים', '6000'), 'משה כהן הזמנה 4 בקרים. 6000');
   assert.equal(mergeDraft('הוצאה דלק.', '300'), 'הוצאה דלק. 300');
   assert.equal(mergeDraft(null, 'הוצאה 300 דלק'), 'הוצאה 300 דלק');
-  const now = Date.now();
-  assert.equal(settleState({ state: 'ADMIN', updated_at: new Date(now - ADMIN_TTL_MS + 1000) }, now), 'ADMIN');
-  assert.equal(settleState({ state: 'ADMIN', updated_at: new Date(now - ADMIN_TTL_MS - 1000) }, now), 'IDLE');
   assert.ok(WRITE_INTENTS.has('create_lead_and_order'));
 });

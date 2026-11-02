@@ -5,6 +5,8 @@
 //                        button → services/nluExec.js) / support answer
 //   unknown number     → support answers only; what the bot can't answer
 //                        becomes a ticket in the admin inbox (source 'whatsapp')
+//   superadmin's own   → the office secretary (services/secretary.js): every
+//   number               message, text or voice, is an instruction it carries out
 //
 // Same rules as the phone line: nothing executes without the explicit confirm,
 // ids come only from the interpreter's own validated output, and every
@@ -22,7 +24,8 @@ import { getSession, saveSession, resetSession } from './session.js';
 import { sendText, sendButtons, markRead, downloadMedia } from './client.js';
 import { transcribeVoice, sttEnabled } from './stt.js';
 import { serialByKey } from './queue.js';
-import { adminByPhone, adminTrigger, interpretAdminRequest, prepareAdminAction, runAdminAction, answerAdminQuery, WRITE_INTENTS, ADMIN_HELP, mergeDraft } from '../services/adminAssistant.js';
+import { adminByPhone, adminTrigger } from '../services/adminAssistant.js';
+import { secretaryTurn, SECRETARY_HELP } from '../services/secretary.js';
 import { env } from '../config/env.js';
 import { confirmWord, isGreeting, isStatusRequest, looksLikeQuestion, isBareDigit, strayConfirmWord } from './parse.js';
 import { smallTalkAnswer } from '../services/supportRules.js';
@@ -158,51 +161,15 @@ async function commandReply({ phone, user, text }) {
   await sendButtons({ phone, userId: user.id, text: body, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
 }
 
-// The admin assistant (services/adminAssistant.js): a superadmin's own number,
-// a message starting with # or מנהל. Writes are read back and need the same
-// confirm buttons as an order; questions are answered at once.
-// Admin mode (state ADMIN, 10 min of silence ends it): entered by a bare "#",
-// and after it every message — a voice note, or the "6000" that answers a
-// question — reaches the assistant without a trigger. A question the
-// assistant asks keeps the request as a draft; the next message completes it.
-const ADMIN_MODE_ON = 'מצב מנהל פעיל ל-10 דקות: כתבו או הקליטו בקשות, גם תשובות להמשך. #סיום ליציאה.';
-async function adminReply({ phone, userId, admin, text, session, inAdminMode }) {
-  const keepMode = (pending = {}) => saveSession({ phone, userId, state: 'ADMIN', pending });
-  if (/^(סיום|יציאה|exit|done)$/i.test(text)) { await resetSession(phone, userId); await sendText({ phone, userId, text: 'יצאנו ממצב מנהל.' }); return; }
-  if (!text) {
-    if (inAdminMode) { await sendText({ phone, userId, text: ADMIN_HELP }); await keepMode(session.pending || {}); return; }
-    await keepMode({}); await sendText({ phone, userId, text: `${ADMIN_MODE_ON}
-
-${ADMIN_HELP}` }); return;
-  }
-  if (/^(עזרה|help|\?)$/i.test(text)) { await sendText({ phone, userId, text: ADMIN_HELP }); if (inAdminMode) await keepMode(session.pending || {}); return; }
-  const full = mergeDraft(inAdminMode ? session.pending?.adminDraft : null, text);
-  const parsed = await interpretAdminRequest({ admin: { ...admin, phone }, text: full, source: 'whatsapp' });
-  if (!WRITE_INTENTS.has(parsed.intent)) {
-    const answer = await answerAdminQuery(parsed);
-    // A question back means the request is incomplete: keep it as the draft
-    // (in admin mode, so the bare answer that follows reaches us).
-    if (parsed.intent === 'unknown' && parsed.clarification) await keepMode({ adminDraft: full });
-    else if (inAdminMode) await keepMode({});
-    await sendText({ phone, userId, text: answer });
-    return;
-  }
-  const prep = await prepareAdminAction(parsed);
-  if (!prep.ok) { await keepMode({ adminDraft: full }); await sendText({ phone, userId, text: prep.text }); return; }
-  await saveSession({ phone, userId, state: 'CONFIRM', pending: { admin: { admin: { id: admin.id, name: admin.name, phone }, action: prep.action, resumeAdmin: inAdminMode }, text: full } });
-  await sendButtons({ phone, userId, text: `${prep.text}\nלאשר?`, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
-}
-
-// The admin's confirmed action — keyed on the phone, so a superadmin whose
-// number is not also a customer account can confirm as well.
-async function executeAdminPending({ phone, userId, session }) {
-  const { admin, action, resumeAdmin } = session.pending.admin;
-  if (resumeAdmin) await saveSession({ phone, userId, state: 'ADMIN', pending: {} }); else await resetSession(phone, userId);
-  try {
-    await sendText({ phone, userId, text: await runAdminAction({ admin, action, source: 'whatsapp' }), kind: 'result' });
-  } catch (e) {
-    await sendText({ phone, userId, text: `⚠️ לא בוצע: ${e.message}` });
-  }
+// The secretary (services/secretary.js): a superadmin's own number talks to it
+// like to a person — no trigger, no confirm buttons; it acts, or asks. The
+// chat log is its memory, so the reply is sent as plain text and recorded.
+// A leading "#" (the old trigger) is still tolerated and dropped.
+async function secretaryReply({ phone, userId, admin, text, waId }) {
+  const t = adminTrigger(text) ?? text;
+  if (/^(עזרה|help|\?)$/i.test(t)) { await sendText({ phone, userId, text: SECRETARY_HELP, kind: 'secretary' }); return; }
+  const reply = await secretaryTurn({ admin, phone, userId, text: t, excludeWaId: waId, source: 'whatsapp' });
+  await sendText({ phone, userId, text: reply, kind: 'secretary' });
 }
 
 async function executePending({ phone, user, session }) {
@@ -275,6 +242,8 @@ async function handleInboundNow(msg) {
   const found = await findUserByPhone(phone);
   const user = found && found.status !== 'suspended' ? found : null;
   const userId = user?.id ?? null;
+  // A superadmin's own number (admins.phone): the secretary answers it, below.
+  const admin = await adminByPhone(phone);
   // A voice note from a customer is transcribed (whatsapp/stt.js) and then
   // handled exactly like the same words typed; the log keeps the transcript.
   // Unknown numbers are not transcribed (a paid call per note): text only —
@@ -285,7 +254,7 @@ async function handleInboundNow(msg) {
   markRead(msg.waId);
   let voiceFailed = false;
   let voiceTooLong = false;
-  if (msg.text == null && msg.media && sttEnabled() && (user || await adminByPhone(phone))) {
+  if (msg.text == null && msg.media && sttEnabled() && (user || admin)) {
     try {
       const media = await downloadMedia(msg.media.id, { maxBytes: env.stt.maxBytes });
       const transcript = await transcribeVoice({ buffer: media.buffer, mime: media.mime, language: user?.language || null });
@@ -302,21 +271,9 @@ async function handleInboundNow(msg) {
   try {
     const session = await getSession(phone);
 
-    // An admin action awaiting confirmation (no customer account needed).
-    if (session.state === 'CONFIRM' && session.pending?.admin) {
-      const word = msg.buttonId === BTN_YES ? 'yes' : msg.buttonId === BTN_NO ? 'no' : confirmWord(msg.text);
-      if (word === 'yes') { await executeAdminPending({ phone, userId, session }); return; }
-      if (word === 'no') {
-        if (session.pending.admin.resumeAdmin) await saveSession({ phone, userId, state: 'ADMIN', pending: {} }); else await resetSession(phone, userId);
-        await sendText({ phone, userId, text: await getText('whatsapp.cancelled') });
-        return;
-      }
-      // anything else = a new request; the pending one is dropped (admin mode kept)
-      if (session.pending.admin.resumeAdmin) { session.state = 'ADMIN'; session.pending = {}; await saveSession({ phone, userId, state: 'ADMIN', pending: {} }); } else await resetSession(phone, userId);
-    }
-
-    // Outstanding confirm: button id, or a typed yes/no.
-    if (session.state === 'CONFIRM' && user) {
+    // Outstanding confirm: button id, or a typed yes/no (never for the
+    // secretary's number — its "כן" is an answer to the secretary).
+    if (session.state === 'CONFIRM' && user && !admin) {
       const word = msg.buttonId === BTN_YES ? 'yes' : msg.buttonId === BTN_NO ? 'no' : confirmWord(msg.text);
       if (word === 'yes') { await executePending({ phone, user, session }); return; }
       if (word === 'no') {
@@ -335,7 +292,7 @@ async function handleInboundNow(msg) {
     // A bare digit is never a stray confirmation: "1" / "2" are menu choices
     // (the menu comes back under every result), so only yes/no WORDS and the
     // confirm buttons mean "the order I was asked about".
-    if (user && session.state !== 'ADMIN' && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || strayConfirmWord(msg.text))) {
+    if (user && !admin && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || strayConfirmWord(msg.text))) {
       await sendText({ phone, userId, text: await getText('whatsapp.confirm_expired') });
       return;
     }
@@ -350,14 +307,8 @@ async function handleInboundNow(msg) {
     }
     const text = msg.text.trim();
 
-    // ── the admin assistant: a superadmin's own number, "#…" or "מנהל …" ──
-    const inAdminMode = session.state === 'ADMIN';
-    const adminReq = adminTrigger(text);
-    if (adminReq != null || inAdminMode) {
-      const admin = await adminByPhone(phone);
-      if (admin) { await adminReply({ phone, userId, admin, text: adminReq ?? text, session, inAdminMode }); return; }
-      if (inAdminMode) await resetSession(phone, userId); // the number lost its admin role mid-session
-    }
+    // ── the secretary: a superadmin's own number, every message ──
+    if (admin) { await secretaryReply({ phone, userId, admin, text, waId: msg.waId }); return; }
 
     // The numbered menu, for customers and guests alike — but only for the
     // numbers listed in whatsapp.menu_phones (per-number rollout, '' = nobody).

@@ -9,15 +9,11 @@ const CONFIRM_TTL_MS = 10 * 60 * 1000;
 // A menu left mid-branch is forgotten after this: the next message is a fresh
 // conversation, not a digit expected by a question asked days ago.
 const MENU_TTL_MS = 30 * 60 * 1000;
-// Admin mode (the assistant without a # on every message, bot.js adminReply)
-// ends by itself after this much silence.
-export const ADMIN_TTL_MS = 10 * 60 * 1000;
 // Pure: the state a stored row stands for now.
 export function settleState(row, now = Date.now()) {
   const age = now - new Date(row.updated_at).getTime();
   if (row.state === 'CONFIRM' && age > CONFIRM_TTL_MS) return 'IDLE';
   if (row.state === 'MENU' && age > MENU_TTL_MS) return 'IDLE';
-  if (row.state === 'ADMIN' && age > ADMIN_TTL_MS) return 'IDLE';
   return row.state;
 }
 
