@@ -56,6 +56,8 @@ test('looksLikeProposal: a read-back ending in "לאשר?" gets the confirm butt
   const { looksLikeProposal } = await import('../src/services/secretary.js');
   assert.equal(looksLikeProposal('• ליד חדש: משה כהן\n• הזמנה: 4 בקרים — 6000 ₪\n\nלאשר?'), true);
   assert.equal(looksLikeProposal('לאשר? '), true);
+  assert.equal(looksLikeProposal('• הוצאה 300 ₪\n*לאשר?*'), true);        // bold, as the style rule allows
+  assert.equal(looksLikeProposal('❓ לא ברור — מה לאשר?'), false);        // a question that merely ends with the word
   assert.equal(looksLikeProposal('❓ מה הסכום?'), false);
   assert.equal(looksLikeProposal('✅ נפתחה הזמנה #30'), false);
 });

@@ -38,9 +38,12 @@ export const PROPOSAL_TTL_MS = 15 * 60 * 1000;
 // bare word of assent (with trailing punctuation / a thumbs-up). Pure.
 const YES = /^(כן|אישור|מאשר|מאשרת|אשר|בצע|בצעי|תבצע|תבצעי|אוקיי|אוקי|אוקי?י|או קיי|בסדר|סבבה|יאללה|מעולה|נכון|ok|okay|yes|y|go)[\s!.,✅👍🙏]*$/i;
 export const isConfirmation = (text, buttonId = null) => buttonId === 'confirm_yes' || YES.test(String(text || '').trim());
-// The secretary's read-back ends with "לאשר?" — that line is what the confirm
-// buttons are attached to. Pure.
-export const looksLikeProposal = (text) => /לאשר\s*[?؟]\s*$/.test(String(text || '').trim());
+// The proposal contract, in one place: a read-back ends with the word "לאשר?"
+// on its own line (bold tolerated). That line is what the confirm buttons are
+// attached to, and the only outbound message a later "כן" can unlock. The
+// regex and the sentence that tells the model so live together. Pure.
+export const looksLikeProposal = (text) => /(^|\n)\s*\*?לאשר\s*[?؟]\*?\s*$/.test(String(text || '').trim());
+const PROPOSAL_ENDING_RULE = 'לסיים בשורה נפרדת עם המילה "לאשר?" בדיוק כך (לא בניסוח אחר, בלי ❓) — זו השורה שמצמידה להודעה את כפתורי האישור, ורק הצעה כזו ניתנת לאישור. ❓ שמורה לשאלת הבהרה בלבד.';
 const MAX_TOOL_ROUNDS = 8;
 const HISTORY_HOURS = 6;
 const HISTORY_MAX = 30;
@@ -68,14 +71,18 @@ export function historyToMessages(rows) {
 
 async function loadHistory({ phone, excludeWaId }) {
   const rows = await query(
-    `SELECT direction, body, created_at FROM whatsapp_messages
+    `SELECT direction, kind, body, created_at FROM whatsapp_messages
       WHERE phone = ? AND created_at >= UTC_TIMESTAMP() - INTERVAL ? HOUR
         AND (wa_message_id IS NULL OR wa_message_id <> ?)
       ORDER BY id DESC LIMIT ?`,
     [phone, HISTORY_HOURS, excludeWaId || '', HISTORY_MAX],
   );
+  // A "כן" unlocks writes only when the secretary's LAST message was a
+  // proposal (sent with the confirm buttons, or ending in לאשר?): a yes to a
+  // clarification question, or to a ✅ report, is just conversation.
   const lastOut = rows.find((r) => r.direction === 'out');
-  return { messages: historyToMessages(rows.reverse()), lastOutAt: lastOut ? new Date(lastOut.created_at).getTime() : 0 };
+  const isProposal = lastOut && (lastOut.kind === 'confirm' || looksLikeProposal(lastOut.body));
+  return { messages: historyToMessages(rows.reverse()), lastProposalAt: isProposal ? new Date(lastOut.created_at).getTime() : 0 };
 }
 
 // ── what the secretary can do ────────────────────────────────────────
@@ -137,7 +144,7 @@ export const TOOLS = [
     input_schema: { type: 'object', properties: { task_id: I('מזהה המשימה'), title: S('כותרת'), notes: S('פירוט'), status: S('open / in_progress / done', { enum: ['open', 'in_progress', 'done'] }), due_date: S('YYYY-MM-DD או "" לביטול'), priority: S('עדיפות', { enum: ['low', 'normal', 'high'] }), deleted: B('true = מחיקה רכה') }, required: ['task_id'] } },
   { name: 'reply_to_ticket', description: 'תשובה ללקוח על פנייה בתיבת התמיכה, במילים שהמנהל הכתיב (הלקוח מקבל אותה באימייל / בוואטסאפ). לכתוב רק מה שהמנהל אמר לענות.',
     input_schema: { type: 'object', properties: { ticket_id: I('מזהה הפנייה'), body: S('נוסח התשובה'), close: B('true = לסגור את הפנייה אחרי התשובה') }, required: ['ticket_id', 'body'] } },
-  { name: 'my_devices_command', description: 'פקודה למכשירים של המנהל עצמו (חשבון הלקוח שלו), כמו "כבה את הדוד" או "הדלק את הפלטה בשש" — מתבצעת מיד.',
+  { name: 'my_devices_command', description: 'פקודה למכשירים של המנהל עצמו (חשבון הלקוח שלו), כמו "כבה את הדוד" או "הדלק את הפלטה בשש" (גם היא דורשת אישור).',
     input_schema: { type: 'object', properties: { text: S('הפקודה במילים, כפי שנאמרה') }, required: ['text'] } },
 ];
 
@@ -155,7 +162,7 @@ const READ_TOOLS = new Set(['find_contacts', 'lead_details', 'list_open_orders',
 async function runTool(name, input, ctx) {
   if (!READ_TOOLS.has(name) && !ctx.writesAllowed) {
     ctx.proposed = true;
-    return { not_done: true, needs_confirmation: true, note: 'לא בוצע — כל פעולה דורשת אישור של המנהל. כתבו למנהל במדויק מה ייעשה (כל הפרטים והסכומים, בשורה אחת לפעולה) וסיימו במילה "לאשר?" בדיוק כך (לא בניסוח אחר) — בלי אמוג׳י ❓. אל תקראו לכלי כתיבה נוסף בתור הזה. אחרי שהמנהל יאשר, קראו לכלי שוב בדיוק כפי שהוצע.' };
+    return { not_done: true, needs_confirmation: true, note: `לא בוצע — כל פעולה דורשת אישור של המנהל. כתבו למנהל במדויק מה ייעשה (כל הפרטים והסכומים, בשורה אחת לפעולה) ו${PROPOSAL_ENDING_RULE} אל תקראו לכלי כתיבה נוסף בתור הזה. אחרי שהמנהל יאשר, קראו לכלי שוב בדיוק כפי שהוצע.` };
   }
   // The same write twice in one turn (a model retry after an odd result) is
   // answered with the first result, never written again.
@@ -391,7 +398,7 @@ const RULES = `את/ה המזכיר/ה של משרד TelTech (שעון שבת ח
 התפקיד: להבין מה המנהל רוצה ולבצע, בעזרת הכלים — ליד חדש, הזמנה, תשלום, הכנסה/הוצאה, משימה/תזכורת, תשובה לפנייה, בירור על לקוח או על המערכת. יש לך גישה מלאה; כל פעולה נרשמת על שם המנהל.
 
 איך לפעול:
-1. שום פעולה לא מתבצעת בלי אישור של המנהל. בקשה ברורה — לקרוא לכלי הכתיבה; המערכת תעצור אותו ותחזיר needs_confirmation, ואז לכתוב למנהל במדויק מה ייעשה (שורה אחת לכל פעולה: מי, מה, כמה, מתי) ולסיים במילה "לאשר?" בדיוק כך — זה מה שמצמיד להודעה את כפתורי האישור; הצעה שמסתיימת בניסוח אחר ("לפתוח לו הזמנה?") לא תקבל כפתורים. ❓ שמורה לשאלת הבהרה בלבד. כשהמנהל מאשר ("כן", "אישור", הכפתור) — לבצע בדיוק מה שהוצע, בלי לשאול שוב, ולדווח בשורה אחת-שתיים עם המספר שנוצר (ליד #12, הזמנה #30). אם המנהל מאשר עם שינוי ("כן אבל 5000") — להציג את ההצעה המתוקנת ולשאול שוב. "לא"/"בטל" להצעה — לא לבצע, לענות "בוטל". שאלות ובירורים (קריאה בלבד) — לענות מיד, בלי אישור.
+1. שום פעולה לא מתבצעת בלי אישור של המנהל. בקשה ברורה — לקרוא לכלי הכתיבה; המערכת תעצור אותו ותחזיר needs_confirmation, ואז לכתוב למנהל במדויק מה ייעשה (שורה אחת לכל פעולה: מי, מה, כמה, מתי) ו${PROPOSAL_ENDING_RULE} כשהמנהל מאשר ("כן", "אישור", הכפתור) — לבצע בדיוק מה שהוצע, בלי לשאול שוב, ולדווח בשורה אחת-שתיים עם המספר שנוצר (ליד #12, הזמנה #30). אם המנהל מאשר עם שינוי ("כן אבל 5000") — להציג את ההצעה המתוקנת ולשאול שוב. "לא"/"בטל" להצעה — לא לבצע, לענות "בוטל". שאלות ובירורים (קריאה בלבד) — לענות מיד, בלי אישור.
 2. ספק אמיתי — לשאול שאלה אחת קצרה ולחכות. ספק = חסר פרט הכרחי (סכום להזמנה, על מה ההוצאה), או כמה התאמות לשם, או בקשה שאפשר להבין בשתי דרכים. לא לנחש סכומים. תאריך/קטגוריה/אמצעי תשלום שלא נאמרו — ברירת מחדל סבירה (היום, "כללי", מזומן) בלי לשאול.
 3. שם של אדם: קודם לבדוק ברשימת הלידים שבהקשר, ואם אינו שם — find_contacts פעם אחת עם החלק היציב של השם (השם הפרטי או שם המשפחה; תמלול משבש שמות, ולכן חלק מהשם עדיף על השם המלא). אם יש התאמה אחת סבירה — לפעול עליה. אם אין — להזמנה: לפתוח ליד חדש בשם שנאמר ואז את ההזמנה, ולומר למנהל שזה איש קשר חדש (ואפשר להוסיף טלפון/עיר). לא לפתוח ליד כפול.
 3א. יש שני סוגי רשומות: ליד ב-CRM (מכירה: הזמנות ותשלומים) וחשבון לקוח במערכת (users: טלפונים, מכשירים, ממסרים). שאלה על מכשירים, חיבור, מצב או תזמונים של לקוח — זה חשבון לקוח: find_contacts ואז customer_details (לא lead_details). רשימת הלידים שבהקשר אינה רשימת חשבונות הלקוח.
@@ -401,7 +408,7 @@ const RULES = `את/ה המזכיר/ה של משרד TelTech (שעון שבת ח
 7. סכומים בשקלים. "ארבעה בקרים", "ארבע" = 4. "אלפיים" = 2000. תאריכים יחסית להיום ("מחר", "יום שלישי").
 8. סגנון: עברית בלבד, קצרה וחמה, כמו הודעת וואטסאפ. בלי הקדמות ובלי לספר מה אתה עומד לבדוק — רק התוצאה. בלי "בשמחה", בלי להסביר מה אתה. דיווח: ✅ בתחילת שורת ביצוע, עם המזהה. שאלה: ❓ ושאלה אחת. אם משהו נכשל — להגיד מה ולמה, בלי מונחים טכניים. עיצוב וואטסאפ בלבד: *מודגש* בכוכבית אחת, בלי markdown (בלי **, בלי #, בלי טבלאות).
 9. לא להמציא נתונים — כל מספר שמדווח מגיע מכלי. על שאלות ידע כללי לענות בקצרה.
-10. פקודה למכשירים של המנהל עצמו ("כבה את הדוד", "הדלק פלטה בשש") — my_devices_command.`;
+10. פקודה למכשירים של המנהל עצמו ("כבה את הדוד", "הדלק פלטה בשש") — my_devices_command, גם היא אחרי אישור.`;
 
 async function contextBlock(admin) {
   const p = localParts(new Date(), 'Asia/Jerusalem');
@@ -439,7 +446,7 @@ const clip = (v) => { const s = JSON.stringify(v, (k, x) => (x instanceof Date ?
 // waiting for the admin's yes (the channel shows confirm buttons).
 // `confirmed` = the admin's message is that yes; writes run only then, and
 // only while the last proposal is fresh (PROPOSAL_TTL_MS).
-export async function secretaryTurn({ admin, phone, userId = null, text, excludeWaId = null, source = 'whatsapp', confirmed = false, dryRun = false, history = null, lastOutAt = null, onTool = null }) {
+export async function secretaryTurn({ admin, phone, userId = null, text, excludeWaId = null, source = 'whatsapp', confirmed = false, dryRun = false, history = null, lastProposalAt = null, onTool = null }) {
   const clean = String(text || '').trim().slice(0, 2000);
   const plain = (t) => ({ text: t, proposed: false });
   if (!clean) return plain('מה לעשות?');
@@ -450,8 +457,9 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
   // The admin is re-checked on every turn: a revoked number writes nothing.
   assertAdminLive(admin, await adminByPhone(phone));
 
-  const loaded = history ? { messages: history, lastOutAt: lastOutAt ?? Date.now() } : await loadHistory({ phone, excludeWaId });
-  const fresh = Date.now() - loaded.lastOutAt <= PROPOSAL_TTL_MS;
+  const loaded = history ? { messages: history, lastProposalAt: lastProposalAt ?? Date.now() } : await loadHistory({ phone, excludeWaId });
+  const fresh = Date.now() - loaded.lastProposalAt <= PROPOSAL_TTL_MS;
+  const stale = confirmed && !fresh; // a yes with no fresh proposal behind it: re-propose, never write
   const ctx = { admin: { ...admin, phone }, actor: `admin:${admin.id}`, who: { type: 'admin', id: admin.id }, userId, phone, source, dryRun, writesAllowed: confirmed && fresh, proposed: false, done: new Map() };
   const client = new Anthropic({ apiKey: env.anthropic.apiKey });
   const model = env.anthropic.model;
@@ -460,7 +468,7 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
     { type: 'text', text: await contextBlock(admin) },
   ];
   const messages = [...loaded.messages, { role: 'user', content: clean }];
-  if (confirmed && !fresh) messages[messages.length - 1] = { role: 'user', content: `${clean}\n(הערת מערכת: עבר זמן מאז ההצעה האחרונה — הציגו אותה שוב ושאלו לאשר, בלי לבצע)` };
+  if (stale) messages[messages.length - 1] = { role: 'user', content: `${clean}\n(הערת מערכת: אין הצעה טרייה לאשר — אם הייתה הצעה, הציגו אותה שוב ושאלו לאשר, בלי לבצע; אם לא, שאלו מה לעשות)` };
   // The reply is the text of the LAST model response: what it writes before a
   // tool call ("אבדוק…") is narration, not an answer, and stays out of the chat.
   let replies = [];
@@ -482,8 +490,8 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
     for (const c of calls) {
       try {
         const out = await runTool(c.name, c.input || {}, ctx);
-        console.log(`[secretary] ${admin.id} ${c.name} ${JSON.stringify(c.input).slice(0, 200)}`);
-        onTool?.(c.name, c.input, out);
+        console.log(`[secretary] ${admin.id} ${c.name}${dryRun ? ' (dry run)' : ''} ${JSON.stringify(c.input).slice(0, 200)}`);
+        onTool?.(c.name, c.input, out, { dryRun });
         results.push({ type: 'tool_result', tool_use_id: c.id, content: clip(out) });
       } catch (e) {
         console.error(`[secretary] ${c.name} failed:`, e.message);
@@ -493,8 +501,14 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
     messages.push({ role: 'user', content: results });
     if (round === MAX_TOOL_ROUNDS) replies.push('(עצרתי אחרי הרבה צעדים — אם משהו לא הושלם, כתבו שוב)');
   }
-  const answer = toWhatsApp(replies.join('\n')) || 'בוצע.';
-  return { text: answer, proposed: ctx.proposed || looksLikeProposal(answer) };
+  let answer = toWhatsApp(replies.join('\n')) || 'בוצע.';
+  // Buttons go only on a message that ends with the proposal line — never on
+  // a clarification question that followed a gated write (ctx.proposed alone
+  // is not enough). The re-proposal after a stale yes is known to be one by
+  // construction: it gets the line (and so the buttons) if the model left it off.
+  let proposed = looksLikeProposal(answer);
+  if (!proposed && stale && !answer.includes('❓')) { answer = `${answer}\nלאשר?`; proposed = true; }
+  return { text: answer, proposed };
 }
 
 export const SECRETARY_HELP = `אני המזכירה של המשרד. כתבו או הקליטו חופשי, למשל:
