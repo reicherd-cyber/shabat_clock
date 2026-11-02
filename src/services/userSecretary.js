@@ -56,12 +56,20 @@ export const TOOLS = [
 const clip = (v) => { const s = JSON.stringify(v); return s.length > RESULT_MAX_CHARS ? `${s.slice(0, RESULT_MAX_CHARS)}…(קוצר)` : s; };
 const DAY_HE = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
+// One proposal per turn: a switch, a sales request or a ticket — the channel
+// shows one confirm. A second proposing tool in the same turn is refused so
+// the model tells the customer to send the next request after this one.
+function propose(ctx, pending) {
+  if (ctx.pending) throw new Error('כבר יש הצעה אחת שממתינה לאישור בהודעה הזו — אחת בכל פעם. אמרו ללקוח שאת הבקשה השנייה ישלח אחרי האישור.');
+  ctx.pending = pending;
+}
+
 async function runTool(name, input, ctx) {
   const { userId, phone } = ctx;
   switch (name) {
     case 'my_relays': {
-      const rows = await enabledRelaysForUser(userId);
-      return rows.map((r) => ({ name: r.name, state: r.current_state === 'on' ? 'דולק' : 'כבוי', device_online: Boolean(r.is_online) }));
+      // The rows loaded for the context block, not a second join.
+      return ctx.relays.map((r) => ({ name: r.name, state: r.current_state === 'on' ? 'דולק' : 'כבוי', device_online: Boolean(r.is_online) }));
     }
     case 'my_plans': {
       const schedules = await listSchedules({ userId });
@@ -82,7 +90,7 @@ async function runTool(name, input, ctx) {
       const { items } = await getHistory({ userId, limit: Math.min(40, Math.max(1, Number(input.limit) || 20)) });
       return items.map((it) => (it.type === 'cmd'
         ? { at: it.ts, relay: it.data.relay_name, action: it.data.action === 'on' ? 'הדלקה' : 'כיבוי', via: it.data.source, status: it.data.status, reason: it.data.fail_reason || null }
-        : { at: it.ts, call: true, from: it.data.caller || it.data.phone || null, path: it.data.path || null }));
+        : { at: it.ts, call: true, from: it.data.phone || null, menu_path: it.data.menu_path || null, outcome: it.data.outcome || null }));
     }
     case 'my_tickets': {
       const rows = await query("SELECT id, topic, body, status, created_at FROM support_messages WHERE user_id = ? AND source <> 'phone' AND deleted_at IS NULL ORDER BY id DESC LIMIT 10", [userId]);
@@ -100,8 +108,8 @@ async function runTool(name, input, ctx) {
       if (!interp.understood) return { proposed: false, clarification: interp.clarification };
       const refused = interp.actions.filter((a) => !ALLOWED_ACTION_KINDS.has(a.kind));
       if (refused.length) return { proposed: false, refused: refused.map((a) => a.summary), note: 'תזמון קבוע (כל שבוע) ומחיקת תזמונים נעשים באפליקציה (kosher-teltech.com) — לא כאן. אמרו זאת ללקוח.' };
-      ctx.pending = { actions: interp.actions, tz: interp.tz, text: String(input.text || '') };
-      return { proposed: true, awaiting_confirmation: true, actions: interp.actions.map((a) => a.summary), note: 'הפעולות ייקראו ללקוח עם כפתורי אישור על ידי המערכת — אל תפרטו אותן ואל תשאלו "לאשר?"; כתבו רק משפט קצר או כלום.' };
+      propose(ctx, { actions: interp.actions, tz: interp.tz, text: String(input.text || ''), clarification: interp.clarification || null });
+      return { proposed: true, awaiting_confirmation: true, actions: interp.actions.map((a) => a.summary), partial_note: interp.clarification || null, note: 'הפעולות ייקראו ללקוח עם כפתורי אישור על ידי המערכת — אל תפרטו אותן ואל תשאלו "לאשר?"; כתבו רק משפט קצר או כלום. partial_note = הערת המפרש על חלק שלא הובן; היא תוצג ללקוח מעל האישור.' };
     }
     case 'order_request': {
       // Never inserted here: the channel reads the request back with the
@@ -109,7 +117,7 @@ async function runTool(name, input, ctx) {
       const channels = Math.min(4, Math.max(1, Number(input.channels) || 1));
       const when = String(input.when || '').trim().slice(0, 60); const city = String(input.city || '').trim().slice(0, 60);
       if (!when || !city) throw new Error('חסר יישוב או מועד');
-      ctx.pending = { lead: { channels, when, city, notes: String(input.notes || '').trim().slice(0, 300) || null } };
+      propose(ctx, { lead: { channels, when, city, notes: String(input.notes || '').trim().slice(0, 300) || null } });
       return { proposed: true, awaiting_confirmation: true, note: 'הבקשה תוצג ללקוח עם כפתורי אישור על ידי המערכת — אל תכתבו שנרשמה; כתבו משפט קצר או כלום.' };
     }
     case 'open_ticket': {
@@ -117,7 +125,7 @@ async function runTool(name, input, ctx) {
       // לא" buttons and opens the ticket only on the customer's yes.
       const body = String(input.text || '').trim().slice(0, 2000);
       if (!body) throw new Error('אין מה לרשום');
-      ctx.pending = { ticket: { text: body } };
+      propose(ctx, { ticket: { text: body } });
       return { proposed: true, awaiting_confirmation: true, note: 'הנוסח יוצג ללקוח עם כפתורי "שלח לנציג / לא" על ידי המערכת — אל תכתבו שהפנייה נשלחה; כתבו משפט קצר או כלום.' };
     }
     default:
@@ -166,7 +174,7 @@ export async function userSecretaryTurn({ user, phone, text, excludeWaId = null,
   if (!env.anthropic.apiKey) return plain('העוזר לא זמין כרגע');
   if (!(await aiAllowed({ userId: user.id, kind: 'command' }))) return plain('העוזר לא זמין כרגע, נסו שוב מאוחר יותר');
   const relays = await enabledRelaysForUser(user.id);
-  const ctx = { userId: user.id, phone, pending: null };
+  const ctx = { userId: user.id, phone, relays, pending: null };
   const client = new Anthropic({ apiKey: env.anthropic.apiKey });
   const model = env.anthropic.model;
   const system = [

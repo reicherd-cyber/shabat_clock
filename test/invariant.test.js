@@ -141,3 +141,13 @@ test('WhatsApp: the customer secretary is entered only from the menu, and the pl
   const sec = readFileSync(new URL('../src/services/userSecretary.js', import.meta.url), 'utf8');
   assert.ok(!/INSERT INTO crm_leads/.test(sec), 'the secretary never writes a lead itself');
 });
+
+test('WhatsApp: a confirmed ticket is inserted with the text taken BEFORE the confirm is left (review 2026-11-03)', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const block = bot.slice(bot.indexOf("session.pending?.ticket && !admin"), bot.indexOf('// anything else: a new message; the offer is dropped'));
+  assert.ok(block.indexOf('const ticketText = session.pending.ticket.text') < block.indexOf('await leaveConfirm('), 'text read first');
+  assert.ok(/openTicket\(\{ phone, userId, text: ticketText/.test(block));
+  // every confirm is shown and left through the shared helpers
+  assert.equal((bot.match(/getText\('whatsapp\.confirm'/g) || []).length, 1, 'one place renders the confirm body');
+  assert.ok(!/resumeAfter\(/.test(bot));
+});
