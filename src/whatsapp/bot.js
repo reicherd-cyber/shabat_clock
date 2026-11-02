@@ -354,6 +354,26 @@ async function handleInboundNow(msg) {
     // ── the secretary: a superadmin's own number, every message ──
     if (admin) { await secretaryReply({ phone, userId, admin, text, waId: msg.waId, buttonId: msg.buttonId }); return; }
 
+    // ── the customer's secretary (per-number rollout: whatsapp.secretary_phones) ──
+    // Comes BEFORE the numbered menu: a listed customer gets one conversation.
+    // Read-only over the customer's own account; a switch comes back as the
+    // interpreter's validated actions and takes the SAME confirm path as a
+    // typed order (state CONFIRM → executePending → runNluActions).
+    if (user && await phoneAllowed('whatsapp.secretary_phones', phone)) {
+      if (session.state === 'MENU' || session.fresh) await saveSession({ phone, userId: user.id }); // a menu left open earlier is forgotten
+      const r = await userSecretaryTurn({ user, phone, text, excludeWaId: msg.waId });
+      if (!r.pending) { await sendText({ phone, userId, text: r.text, kind: 'secretary' }); return; }
+      if (r.pending.ticket) {
+        if (r.text) await sendText({ phone, userId, text: r.text, kind: 'secretary' });
+        await confirmTicket({ phone, userId, text: r.pending.ticket.text });
+        return;
+      }
+      await saveSession({ phone, userId: user.id, state: 'CONFIRM', pending: { actions: r.pending.actions, tz: r.pending.tz, text: r.pending.text } });
+      const summary = r.pending.actions.map((a) => `• ${a.summary}`).join('\n');
+      const body = (r.text ? `${r.text}\n\n` : '') + await getText('whatsapp.confirm', { summary });
+      await sendButtons({ phone, userId, text: body, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
+      return;
+    }
     // The numbered menu, for customers and guests alike — but only for the
     // numbers listed in whatsapp.menu_phones (per-number rollout, '' = nobody).
     const menuState = session.state === 'MENU' && session.pending?.menu ? session.pending.menu : null;
@@ -382,24 +402,6 @@ async function handleInboundNow(msg) {
     }
 
     if (session.fresh) await saveSession({ phone, userId: user.id });
-    // ── the customer's secretary (per-number rollout: whatsapp.secretary_phones) ──
-    // Read-only over the customer's own account; a switch comes back as the
-    // interpreter's validated actions and takes the SAME confirm path as a
-    // typed order (state CONFIRM → executePending → runNluActions).
-    if (await phoneAllowed('whatsapp.secretary_phones', phone)) {
-      const r = await userSecretaryTurn({ user, phone, text, excludeWaId: msg.waId });
-      if (!r.pending) { await sendText({ phone, userId, text: r.text, kind: 'secretary' }); return; }
-      if (r.pending.ticket) {
-        if (r.text) await sendText({ phone, userId, text: r.text, kind: 'secretary' });
-        await confirmTicket({ phone, userId, text: r.pending.ticket.text });
-        return;
-      }
-      await saveSession({ phone, userId: user.id, state: 'CONFIRM', pending: { actions: r.pending.actions, tz: r.pending.tz, text: r.pending.text } });
-      const summary = r.pending.actions.map((a) => `• ${a.summary}`).join('\n');
-      const body = (r.text ? `${r.text}\n\n` : '') + await getText('whatsapp.confirm', { summary });
-      await sendButtons({ phone, userId, text: body, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
-      return;
-    }
     if (isGreeting(text)) {
       await sendText({ phone, userId, text: await getText('whatsapp.greeting', { name: firstName(user) }) });
       return;

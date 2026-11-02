@@ -140,8 +140,8 @@ own ticket leaves (an explicit "לא עזר" / "נציג" choice) are unchanged.
 ## The customer's secretary (2026-11-03)
 
 Registered numbers listed in the setting `whatsapp.secretary_phones` ('' = nobody,
-'*' = everybody) talk to `services/userSecretary.js` instead of the greeting / status /
-command / question paths: a tool-using agent that sees only the sender's own account —
+'*' = everybody) talk to `services/userSecretary.js` instead of the numbered menu and the greeting / status /
+command / question paths (the secretary is checked before the menu, so a number on both lists gets one conversation): a tool-using agent that sees only the sender's own account —
 relays and live state, plans, the next days' firings, history, their tickets — plus the
 product knowledge base. The only change it can propose is a switch (on/off now, pause or
 resume a plan): the words go to the command interpreter, whose validated actions are
