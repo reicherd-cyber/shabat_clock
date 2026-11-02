@@ -51,3 +51,11 @@ test('isConfirmation: the confirm button or a bare yes word; anything else is a 
   assert.equal(isConfirmation('whatever', 'confirm_yes'), true);
   assert.equal(isConfirmation('ביטול ❌', 'confirm_no'), false);
 });
+
+test('looksLikeProposal: a read-back ending in "לאשר?" gets the confirm buttons', async () => {
+  const { looksLikeProposal } = await import('../src/services/secretary.js');
+  assert.equal(looksLikeProposal('• ליד חדש: משה כהן\n• הזמנה: 4 בקרים — 6000 ₪\n\nלאשר?'), true);
+  assert.equal(looksLikeProposal('לאשר? '), true);
+  assert.equal(looksLikeProposal('❓ מה הסכום?'), false);
+  assert.equal(looksLikeProposal('✅ נפתחה הזמנה #30'), false);
+});

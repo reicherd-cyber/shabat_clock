@@ -38,6 +38,9 @@ export const PROPOSAL_TTL_MS = 15 * 60 * 1000;
 // bare word of assent (with trailing punctuation / a thumbs-up). Pure.
 const YES = /^(כן|אישור|מאשר|מאשרת|אשר|בצע|בצעי|תבצע|תבצעי|אוקיי|אוקי|אוקי?י|או קיי|בסדר|סבבה|יאללה|מעולה|נכון|ok|okay|yes|y|go)[\s!.,✅👍🙏]*$/i;
 export const isConfirmation = (text, buttonId = null) => buttonId === 'confirm_yes' || YES.test(String(text || '').trim());
+// The secretary's read-back ends with "לאשר?" — that line is what the confirm
+// buttons are attached to. Pure.
+export const looksLikeProposal = (text) => /לאשר\s*[?؟]\s*$/.test(String(text || '').trim());
 const MAX_TOOL_ROUNDS = 8;
 const HISTORY_HOURS = 6;
 const HISTORY_MAX = 30;
@@ -146,15 +149,35 @@ const need = (v, what) => { if (!Number.isInteger(Number(v)) || Number(v) <= 0) 
 
 const READ_TOOLS = new Set(['find_contacts', 'lead_details', 'list_open_orders', 'finance_summary', 'list_tasks', 'list_support', 'customer_details', 'system_status']);
 
+// The gate: a write runs only with the admin's fresh confirmation (writesAllowed);
+// otherwise the model is told to read the action back. A dry run (live probes
+// against the shared database) answers every write as if it happened.
 async function runTool(name, input, ctx) {
-  const { admin, actor, who, source } = ctx;
-  // A dry run (live probes against the shared database) answers every write
-  // as if it happened, without touching a row.
   if (!READ_TOOLS.has(name) && !ctx.writesAllowed) {
     ctx.proposed = true;
     return { not_done: true, needs_confirmation: true, note: 'לא בוצע — כל פעולה דורשת אישור של המנהל. כתבו למנהל במדויק מה ייעשה (כל הפרטים והסכומים, בשורה אחת לפעולה) וסיימו ב"לאשר?". אל תקראו לכלי כתיבה נוסף בתור הזה. אחרי שהמנהל יאשר, קראו לכלי שוב בדיוק כפי שהוצע.' };
   }
-  if (ctx.dryRun && !READ_TOOLS.has(name)) return { ok: true, dry_run: true, would: name, input, note: 'מצב בדיקה — לא נכתב בפועל', id: 999 };
+  // The same write twice in one turn (a model retry after an odd result) is
+  // answered with the first result, never written again.
+  if (!READ_TOOLS.has(name)) {
+    const key = `${name}:${JSON.stringify(input)}`;
+    if (ctx.done.has(key)) return ctx.done.get(key);
+    const out = await runWrite(name, input, ctx);
+    ctx.done.set(key, out);
+    return out;
+  }
+  return runRead(name, input, ctx);
+}
+
+const DRY_IDS = { create_lead: 'lead_id', create_order: 'order_id', add_payment: 'payment_id', add_finance_entry: 'entry_id', create_task: 'task_id', reply_to_ticket: 'reply_id' };
+async function runWrite(name, input, ctx) {
+  if (ctx.dryRun) return { ok: true, dry_run: true, ...(DRY_IDS[name] ? { [DRY_IDS[name]]: 999 } : {}), ...input };
+  return runRead(name, input, ctx);
+}
+
+// The tool bodies, reads and writes alike.
+async function runRead(name, input, ctx) {
+  const { admin, actor, who, source } = ctx;
   const via = { via: source, secretary: true };
   switch (name) {
     case 'find_contacts': {
@@ -428,7 +451,7 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
 
   const loaded = history ? { messages: history, lastOutAt: lastOutAt ?? Date.now() } : await loadHistory({ phone, excludeWaId });
   const fresh = Date.now() - loaded.lastOutAt <= PROPOSAL_TTL_MS;
-  const ctx = { admin: { ...admin, phone }, actor: `admin:${admin.id}`, who: { type: 'admin', id: admin.id }, userId, phone, source, dryRun, writesAllowed: confirmed && fresh, proposed: false };
+  const ctx = { admin: { ...admin, phone }, actor: `admin:${admin.id}`, who: { type: 'admin', id: admin.id }, userId, phone, source, dryRun, writesAllowed: confirmed && fresh, proposed: false, done: new Map() };
   const client = new Anthropic({ apiKey: env.anthropic.apiKey });
   const model = env.anthropic.model;
   const system = [
@@ -469,7 +492,8 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
     messages.push({ role: 'user', content: results });
     if (round === MAX_TOOL_ROUNDS) replies.push('(עצרתי אחרי הרבה צעדים — אם משהו לא הושלם, כתבו שוב)');
   }
-  return { text: toWhatsApp(replies.join('\n')) || 'בוצע.', proposed: ctx.proposed };
+  const answer = toWhatsApp(replies.join('\n')) || 'בוצע.';
+  return { text: answer, proposed: ctx.proposed || looksLikeProposal(answer) };
 }
 
 export const SECRETARY_HELP = `אני המזכירה של המשרד. כתבו או הקליטו חופשי, למשל:
