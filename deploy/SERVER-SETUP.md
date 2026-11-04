@@ -113,7 +113,8 @@ in its .env** or its passkeys will not verify. An admin registers a key from the
 (a current 2FA code is required when 2FA is on); the login page offers "כניסה בטביעת אצבע".
 Tables: `admin_passkeys` (public keys only), `admin_passkey_challenges` (5 minutes, single use).
 A failed passkey login (a credential that was checked and rejected) counts as an admin login
-failure for the guardian; an aged-out challenge does not. A device-bound passkey is possession
-plus the person; a **synced** passkey (iCloud / Google Password Manager) on an account with the
-authenticator app enrolled still owes the app's code — the login answers `twofa_required` with a
-five-minute ticket that only `/admin/auth/passkey-2fa` accepts.
+failure for the guardian; an aged-out challenge does not. A passkey is a complete sign-in by default (the
+panel trusts the same Google account through "Sign in with Google" with no app code anyway). The
+setting `security.passkey_synced_needs_2fa = 1` makes a **synced** passkey (iCloud / Google Password
+Manager) on an account with the authenticator app enrolled owe the app's code: the login then
+answers `twofa_required` with a five-minute ticket that only `/admin/auth/passkey-2fa` accepts.
