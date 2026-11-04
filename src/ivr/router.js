@@ -568,6 +568,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
   try {
     if (!tokenValid(req.params.token || req.query.token)) {
       console.warn(`IVR: bad token from ${req.ip}`);
+      recordFailure(String(req.ip || '').slice(0, 15), 'ivr_token').catch(() => {}); // counted by monitor/guardian.js
       return res.status(403).send('forbidden');
     }
     res.type('text/plain; charset=utf-8');

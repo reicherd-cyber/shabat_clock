@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { env } from '../config/env.js';
+import { lockdownState } from '../monitor/guardian.js';
 import { errors, ApiError } from '../config/errors.js';
 import { query } from '../db/pool.js';
 
@@ -105,6 +106,10 @@ export async function requireAdmin(req, res, next) {
     if (!(await subjectAlive('admin', Number(t.sub), t.role))) {
       throw new ApiError(401, 'SESSION_EXPIRED', 'ההרשאות השתנו — יש להתחבר מחדש');
     }
+    // The guardian's lockdown (monitor/guardian.js): the office is closed until
+    // the emailed unlock link or the server CLI opens it. Customers are unaffected.
+    const lock = await lockdownState();
+    if (lock) throw new ApiError(423, 'LOCKDOWN', `ממשק הניהול נעול על ידי שומר המערכת (${lock.reason}). השחרור בקישור שנשלח במייל למנהלי-העל, או מהשרת.`);
     auth = { adminId: Number(t.sub), role: t.role };
   } catch (e) {
     return next(e);

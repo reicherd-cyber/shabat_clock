@@ -10,6 +10,10 @@ import { timingSafeEqual } from 'node:crypto';
 import { env } from '../config/env.js';
 import { signatureValid, extractInbound } from './parse.js';
 import { handleInbound } from './bot.js';
+import { recordFailure } from '../services/authFailures.js';
+
+// A refused webhook call is counted (monitor/guardian.js: webhook_forgeries).
+const refused = (req) => recordFailure(String(req.ip || '').slice(0, 15), 'wa_webhook').catch(() => {});
 
 export const whatsappRouter = Router();
 
@@ -29,12 +33,13 @@ whatsappRouter.get('/webhook', (req, res) => {
 whatsappRouter.post('/webhook', raw({ type: () => true, limit: '1mb' }), (req, res) => {
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
   if (env.whatsapp.appSecret) {
-    if (!signatureValid(body, req.get('x-hub-signature-256'), env.whatsapp.appSecret)) return res.sendStatus(403);
+    if (!signatureValid(body, req.get('x-hub-signature-256'), env.whatsapp.appSecret)) { refused(req); return res.sendStatus(403); }
   } else if (env.nodeEnv !== 'development' && env.nodeEnv !== 'test') {
     // Unsigned traffic is accepted only on a developer's machine. Production
     // AND staging refuse it (staging shares the production database, so a
     // forged POST there could order a real customer's relays off).
     console.error('[whatsapp] WHATSAPP_APP_SECRET is not set — webhook refused');
+    refused(req);
     return res.sendStatus(403);
   }
   let payload;

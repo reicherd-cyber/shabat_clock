@@ -18,6 +18,7 @@ import { costUsd, totalInputTokens, quickAnswerParams } from './aiPricing.js';
 import { aiAllowed } from './aiBudget.js';
 import { createLead, findLeads, createOrder, addPayment, listOpenOrders, PAYMENT_METHODS, devicesCsv } from './crm.js';
 import { createFinanceEntry, getFinance } from './finance.js';
+import { isLockedDown } from '../monitor/guardian.js';
 
 // ── identity ─────────────────────────────────────────────────────────────
 // The sender's number must be an active superadmin's own (admins.phone).
@@ -255,6 +256,7 @@ export async function runAdminAction({ admin, action, source = 'whatsapp' }) {
   // Confirmation may come minutes after the read-back: the admin must still be
   // an active superadmin who owns this number (revoked → nothing is written).
   assertAdminLive(admin, await adminByPhone(admin.phone));
+  if (await isLockedDown()) { const err = new Error('ממשק הניהול נעול על ידי שומר המערכת'); err.code = 'LOCKDOWN'; throw err; }
   const actor = `admin:${admin.id}`;
   const who = { type: 'admin', id: admin.id };
   const via = { via: source, assistant: true };

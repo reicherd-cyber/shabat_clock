@@ -1050,6 +1050,10 @@ adminRouter.post('/admins', async (req, res, next) => {
 
 adminRouter.patch('/admins/:id', async (req, res, next) => {
   try {
+    // The row as it is now: the audit keeps `before` so the guardian's revert
+    // link can put it back (monitor/guardian.js revertAdminChange).
+    const [current] = await query('SELECT name, role, is_active, phone FROM admins WHERE id = ?', [Number(req.params.id)]);
+    if (!current) throw errors.notFound();
     // Same whitelist as the create route — never forward a raw role string.
     const fields = {};
     if (req.body?.name !== undefined) fields.name = String(req.body.name).trim().slice(0, 100);
@@ -1072,7 +1076,8 @@ adminRouter.patch('/admins/:id', async (req, res, next) => {
       }
       invalidateSession('admin', Number(req.params.id)); // deactivation / re-role bites now, not in 60s
     }
-    await audit(req, 'update', 'admin', Number(req.params.id), { after: { ...fields, password_hash: undefined } });
+    const before = Object.fromEntries(Object.keys(fields).filter((k) => k in current).map((k) => [k, current[k]]));
+    await audit(req, 'update', 'admin', Number(req.params.id), { before, after: { ...fields, password_hash: undefined } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
