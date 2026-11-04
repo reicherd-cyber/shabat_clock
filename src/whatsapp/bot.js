@@ -37,7 +37,8 @@ import { transcribeVoice, sttEnabled } from './stt.js';
 import { serialByKey } from './queue.js';
 import { adminByPhone, adminTrigger } from '../services/adminAssistant.js';
 import { secondFactorKind, issueAdminEmailCode, verifyAdminCode, makeAdminLink, adminLinkMatches } from '../services/adminSecondFactor.js';
-import { listPasskeys } from '../services/passkeys.js';
+import { hasPasskey } from '../services/passkeys.js';
+import { createHash } from 'node:crypto';
 import { recordFailure } from '../services/authFailures.js';
 import { secretaryTurn, executeProposals, isConfirmation, SECRETARY_HELP } from '../services/secretary.js';
 import { userSecretaryTurn } from '../services/userSecretary.js';
@@ -244,7 +245,7 @@ const ADMIN_MODE_MS = 30 * 60 * 1000;
 const CONVERSATION_GAP_MS = 30 * 60 * 1000;
 const isAdminExit = (t) => /^(לקוח|0|יציאה|exit|סיום)$/i.test(String(t || '').trim());
 async function startAdminCode({ phone, userId, admin, after = null, session = null }) {
-  const f = await secondFactorKind(admin.id);
+  const [f, passkey] = await Promise.all([secondFactorKind(admin.id), hasPasskey(admin.id)]);
   let ask;
   // One emailed code per minute: a stolen phone cannot flood the admin's inbox.
   const issuedAt = Number(session?.pending?.issuedAt || 0);
@@ -254,26 +255,39 @@ async function startAdminCode({ phone, userId, admin, after = null, session = nu
   // A registered passkey offers the finger instead: a one-time link to the page
   // that runs it (web /admin/wa-login/:token → POST /admin/auth/wa-passkey →
   // completeAdminLink below). The code still works alongside.
-  const link = (await listPasskeys(admin.id)).length ? makeAdminLink() : null;
-  if (link) ask = `👆 לכניסה בטביעת אצבע פתחו את הקישור (10 דקות):\n${String(env.publicUrl).replace(/\/+$/, '')}/admin/wa-login/${link.token}\n\nאו ${ask.replace(/^🔐 /, '')}`;
+  const link = passkey ? makeAdminLink() : null;
+  const linkLine = (token) => `👆 לכניסה בטביעת אצבע פתחו את הקישור (10 דקות):\n${String(env.publicUrl).replace(/\/+$/, '')}/admin/wa-login/${token}\n\nאו `;
+  if (link) ask = `${linkLine(link.token)}${ask.replace(/^🔐 /, '')}`;
   await saveSession({ phone, userId, state: 'ADMIN_CODE', pending: { tries: 0, after, issuedAt: f?.kind === 'totp' ? 0 : (Date.now() - issuedAt < 60_000 ? issuedAt : Date.now()), ...(link ? { linkHash: link.hash, linkUntil: link.until } : {}) } });
-  await sendText({ phone, userId, text: ask, kind: 'auth' });
+  // The chat log keeps the link masked: only the token's hash lives on the session.
+  await sendText({ phone, userId, text: ask, kind: 'auth', logBody: link ? ask.replace(link.token, '[קישור חד-פעמי]') : null });
 }
 
 // The fingerprint page proved the passkey of `adminId`: the session whose
 // pending link this token opens — and whose number belongs to that very admin —
 // switches to admin mode. Called by POST /admin/auth/wa-passkey (api/routes/auth.js).
 export async function completeAdminLink({ token, adminId }) {
-  const rows = await query("SELECT phone, user_id, pending FROM whatsapp_sessions WHERE state = 'ADMIN_CODE' AND JSON_EXTRACT(pending, '$.linkHash') IS NOT NULL");
-  for (const row of rows) {
-    let pending = row.pending; if (typeof pending === 'string') { try { pending = JSON.parse(pending); } catch { pending = null; } }
-    if (!adminLinkMatches(pending, token)) continue;
+  // The row is found by the token's hash (no secret is compared in SQL); the
+  // pure check then settles the expiry. The switch itself runs in the number's
+  // own lane, so it cannot interleave with a message being handled right now.
+  const hash = createHash('sha256').update(String(token || '')).digest('hex');
+  const [row] = await query("SELECT phone, user_id, pending FROM whatsapp_sessions WHERE state = 'ADMIN_CODE' AND JSON_UNQUOTE(JSON_EXTRACT(pending, '$.linkHash')) = ?", [hash]);
+  if (!row) return { ok: false, reason: 'expired' };
+  return serialByKey(row.phone, async () => {
+    const session = await getSession(row.phone); // re-read inside the lane
+    const pending = session.pending;
+    if (session.state !== 'ADMIN_CODE' || !adminLinkMatches(pending, token)) return { ok: false, reason: 'expired' };
     const admin = await adminByPhone(row.phone);
-    if (!admin || Number(admin.id) !== Number(adminId)) return { ok: false, reason: 'not_yours' };
+    if (!admin || Number(admin.id) !== Number(adminId)) {
+      // Someone else's passkey on this link: the link is burnt and the miss is counted.
+      const { linkHash, linkUntil, ...rest } = pending;
+      await saveSession({ phone: row.phone, userId: row.user_id ?? null, state: 'ADMIN_CODE', pending: rest });
+      recordFailure('admin', 'admin_login').catch(() => {});
+      return { ok: false, reason: 'not_yours' };
+    }
     await enterAdminMode({ phone: row.phone, userId: row.user_id ?? null, admin, after: pending.after || null });
     return { ok: true, phone: row.phone };
-  }
-  return { ok: false, reason: 'expired' };
+  });
 }
 async function enterAdminMode({ phone, userId, admin, after }) {
   await saveSession({ phone, userId, state: 'ADMIN', pending: {} });

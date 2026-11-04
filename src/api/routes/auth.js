@@ -240,16 +240,19 @@ authRouter.post('/auth/review-login', adminLoginLimiter, async (req, res, next) 
 authRouter.post('/admin/auth/passkey-options', passkeyOptionsLimiter, async (req, res, next) => {
   try { res.json(await authenticationOptions()); } catch (e) { next(e); }
 });
+// The passkey check both passkey doors share: a checked-and-rejected credential
+// counts as an admin login failure for the guardian; an aged-out challenge does not.
+async function passkeyOrCount(req) {
+  try {
+    return await authenticatePasskey({ challengeId: req.body?.challengeId, response: req.body?.response });
+  } catch (e) {
+    if (e?.countable !== false) recordFailure('admin', 'admin_login').catch(() => {});
+    throw e;
+  }
+}
 authRouter.post('/admin/auth/passkey', adminLoginLimiter, async (req, res, next) => {
   try {
-    let who;
-    try {
-      who = await authenticatePasskey({ challengeId: req.body?.challengeId, response: req.body?.response });
-    } catch (e) {
-      // Only a checked-and-failed credential is an attack signal for the guardian.
-      if (e?.countable !== false) recordFailure('admin', 'admin_login').catch(() => {});
-      throw e;
-    }
+    const who = await passkeyOrCount(req);
     // A synced passkey on an account with the authenticator app still owes the code.
     if (who.secondFactor) return res.json({ twofa_required: true, ticket: signHalfLoginTicket(who.adminId, who.role), name: who.name });
     await query('UPDATE admins SET last_login_at = UTC_TIMESTAMP() WHERE id = ?', [who.adminId]);
@@ -261,13 +264,9 @@ authRouter.post('/admin/auth/passkey', adminLoginLimiter, async (req, res, next)
 // session — it switches the chat whose link this is to admin mode.
 authRouter.post('/admin/auth/wa-passkey', adminLoginLimiter, async (req, res, next) => {
   try {
-    let who;
-    try {
-      who = await authenticatePasskey({ challengeId: req.body?.challengeId, response: req.body?.response });
-    } catch (e) {
-      if (e?.countable !== false) recordFailure('admin', 'admin_login').catch(() => {});
-      throw e;
-    }
+    const who = await passkeyOrCount(req);
+    // The same policy as the panel: a synced passkey that owes the code cannot open the chat by itself.
+    if (who.secondFactor) throw new ApiError(409, 'TWOFA_REQUIRED', 'המפתח מסונכרן ולפי ההגדרה דורש גם קוד — כתבו את הקוד מאפליקציית האימות בוואטסאפ');
     const { completeAdminLink } = await import('../../whatsapp/bot.js');
     const r = await completeAdminLink({ token: String(req.body?.token || ''), adminId: who.adminId });
     if (!r.ok) throw new ApiError(404, 'LINK_EXPIRED', r.reason === 'not_yours' ? 'המפתח הזה אינו של המנהל שהקישור נשלח אליו' : 'הקישור פג או כבר נוצל — כתבו "מנהל" בוואטסאפ לקישור חדש');

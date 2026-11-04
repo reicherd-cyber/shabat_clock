@@ -52,6 +52,11 @@ async function takeChallenge(id, purpose) {
   return r.affectedRows === 1 ? row : null;
 }
 
+export async function hasPasskey(adminId) {
+  const [r] = await query('SELECT COUNT(*) AS n FROM admin_passkeys WHERE admin_id = ?', [Number(adminId)]);
+  return Number(r.n) > 0;
+}
+
 export async function listPasskeys(adminId) {
   return query('SELECT id, name, device_type, backed_up, created_at, last_used_at FROM admin_passkeys WHERE admin_id = ? ORDER BY id', [Number(adminId)]);
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { startAuthentication, browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import { publicApi } from '../api.js';
+import { passkeyAssertion, passkeysSupported } from '../passkey.js';
 import { Card, Button, ErrorNote, useAsync, Wordmark } from '../ui.jsx';
 import { Fingerprint } from 'lucide-react';
 
@@ -12,14 +12,9 @@ export default function WaAdminLogin() {
   const { token } = useParams();
   const { busy, error, run } = useAsync();
   const [done, setDone] = useState(false);
-  const supported = browserSupportsWebAuthn();
+  const supported = passkeysSupported();
   const verify = () => run(async () => {
-    const { challengeId, options } = await publicApi.post('/admin/auth/passkey-options', {});
-    let response;
-    try { response = await startAuthentication({ optionsJSON: options }); } catch (e) {
-      if (e?.name === 'NotAllowedError') throw new Error('האימות בוטל או שאין מפתח גישה במכשיר הזה — אפשר לכתוב את הקוד בוואטסאפ במקום');
-      throw e;
-    }
+    const { challengeId, response } = await passkeyAssertion({ cancelled: 'האימות בוטל או שאין מפתח גישה במכשיר הזה — אפשר לכתוב את הקוד בוואטסאפ במקום' });
     await publicApi.post('/admin/auth/wa-passkey', { token, challengeId, response });
     setDone(true);
   });

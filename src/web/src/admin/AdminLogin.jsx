@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { startAuthentication, browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import { publicApi, tokens } from '../api.js';
+import { passkeyAssertion, passkeysSupported } from '../passkey.js';
 import { Card, Button, Input, ErrorNote, useAsync, Wordmark } from '../ui.jsx';
 import GoogleButton from '../GoogleButton.jsx';
 import { Fingerprint } from 'lucide-react';
@@ -15,7 +15,7 @@ import { Fingerprint } from 'lucide-react';
 export default function AdminLogin() {
   const { busy, error, run, setError } = useAsync();
   const nav = useNavigate();
-  const [passkeys] = useState(() => browserSupportsWebAuthn());
+  const [passkeys] = useState(() => passkeysSupported());
   const [half, setHalf] = useState(null); // {ticket, name}: a synced passkey still owes the 2FA code
   const [code, setCode] = useState('');
 
@@ -25,12 +25,7 @@ export default function AdminLogin() {
     nav('/admin');
   });
   const withPasskey = () => run(async () => {
-    const { challengeId, options } = await publicApi.post('/admin/auth/passkey-options', {});
-    let response;
-    try { response = await startAuthentication({ optionsJSON: options }); } catch (e) {
-      if (e?.name === 'NotAllowedError') throw new Error('הכניסה בוטלה או שאין מפתח גישה במכשיר הזה');
-      throw e;
-    }
+    const { challengeId, response } = await passkeyAssertion();
     const r = await publicApi.post('/admin/auth/passkey', { challengeId, response });
     if (r.twofa_required) { setHalf({ ticket: r.ticket, name: r.name }); return; }
     tokens.admin = r.token;
