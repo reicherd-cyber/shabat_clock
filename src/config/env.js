@@ -41,6 +41,8 @@ export const env = {
   // /ivr/<token> is appended; a full URL containing /ivr is used as-is). Empty =
   // no forwarding. The dev server leaves it empty (see router.js loop guard).
   ivrDevForwardUrl: process.env.IVR_DEV_FORWARD_URL || '',
+  // Links in alert emails (monitor/guardian.js: unlock / revert).
+  publicUrl: process.env.PUBLIC_URL || 'https://kosher-teltech.com',
   mqtt: {
     url: process.env.MQTT_URL || 'mqtt://localhost:1883',
     username: process.env.MQTT_SERVER_USER || '',

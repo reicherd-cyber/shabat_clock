@@ -17,7 +17,6 @@ import { getText, getSetting } from '../services/settings.js';
 import { getSession, createSession, endSession } from './session.js';
 import { ask, askVoice, askRecord, say, sayAndHangup, transfer } from './responses.js';
 import { spokenText, spokenOption, speech } from './speech.js';
-import { adminByPhone, interpretAdminRequest, prepareAdminAction, runAdminAction, answerAdminQuery, WRITE_INTENTS, mergeDraft } from '../services/adminAssistant.js';
 import { voicemailFolder, voicemailFileName, createPhoneTicket, fetchVoicemailInBackground } from '../services/voicemail.js';
 import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
@@ -223,10 +222,9 @@ async function mainMenu(session, message = null) {
     if (await phoneAllowed('ivr.service_phones', session.phone)) {
       items.push(...await speak('ivr.main_menu_service', {}, 'לשירות לקוחות, הקישו 6'));
     }
-    // The admin assistant (services/adminAssistant.js) — only a superadmin's own number hears it.
-    if (session.admin) items.push(...await speak('ivr.main_menu_admin', {}, 'למנהל, הקישו 8'));
-    // An admin whose number is not a customer account: the admin line is the whole menu.
-    if (session.admin && !session.userId) items = [...greeting, ...await speak('ivr.main_menu_admin', {}, 'למנהל, הקישו 8')];
+    // No admin option on the phone, not even for a superadmin's own number:
+    // caller ID can be spoofed (owner's decision 2026-11-05). Admin work is
+    // WhatsApp only (services/secretary.js, Meta-verified sender).
   } else {
     const audio = await getSetting('ivr.audio.main_menu');
     items = audio
@@ -568,6 +566,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
   try {
     if (!tokenValid(req.params.token || req.query.token)) {
       console.warn(`IVR: bad token from ${req.ip}`);
+      recordFailure(String(req.ip || '').slice(0, 15), 'ivr_token').catch(() => {}); // counted by monitor/guardian.js
       return res.status(403).send('forbidden');
     }
     res.type('text/plain; charset=utf-8');
@@ -642,8 +641,6 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           // Per-number rollout of the נציג transfer (ivr.agent_transfer_phones, '' = nobody):
           // other callers keep the callback ticket.
           agentTransfer: await phoneAllowed('ivr.agent_transfer_phones', phone),
-          // A superadmin calling from their own number: main-menu key 8 (admin assistant).
-          admin: await adminByPhone(phone),
         });
         await setCallUser(callLogId, user.id);
         if (user.require_pin) {
@@ -653,14 +650,6 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           return res.send(ask(await speak('ivr.pin_prompt'), { min: 4, max: 4 }));
         }
         await appendPath(callLogId, 'main');
-        return res.send(await mainMenu(session));
-      }
-      // A superadmin's own number that is not a customer account: the admin
-      // assistant alone (services/adminAssistant.js), never the sales menu.
-      const adminOnly = asGuest ? null : await adminByPhone(phone);
-      if (adminOnly) {
-        session = createSession(callId, { callLogId, phone, userId: null, userName: adminOnly.name, admin: adminOnly });
-        await appendPath(callLogId, 'admin_menu');
         return res.send(await mainMenu(session));
       }
       // Unknown caller with a pending phone-add verification: the campaign call may
@@ -752,8 +741,6 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       // ── main menu ──
       case 'MAIN': {
         if (input === '0' || input === '*') return res.send(await mainMenu(session));
-        // No customer account behind this call (admin-only number): 8 is the only key.
-        if (!session.userId && session.admin && input !== '8') return res.send(await invalidInput(session));
         if (env.anthropic.apiKey) {
           // Voice-command build: 1=voice, 2=on, 3=off, 4=schedule, 5=status.
           if (input === '1') {
@@ -777,11 +764,6 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
             return res.send(await schedBrowse(session));
           }
           if (input === '5') return res.send(await runStatus(session));
-          if (input === '8' && session.admin) {
-            await appendPath(session.callLogId, 'admin');
-            session.state = 'ADMIN_LISTEN';
-            return res.send(askVoice(await speak('ivr.admin_listen', {}, 'אמרו את הפעולה לאחר הצפצוף, למשל: הוצאה 300 שקל דלק, לחץ סולמית לסיום'), { maxSilence: 3 }));
-          }
           if (input === '6' && await phoneAllowed('ivr.service_phones', session.phone)) {
             // 7 (מה קורה בשבת הקרובה) left the menu 2026-10-27 with the shared tree's 6/8.
             await appendPath(session.callLogId, 'svc');
@@ -848,45 +830,6 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       }
 
       // ── מוקד שירות: digits into the shared tree ──
-      // ── the admin assistant by voice: words → one action → read-back → 1/2 ──
-      case 'ADMIN_LISTEN': {
-        const raw = req.query.nlu;
-        const spoken = String(Array.isArray(raw) ? raw[raw.length - 1] : (raw ?? '')).trim();
-        if (!spoken) return res.send(await mainMenu(session, await speak('ivr.nlu_giveup', {}, 'לא זוהה דיבור, חוזרים לתפריט הראשי')));
-        // A question back (missing amount, unknown name…) re-listens at most
-        // twice, with the earlier words kept as a draft the answer completes.
-        const full = mergeDraft(session.data.adminDraft, spoken);
-        const askAgain = async (question) => {
-          session.data.adminRetries = (session.data.adminRetries || 0) + 1;
-          if (session.data.adminRetries > 2) { session.data.adminDraft = null; session.data.adminRetries = 0; return mainMenu(session, [{ t: speech(question) }]); }
-          session.data.adminDraft = full;
-          return askVoice([{ t: speech(question) }], { maxSilence: 3 });
-        };
-        const parsed = await interpretAdminRequest({ admin: { ...session.admin, phone: session.phone }, text: full, source: 'phone' });
-        if (!WRITE_INTENTS.has(parsed.intent)) {
-          if (parsed.intent === 'unknown' && parsed.clarification) return res.send(await askAgain(parsed.clarification));
-          session.data.adminDraft = null; session.data.adminRetries = 0;
-          return res.send(await mainMenu(session, [{ t: speech(await answerAdminQuery(parsed)) }]));
-        }
-        const prep = await prepareAdminAction(parsed);
-        if (!prep.ok) return res.send(await askAgain(prep.text));
-        session.data.adminDraft = null; session.data.adminRetries = 0;
-        session.data.adminAction = prep.action;
-        session.state = 'ADMIN_CONFIRM';
-        return res.send(ask([{ t: speech(prep.text) }, ...await speak('ivr.nlu_confirm', {}, 'להקיש 1 לאישור, 2 לביטול')]));
-      }
-      case 'ADMIN_CONFIRM': {
-        if (input === '1' && session.data.adminAction) {
-          try {
-            const done = await runAdminAction({ admin: { ...session.admin, phone: session.phone }, action: session.data.adminAction, source: 'phone' });
-            await appendPath(session.callLogId, 'admin_done');
-            return res.send(await mainMenu(session, [{ t: speech(done) }]));
-          } catch (e) {
-            return res.send(await mainMenu(session, [{ t: `לא בוצע, ${speech(e.message)}` }]));
-          }
-        }
-        return res.send(await mainMenu(session));
-      }
       case 'SVC_MENU': {
         if (input === '*') return res.send(await mainMenu(session));
         // Fixed-width menus: "01" is the engine's 1, "00" its 0.

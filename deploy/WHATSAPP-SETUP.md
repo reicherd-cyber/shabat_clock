@@ -110,8 +110,14 @@ before. Unknown numbers are never transcribed (a paid call per note).
 ## The secretary (2026-11-02)
 
 A superadmin whose own phone is set on their admin row (`admins.phone`, PATCH /admins/:id)
-gets the office secretary on WhatsApp: **every** message from that number — text or a
-voice note — goes to `services/secretary.js`, a tool-using Claude agent with full access
+gets the office secretary on WhatsApp behind a gate (`bot.js` adminGate): a new
+conversation starts with "מנהל או לקוח?" (buttons); admin asks for a six-digit second factor
+— the authenticator app when 2FA is enrolled on the admin row, otherwise a one-time code
+emailed to the admin (`services/adminSecondFactor.js`, 5 minutes, three tries) — and opens
+admin mode (session state ADMIN, 30 minutes) in which **every** message — text or a voice
+note — goes to `services/secretary.js`; "לקוח" / "0" returns to the customer flows, and
+"#…" / "מנהל …" skips the choice (the request waits for the code). The code never stays in the
+chat log. The secretary is a tool-using Claude agent with full access
 to leads, orders, payments, the ledger, the task board, the support inbox, customer
 accounts and the admin's own devices. A clear instruction is read back with confirm
 buttons and carried out on the admin's yes. The confirm binds execution to the proposal:
@@ -126,8 +132,10 @@ line. Writes use the same `services/crm.js` / `services/finance.js` / SQL as the
 stamped `admin:<id>` and audited; `עזרה` lists examples; a leading `#` is tolerated.
 Model calls are capped at 300 per admin per day (`nlu_usage` kind `admin`).
 
-On the phone the same number hears "למנהל, הקישו 8" — the structured assistant in
-`services/adminAssistant.js` (one action, read back, key 1 to confirm).
+The phone line offers no admin action at all, not even for that number: caller ID can be
+spoofed, so admin work is WhatsApp only (Meta-verified sender). Protect the business
+number itself with Meta's two-step verification PIN: `WA_2FA_PIN=123456 node
+scripts/wa-2fa.mjs set` (the PIN is read from the environment, never logged).
 
 ## Tickets need the customer's yes (2026-11-03)
 

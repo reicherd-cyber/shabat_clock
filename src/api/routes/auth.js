@@ -5,10 +5,12 @@ import { query } from '../../db/pool.js';
 import { errors, ApiError } from '../../config/errors.js';
 import { bcryptCompare, bcryptHash, createUser } from '../../services/users.js';
 import { recordFailure, isLockedOut } from '../../services/authFailures.js';
+import { verifyAdminEmailCode } from '../../services/adminSecondFactor.js';
+import { authenticationOptions, authenticatePasskey } from '../../services/passkeys.js';
 import { logAction } from '../../services/audit.js';
 import { consumeTotp, TOTP_REPLAY_MSG } from '../../services/adminTotp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
-import { signUserToken, signAdminToken, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter, onboardPrepareTokenLimiter, onboardCheckLimiter } from '../middleware.js';
+import { signUserToken, signAdminToken, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter, onboardPrepareTokenLimiter, onboardCheckLimiter, passkeyOptionsLimiter, signHalfLoginTicket, readHalfLoginTicket } from '../middleware.js';
 import { env } from '../../config/env.js';
 
 export const authRouter = Router();
@@ -44,7 +46,7 @@ authRouter.post('/admin/auth/google', adminLoginLimiter, async (req, res, next) 
   try {
     const claims = await verifyGoogleCredential(String(req.body?.credential || ''));
     const [admin] = await query('SELECT * FROM admins WHERE email = ? AND is_active = TRUE', [claims.email]);
-    if (!admin) throw errors.unauthenticated('חשבון Google זה אינו מנהל במערכת');
+    if (!admin) { recordFailure('admin', 'admin_login').catch(() => {}); throw errors.unauthenticated('חשבון Google זה אינו מנהל במערכת'); }
     res.json({ token: signAdminToken(admin.id, admin.role), role: admin.role, name: admin.name });
   } catch (e) { next(e); }
 });
@@ -196,18 +198,7 @@ function maskEmail(email) {
   return `${local.slice(0, 1)}***@${domain}`;
 }
 
-// Single-use emailed second-factor code: valid, unexpired, matches → clear it, true.
-async function verifyAdminEmailCode(admin, code) {
-  if (!admin.email_code_hash || !admin.email_code_expires) return false;
-  // Expiry judged by the database clock (the column is a UTC DATETIME the driver
-  // hands back as a Date parsed in the host zone — comparing it in JS is off by
-  // the host's UTC offset on any non-UTC box).
-  const [live] = await query('SELECT 1 AS ok FROM admins WHERE id = ? AND email_code_expires > UTC_TIMESTAMP()', [admin.id]);
-  if (!live) return false;
-  if (!bcryptCompare(code, admin.email_code_hash)) return false;
-  await query('UPDATE admins SET email_code_hash = NULL, email_code_expires = NULL WHERE id = ?', [admin.id]);
-  return true;
-}
+// The emailed second-factor code is shared with the WhatsApp admin gate (services/adminSecondFactor.js).
 
 // Phone-number login (OTP by call / by email, keyed by the phone) was removed
 // 2026-10-19 — the site is Google-only. The one exception is the Google Play
@@ -242,6 +233,65 @@ authRouter.post('/auth/review-login', adminLoginLimiter, async (req, res, next) 
   } catch (e) { next(e); }
 });
 
+// ── passkey login (services/passkeys.js): fingerprint / face / device PIN ──
+// Two calls: options (a challenge the browser signs with any passkey it holds
+// for this site) and the signed response, which names the credential and so
+// the admin. The device verified the person; this verifies the signature.
+authRouter.post('/admin/auth/passkey-options', passkeyOptionsLimiter, async (req, res, next) => {
+  try { res.json(await authenticationOptions()); } catch (e) { next(e); }
+});
+authRouter.post('/admin/auth/passkey', adminLoginLimiter, async (req, res, next) => {
+  try {
+    let who;
+    try {
+      who = await authenticatePasskey({ challengeId: req.body?.challengeId, response: req.body?.response });
+    } catch (e) {
+      // Only a checked-and-failed credential is an attack signal for the guardian.
+      if (e?.countable !== false) recordFailure('admin', 'admin_login').catch(() => {});
+      throw e;
+    }
+    // A synced passkey on an account with the authenticator app still owes the code.
+    if (who.secondFactor) return res.json({ twofa_required: true, ticket: signHalfLoginTicket(who.adminId, who.role), name: who.name });
+    await query('UPDATE admins SET last_login_at = UTC_TIMESTAMP() WHERE id = ?', [who.adminId]);
+    res.json({ token: signAdminToken(who.adminId, who.role), role: who.role, name: who.name });
+  } catch (e) { next(e); }
+});
+authRouter.post('/admin/auth/passkey-2fa', adminLoginLimiter, async (req, res, next) => {
+  try {
+    const half = readHalfLoginTicket(req.body?.ticket);
+    if (!half) throw errors.unauthenticated('פג תוקף — היכנסו שוב');
+    const [admin] = await query('SELECT id, name, role, is_active, totp_enabled, totp_secret, totp_last_counter FROM admins WHERE id = ?', [half.adminId]);
+    if (!admin || !admin.is_active || !admin.totp_enabled) throw errors.unauthenticated();
+    const totp = await consumeTotp(admin, String(req.body?.code || ''));
+    if (totp !== 'ok') { recordFailure('admin', 'admin_login').catch(() => {}); throw new ApiError(401, 'BAD_2FA', totp === 'replay' ? TOTP_REPLAY_MSG : 'קוד אימות שגוי'); }
+    await query('UPDATE admins SET last_login_at = UTC_TIMESTAMP() WHERE id = ?', [admin.id]);
+    res.json({ token: signAdminToken(admin.id, admin.role), role: admin.role, name: admin.name });
+  } catch (e) { next(e); }
+});
+
+// ── the guardian's recovery links (monitor/guardian.js) ──
+// No session: the admin is locked out by design. The token is single-use
+// (the lock state is cleared) and expires in 24 h; a bad token is a 404.
+const page = (res, status, title, body) => res.status(status).type('html').send(`<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><body style="font-family:sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem"><h2>${title}</h2><p>${body}</p></body></html>`);
+authRouter.get('/admin/security/unlock', adminLoginLimiter, async (req, res, next) => {
+  try {
+    const { unlock } = await import('../../monitor/guardian.js');
+    const r = await unlock({ token: String(req.query.token || ''), by: `link:${req.ip}` });
+    if (!r.ok) return page(res, 404, 'הקישור אינו תקף', 'הקישור פג או כבר נוצל. אפשר לשחרר מהשרת: node scripts/guardian.mjs unlock');
+    return page(res, 200, r.already ? 'המערכת כבר פתוחה' : 'הנעילה שוחררה', 'ממשק הניהול פתוח. יש להתחבר מחדש.');
+  } catch (e) { next(e); }
+});
+authRouter.get('/admin/security/revert/:id', adminLoginLimiter, async (req, res, next) => {
+  try {
+    const { revertTokenValid, revertAdminChange } = await import('../../monitor/guardian.js');
+    const id = Number(req.params.id);
+    if (!revertTokenValid(id, String(req.query.token || ''))) return page(res, 404, 'הקישור אינו תקף', 'הקישור פג או שגוי.');
+    const r = await revertAdminChange(id, { by: `link:${req.ip}` });
+    if (!r.ok) return page(res, 409, 'לא ניתן להחזיר', `אין ערכים קודמים לשינוי הזה (${r.reason}).`);
+    return page(res, 200, 'השינוי הוחזר', `מנהל #${r.admin_id}: ${Object.entries(r.fields).map(([k, v]) => `${k} = ${v}`).join(', ')}`);
+  } catch (e) { next(e); }
+});
+
 // Password login is normally OFF (Google-only policy); ADMIN_PASSWORD_LOGIN=1 in the
 // server env re-enables it as an emergency fallback if Google sign-in breaks.
 authRouter.post('/admin/auth/login', adminLoginLimiter, async (req, res, next) => {
@@ -251,6 +301,7 @@ authRouter.post('/admin/auth/login', adminLoginLimiter, async (req, res, next) =
     const [admin] = await query('SELECT * FROM admins WHERE email = ?', [String(email || '')]);
     // is_active=FALSE fails with the same generic 401 as unknown email / wrong password.
     if (!admin || !admin.is_active || !bcryptCompare(String(password || ''), admin.password_hash)) {
+      recordFailure('admin', 'admin_login').catch(() => {}); // counted by monitor/guardian.js
       throw errors.unauthenticated();
     }
     // Second factor: only once the password is correct, to avoid leaking whether 2FA is on.

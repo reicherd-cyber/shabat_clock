@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { env } from '../config/env.js';
+import { lockdownState, sessionsMinIat } from '../monitor/guardian.js';
 import { errors, ApiError } from '../config/errors.js';
 import { query } from '../db/pool.js';
 
@@ -60,6 +61,15 @@ export function signUserToken(userId, impAdminId = null, email = null) {
 export function signAdminToken(adminId, role) {
   return jwt.sign({ sub: String(adminId), role }, env.jwtSecret, { expiresIn: '12h' });
 }
+// A passkey login that still owes the authenticator code (a synced passkey on
+// an account with 2FA): a five-minute ticket that only /admin/auth/passkey-2fa
+// accepts — never an admin session.
+export function signHalfLoginTicket(adminId, role) {
+  return jwt.sign({ sub: String(adminId), role, half: 'passkey' }, env.jwtSecret, { expiresIn: '5m' });
+}
+export function readHalfLoginTicket(ticket) {
+  try { const t = jwt.verify(String(ticket || ''), env.jwtSecret); return t.half === 'passkey' ? { adminId: Number(t.sub), role: t.role } : null; } catch { return null; }
+}
 
 function decode(req) {
   const h = req.headers.authorization || '';
@@ -80,14 +90,17 @@ export async function requireUser(req, res, next) {
   let auth;
   try {
     const t = decode(req);
-    if (t.role !== 'user') throw errors.forbidden();
+    if (t.half || t.role !== 'user') throw errors.forbidden();
     if (!(await subjectAlive('user', Number(t.sub), 'user', t.em || null))) {
       throw new ApiError(401, 'SESSION_EXPIRED', 'החשבון אינו פעיל או שהגישה אליו הוסרה — יש להתחבר מחדש');
     }
     // An impersonation token (`imp`) is only as alive as the superadmin behind
-    // it: disabled or demoted → the token dies with them, not an hour later.
-    if (t.imp && !(await subjectAlive('admin', Number(t.imp), 'superadmin'))) {
-      throw new ApiError(401, 'SESSION_EXPIRED', 'ההתחזות הסתיימה — המנהל אינו פעיל');
+    // it: disabled or demoted → the token dies with them, not an hour later —
+    // and it is an admin session for the guardian's purposes: revoked by a
+    // lockdown's cut-off, refused while the office is locked.
+    if (t.imp) {
+      if (!(await subjectAlive('admin', Number(t.imp), 'superadmin'))) throw new ApiError(401, 'SESSION_EXPIRED', 'ההתחזות הסתיימה — המנהל אינו פעיל');
+      await assertAdminSessionLive(t);
     }
     auth = { userId: Number(t.sub), role: 'user', imp: t.imp ? Number(t.imp) : null, email: t.em || null };
   } catch (e) {
@@ -97,14 +110,29 @@ export async function requireUser(req, res, next) {
   next();
 }
 
+// The guardian's say over an admin session (monitor/guardian.js): a token
+// issued before the last lockdown's cut-off is dead for good, and while the
+// office is locked every admin session answers 423 until the emailed unlock
+// link or the server CLI opens it. Customers are unaffected.
+async function assertAdminSessionLive(t) {
+  const minIat = await sessionsMinIat();
+  if (minIat && Number(t.iat || 0) < minIat) throw new ApiError(401, 'SESSION_EXPIRED', 'ההתחברות בוטלה על ידי שומר המערכת — יש להתחבר מחדש');
+  const lock = await lockdownState();
+  if (lock) throw new ApiError(423, 'LOCKDOWN', `ממשק הניהול נעול על ידי שומר המערכת (${lock.reason}). השחרור בקישור שנשלח במייל למנהלי-העל, או מהשרת.`);
+}
+
 export async function requireAdmin(req, res, next) {
   let auth;
   try {
     const t = decode(req);
+    // A passkey half-login ticket (signHalfLoginTicket) carries the role but is
+    // not a session: it only buys the 2FA step at /admin/auth/passkey-2fa.
+    if (t.half) throw errors.unauthenticated('נדרש להשלים את האימות הדו-שלבי');
     if (t.role !== 'superadmin' && t.role !== 'support') throw errors.forbidden();
     if (!(await subjectAlive('admin', Number(t.sub), t.role))) {
       throw new ApiError(401, 'SESSION_EXPIRED', 'ההרשאות השתנו — יש להתחבר מחדש');
     }
+    await assertAdminSessionLive(t);
     auth = { adminId: Number(t.sub), role: t.role };
   } catch (e) {
     return next(e);
@@ -146,6 +174,9 @@ export const whatsappLimiter = limited({ windowMs: 60_000, limit: 600 });
 // Google sign-in (admin + user), the Play review-account login, and the
 // emergency admin password login share one per-IP cap.
 export const adminLoginLimiter = limited({ windowMs: 15 * 60_000, limit: 5 });
+// The passkey options call makes no login attempt (a cancelled device prompt
+// burns one), so it does not spend the login budget shared by an office IP.
+export const passkeyOptionsLimiter = limited({ windowMs: 15 * 60_000, limit: 30 });
 // Per-user caps on the endpoints that cost money (Claude API) or enumerate
 // (phone add). Keyed by the authenticated user, not the IP.
 const perUser = (req) => String(req.auth?.userId || req.ip);

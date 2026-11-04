@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi, adminRole } from '../api.js';
 import { Card, Button, Input, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, Stat, fmtUptime, FilterSelect } from '../ui.jsx';
-import { UserRound, House } from 'lucide-react';
+import { UserRound, House, Fingerprint } from 'lucide-react';
+import { startRegistration, browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import { ProviderBalances } from './ProviderBalances.jsx';
 
 
@@ -522,14 +523,61 @@ export function SystemSettings() {
   );
 }
 
+// Passkeys (fingerprint / face / device PIN) for the logged-in admin — drives
+// /passkeys/*. Adding one asks for a current 2FA code when 2FA is on.
+function PasskeysCard({ twoFa }) {
+  const [rows, setRows] = useState(null);
+  const [code, setCode] = useState('');
+  const [label, setLabel] = useState('');
+  const { busy, error, run, setError } = useAsync();
+  const supported = browserSupportsWebAuthn();
+  const refresh = async () => setRows((await adminApi.get('/passkeys')).rows);
+  useEffect(() => { refresh().catch(setError); }, []);
+  const add = () => run(async () => {
+    const { challengeId, options } = await adminApi.post('/passkeys/register-options', twoFa ? { code } : {});
+    let response;
+    try { response = await startRegistration({ optionsJSON: options }); } catch (e) {
+      if (e?.name === 'NotAllowedError') throw new Error('הרישום בוטל');
+      if (e?.name === 'InvalidStateError') throw new Error('המפתח הזה כבר רשום');
+      throw e;
+    }
+    await adminApi.post('/passkeys/register', { challengeId, response, label });
+    setCode(''); setLabel('');
+    await refresh();
+  });
+  const remove = (id) => run(async () => { await adminApi.del(`/passkeys/${id}`); await refresh(); });
+  if (rows === null) return null;
+  return (
+    <Card className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-bold flex items-center gap-2"><Fingerprint size={18} /> מפתחות גישה (טביעת אצבע / Face ID) לחשבון שלי</h3>
+        <Badge ok={rows.length > 0}>{rows.length ? `${rows.length} רשומים` : 'אין'}</Badge>
+      </div>
+      <ErrorNote error={error} />
+      <p className="text-sm text-muted">מפתח גישה נרשם במכשיר שבו אתם עכשיו (טלפון או מחשב) ומאפשר כניסה לניהול בטביעת אצבע, זיהוי פנים או קוד המכשיר — בלי Google. המפתח עצמו לא עוזב את המכשיר. מפתח מסונכרן (iCloud / Google) יבקש בכניסה גם את קוד האימות הדו-שלבי כשהוא פעיל.</p>
+      {rows.map((r) => (
+        <div key={r.id} className="flex items-center justify-between gap-2 text-sm">
+          <span>{r.name}{r.backed_up ? ' · מסונכרן' : ''}<span className="text-muted"> · נוסף {String(r.created_at).slice(0, 10)}{r.last_used_at ? `, שימוש אחרון ${String(r.last_used_at).slice(0, 10)}` : ''}</span></span>
+          <Button variant="danger" disabled={busy} onClick={() => remove(r.id)}>הסר</Button>
+        </div>
+      ))}
+      {supported ? (
+        <div className="flex flex-wrap gap-2 items-center">
+          <Input className="w-40" placeholder="שם (למשל: הטלפון שלי)" value={label} onChange={(e) => setLabel(e.target.value)} />
+          {twoFa && <Input dir="ltr" inputMode="numeric" className="w-36" placeholder="קוד 2FA נוכחי" value={code} onChange={(e) => setCode(e.target.value)} />}
+          <Button disabled={busy || (twoFa && code.length !== 6)} onClick={add}>+ הוסף מפתח במכשיר הזה</Button>
+        </div>
+      ) : <p className="text-sm text-muted">הדפדפן הזה אינו תומך במפתחות גישה.</p>}
+    </Card>
+  );
+}
+
 // 2FA (TOTP) self-enrollment for the logged-in admin — drives the /2fa/* endpoints.
-function TwoFactorCard() {
-  const [enabled, setEnabled] = useState(null);
+// `enabled` and `refresh` come from the page, which shares them with PasskeysCard.
+function TwoFactorCard({ enabled, refresh }) {
   const [setup, setSetup] = useState(null); // {qr, secret} while enrolling
   const [code, setCode] = useState('');
   const { busy, error, run, setError } = useAsync();
-  const refresh = async () => setEnabled((await adminApi.get('/2fa/status')).enabled);
-  useEffect(() => { refresh().catch(setError); }, []);
 
   const begin = () => run(async () => { setSetup(await adminApi.post('/2fa/setup', {})); setCode(''); });
   const enable = () => run(async () => { await adminApi.post('/2fa/enable', { code }); setSetup(null); setCode(''); await refresh(); });
@@ -575,7 +623,11 @@ export function Admins() {
   const [form, setForm] = useState(null);
   const { busy, error, run, setError } = useAsync();
   const refresh = async () => setAdmins(await adminApi.get('/admins'));
-  useEffect(() => { refresh().catch(setError); }, []);
+  // The admin's own 2FA flag, read once for the page: the 2FA card changes it,
+  // the passkeys card asks for a code only while it is on.
+  const [twoFa, setTwoFa] = useState(null);
+  const refreshTwoFa = async () => setTwoFa(Boolean((await adminApi.get('/2fa/status')).enabled));
+  useEffect(() => { refresh().catch(setError); refreshTwoFa().catch(setError); }, []);
   const create = () => run(async () => { await adminApi.post('/admins', form); setForm(null); await refresh(); });
   // The admin's own phone: the number that gets the WhatsApp secretary and the
   // phone line's admin menu (admins.phone, superadmin rows only). Edited inline.
@@ -592,7 +644,8 @@ export function Admins() {
         <h2 className="font-bold text-xl">מנהלים</h2>
         <Button onClick={() => setForm({ name: '', email: '', password: '', role: 'support' })}>+ מנהל</Button>
       </div>
-      <TwoFactorCard />
+      {twoFa !== null && <TwoFactorCard enabled={twoFa} refresh={refreshTwoFa} />}
+      {twoFa !== null && <PasskeysCard twoFa={twoFa} />}
       <ErrorNote error={error} />
       {(admins || []).map((a) => (
         <Card key={a.id} className="flex flex-wrap items-center justify-between gap-2 py-3">

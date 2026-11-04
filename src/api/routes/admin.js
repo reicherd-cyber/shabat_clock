@@ -35,6 +35,7 @@ import { listHelpChats } from '../../services/helpChats.js';
 import { getFinance, createFinanceEntry, updateFinanceEntry, softDeleteFinanceEntry, restoreFinanceEntry } from '../../services/finance.js';
 import { recentFailureCount } from '../../services/authFailures.js';
 import { auditLog } from '../../services/audit.js';
+import { listPasskeys, registrationOptions, registerPasskey, deletePasskey, rpId as passkeyRpId } from '../../services/passkeys.js';
 import { listReplies, markRepliesSeen, insertReply, cleanReplyBody, notifyUserOfReply } from '../../services/supportThread.js';
 import { notifyWhatsappReply } from '../../whatsapp/bot.js';
 import { readVoicemail, fetchVoicemail } from '../../services/voicemail.js';
@@ -123,6 +124,39 @@ adminRouter.post('/2fa/disable', async (req, res, next) => {
     if (v2 !== 'ok') throw errors.validation(v2 === 'replay' ? TOTP_REPLAY_MSG : TOTP_BAD_MSG);
     await query('UPDATE admins SET totp_enabled = FALSE, totp_secret = NULL WHERE id = ?', [req.auth.adminId]);
     audit(req, 'disable_2fa', 'admin', req.auth.adminId);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ── passkeys (fingerprint / face / device PIN sign-in, services/passkeys.js) ──
+// Registering needs a current 2FA code when 2FA is on: a hijacked session must
+// not be able to plant a key of its own (same rule as /2fa/setup).
+adminRouter.get('/passkeys', async (req, res, next) => {
+  try { res.json({ rows: await listPasskeys(req.auth.adminId), rp_id: passkeyRpId() }); } catch (e) { next(e); }
+});
+adminRouter.post('/passkeys/register-options', async (req, res, next) => {
+  try {
+    const [a] = await query('SELECT id, email, name, totp_secret, totp_enabled, totp_last_counter FROM admins WHERE id = ?', [req.auth.adminId]);
+    if (a?.totp_enabled) {
+      const v = await consumeTotp(a, req.body?.code);
+      if (v !== 'ok') throw errors.validation(v === 'replay' ? TOTP_REPLAY_MSG : 'נדרש קוד אימות נוכחי כדי להוסיף מפתח גישה', { code: 'current TOTP required' });
+    }
+    res.json(await registrationOptions({ adminId: a.id, email: a.email, name: a.name }));
+  } catch (e) { next(e); }
+});
+adminRouter.post('/passkeys/register', async (req, res, next) => {
+  try {
+    const r = await registerPasskey({ adminId: req.auth.adminId, challengeId: req.body?.challengeId, response: req.body?.response, label: req.body?.label });
+    audit(req, 'passkey_add', 'admin', req.auth.adminId, { after: { passkey_id: r.id, name: r.name } });
+    res.status(201).json(r);
+  } catch (e) { next(e); }
+});
+adminRouter.delete('/passkeys/:id', async (req, res, next) => {
+  try {
+    const id = idParam(req.params.id);
+    if (!id) throw errors.notFound();
+    await deletePasskey({ adminId: req.auth.adminId, id });
+    audit(req, 'passkey_remove', 'admin', req.auth.adminId, { after: { passkey_id: id } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -1050,6 +1084,10 @@ adminRouter.post('/admins', async (req, res, next) => {
 
 adminRouter.patch('/admins/:id', async (req, res, next) => {
   try {
+    // The row as it is now: the audit keeps `before` so the guardian's revert
+    // link can put it back (monitor/guardian.js revertAdminChange).
+    const [current] = await query('SELECT name, role, is_active, phone FROM admins WHERE id = ?', [Number(req.params.id)]);
+    if (!current) throw errors.notFound();
     // Same whitelist as the create route — never forward a raw role string.
     const fields = {};
     if (req.body?.name !== undefined) fields.name = String(req.body.name).trim().slice(0, 100);
@@ -1072,7 +1110,8 @@ adminRouter.patch('/admins/:id', async (req, res, next) => {
       }
       invalidateSession('admin', Number(req.params.id)); // deactivation / re-role bites now, not in 60s
     }
-    await audit(req, 'update', 'admin', Number(req.params.id), { after: { ...fields, password_hash: undefined } });
+    const before = Object.fromEntries(Object.keys(fields).filter((k) => k in current).map((k) => [k, current[k]]));
+    await audit(req, 'update', 'admin', Number(req.params.id), { before, after: { ...fields, password_hash: undefined } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

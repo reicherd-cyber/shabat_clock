@@ -30,6 +30,9 @@ import { insertReply, cleanReplyBody, notifyUserOfReply } from './supportThread.
 import { interpretCommand } from './nlu.js';
 import { runNluActions } from './nluExec.js';
 import { adminByPhone, assertAdminLive, todayStr } from './adminAssistant.js';
+import { isLockedDown } from '../monitor/guardian.js';
+
+const LOCKED_MSG = '🔒 ממשק הניהול נעול על ידי שומר המערכת. ראו את המייל ששלח למנהלי-העל, או שחררו מהשרת (node scripts/guardian.mjs unlock).';
 
 export const SECRETARY_DAILY_MAX = 300; // model calls per admin per day
 
@@ -500,6 +503,7 @@ export async function secretaryTurn({ admin, phone, userId = null, text, exclude
   if (Number(today) >= SECRETARY_DAILY_MAX) return plain('הגעתם למכסת הפניות היומית של המזכירה');
   // The admin is re-checked on every turn: a revoked number writes nothing.
   assertAdminLive(admin, await adminByPhone(phone));
+  if (await isLockedDown()) return plain(LOCKED_MSG);
 
   const ctx = { admin: { ...admin, phone }, actor: `admin:${admin.id}`, who: { type: 'admin', id: admin.id }, userId, phone, source, dryRun, proposals: [] };
   const client = new Anthropic({ apiKey: env.anthropic.apiKey });
@@ -569,6 +573,7 @@ async function lookupNames(proposals) {
 // outcome; a step whose prerequisite failed is skipped. No model involved.
 export async function executeProposals({ admin, phone, userId = null, proposals, source = 'whatsapp', dryRun = false }) {
   assertAdminLive(admin, await adminByPhone(phone));
+  if (await isLockedDown()) return LOCKED_MSG;
   const ctx = { admin: { ...admin, phone }, actor: `admin:${admin.id}`, who: { type: 'admin', id: admin.id }, userId, phone, source, dryRun };
   const created = []; const lines = []; const failed = new Set();
   for (let i = 0; i < proposals.length; i++) {

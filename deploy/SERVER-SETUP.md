@@ -104,3 +104,16 @@ sudo certbot --nginx -d <your-domain>
 
 Update the Yemot root extension's `api_link` to
 `https://<your-domain>/ivr/<IVR_TOKEN>` (replaces the temporary trycloudflare URL).
+
+## Passkeys (fingerprint / Face ID login to the admin panel, 2026-11-05)
+
+`services/passkeys.js` + `@simplewebauthn`. The relying party is the host of `PUBLIC_URL`
+(`https://kosher-teltech.com` by default), so **staging needs `PUBLIC_URL=https://dev.kosher-teltech.com`
+in its .env** or its passkeys will not verify. An admin registers a key from the admins page
+(a current 2FA code is required when 2FA is on); the login page offers "כניסה בטביעת אצבע".
+Tables: `admin_passkeys` (public keys only), `admin_passkey_challenges` (5 minutes, single use).
+A failed passkey login (a credential that was checked and rejected) counts as an admin login
+failure for the guardian; an aged-out challenge does not. A device-bound passkey is possession
+plus the person; a **synced** passkey (iCloud / Google Password Manager) on an account with the
+authenticator app enrolled still owes the app's code — the login answers `twofa_required` with a
+five-minute ticket that only `/admin/auth/passkey-2fa` accepts.

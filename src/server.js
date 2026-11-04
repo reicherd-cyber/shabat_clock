@@ -4,6 +4,7 @@ import { migrate } from './db/migrate.js';
 import { connectMqtt } from './mqtt/client.js';
 import { startScheduler } from './scheduler/tick.js';
 import { startHealthMonitor } from './monitor/health.js';
+import { startGuardian } from './monitor/guardian.js';
 
 const app = createApp();
 
@@ -12,6 +13,7 @@ migrate()
     connectMqtt();
     startScheduler();
     startHealthMonitor();
+    startGuardian();
     app.listen(env.port, () => console.log(`shabat-clock listening on :${env.port}`));
   })
   .catch((e) => {
