@@ -90,7 +90,7 @@ export async function requireUser(req, res, next) {
   let auth;
   try {
     const t = decode(req);
-    if (t.role !== 'user') throw errors.forbidden();
+    if (t.half || t.role !== 'user') throw errors.forbidden();
     if (!(await subjectAlive('user', Number(t.sub), 'user', t.em || null))) {
       throw new ApiError(401, 'SESSION_EXPIRED', 'החשבון אינו פעיל או שהגישה אליו הוסרה — יש להתחבר מחדש');
     }
@@ -125,6 +125,9 @@ export async function requireAdmin(req, res, next) {
   let auth;
   try {
     const t = decode(req);
+    // A passkey half-login ticket (signHalfLoginTicket) carries the role but is
+    // not a session: it only buys the 2FA step at /admin/auth/passkey-2fa.
+    if (t.half) throw errors.unauthenticated('נדרש להשלים את האימות הדו-שלבי');
     if (t.role !== 'superadmin' && t.role !== 'support') throw errors.forbidden();
     if (!(await subjectAlive('admin', Number(t.sub), t.role))) {
       throw new ApiError(401, 'SESSION_EXPIRED', 'ההרשאות השתנו — יש להתחבר מחדש');

@@ -127,8 +127,12 @@ export async function authenticatePasskey({ challengeId, response }) {
     const err = errors.unauthenticated(`האימות נכשל: ${e.message}`); err.countable = true; throw err;
   }
   if (!v.verified) { const e = errors.unauthenticated('האימות נכשל'); e.countable = true; throw e; }
-  await query('UPDATE admin_passkeys SET counter = ?, last_used_at = UTC_TIMESTAMP() WHERE id = ?', [Number(v.authenticationInfo.newCounter || 0), row.id]);
-  return { adminId: Number(row.admin_id), role: row.role, name: row.name, passkeyId: row.id, secondFactor: secondFactorNeeded({ totpEnabled: row.totp_enabled, backedUp: row.backed_up }) };
+  // The authenticator reports on every login whether the key is synced now — a
+  // key backed up after registration is judged by today's flag, and the row learns it.
+  const backedUp = typeof v.authenticationInfo.credentialBackedUp === 'boolean' ? v.authenticationInfo.credentialBackedUp : Boolean(row.backed_up);
+  await query('UPDATE admin_passkeys SET counter = ?, backed_up = ?, device_type = COALESCE(?, device_type), last_used_at = UTC_TIMESTAMP() WHERE id = ?',
+    [Number(v.authenticationInfo.newCounter || 0), backedUp ? 1 : 0, v.authenticationInfo.credentialDeviceType || null, row.id]);
+  return { adminId: Number(row.admin_id), role: row.role, name: row.name, passkeyId: row.id, secondFactor: secondFactorNeeded({ totpEnabled: row.totp_enabled, backedUp }) };
 }
 
 const parseTransports = (t) => { try { const a = typeof t === 'string' ? JSON.parse(t) : t; return Array.isArray(a) ? a : undefined; } catch { return undefined; } };

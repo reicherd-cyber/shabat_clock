@@ -51,7 +51,11 @@ export async function sessionsMinIat() {
   const v = Number(await getSetting('security.sessions_min_iat', '0'));
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
-export const revokeAdminSessions = () => putSettings([{ setting_key: 'security.sessions_min_iat', setting_value: String(Math.floor(Date.now() / 1000)) }]);
+// Exclusive of the current second: a token's iat is floored to the second, so a
+// token issued in the same second as the lockdown has iat == floor(now) and
+// must fall BELOW the cut-off too.
+export const sessionCutoffFor = (nowMs) => Math.floor(nowMs / 1000) + 1;
+export const revokeAdminSessions = () => putSettings([{ setting_key: 'security.sessions_min_iat', setting_value: String(sessionCutoffFor(Date.now())) }]);
 
 const sha = (t) => createHash('sha256').update(String(t)).digest('hex');
 const baseUrl = () => String(env.publicUrl || 'https://kosher-teltech.com').replace(/\/+$/, '');

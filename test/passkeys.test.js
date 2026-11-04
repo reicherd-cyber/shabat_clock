@@ -29,3 +29,11 @@ test('half-login ticket: only /passkey-2fa reads it, and an admin session token 
   assert.equal(readHalfLoginTicket(t + 'x'), null);
   assert.equal(readHalfLoginTicket(''), null);
 });
+
+test('a half-login ticket presented as a bearer token is refused by requireAdmin before any lookup (401, not a session)', async () => {
+  const { requireAdmin } = await import('../src/api/middleware.js');
+  const req = { headers: { authorization: `Bearer ${signHalfLoginTicket(1, 'superadmin')}` } };
+  const err = await new Promise((resolve) => requireAdmin(req, {}, resolve));
+  assert.equal(err?.status, 401);
+  assert.equal(req.auth, undefined);
+});

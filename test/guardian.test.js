@@ -48,3 +48,11 @@ test('a critical reading is never swallowed by the warning cooldown; a lockdown 
   const lock = g.slice(g.indexOf('export async function lockdown'), g.indexOf('export async function unlock'));
   assert.ok(lock.includes('await revokeAdminSessions();'));
 });
+
+test('the session cut-off excludes its own second: a token issued in the lockdown\'s second is dead too', async () => {
+  const { sessionCutoffFor } = await import('../src/monitor/guardian.js');
+  const nowMs = 1_793_833_382_900; // a token minted at this instant carries iat = 1793833382
+  const iat = Math.floor(nowMs / 1000);
+  assert.ok(iat < sessionCutoffFor(nowMs), 'same-second token is below the cut-off');
+  assert.ok(iat + 1 >= sessionCutoffFor(nowMs), 'the next second is alive');
+});
