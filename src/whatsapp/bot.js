@@ -285,12 +285,20 @@ export async function completeAdminLink({ token, adminId }) {
       recordFailure('admin', 'admin_login').catch(() => {});
       return { ok: false, reason: 'not_yours' };
     }
-    await enterAdminMode({ phone: row.phone, userId: row.user_id ?? null, admin, after: pending.after || null });
+    // The claim itself is one conditional UPDATE: the session flips to ADMIN only
+    // if it still holds this very link, so of two callers exactly one wins —
+    // in this process (the lane) and across processes (the database).
+    const claim = await query(
+      "UPDATE whatsapp_sessions SET state = 'ADMIN', pending = '{}', retries = 0 WHERE phone = ? AND state = 'ADMIN_CODE' AND JSON_UNQUOTE(JSON_EXTRACT(pending, '$.linkHash')) = ?",
+      [row.phone, hash],
+    );
+    if (claim.affectedRows !== 1) return { ok: false, reason: 'expired' };
+    await enterAdminMode({ phone: row.phone, userId: row.user_id ?? null, admin, after: pending.after || null, claimed: true });
     return { ok: true, phone: row.phone };
   });
 }
-async function enterAdminMode({ phone, userId, admin, after }) {
-  await saveSession({ phone, userId, state: 'ADMIN', pending: {} });
+async function enterAdminMode({ phone, userId, admin, after, claimed = false }) {
+  if (!claimed) await saveSession({ phone, userId, state: 'ADMIN', pending: {} });
   await sendText({ phone, userId, text: `✅ מצב מנהל פעיל ל-30 דקות. כתבו "לקוח" לחזור לחשבון הלקוח.\n\n${SECRETARY_HELP}`, kind: 'secretary' });
   if (after) await secretaryReply({ phone, userId, admin, text: after, waId: null, buttonId: null });
 }

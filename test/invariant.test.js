@@ -172,6 +172,9 @@ test('WhatsApp fingerprint link: the chat switches only when the passkey belongs
   assert.ok(/if \(!admin \|\| Number\(admin\.id\) !== Number\(adminId\)\) \{[\s\S]*?reason: 'not_yours'/.test(fn));
   assert.ok(fn.indexOf('adminLinkMatches(pending, token)') < fn.indexOf('enterAdminMode('));
   assert.ok(fn.includes('return serialByKey(row.phone, async () => {'), 'the switch runs in the number\'s lane');
+  assert.ok(/UPDATE whatsapp_sessions SET state = 'ADMIN'[^"]*WHERE phone = \? AND state = 'ADMIN_CODE' AND JSON_UNQUOTE\(JSON_EXTRACT\(pending, '\$\.linkHash'\)\) = \?/.test(fn), 'the claim is one conditional update');
+  assert.ok(/if \(claim\.affectedRows !== 1\) return \{ ok: false, reason: 'expired' \};/.test(fn));
+  assert.ok(fn.indexOf('claim.affectedRows') < fn.indexOf('enterAdminMode('), 'the welcome goes out only to the winner');
   assert.ok(/not_yours[\s\S]*?recordFailure\('admin', 'admin_login'\)|recordFailure\('admin', 'admin_login'\)[\s\S]*?not_yours/.test(fn), 'a foreign passkey counts as a failure');
   // the link is logged masked
   const start = bot.slice(bot.indexOf('async function startAdminCode'), bot.indexOf('async function enterAdminMode'));
