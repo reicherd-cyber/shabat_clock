@@ -113,7 +113,10 @@ A superadmin whose own phone is set on their admin row (`admins.phone`, PATCH /a
 gets the office secretary on WhatsApp behind a gate (`bot.js` adminGate): a new
 conversation starts with "מנהל או לקוח?" (buttons); admin asks for a six-digit second factor
 — the authenticator app when 2FA is enrolled on the admin row, otherwise a one-time code
-emailed to the admin (`services/adminSecondFactor.js`, 5 minutes, three tries) — and opens
+emailed to the admin (`services/adminSecondFactor.js`, 5 minutes, three tries); an admin with a
+registered passkey also gets a one-time fingerprint link (10 minutes, web `/admin/wa-login/:token`
+→ `POST /admin/auth/wa-passkey` → `bot.js completeAdminLink`, which switches the chat only when the
+passkey belongs to the admin of that number) — and opens
 admin mode (session state ADMIN, 30 minutes) in which **every** message — text or a voice
 note — goes to `services/secretary.js`; "לקוח" / "0" returns to the customer flows, and
 "#…" / "מנהל …" skips the choice (the request waits for the code). The code never stays in the

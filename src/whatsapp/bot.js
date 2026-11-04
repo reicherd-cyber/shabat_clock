@@ -36,7 +36,8 @@ import { sendText, sendButtons, markRead, downloadMedia } from './client.js';
 import { transcribeVoice, sttEnabled } from './stt.js';
 import { serialByKey } from './queue.js';
 import { adminByPhone, adminTrigger } from '../services/adminAssistant.js';
-import { secondFactorKind, issueAdminEmailCode, verifyAdminCode } from '../services/adminSecondFactor.js';
+import { secondFactorKind, issueAdminEmailCode, verifyAdminCode, makeAdminLink, adminLinkMatches } from '../services/adminSecondFactor.js';
+import { listPasskeys } from '../services/passkeys.js';
 import { recordFailure } from '../services/authFailures.js';
 import { secretaryTurn, executeProposals, isConfirmation, SECRETARY_HELP } from '../services/secretary.js';
 import { userSecretaryTurn } from '../services/userSecretary.js';
@@ -250,8 +251,29 @@ async function startAdminCode({ phone, userId, admin, after = null, session = nu
   if (f?.kind === 'totp') ask = '🔐 כתבו את הקוד בן 6 הספרות מאפליקציית האימות.';
   else if (Date.now() - issuedAt < 60_000) ask = '🔐 הקוד כבר נשלח למייל לפני רגע — כתבו אותו כאן.';
   else { const masked = await issueAdminEmailCode(admin.id); ask = `🔐 שלחתי קוד בן 6 ספרות ל-${masked}. כתבו אותו כאן (תקף 5 דקות).`; }
-  await saveSession({ phone, userId, state: 'ADMIN_CODE', pending: { tries: 0, after, issuedAt: f?.kind === 'totp' ? 0 : (Date.now() - issuedAt < 60_000 ? issuedAt : Date.now()) } });
+  // A registered passkey offers the finger instead: a one-time link to the page
+  // that runs it (web /admin/wa-login/:token → POST /admin/auth/wa-passkey →
+  // completeAdminLink below). The code still works alongside.
+  const link = (await listPasskeys(admin.id)).length ? makeAdminLink() : null;
+  if (link) ask = `👆 לכניסה בטביעת אצבע פתחו את הקישור (10 דקות):\n${String(env.publicUrl).replace(/\/+$/, '')}/admin/wa-login/${link.token}\n\nאו ${ask.replace(/^🔐 /, '')}`;
+  await saveSession({ phone, userId, state: 'ADMIN_CODE', pending: { tries: 0, after, issuedAt: f?.kind === 'totp' ? 0 : (Date.now() - issuedAt < 60_000 ? issuedAt : Date.now()), ...(link ? { linkHash: link.hash, linkUntil: link.until } : {}) } });
   await sendText({ phone, userId, text: ask, kind: 'auth' });
+}
+
+// The fingerprint page proved the passkey of `adminId`: the session whose
+// pending link this token opens — and whose number belongs to that very admin —
+// switches to admin mode. Called by POST /admin/auth/wa-passkey (api/routes/auth.js).
+export async function completeAdminLink({ token, adminId }) {
+  const rows = await query("SELECT phone, user_id, pending FROM whatsapp_sessions WHERE state = 'ADMIN_CODE' AND JSON_EXTRACT(pending, '$.linkHash') IS NOT NULL");
+  for (const row of rows) {
+    let pending = row.pending; if (typeof pending === 'string') { try { pending = JSON.parse(pending); } catch { pending = null; } }
+    if (!adminLinkMatches(pending, token)) continue;
+    const admin = await adminByPhone(row.phone);
+    if (!admin || Number(admin.id) !== Number(adminId)) return { ok: false, reason: 'not_yours' };
+    await enterAdminMode({ phone: row.phone, userId: row.user_id ?? null, admin, after: pending.after || null });
+    return { ok: true, phone: row.phone };
+  }
+  return { ok: false, reason: 'expired' };
 }
 async function enterAdminMode({ phone, userId, admin, after }) {
   await saveSession({ phone, userId, state: 'ADMIN', pending: {} });

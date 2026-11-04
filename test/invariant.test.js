@@ -165,3 +165,10 @@ test('WhatsApp admin gate: the office secretary is reachable only in admin mode 
   const sf = readFileSync(new URL('../src/services/adminSecondFactor.js', import.meta.url), 'utf8');
   assert.ok(/if \(clean\.length !== 6\) return 'bad'/.test(sf));
 });
+
+test('WhatsApp fingerprint link: the chat switches only when the passkey belongs to the admin of that number', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const fn = bot.slice(bot.indexOf('export async function completeAdminLink'), bot.indexOf("return { ok: false, reason: 'expired' };"));
+  assert.ok(/if \(!admin \|\| Number\(admin\.id\) !== Number\(adminId\)\) return \{ ok: false, reason: 'not_yours' \};/.test(fn));
+  assert.ok(fn.indexOf('adminLinkMatches(pending, token)') < fn.indexOf('enterAdminMode('));
+});

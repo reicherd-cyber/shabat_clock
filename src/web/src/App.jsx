@@ -11,6 +11,7 @@ import Settings from './user/Settings.jsx';
 import Help from './user/Help.jsx';
 import { ReadOnlyBanner } from './user/ReadOnlyBanner.jsx';
 import AdminLogin from './admin/AdminLogin.jsx';
+import WaAdminLogin from './admin/WaAdminLogin.jsx';
 import Users from './admin/Users.jsx';
 import Devices from './admin/Devices.jsx';
 import { Monitoring, DeviceHealth, CallLogs, Commands, AdminSchedules, SystemSettings, Admins } from './admin/Misc.jsx';
@@ -414,6 +415,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/admin/login" element={<AdminLogin />} />
+        <Route path="/admin/wa-login/:token" element={<WaAdminLogin />} />
         <Route element={<UserLayout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/schedules" element={<Schedules />} />

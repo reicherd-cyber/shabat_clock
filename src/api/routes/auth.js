@@ -256,6 +256,24 @@ authRouter.post('/admin/auth/passkey', adminLoginLimiter, async (req, res, next)
     res.json({ token: signAdminToken(who.adminId, who.role), role: who.role, name: who.name });
   } catch (e) { next(e); }
 });
+// The WhatsApp gate's fingerprint link (whatsapp/bot.js completeAdminLink): the
+// passkey is verified exactly like a panel login, but the result is not a
+// session — it switches the chat whose link this is to admin mode.
+authRouter.post('/admin/auth/wa-passkey', adminLoginLimiter, async (req, res, next) => {
+  try {
+    let who;
+    try {
+      who = await authenticatePasskey({ challengeId: req.body?.challengeId, response: req.body?.response });
+    } catch (e) {
+      if (e?.countable !== false) recordFailure('admin', 'admin_login').catch(() => {});
+      throw e;
+    }
+    const { completeAdminLink } = await import('../../whatsapp/bot.js');
+    const r = await completeAdminLink({ token: String(req.body?.token || ''), adminId: who.adminId });
+    if (!r.ok) throw new ApiError(404, 'LINK_EXPIRED', r.reason === 'not_yours' ? 'המפתח הזה אינו של המנהל שהקישור נשלח אליו' : 'הקישור פג או כבר נוצל — כתבו "מנהל" בוואטסאפ לקישור חדש');
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
 authRouter.post('/admin/auth/passkey-2fa', adminLoginLimiter, async (req, res, next) => {
   try {
     const half = readHalfLoginTicket(req.body?.ticket);
