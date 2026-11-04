@@ -554,7 +554,7 @@ function PasskeysCard({ twoFa }) {
         <Badge ok={rows.length > 0}>{rows.length ? `${rows.length} רשומים` : 'אין'}</Badge>
       </div>
       <ErrorNote error={error} />
-      <p className="text-sm text-muted">מפתח גישה נרשם במכשיר שבו אתם עכשיו (טלפון או מחשב) ומאפשר כניסה לניהול בטביעת אצבע, זיהוי פנים או קוד המכשיר — בלי Google. המפתח עצמו לא עוזב את המכשיר. מפתח מסונכרן (iCloud / Google) יבקש בכניסה גם את קוד האימות הדו-שלבי כשהוא פעיל.</p>
+      <p className="text-sm text-muted">מפתח גישה נרשם במכשיר שבו אתם עכשיו (טלפון או מחשב) ומאפשר כניסה לניהול בטביעת אצבע, זיהוי פנים או קוד המכשיר — בלי Google. המפתח עצמו לא עוזב את המכשיר.</p>
       {rows.map((r) => (
         <div key={r.id} className="flex items-center justify-between gap-2 text-sm">
           <span>{r.name}{r.backed_up ? ' · מסונכרן' : ''}<span className="text-muted"> · נוסף {String(r.created_at).slice(0, 10)}{r.last_used_at ? `, שימוש אחרון ${String(r.last_used_at).slice(0, 10)}` : ''}</span></span>

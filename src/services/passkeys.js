@@ -12,6 +12,7 @@ import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthen
 import { query } from '../db/pool.js';
 import { env } from '../config/env.js';
 import { errors } from '../config/errors.js';
+import { getSetting } from './settings.js';
 
 export const RP_NAME = 'שעון שבת — TelTech';
 // The relying party is the panel's own host: a passkey made on
@@ -24,11 +25,13 @@ const CHALLENGE_TTL_MIN = 5;
 // face / PIN) and to keep a discoverable credential, so the login page needs
 // no email. Exported for the tests.
 export const AUTHENTICATOR_SELECTION = { residentKey: 'required', userVerification: 'required' };
-// A passkey that lives on one device is possession + the person; a synced
-// passkey (iCloud / Google Password Manager) can be restored on another device
-// by whoever holds that account, so when the admin has the authenticator app
-// enrolled, a synced passkey must still show its code. Pure.
-export const secondFactorNeeded = ({ totpEnabled, backedUp }) => Boolean(totpEnabled) && Boolean(backedUp);
+// A passkey is the device plus the person. A synced passkey (iCloud / Google
+// Password Manager) can be restored by whoever holds that account — but the
+// panel already trusts that same account through "Sign in with Google" with no
+// app code, so demanding the authenticator code only here adds friction, not
+// safety. Off by default; the setting security.passkey_synced_needs_2fa = 1
+// turns it on for an account with the app enrolled. Pure.
+export const secondFactorNeeded = ({ totpEnabled, backedUp, policy = false }) => Boolean(policy) && Boolean(totpEnabled) && Boolean(backedUp);
 const b64 = (buf) => Buffer.from(buf).toString('base64url');
 const unb64 = (s) => new Uint8Array(Buffer.from(String(s), 'base64url'));
 
@@ -132,7 +135,8 @@ export async function authenticatePasskey({ challengeId, response }) {
   const backedUp = typeof v.authenticationInfo.credentialBackedUp === 'boolean' ? v.authenticationInfo.credentialBackedUp : Boolean(row.backed_up);
   await query('UPDATE admin_passkeys SET counter = ?, backed_up = ?, device_type = COALESCE(?, device_type), last_used_at = UTC_TIMESTAMP() WHERE id = ?',
     [Number(v.authenticationInfo.newCounter || 0), backedUp ? 1 : 0, v.authenticationInfo.credentialDeviceType || null, row.id]);
-  return { adminId: Number(row.admin_id), role: row.role, name: row.name, passkeyId: row.id, secondFactor: secondFactorNeeded({ totpEnabled: row.totp_enabled, backedUp }) };
+  const policy = String(await getSetting('security.passkey_synced_needs_2fa', '0')) === '1';
+  return { adminId: Number(row.admin_id), role: row.role, name: row.name, passkeyId: row.id, secondFactor: secondFactorNeeded({ totpEnabled: row.totp_enabled, backedUp, policy }) };
 }
 
 const parseTransports = (t) => { try { const a = typeof t === 'string' ? JSON.parse(t) : t; return Array.isArray(a) ? a : undefined; } catch { return undefined; } };
