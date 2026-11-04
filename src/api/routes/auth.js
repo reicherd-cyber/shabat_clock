@@ -6,6 +6,7 @@ import { errors, ApiError } from '../../config/errors.js';
 import { bcryptCompare, bcryptHash, createUser } from '../../services/users.js';
 import { recordFailure, isLockedOut } from '../../services/authFailures.js';
 import { verifyAdminEmailCode } from '../../services/adminSecondFactor.js';
+import { authenticationOptions, authenticatePasskey } from '../../services/passkeys.js';
 import { logAction } from '../../services/audit.js';
 import { consumeTotp, TOTP_REPLAY_MSG } from '../../services/adminTotp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
@@ -229,6 +230,27 @@ authRouter.post('/auth/review-login', adminLoginLimiter, async (req, res, next) 
     );
     if (!u) throw errors.unauthenticated('חשבון הבדיקה אינו קיים');
     res.json({ token: signUserToken(u.id), user: { id: Number(u.id), full_name: u.full_name } });
+  } catch (e) { next(e); }
+});
+
+// ── passkey login (services/passkeys.js): fingerprint / face / device PIN ──
+// Two calls: options (a challenge the browser signs with any passkey it holds
+// for this site) and the signed response, which names the credential and so
+// the admin. The device verified the person; this verifies the signature.
+authRouter.post('/admin/auth/passkey-options', adminLoginLimiter, async (req, res, next) => {
+  try { res.json(await authenticationOptions()); } catch (e) { next(e); }
+});
+authRouter.post('/admin/auth/passkey', adminLoginLimiter, async (req, res, next) => {
+  try {
+    let who;
+    try {
+      who = await authenticatePasskey({ challengeId: req.body?.challengeId, response: req.body?.response });
+    } catch (e) {
+      recordFailure('admin', 'admin_login').catch(() => {}); // counted by monitor/guardian.js
+      throw e;
+    }
+    await query('UPDATE admins SET last_login_at = UTC_TIMESTAMP() WHERE id = ?', [who.adminId]);
+    res.json({ token: signAdminToken(who.adminId, who.role), role: who.role, name: who.name });
   } catch (e) { next(e); }
 });
 

@@ -102,6 +102,7 @@ export const adminApi = {
   get: (p) => call('GET', '/admin' + p, undefined, tokens.admin, 'admin'),
   post: (p, b) => call('POST', '/admin' + p, b, tokens.admin, 'admin'),
   patch: (p, b) => call('PATCH', '/admin' + p, b, tokens.admin, 'admin'),
+  delete: (p) => call('DELETE', '/admin' + p, undefined, tokens.admin, 'admin'),
   put: (p, b) => call('PUT', '/admin' + p, b, tokens.admin, 'admin'),
   del: (p) => call('DELETE', '/admin' + p, undefined, tokens.admin, 'admin'),
 };
