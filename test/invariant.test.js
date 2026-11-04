@@ -183,3 +183,9 @@ test('WhatsApp fingerprint link: the chat switches only when the passkey belongs
   const wa = auth.slice(auth.indexOf("authRouter.post('/admin/auth/wa-passkey'"), auth.indexOf("authRouter.post('/admin/auth/passkey-2fa'"));
   assert.ok(/if \(who\.secondFactor\) throw new ApiError\(409, 'TWOFA_REQUIRED'/.test(wa), 'the synced-key policy applies to the chat door too');
 });
+
+test('WhatsApp admin gate: "מנהל" inside admin mode is answered by the gate, before the secretary', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const branch = bot.slice(bot.indexOf('  // 4. admin mode'), bot.indexOf('  // 5. the shortcut from anywhere'));
+  assert.ok(branch.indexOf('מצב מנהל כבר פעיל') < branch.indexOf('await secretaryReply('));
+});
