@@ -10,7 +10,7 @@ import { authenticationOptions, authenticatePasskey } from '../../services/passk
 import { logAction } from '../../services/audit.js';
 import { consumeTotp, TOTP_REPLAY_MSG } from '../../services/adminTotp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
-import { signUserToken, signAdminToken, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter, onboardPrepareTokenLimiter, onboardCheckLimiter } from '../middleware.js';
+import { signUserToken, signAdminToken, adminLoginLimiter, onboardStatusLimiter, onboardPrepareLimiter, onboardPrepareTokenLimiter, onboardCheckLimiter, passkeyOptionsLimiter, signHalfLoginTicket, readHalfLoginTicket } from '../middleware.js';
 import { env } from '../../config/env.js';
 
 export const authRouter = Router();
@@ -237,7 +237,7 @@ authRouter.post('/auth/review-login', adminLoginLimiter, async (req, res, next) 
 // Two calls: options (a challenge the browser signs with any passkey it holds
 // for this site) and the signed response, which names the credential and so
 // the admin. The device verified the person; this verifies the signature.
-authRouter.post('/admin/auth/passkey-options', adminLoginLimiter, async (req, res, next) => {
+authRouter.post('/admin/auth/passkey-options', passkeyOptionsLimiter, async (req, res, next) => {
   try { res.json(await authenticationOptions()); } catch (e) { next(e); }
 });
 authRouter.post('/admin/auth/passkey', adminLoginLimiter, async (req, res, next) => {
@@ -246,11 +246,26 @@ authRouter.post('/admin/auth/passkey', adminLoginLimiter, async (req, res, next)
     try {
       who = await authenticatePasskey({ challengeId: req.body?.challengeId, response: req.body?.response });
     } catch (e) {
-      recordFailure('admin', 'admin_login').catch(() => {}); // counted by monitor/guardian.js
+      // Only a checked-and-failed credential is an attack signal for the guardian.
+      if (e?.countable !== false) recordFailure('admin', 'admin_login').catch(() => {});
       throw e;
     }
+    // A synced passkey on an account with the authenticator app still owes the code.
+    if (who.secondFactor) return res.json({ twofa_required: true, ticket: signHalfLoginTicket(who.adminId, who.role), name: who.name });
     await query('UPDATE admins SET last_login_at = UTC_TIMESTAMP() WHERE id = ?', [who.adminId]);
     res.json({ token: signAdminToken(who.adminId, who.role), role: who.role, name: who.name });
+  } catch (e) { next(e); }
+});
+authRouter.post('/admin/auth/passkey-2fa', adminLoginLimiter, async (req, res, next) => {
+  try {
+    const half = readHalfLoginTicket(req.body?.ticket);
+    if (!half) throw errors.unauthenticated('פג תוקף — היכנסו שוב');
+    const [admin] = await query('SELECT id, name, role, is_active, totp_enabled, totp_secret, totp_last_counter FROM admins WHERE id = ?', [half.adminId]);
+    if (!admin || !admin.is_active || !admin.totp_enabled) throw errors.unauthenticated();
+    const totp = await consumeTotp(admin, String(req.body?.code || ''));
+    if (totp !== 'ok') { recordFailure('admin', 'admin_login').catch(() => {}); throw new ApiError(401, 'BAD_2FA', totp === 'replay' ? TOTP_REPLAY_MSG : 'קוד אימות שגוי'); }
+    await query('UPDATE admins SET last_login_at = UTC_TIMESTAMP() WHERE id = ?', [admin.id]);
+    res.json({ token: signAdminToken(admin.id, admin.role), role: admin.role, name: admin.name });
   } catch (e) { next(e); }
 });
 

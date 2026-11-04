@@ -153,8 +153,10 @@ adminRouter.post('/passkeys/register', async (req, res, next) => {
 });
 adminRouter.delete('/passkeys/:id', async (req, res, next) => {
   try {
-    await deletePasskey({ adminId: req.auth.adminId, id: req.params.id });
-    audit(req, 'passkey_remove', 'admin', req.auth.adminId, { after: { passkey_id: Number(req.params.id) } });
+    const id = idParam(req.params.id);
+    if (!id) throw errors.notFound();
+    await deletePasskey({ adminId: req.auth.adminId, id });
+    audit(req, 'passkey_remove', 'admin', req.auth.adminId, { after: { passkey_id: id } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

@@ -525,17 +525,13 @@ export function SystemSettings() {
 
 // Passkeys (fingerprint / face / device PIN) for the logged-in admin — drives
 // /passkeys/*. Adding one asks for a current 2FA code when 2FA is on.
-function PasskeysCard() {
+function PasskeysCard({ twoFa }) {
   const [rows, setRows] = useState(null);
-  const [twoFa, setTwoFa] = useState(false);
   const [code, setCode] = useState('');
   const [label, setLabel] = useState('');
   const { busy, error, run, setError } = useAsync();
   const supported = browserSupportsWebAuthn();
-  const refresh = async () => {
-    const [p, t] = await Promise.all([adminApi.get('/passkeys'), adminApi.get('/2fa/status')]);
-    setRows(p.rows); setTwoFa(Boolean(t.enabled));
-  };
+  const refresh = async () => setRows((await adminApi.get('/passkeys')).rows);
   useEffect(() => { refresh().catch(setError); }, []);
   const add = () => run(async () => {
     const { challengeId, options } = await adminApi.post('/passkeys/register-options', twoFa ? { code } : {});
@@ -549,7 +545,7 @@ function PasskeysCard() {
     setCode(''); setLabel('');
     await refresh();
   });
-  const remove = (id) => run(async () => { await adminApi.delete(`/passkeys/${id}`); await refresh(); });
+  const remove = (id) => run(async () => { await adminApi.del(`/passkeys/${id}`); await refresh(); });
   if (rows === null) return null;
   return (
     <Card className="space-y-3">
@@ -558,7 +554,7 @@ function PasskeysCard() {
         <Badge ok={rows.length > 0}>{rows.length ? `${rows.length} רשומים` : 'אין'}</Badge>
       </div>
       <ErrorNote error={error} />
-      <p className="text-sm text-muted">מפתח גישה נרשם במכשיר שבו אתם עכשיו (טלפון או מחשב) ומאפשר כניסה לניהול בטביעת אצבע, זיהוי פנים או קוד המכשיר — בלי Google. המפתח עצמו לא עוזב את המכשיר.</p>
+      <p className="text-sm text-muted">מפתח גישה נרשם במכשיר שבו אתם עכשיו (טלפון או מחשב) ומאפשר כניסה לניהול בטביעת אצבע, זיהוי פנים או קוד המכשיר — בלי Google. המפתח עצמו לא עוזב את המכשיר. מפתח מסונכרן (iCloud / Google) יבקש בכניסה גם את קוד האימות הדו-שלבי כשהוא פעיל.</p>
       {rows.map((r) => (
         <div key={r.id} className="flex items-center justify-between gap-2 text-sm">
           <span>{r.name}{r.backed_up ? ' · מסונכרן' : ''}<span className="text-muted"> · נוסף {String(r.created_at).slice(0, 10)}{r.last_used_at ? `, שימוש אחרון ${String(r.last_used_at).slice(0, 10)}` : ''}</span></span>
@@ -577,13 +573,11 @@ function PasskeysCard() {
 }
 
 // 2FA (TOTP) self-enrollment for the logged-in admin — drives the /2fa/* endpoints.
-function TwoFactorCard() {
-  const [enabled, setEnabled] = useState(null);
+// `enabled` and `refresh` come from the page, which shares them with PasskeysCard.
+function TwoFactorCard({ enabled, refresh }) {
   const [setup, setSetup] = useState(null); // {qr, secret} while enrolling
   const [code, setCode] = useState('');
   const { busy, error, run, setError } = useAsync();
-  const refresh = async () => setEnabled((await adminApi.get('/2fa/status')).enabled);
-  useEffect(() => { refresh().catch(setError); }, []);
 
   const begin = () => run(async () => { setSetup(await adminApi.post('/2fa/setup', {})); setCode(''); });
   const enable = () => run(async () => { await adminApi.post('/2fa/enable', { code }); setSetup(null); setCode(''); await refresh(); });
@@ -629,7 +623,11 @@ export function Admins() {
   const [form, setForm] = useState(null);
   const { busy, error, run, setError } = useAsync();
   const refresh = async () => setAdmins(await adminApi.get('/admins'));
-  useEffect(() => { refresh().catch(setError); }, []);
+  // The admin's own 2FA flag, read once for the page: the 2FA card changes it,
+  // the passkeys card asks for a code only while it is on.
+  const [twoFa, setTwoFa] = useState(null);
+  const refreshTwoFa = async () => setTwoFa(Boolean((await adminApi.get('/2fa/status')).enabled));
+  useEffect(() => { refresh().catch(setError); refreshTwoFa().catch(setError); }, []);
   const create = () => run(async () => { await adminApi.post('/admins', form); setForm(null); await refresh(); });
   // The admin's own phone: the number that gets the WhatsApp secretary and the
   // phone line's admin menu (admins.phone, superadmin rows only). Edited inline.
@@ -646,8 +644,8 @@ export function Admins() {
         <h2 className="font-bold text-xl">מנהלים</h2>
         <Button onClick={() => setForm({ name: '', email: '', password: '', role: 'support' })}>+ מנהל</Button>
       </div>
-      <TwoFactorCard />
-      <PasskeysCard />
+      {twoFa !== null && <TwoFactorCard enabled={twoFa} refresh={refreshTwoFa} />}
+      {twoFa !== null && <PasskeysCard twoFa={twoFa} />}
       <ErrorNote error={error} />
       {(admins || []).map((a) => (
         <Card key={a.id} className="flex flex-wrap items-center justify-between gap-2 py-3">

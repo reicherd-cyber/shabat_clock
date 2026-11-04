@@ -20,19 +20,33 @@ export const rpId = () => new URL(env.publicUrl).hostname;
 export const expectedOrigin = () => new URL(env.publicUrl).origin;
 
 const CHALLENGE_TTL_MIN = 5;
+// Registration asks the device to verify the person every time (the finger /
+// face / PIN) and to keep a discoverable credential, so the login page needs
+// no email. Exported for the tests.
+export const AUTHENTICATOR_SELECTION = { residentKey: 'required', userVerification: 'required' };
+// A passkey that lives on one device is possession + the person; a synced
+// passkey (iCloud / Google Password Manager) can be restored on another device
+// by whoever holds that account, so when the admin has the authenticator app
+// enrolled, a synced passkey must still show its code. Pure.
+export const secondFactorNeeded = ({ totpEnabled, backedUp }) => Boolean(totpEnabled) && Boolean(backedUp);
 const b64 = (buf) => Buffer.from(buf).toString('base64url');
 const unb64 = (s) => new Uint8Array(Buffer.from(String(s), 'base64url'));
 
 async function storeChallenge({ challenge, adminId, purpose }) {
   const id = randomBytes(16).toString('base64url');
+  await query('DELETE FROM admin_passkey_challenges WHERE expires_at < UTC_TIMESTAMP()').catch(() => {});
   await query('INSERT INTO admin_passkey_challenges (id, challenge, admin_id, purpose, expires_at) VALUES (?,?,?,?, UTC_TIMESTAMP() + INTERVAL ? MINUTE)', [id, challenge, adminId, purpose, CHALLENGE_TTL_MIN]);
   return id;
 }
-// Single use: the row is deleted as it is read; an expired or unknown id is null.
+// Single use, atomically: the conditional DELETE is the claim — of two
+// concurrent calls with the same id only the one whose DELETE removed the row
+// gets the challenge; the other sees nothing. An expired or unknown id is null.
 async function takeChallenge(id, purpose) {
-  const [row] = await query('SELECT challenge, admin_id FROM admin_passkey_challenges WHERE id = ? AND purpose = ? AND expires_at > UTC_TIMESTAMP()', [String(id || ''), purpose]);
-  await query('DELETE FROM admin_passkey_challenges WHERE id = ? OR expires_at < UTC_TIMESTAMP()', [String(id || '')]);
-  return row || null;
+  const key = String(id || '');
+  const [row] = await query('SELECT challenge, admin_id FROM admin_passkey_challenges WHERE id = ? AND purpose = ?', [key, purpose]);
+  if (!row) return null;
+  const r = await query('DELETE FROM admin_passkey_challenges WHERE id = ? AND purpose = ? AND expires_at > UTC_TIMESTAMP()', [key, purpose]);
+  return r.affectedRows === 1 ? row : null;
 }
 
 export async function listPasskeys(adminId) {
@@ -48,7 +62,7 @@ export async function registrationOptions({ adminId, email, name }) {
     userID: new Uint8Array(Buffer.from(`admin:${adminId}`)),
     attestationType: 'none',
     excludeCredentials: existing.map((c) => ({ id: c.credential_id, transports: parseTransports(c.transports) })),
-    authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+    authenticatorSelection: AUTHENTICATOR_SELECTION,
   });
   const challengeId = await storeChallenge({ challenge: options.challenge, adminId: Number(adminId), purpose: 'register' });
   return { challengeId, options };
@@ -67,11 +81,17 @@ export async function registerPasskey({ adminId, challengeId, response, label })
   if (!v.verified || !v.registrationInfo) throw errors.validation('הרישום לא אומת');
   const { credential, credentialDeviceType, credentialBackedUp } = v.registrationInfo;
   const name = String(label || '').trim().slice(0, 60) || (credentialDeviceType === 'multiDevice' ? 'מפתח מסונכרן' : 'מכשיר זה');
-  const r = await query(
-    'INSERT INTO admin_passkeys (admin_id, credential_id, public_key, counter, transports, device_type, backed_up, name) VALUES (?,?,?,?,?,?,?,?)',
-    [Number(adminId), credential.id, b64(credential.publicKey), Number(credential.counter || 0), JSON.stringify(credential.transports || []), credentialDeviceType || null, credentialBackedUp ? 1 : 0, name],
-  );
-  return { id: r.insertId, name };
+  let r;
+  try {
+    r = await query(
+      'INSERT INTO admin_passkeys (admin_id, credential_id, public_key, counter, transports, device_type, backed_up, name) VALUES (?,?,?,?,?,?,?,?)',
+      [Number(adminId), credential.id, b64(credential.publicKey), Number(credential.counter || 0), JSON.stringify(credential.transports || []), credentialDeviceType || null, credentialBackedUp ? 1 : 0, name],
+    );
+  } catch (e) {
+    if (e?.code === 'ER_DUP_ENTRY') throw errors.validation('המפתח הזה כבר רשום');
+    throw e;
+  }
+  return { id: r.insertId, name, backed_up: Boolean(credentialBackedUp) };
 }
 
 export async function deletePasskey({ adminId, id }) {
@@ -88,13 +108,15 @@ export async function authenticationOptions() {
 }
 
 // Step 2 of login: the signed response → the admin row it belongs to, or a throw.
+// Throws with e.countable = false when no credential was checked (the challenge
+// aged out — a slow admin, not an attacker), true when a credential failed.
 export async function authenticatePasskey({ challengeId, response }) {
   const ch = await takeChallenge(challengeId, 'login');
-  if (!ch) throw errors.unauthenticated('האתגר פג — נסו שוב');
+  if (!ch) { const e = errors.unauthenticated('האתגר פג — נסו שוב'); e.countable = false; throw e; }
   const [row] = await query(
-    `SELECT p.id, p.admin_id, p.public_key, p.counter, p.transports, a.role, a.name, a.is_active
+    `SELECT p.id, p.admin_id, p.public_key, p.counter, p.transports, p.backed_up, a.role, a.name, a.is_active, a.totp_enabled
        FROM admin_passkeys p JOIN admins a ON a.id = p.admin_id WHERE p.credential_id = ?`, [String(response?.id || '')]);
-  if (!row || !row.is_active) throw errors.unauthenticated('מפתח גישה לא מוכר');
+  if (!row || !row.is_active) { const e = errors.unauthenticated('מפתח גישה לא מוכר'); e.countable = true; throw e; }
   let v;
   try {
     v = await verifyAuthenticationResponse({
@@ -102,11 +124,11 @@ export async function authenticatePasskey({ challengeId, response }) {
       credential: { id: String(response.id), publicKey: unb64(row.public_key), counter: Number(row.counter), transports: parseTransports(row.transports) },
     });
   } catch (e) {
-    throw errors.unauthenticated(`האימות נכשל: ${e.message}`);
+    const err = errors.unauthenticated(`האימות נכשל: ${e.message}`); err.countable = true; throw err;
   }
-  if (!v.verified) throw errors.unauthenticated('האימות נכשל');
+  if (!v.verified) { const e = errors.unauthenticated('האימות נכשל'); e.countable = true; throw e; }
   await query('UPDATE admin_passkeys SET counter = ?, last_used_at = UTC_TIMESTAMP() WHERE id = ?', [Number(v.authenticationInfo.newCounter || 0), row.id]);
-  return { adminId: Number(row.admin_id), role: row.role, name: row.name, passkeyId: row.id };
+  return { adminId: Number(row.admin_id), role: row.role, name: row.name, passkeyId: row.id, secondFactor: secondFactorNeeded({ totpEnabled: row.totp_enabled, backedUp: row.backed_up }) };
 }
 
 const parseTransports = (t) => { try { const a = typeof t === 'string' ? JSON.parse(t) : t; return Array.isArray(a) ? a : undefined; } catch { return undefined; } };

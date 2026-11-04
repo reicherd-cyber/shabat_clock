@@ -61,6 +61,15 @@ export function signUserToken(userId, impAdminId = null, email = null) {
 export function signAdminToken(adminId, role) {
   return jwt.sign({ sub: String(adminId), role }, env.jwtSecret, { expiresIn: '12h' });
 }
+// A passkey login that still owes the authenticator code (a synced passkey on
+// an account with 2FA): a five-minute ticket that only /admin/auth/passkey-2fa
+// accepts — never an admin session.
+export function signHalfLoginTicket(adminId, role) {
+  return jwt.sign({ sub: String(adminId), role, half: 'passkey' }, env.jwtSecret, { expiresIn: '5m' });
+}
+export function readHalfLoginTicket(ticket) {
+  try { const t = jwt.verify(String(ticket || ''), env.jwtSecret); return t.half === 'passkey' ? { adminId: Number(t.sub), role: t.role } : null; } catch { return null; }
+}
 
 function decode(req) {
   const h = req.headers.authorization || '';
@@ -151,6 +160,9 @@ export const whatsappLimiter = limited({ windowMs: 60_000, limit: 600 });
 // Google sign-in (admin + user), the Play review-account login, and the
 // emergency admin password login share one per-IP cap.
 export const adminLoginLimiter = limited({ windowMs: 15 * 60_000, limit: 5 });
+// The passkey options call makes no login attempt (a cancelled device prompt
+// burns one), so it does not spend the login budget shared by an office IP.
+export const passkeyOptionsLimiter = limited({ windowMs: 15 * 60_000, limit: 30 });
 // Per-user caps on the endpoints that cost money (Claude API) or enumerate
 // (phone add). Keyed by the authenticated user, not the IP.
 const perUser = (req) => String(req.auth?.userId || req.ip);
