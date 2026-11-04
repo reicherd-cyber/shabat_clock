@@ -99,7 +99,7 @@ test('both access-management routes call requireOwner, and an impersonation toke
   assert.equal((levelRoutes.match(/await requireOwner\(req\)/g) || []).length, 2, 'both level routes use the shared guard');
   assert.doesNotMatch(levelRoutes, /req\.auth\.imp\) throw/, 'no private impersonation rule beside the shared one');
   const mw = readFileSync(new URL('../src/api/middleware.js', import.meta.url), 'utf8');
-  assert.match(mw, /t\.imp && !\(await subjectAlive\('admin', Number\(t\.imp\), 'superadmin'\)\)/);
+  assert.match(mw, /if \(t\.imp\) \{[\s\S]*?subjectAlive\('admin', Number\(t\.imp\), 'superadmin'\)/);
   const compose = readFileSync(new URL('../docker-compose.yml', import.meta.url), 'utf8');
   assert.doesNotMatch(compose, /- "(3306|1883):/, 'dev ports must bind to 127.0.0.1');
 });

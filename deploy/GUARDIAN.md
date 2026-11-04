@@ -19,7 +19,9 @@ Thresholds are the `security.*` settings (editable in the panel). A hit is a row
 "always" rules report each audit row once).
 
 **Lockdown** (critical): `security.lockdown` holds the state; every admin API request
-answers 423 LOCKDOWN, every admin session is invalidated, the WhatsApp office secretary
+answers 423 LOCKDOWN, every admin session — impersonation sessions included — is revoked for
+good (`security.sessions_min_iat`: tokens issued before the lockdown stay dead after the
+unlock, so a token stolen before the incident never works again), the WhatsApp office secretary
 refuses to write, impersonation is refused (it is an admin route). The phone line has no
 admin door at all. Customers, the phone line, the devices and the scheduler are untouched.
 

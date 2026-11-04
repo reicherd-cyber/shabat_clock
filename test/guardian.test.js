@@ -26,13 +26,25 @@ test('revert links: signed per audit row, expire, and never validate for another
   assert.equal(revertTokenValid(123, `${Date.now() - 1000}.${sig}`), false); // an expired stamp fails even with the old signature replaced
 });
 
-test('lockdown gates every office door: the admin API and the secretary\'s writes; the phone has none', () => {
+test('lockdown gates every office door: the admin API, impersonation sessions and the secretary\'s writes; the phone has none', () => {
   const mw = readFileSync(new URL('../src/api/middleware.js', import.meta.url), 'utf8');
   assert.ok(/const lock = await lockdownState\(\);[\s\S]*?new ApiError\(423, 'LOCKDOWN'/.test(mw));
+  // both admin sessions and impersonation tokens pass the same check, which also enforces the persisted cut-off
+  assert.equal((mw.match(/await assertAdminSessionLive\(t\)/g) || []).length, 2, 'requireAdmin and requireUser(imp)');
+  assert.ok(/Number\(t\.iat \|\| 0\) < minIat/.test(mw));
   const sec = readFileSync(new URL('../src/services/secretary.js', import.meta.url), 'utf8');
   assert.equal((sec.match(/await isLockedDown\(\)/g) || []).length, 2, 'secretaryTurn and executeProposals');
   const ivr = readFileSync(new URL('../src/ivr/router.js', import.meta.url), 'utf8');
   assert.ok(!/adminByPhone/.test(ivr), 'the phone has no admin door to lock');
   const srv = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   assert.ok(srv.includes('startGuardian()'));
+});
+
+test('a critical reading is never swallowed by the warning cooldown; a lockdown persists a session cut-off', () => {
+  const g = readFileSync(new URL('../src/monitor/guardian.js', import.meta.url), 'utf8');
+  const loop = g.slice(g.indexOf('export async function evaluateOnce'), g.indexOf('async function tick'));
+  assert.ok(loop.indexOf("const severity = m.n >= critAt") < loop.indexOf('lastSent.get(rule.key)'), 'severity is decided before the cooldown');
+  assert.ok(/if \(severity !== 'critical' && now - last < COOLDOWN_MS\) continue;/.test(loop));
+  const lock = g.slice(g.indexOf('export async function lockdown'), g.indexOf('export async function unlock'));
+  assert.ok(lock.includes('await revokeAdminSessions();'));
 });

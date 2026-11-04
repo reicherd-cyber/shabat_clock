@@ -43,6 +43,16 @@ export async function lockdownState() {
 }
 export const isLockedDown = async () => Boolean(await lockdownState());
 
+// Admin sessions (JWTs, 12 h) issued before this moment are dead — set by every
+// lockdown and kept after the unlock, so a token stolen before the incident
+// never works again. Epoch seconds, compared with the token's iat. The
+// middleware reads it through the settings cache (30 s).
+export async function sessionsMinIat() {
+  const v = Number(await getSetting('security.sessions_min_iat', '0'));
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+export const revokeAdminSessions = () => putSettings([{ setting_key: 'security.sessions_min_iat', setting_value: String(Math.floor(Date.now() / 1000)) }]);
+
 const sha = (t) => createHash('sha256').update(String(t)).digest('hex');
 const baseUrl = () => String(env.publicUrl || 'https://kosher-teltech.com').replace(/\/+$/, '');
 
@@ -51,7 +61,9 @@ export async function lockdown({ reason, by = 'guardian', eventId = null }) {
   const token = randomBytes(24).toString('base64url');
   const state = { at: new Date().toISOString(), reason: String(reason).slice(0, 300), by, event_id: eventId, token_hash: sha(token), token_until: Date.now() + UNLOCK_TTL_MS };
   await putSettings([{ setting_key: 'security.lockdown', setting_value: JSON.stringify(state) }]);
-  // Every admin session dies now, not within the liveness cache TTL.
+  // Every admin session dies now — for good: the cut-off is persisted, so the
+  // same tokens stay dead after the unlock (a fresh login is needed anyway).
+  await revokeAdminSessions();
   try {
     const { invalidateSession } = await import('../api/middleware.js');
     const admins = await query('SELECT id FROM admins');
@@ -237,17 +249,19 @@ export async function evaluateOnce({ now = Date.now() } = {}) {
     const warnAt = await num(rule.warn[0], rule.warn[1]);
     const critAt = rule.critical ? await num(rule.critical[0], rule.critical[1]) : Infinity;
     if (m.n < warnAt) continue;
-    // The "always" rules report each audit row once; the counters report once per cooldown.
+    const severity = m.n >= critAt && !locked ? 'critical' : 'warn';
+    // The "always" rules report each audit row once; the counters report once
+    // per cooldown — but a CRITICAL reading is never swallowed by the cooldown
+    // of the warning that preceded it: the lockdown must fire.
     if (rule.always) {
       const fresh = (m.events || [m.detail]).filter((id) => !seenEvents.has(`${rule.key}:${id}`));
       if (!fresh.length) continue;
       for (const id of m.events || [m.detail]) seenEvents.add(`${rule.key}:${id}`);
     } else {
       const last = lastSent.get(rule.key) ?? 0;
-      if (now - last < COOLDOWN_MS) continue;
+      if (severity !== 'critical' && now - last < COOLDOWN_MS) continue;
       lastSent.set(rule.key, now);
     }
-    const severity = m.n >= critAt && !locked ? 'critical' : 'warn';
     findings.push({ rule, severity, detail: m.detail, value: m.n, events: m.events || [] });
   }
   return findings;
