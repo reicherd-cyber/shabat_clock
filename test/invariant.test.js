@@ -141,7 +141,7 @@ test('WhatsApp: the customer secretary is entered only from the menu, and the pl
 
 test('WhatsApp: a confirmed ticket is inserted with the text taken BEFORE the confirm is left (review 2026-11-03)', () => {
   const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
-  const block = bot.slice(bot.indexOf("session.pending?.ticket && !admin"), bot.indexOf('// anything else: a new message; the offer is dropped'));
+  const block = bot.slice(bot.indexOf("session.pending?.ticket) {"), bot.indexOf('// anything else: a new message; the offer is dropped'));
   assert.ok(block.indexOf('const ticketText = session.pending.ticket.text') < block.indexOf('await leaveConfirm('), 'text read first');
   assert.ok(/openTicket\(\{ phone, userId, text: ticketText/.test(block));
   // every confirm is shown and left through the shared helpers
@@ -151,6 +151,17 @@ test('WhatsApp: a confirmed ticket is inserted with the text taken BEFORE the co
 
 test('WhatsApp: leaving secretary mode with 0 / תפריט renders the main menu directly, never as a digit the tree rejects', () => {
   const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
-  const block = bot.slice(bot.indexOf("session.state === 'SECRETARY' && user && !admin"), bot.indexOf('// The numbered menu, for customers and guests alike'));
+  const block = bot.slice(bot.indexOf("session.state === 'SECRETARY' && user) {"), bot.indexOf('// The numbered menu, for customers and guests alike'));
   assert.ok(/await sendMenu\(\{ phone, user, r: menuStart\(menuCtx\(user, phone\)\) \}\); return;/.test(block));
+});
+
+test('WhatsApp admin gate: the office secretary is reachable only in admin mode or for its own pending proposal, and admin mode opens only after verifyAdminCode said ok', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const gate = bot.slice(bot.indexOf('async function adminGate('), bot.indexOf('// The secretary (services/secretary.js), inside admin mode'));
+  const calls = (gate.match(/await secretaryReply\(/g) || []).length;
+  assert.equal(calls, 2, 'the pending-proposal branch and the ADMIN-state branch');
+  assert.ok(/if \(r === 'ok'\) \{ await enterAdminMode\(/.test(gate));
+  assert.ok(!/secretaryReply\(/.test(bot.slice(bot.indexOf('async function handleInboundNow'))), 'the dispatcher never calls the secretary directly');
+  const sf = readFileSync(new URL('../src/services/adminSecondFactor.js', import.meta.url), 'utf8');
+  assert.ok(/if \(clean\.length !== 6\) return 'bad'/.test(sf));
 });

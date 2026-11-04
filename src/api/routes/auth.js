@@ -5,6 +5,7 @@ import { query } from '../../db/pool.js';
 import { errors, ApiError } from '../../config/errors.js';
 import { bcryptCompare, bcryptHash, createUser } from '../../services/users.js';
 import { recordFailure, isLockedOut } from '../../services/authFailures.js';
+import { verifyAdminEmailCode } from '../../services/adminSecondFactor.js';
 import { logAction } from '../../services/audit.js';
 import { consumeTotp, TOTP_REPLAY_MSG } from '../../services/adminTotp.js';
 import { OTP_TTL_MIN } from '../../config/constants.js';
@@ -196,18 +197,7 @@ function maskEmail(email) {
   return `${local.slice(0, 1)}***@${domain}`;
 }
 
-// Single-use emailed second-factor code: valid, unexpired, matches → clear it, true.
-async function verifyAdminEmailCode(admin, code) {
-  if (!admin.email_code_hash || !admin.email_code_expires) return false;
-  // Expiry judged by the database clock (the column is a UTC DATETIME the driver
-  // hands back as a Date parsed in the host zone — comparing it in JS is off by
-  // the host's UTC offset on any non-UTC box).
-  const [live] = await query('SELECT 1 AS ok FROM admins WHERE id = ? AND email_code_expires > UTC_TIMESTAMP()', [admin.id]);
-  if (!live) return false;
-  if (!bcryptCompare(code, admin.email_code_hash)) return false;
-  await query('UPDATE admins SET email_code_hash = NULL, email_code_expires = NULL WHERE id = ?', [admin.id]);
-  return true;
-}
+// The emailed second-factor code is shared with the WhatsApp admin gate (services/adminSecondFactor.js).
 
 // Phone-number login (OTP by call / by email, keyed by the phone) was removed
 // 2026-10-19 — the site is Google-only. The one exception is the Google Play

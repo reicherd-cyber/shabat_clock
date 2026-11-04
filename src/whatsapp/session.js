@@ -15,6 +15,9 @@ export function settleState(row, now = Date.now()) {
   if (row.state === 'CONFIRM' && age > CONFIRM_TTL_MS) return 'IDLE';
   if (row.state === 'MENU' && age > MENU_TTL_MS) return 'IDLE';
   if (row.state === 'SECRETARY' && age > MENU_TTL_MS) return 'IDLE'; // the customer's secretary, entered from the menu
+  // The admin gate (bot.js adminGate): the choice and the code wait 10 minutes, admin mode lasts 30.
+  if ((row.state === 'ADMIN_CHOICE' || row.state === 'ADMIN_CODE') && age > CONFIRM_TTL_MS) return 'IDLE';
+  if (row.state === 'ADMIN' && age > MENU_TTL_MS) return 'IDLE';
   return row.state;
 }
 

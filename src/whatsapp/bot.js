@@ -5,8 +5,12 @@
 //                        button → services/nluExec.js) / support answer
 //   unknown number     → support answers only; what the bot can't answer
 //                        becomes a ticket in the admin inbox (source 'whatsapp')
-//   superadmin's own   → the office secretary (services/secretary.js): every
-//   number               message, text or voice, is an instruction it carries out
+//   superadmin's own   → first "מנהל או לקוח?"; admin mode opens only after a
+//   number               six-digit second factor (authenticator / emailed code,
+//                        services/adminSecondFactor.js) and lasts 30 minutes —
+//                        then every message goes to the office secretary
+//                        (services/secretary.js); "לקוח" is the ordinary customer
+//                        flow. A stolen phone alone does not open the office.
 //   registered number  → the customer's secretary (services/userSecretary.js)
 //   on the rollout list  INSIDE the numbered menu: 7 פקודה חופשית, the service
 //                        branch's "לשאול את העוזר", and a sentence in the sales
@@ -32,6 +36,8 @@ import { sendText, sendButtons, markRead, downloadMedia } from './client.js';
 import { transcribeVoice, sttEnabled } from './stt.js';
 import { serialByKey } from './queue.js';
 import { adminByPhone, adminTrigger } from '../services/adminAssistant.js';
+import { secondFactorKind, issueAdminEmailCode, verifyAdminCode } from '../services/adminSecondFactor.js';
+import { recordFailure } from '../services/authFailures.js';
 import { secretaryTurn, executeProposals, isConfirmation, SECRETARY_HELP } from '../services/secretary.js';
 import { userSecretaryTurn } from '../services/userSecretary.js';
 import { env } from '../config/env.js';
@@ -223,20 +229,100 @@ async function commandReply({ phone, user, text }) {
   await sendConfirm({ phone, userId: user.id, summary: interp.actions.map((a) => `• ${a.summary}`).join('\n'), prefix: interp.clarification || '' });
 }
 
-// The secretary (services/secretary.js): a superadmin's own number talks to it
-// like to a person — no trigger. A write is read back with the confirm
-// buttons and the recorded calls are stored on the session (state CONFIRM,
-// 10-min TTL) only once that read-back was delivered; the admin's yes runs
-// exactly those calls (executeProposals, no model), a no drops them, anything
-// else is a new request. Questions answer at once. The chat log is its memory.
-// A leading "#" (the old trigger) is still tolerated and dropped.
+// ── the admin gate ──
+// A superadmin's number starts a conversation with "מנהל או לקוח?" (buttons).
+// Admin → a six-digit second factor (the authenticator app when enrolled,
+// else a code emailed to the admin) → state ADMIN for 30 minutes, in which
+// every message goes to the office secretary; "לקוח" / "0" leaves it.
+// "#…" / "מנהל …" skips the choice and keeps the request for after the code.
+// Three wrong codes end the attempt and count as admin login failures
+// (the guardian watches those). Returns true when the message was handled.
+const BTN_ADMIN = 'mode_admin';
+const BTN_CUSTOMER = 'mode_customer';
+const ADMIN_MODE_MS = 30 * 60 * 1000;
+const CONVERSATION_GAP_MS = 30 * 60 * 1000;
+const isAdminExit = (t) => /^(לקוח|0|יציאה|exit|סיום)$/i.test(String(t || '').trim());
+async function startAdminCode({ phone, userId, admin, after = null, session = null }) {
+  const f = await secondFactorKind(admin.id);
+  let ask;
+  // One emailed code per minute: a stolen phone cannot flood the admin's inbox.
+  const issuedAt = Number(session?.pending?.issuedAt || 0);
+  if (f?.kind === 'totp') ask = '🔐 כתבו את הקוד בן 6 הספרות מאפליקציית האימות.';
+  else if (Date.now() - issuedAt < 60_000) ask = '🔐 הקוד כבר נשלח למייל לפני רגע — כתבו אותו כאן.';
+  else { const masked = await issueAdminEmailCode(admin.id); ask = `🔐 שלחתי קוד בן 6 ספרות ל-${masked}. כתבו אותו כאן (תקף 5 דקות).`; }
+  await saveSession({ phone, userId, state: 'ADMIN_CODE', pending: { tries: 0, after, issuedAt: f?.kind === 'totp' ? 0 : (Date.now() - issuedAt < 60_000 ? issuedAt : Date.now()) } });
+  await sendText({ phone, userId, text: ask, kind: 'auth' });
+}
+async function enterAdminMode({ phone, userId, admin, after }) {
+  await saveSession({ phone, userId, state: 'ADMIN', pending: {} });
+  await sendText({ phone, userId, text: `✅ מצב מנהל פעיל ל-30 דקות. כתבו "לקוח" לחזור לחשבון הלקוח.\n\n${SECRETARY_HELP}`, kind: 'secretary' });
+  if (after) await secretaryReply({ phone, userId, admin, text: after, waId: null, buttonId: null });
+}
+async function customerMode({ phone, userId, user }) {
+  await resetSession(phone, userId);
+  if (!user) { await sendText({ phone, userId, text: 'למספר הזה אין חשבון לקוח. כתבו "מנהל" כשתרצו למצב מנהל.' }); return; }
+  if (await phoneAllowed('whatsapp.menu_phones', phone)) { await sendMenu({ phone, user, r: menuStart(menuCtx(user, phone)) }); return; }
+  await sendText({ phone, userId, text: await getText('whatsapp.greeting', { name: firstName(user) }) });
+}
+async function adminGate({ phone, userId, user, admin, text, waId, buttonId, session }) {
+  const shortcut = adminTrigger(text); // "#…" / "מנהל …" → straight to the code
+  // 1. an admin proposal awaiting yes / no
+  if (session.state === 'CONFIRM' && session.pending?.secretary) { await secretaryReply({ phone, userId, admin, text, waId, buttonId }); return true; }
+  // 2. the code step
+  if (session.state === 'ADMIN_CODE') {
+    if (isAdminExit(text)) { await customerMode({ phone, userId, user }); return true; }
+    const r = await verifyAdminCode(admin.id, text);
+    // the code never stays in the chat log
+    await query('UPDATE whatsapp_messages SET body = ? WHERE wa_message_id = ? AND direction = ?', ['[קוד אימות]', waId, 'in']).catch(() => {});
+    if (r === 'ok') { await enterAdminMode({ phone, userId, admin, after: session.pending?.after || null }); return true; }
+    recordFailure('admin', 'admin_login').catch(() => {});
+    const tries = Number(session.pending?.tries || 0) + 1;
+    if (tries >= 3) { await saveSession({ phone, userId, state: 'IDLE', pending: { issuedAt: session.pending?.issuedAt || 0 } }); await sendText({ phone, userId, text: '❌ שלושה קודים שגויים. כתבו "מנהל" כדי לנסות שוב.' }); return true; }
+    await saveSession({ phone, userId, state: 'ADMIN_CODE', pending: { ...(session.pending || {}), tries } });
+    await sendText({ phone, userId, text: r === 'replay' ? 'הקוד הזה כבר שימש — המתינו לקוד הבא באפליקציה.' : `קוד שגוי (${tries}/3). נסו שוב, או כתבו "לקוח".` });
+    return true;
+  }
+  // 3. the choice step
+  if (session.state === 'ADMIN_CHOICE') {
+    if (buttonId === BTN_ADMIN || /^(1|מנהל)$/.test(text) || shortcut != null) { await startAdminCode({ phone, userId, admin, after: shortcut || null, session }); return true; }
+    if (buttonId === BTN_CUSTOMER || /^(2|לקוח)$/.test(text)) { await customerMode({ phone, userId, user }); return true; }
+    await sendButtons({ phone, userId, text: 'מנהל או לקוח?', buttons: [{ id: BTN_ADMIN, title: 'מנהל 🔐' }, { id: BTN_CUSTOMER, title: 'לקוח' }], kind: 'auth' });
+    return true;
+  }
+  // 4. admin mode
+  if (session.state === 'ADMIN') {
+    if (isAdminExit(text)) { await customerMode({ phone, userId, user }); return true; }
+    await secretaryReply({ phone, userId, admin, text, waId, buttonId });
+    return true;
+  }
+  // 5. the shortcut from anywhere
+  if (shortcut != null) { await startAdminCode({ phone, userId, admin, after: shortcut || null, session }); return true; }
+  // 6. an admin without a customer account has nothing but the office: the code, always
+  if (!user) { await startAdminCode({ phone, userId, admin, session }); return true; }
+  // 7. a new conversation: the choice
+  const idleFor = session.fresh ? Infinity : Date.now() - new Date(session.updated_at).getTime();
+  if (session.state === 'IDLE' && idleFor > CONVERSATION_GAP_MS) {
+    await saveSession({ phone, userId, state: 'ADMIN_CHOICE', pending: {} });
+    await sendButtons({ phone, userId, text: `שלום ${firstName(user) || admin.name}, מנהל או לקוח?`, buttons: [{ id: BTN_ADMIN, title: 'מנהל 🔐' }, { id: BTN_CUSTOMER, title: 'לקוח' }], kind: 'auth' });
+    return true;
+  }
+  return false; // mid customer flow: the customer paths below
+}
+
+// The secretary (services/secretary.js), inside admin mode: a write is read
+// back with the confirm buttons and the recorded calls are stored on the
+// session (state CONFIRM, 10-min TTL) only once that read-back was delivered;
+// the admin's yes runs exactly those calls (executeProposals, no model), a no
+// drops them, anything else is a new request. Questions answer at once. The
+// chat log is its memory. Admin mode (state ADMIN) is restored afterwards.
 async function secretaryReply({ phone, userId, admin, text, waId, buttonId }) {
   const t = adminTrigger(text) ?? text;
-  if (/^(עזרה|help|\?)$/i.test(t)) { await sendText({ phone, userId, text: SECRETARY_HELP, kind: 'secretary' }); return; }
+  const keepAdmin = () => saveSession({ phone, userId, state: 'ADMIN', pending: {} });
+  if (/^(עזרה|help|\?)$/i.test(t)) { await sendText({ phone, userId, text: SECRETARY_HELP, kind: 'secretary' }); await keepAdmin(); return; }
   const session = await getSession(phone);
   const proposals = session.state === 'CONFIRM' ? session.pending?.secretary?.proposals : null;
   if (proposals?.length) {
-    await resetSession(phone, userId);
+    await keepAdmin();
     if (isConfirmation(t, buttonId)) {
       await sendText({ phone, userId, text: await executeProposals({ admin, phone, userId, proposals, source: 'whatsapp' }), kind: 'result' });
       return;
@@ -244,14 +330,16 @@ async function secretaryReply({ phone, userId, admin, text, waId, buttonId }) {
     if (buttonId === BTN_NO || confirmWord(t) === 'no') { await sendText({ phone, userId, text: await getText('whatsapp.cancelled') }); return; }
   } else if (buttonId === BTN_YES || buttonId === BTN_NO) {
     await sendText({ phone, userId, text: await getText('whatsapp.confirm_expired') });
+    await keepAdmin();
     return;
   }
   const r = await secretaryTurn({ admin, phone, userId, text: t, excludeWaId: waId, source: 'whatsapp' });
-  if (!r.proposed) { await sendText({ phone, userId, text: r.text, kind: 'secretary' }); return; }
+  if (!r.proposed) { await sendText({ phone, userId, text: r.text, kind: 'secretary' }); await keepAdmin(); return; }
   const sent = await sendButtons({ phone, userId, text: r.text, buttons: [{ id: BTN_YES, title: 'אישור ✅' }, { id: BTN_NO, title: 'ביטול ❌' }], kind: 'confirm' });
   // Stored only once the read-back reached the admin: a yes can never approve
   // a proposal that was never shown.
   if (sent?.ok) await saveSession({ phone, userId, state: 'CONFIRM', pending: { secretary: { proposals: r.proposals } } });
+  else await keepAdmin();
 }
 
 async function executePending({ phone, user, session }) {
@@ -356,8 +444,22 @@ async function handleInboundNow(msg) {
   try {
     const session = await getSession(phone);
 
+    if (msg.text == null) {
+      if (voiceTooLong) { await sendText({ phone, userId, text: await getText('whatsapp.voice_too_long') }); return; }
+      if (voiceFailed) { await sendText({ phone, userId, text: await getText('whatsapp.voice_failed') }); return; }
+      // Media / location / sticker — we only read text (a voice note without a
+      // transcription service configured lands here too).
+      await sendText({ phone, userId, text: 'קיבלתי, אבל אני יודע לקרוא רק הודעות טקסט. כתבו לי במילים מה תרצו לעשות.' });
+      return;
+    }
+    const text = msg.text.trim();
+
+    // ── a superadmin's number: the admin gate (choice → second factor → admin
+    //    mode), or, when it chose "לקוח" / is mid customer flow, the customer paths ──
+    if (admin && await adminGate({ phone, userId, user, admin, text, waId: msg.waId, buttonId: msg.buttonId, session })) return;
+
     // A ticket waiting for the customer's yes (any number, see confirmTicket).
-    if (session.state === 'CONFIRM' && session.pending?.ticket && !admin) {
+    if (session.state === 'CONFIRM' && session.pending?.ticket) {
       const word = msg.buttonId === BTN_YES ? 'yes' : msg.buttonId === BTN_NO ? 'no' : confirmWord(msg.text);
       const ticketText = session.pending.ticket.text; // taken before the confirm is left
       const footer = await leaveConfirm({ phone, userId, session });
@@ -368,7 +470,7 @@ async function handleInboundNow(msg) {
 
     // Outstanding confirm: button id, or a typed yes/no (never for the
     // secretary's number — its "כן" is an answer to the secretary).
-    if (session.state === 'CONFIRM' && user && !admin) {
+    if (session.state === 'CONFIRM' && user && !session.pending?.secretary) {
       const word = msg.buttonId === BTN_YES ? 'yes' : msg.buttonId === BTN_NO ? 'no' : confirmWord(msg.text);
       if (word === 'yes' && session.pending?.lead) {
         // The sales request the secretary read back: the same lead row the menu's
@@ -392,26 +494,14 @@ async function handleInboundNow(msg) {
     // A bare digit is never a stray confirmation: "1" / "2" are menu choices
     // (the menu comes back under every result), so only yes/no WORDS and the
     // confirm buttons mean "the order I was asked about".
-    if (!admin && (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || (user && strayConfirmWord(msg.text)))) {
+    if (msg.buttonId === BTN_YES || msg.buttonId === BTN_NO || (user && strayConfirmWord(msg.text))) {
       await sendText({ phone, userId, text: await getText('whatsapp.confirm_expired') });
       return;
     }
 
-    if (msg.text == null) {
-      if (voiceTooLong) { await sendText({ phone, userId, text: await getText('whatsapp.voice_too_long') }); return; }
-      if (voiceFailed) { await sendText({ phone, userId, text: await getText('whatsapp.voice_failed') }); return; }
-      // Media / location / sticker — we only read text (a voice note without a
-      // transcription service configured lands here too).
-      await sendText({ phone, userId, text: 'קיבלתי, אבל אני יודע לקרוא רק הודעות טקסט. כתבו לי במילים מה תרצו לעשות.' });
-      return;
-    }
-    const text = msg.text.trim();
-
-    // ── the secretary: a superadmin's own number, every message ──
-    if (admin) { await secretaryReply({ phone, userId, admin, text, waId: msg.waId, buttonId: msg.buttonId }); return; }
 
     // ── secretary mode: every message, until 0 / תפריט / a greeting ──
-    if (session.state === 'SECRETARY' && user && !admin) {
+    if (session.state === 'SECRETARY' && user) {
       if (!isSecretaryExit(text) && await secretaryAllowed(user, phone)) { await secretaryModeReply({ phone, user, text, waId: msg.waId }); return; }
       // An exit word (0 / תפריט / a greeting): the main menu itself, not the
       // word handed to the tree as an unknown digit. Without the menu, the old paths.
