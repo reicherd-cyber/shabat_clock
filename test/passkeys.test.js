@@ -14,12 +14,12 @@ test('passkeys: registration demands the person (user verification) and a discov
   assert.deepEqual(AUTHENTICATOR_SELECTION, { residentKey: 'required', userVerification: 'required' });
 });
 
-test('passkeys: a synced passkey on an account with the authenticator app still owes the code; a device-bound one does not', () => {
-  assert.equal(secondFactorNeeded({ totpEnabled: true, backedUp: true }), true);
-  assert.equal(secondFactorNeeded({ totpEnabled: true, backedUp: 1 }), true);
-  assert.equal(secondFactorNeeded({ totpEnabled: true, backedUp: false }), false);
-  assert.equal(secondFactorNeeded({ totpEnabled: false, backedUp: true }), false);
-  assert.equal(secondFactorNeeded({ totpEnabled: 0, backedUp: 0 }), false);
+test('passkeys: the code after a synced passkey is a policy, off by default; on, it applies only to synced keys on accounts with the app', () => {
+  assert.equal(secondFactorNeeded({ totpEnabled: true, backedUp: true }), false);                 // default policy: a passkey is a complete sign-in
+  assert.equal(secondFactorNeeded({ totpEnabled: true, backedUp: true, policy: true }), true);
+  assert.equal(secondFactorNeeded({ totpEnabled: true, backedUp: 1, policy: true }), true);
+  assert.equal(secondFactorNeeded({ totpEnabled: true, backedUp: false, policy: true }), false);
+  assert.equal(secondFactorNeeded({ totpEnabled: false, backedUp: true, policy: true }), false);
 });
 
 test('half-login ticket: only /passkey-2fa reads it, and an admin session token is never mistaken for one', () => {

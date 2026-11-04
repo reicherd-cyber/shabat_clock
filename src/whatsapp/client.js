@@ -72,10 +72,13 @@ export async function downloadMedia(mediaId, { maxBytes = Infinity, fetchImpl = 
   return { buffer, mime: info.mime_type || res.headers?.get?.('content-type') || 'audio/ogg', bytes: buffer.length };
 }
 
-async function send({ phone, userId, kind, body, payload }) {
+// `logBody`: what the chat log (and the dev console) keeps when the body sent
+// carries a secret — a one-time link is sent whole and logged masked.
+async function send({ phone, userId, kind, body, payload, logBody = null }) {
+  const kept = logBody ?? body;
   if (!env.whatsapp.token || !env.whatsapp.phoneNumberId) {
-    console.log(`[whatsapp:dev] → ${phone} (${kind}):\n${body}`);
-    await record({ phone, userId, kind, body, status: 'dev' });
+    console.log(`[whatsapp:dev] → ${phone} (${kind}):\n${kept}`);
+    await record({ phone, userId, kind, body: kept, status: 'dev' });
     return { ok: true, dev: true };
   }
   try {
@@ -83,17 +86,17 @@ async function send({ phone, userId, kind, body, payload }) {
       messaging_product: 'whatsapp', recipient_type: 'individual', to: toWaNumber(phone), ...payload,
     });
     const waId = data?.messages?.[0]?.id || null;
-    await record({ phone, userId, kind, body, status: 'sent', waId });
+    await record({ phone, userId, kind, body: kept, status: 'sent', waId });
     return { ok: true, waId };
   } catch (e) {
     console.error(`[whatsapp] send to ${phone} failed:`, e.message);
-    await record({ phone, userId, kind, body, status: 'failed', error: e.message });
+    await record({ phone, userId, kind, body: kept, status: 'failed', error: e.message });
     return { ok: false, error: e.message };
   }
 }
 
-export function sendText({ phone, userId = null, text, kind = 'text' }) {
-  return send({ phone, userId, kind, body: text, payload: { type: 'text', text: { body: text, preview_url: false } } });
+export function sendText({ phone, userId = null, text, kind = 'text', logBody = null }) {
+  return send({ phone, userId, kind, body: text, logBody, payload: { type: 'text', text: { body: text, preview_url: false } } });
 }
 
 // Up to 3 reply buttons (Meta's limit; titles ≤ 20 chars). The tap comes back

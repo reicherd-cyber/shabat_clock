@@ -13,6 +13,23 @@ import { consumeTotp } from './adminTotp.js';
 import { sendEmail } from './email.js';
 import { OTP_TTL_MIN } from '../config/constants.js';
 
+// A fingerprint link for the WhatsApp gate: the chat cannot ask for the finger,
+// so it sends a one-time link to a page that runs the admin's passkey
+// (services/passkeys.js) and, on success, switches the chat to admin mode.
+// The token travels in the link; only its hash is kept on the session row.
+export const ADMIN_LINK_TTL_MS = 10 * 60 * 1000;
+export function makeAdminLink() {
+  const token = crypto.randomBytes(24).toString('base64url');
+  return { token, hash: crypto.createHash('sha256').update(token).digest('hex'), until: Date.now() + ADMIN_LINK_TTL_MS };
+}
+// Pure: does this token open this session's pending link, now?
+export function adminLinkMatches(pending, token, now = Date.now()) {
+  if (!pending?.linkHash || !pending?.linkUntil || !token) return false;
+  if (now > Number(pending.linkUntil)) return false;
+  const h = crypto.createHash('sha256').update(String(token)).digest('hex');
+  return h.length === pending.linkHash.length && crypto.timingSafeEqual(Buffer.from(h), Buffer.from(String(pending.linkHash)));
+}
+
 export function maskEmail(email) {
   const [local, domain] = String(email || '').split('@');
   if (!domain) return email;

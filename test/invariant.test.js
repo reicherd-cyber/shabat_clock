@@ -165,3 +165,21 @@ test('WhatsApp admin gate: the office secretary is reachable only in admin mode 
   const sf = readFileSync(new URL('../src/services/adminSecondFactor.js', import.meta.url), 'utf8');
   assert.ok(/if \(clean\.length !== 6\) return 'bad'/.test(sf));
 });
+
+test('WhatsApp fingerprint link: the chat switches only when the passkey belongs to the admin of that number', () => {
+  const bot = readFileSync(new URL('../src/whatsapp/bot.js', import.meta.url), 'utf8');
+  const fn = bot.slice(bot.indexOf('export async function completeAdminLink'), bot.indexOf("return { ok: true, phone: row.phone };"));
+  assert.ok(/if \(!admin \|\| Number\(admin\.id\) !== Number\(adminId\)\) \{[\s\S]*?reason: 'not_yours'/.test(fn));
+  assert.ok(fn.indexOf('adminLinkMatches(pending, token)') < fn.indexOf('enterAdminMode('));
+  assert.ok(fn.includes('return serialByKey(row.phone, async () => {'), 'the switch runs in the number\'s lane');
+  assert.ok(/UPDATE whatsapp_sessions SET state = 'ADMIN'[^"]*WHERE phone = \? AND state = 'ADMIN_CODE' AND JSON_UNQUOTE\(JSON_EXTRACT\(pending, '\$\.linkHash'\)\) = \?/.test(fn), 'the claim is one conditional update');
+  assert.ok(/if \(claim\.affectedRows !== 1\) return \{ ok: false, reason: 'expired' \};/.test(fn));
+  assert.ok(fn.indexOf('claim.affectedRows') < fn.indexOf('enterAdminMode('), 'the welcome goes out only to the winner');
+  assert.ok(/not_yours[\s\S]*?recordFailure\('admin', 'admin_login'\)|recordFailure\('admin', 'admin_login'\)[\s\S]*?not_yours/.test(fn), 'a foreign passkey counts as a failure');
+  // the link is logged masked
+  const start = bot.slice(bot.indexOf('async function startAdminCode'), bot.indexOf('async function enterAdminMode'));
+  assert.ok(/logBody: link \? ask\.replace\(link\.token, '\[קישור חד-פעמי\]'\)/.test(start));
+  const auth = readFileSync(new URL('../src/api/routes/auth.js', import.meta.url), 'utf8');
+  const wa = auth.slice(auth.indexOf("authRouter.post('/admin/auth/wa-passkey'"), auth.indexOf("authRouter.post('/admin/auth/passkey-2fa'"));
+  assert.ok(/if \(who\.secondFactor\) throw new ApiError\(409, 'TWOFA_REQUIRED'/.test(wa), 'the synced-key policy applies to the chat door too');
+});
