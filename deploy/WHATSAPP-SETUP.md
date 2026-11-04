@@ -126,8 +126,10 @@ line. Writes use the same `services/crm.js` / `services/finance.js` / SQL as the
 stamped `admin:<id>` and audited; `עזרה` lists examples; a leading `#` is tolerated.
 Model calls are capped at 300 per admin per day (`nlu_usage` kind `admin`).
 
-On the phone the same number hears "למנהל, הקישו 8" — the structured assistant in
-`services/adminAssistant.js` (one action, read back, key 1 to confirm).
+The phone line offers no admin action at all, not even for that number: caller ID can be
+spoofed, so admin work is WhatsApp only (Meta-verified sender). Protect the business
+number itself with Meta's two-step verification PIN: `WA_2FA_PIN=123456 node
+scripts/wa-2fa.mjs set` (the PIN is read from the environment, never logged).
 
 ## Tickets need the customer's yes (2026-11-03)
 

@@ -114,12 +114,9 @@ test('WhatsApp: the per-number quota is spent before a message enters its lane; 
   assert.match(routes, /req\.auth\.imp \? \{ type: 'admin', id: req\.auth\.imp \}/);
 });
 
-test('admin assistant: every write re-checks the admin at execution; the phone resolves an admin number without a customer account', () => {
-  const svc = readFileSync(new URL('../src/services/adminAssistant.js', import.meta.url), 'utf8');
-  const run = svc.indexOf('export async function runAdminAction');
-  assert.ok(run > 0 && svc.indexOf('assertAdminLive(admin, await adminByPhone(admin.phone))', run) > run, 'runAdminAction must re-validate the admin first');
-  const ivr = readFileSync(new URL('../src/ivr/router.js', import.meta.url), 'utf8');
-  assert.match(ivr, /const adminOnly = asGuest \? null : await adminByPhone\(phone\);/);
+test('the office secretary re-checks the admin at every turn and at execution', () => {
+  const sec = readFileSync(new URL('../src/services/secretary.js', import.meta.url), 'utf8');
+  assert.equal((sec.match(/assertAdminLive\(admin, await adminByPhone\(phone\)\)/g) || []).length, 2, 'secretaryTurn and executeProposals');
 });
 
 test('WhatsApp: a support ticket is opened only after the customer confirmed (confirmTicket → openTicket on yes)', () => {

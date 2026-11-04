@@ -26,13 +26,13 @@ test('revert links: signed per audit row, expire, and never validate for another
   assert.equal(revertTokenValid(123, `${Date.now() - 1000}.${sig}`), false); // an expired stamp fails even with the old signature replaced
 });
 
-test('lockdown gates every office door: the admin API, both secretaries\' writes, the phone assistant', () => {
+test('lockdown gates every office door: the admin API and the secretary\'s writes; the phone has none', () => {
   const mw = readFileSync(new URL('../src/api/middleware.js', import.meta.url), 'utf8');
   assert.ok(/const lock = await lockdownState\(\);[\s\S]*?new ApiError\(423, 'LOCKDOWN'/.test(mw));
   const sec = readFileSync(new URL('../src/services/secretary.js', import.meta.url), 'utf8');
   assert.equal((sec.match(/await isLockedDown\(\)/g) || []).length, 2, 'secretaryTurn and executeProposals');
-  const aa = readFileSync(new URL('../src/services/adminAssistant.js', import.meta.url), 'utf8');
-  assert.ok(/runAdminAction[\s\S]*?await isLockedDown\(\)/.test(aa));
+  const ivr = readFileSync(new URL('../src/ivr/router.js', import.meta.url), 'utf8');
+  assert.ok(!/adminByPhone/.test(ivr), 'the phone has no admin door to lock');
   const srv = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   assert.ok(srv.includes('startGuardian()'));
 });

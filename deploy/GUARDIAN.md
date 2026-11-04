@@ -20,8 +20,8 @@ Thresholds are the `security.*` settings (editable in the panel). A hit is a row
 
 **Lockdown** (critical): `security.lockdown` holds the state; every admin API request
 answers 423 LOCKDOWN, every admin session is invalidated, the WhatsApp office secretary
-and the phone's admin menu refuse to write, impersonation is refused (it is an admin
-route). Customers, the phone line, the devices and the scheduler are untouched.
+refuses to write, impersonation is refused (it is an admin route). The phone line has no
+admin door at all. Customers, the phone line, the devices and the scheduler are untouched.
 
 **Recovery**: the alert email carries a one-time unlock link (24 h) —
 `/api/v1/admin/security/unlock?token=…` — and the server CLI works without a token:
