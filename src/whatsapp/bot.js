@@ -336,6 +336,13 @@ async function adminGate({ phone, userId, user, admin, text, waId, buttonId, ses
   // 4. admin mode
   if (session.state === 'ADMIN') {
     if (isAdminExit(text)) { await customerMode({ phone, userId, user }); return true; }
+    // Asking to log in while already in: the gate answers, not the secretary
+    // (the model must never play the gate — it has no codes and no links).
+    if ((shortcut != null && !shortcut) || /^(להתחבר|כניסה|התחבר|להיכנס)\s+כמנהל$/.test(text) || /^(קישור|לינק|טביעת אצבע)$/.test(text)) {
+      const left = Math.max(1, Math.round((ADMIN_MODE_MS - (Date.now() - new Date(session.updated_at).getTime())) / 60000));
+      await sendText({ phone, userId, text: `✅ מצב מנהל כבר פעיל (עוד כ-${left} דקות). קישור טביעת אצבע נשלח רק בכניסה למצב מנהל: כתבו "לקוח" ואז "מנהל".`, kind: 'auth' });
+      return true;
+    }
     await secretaryReply({ phone, userId, admin, text, waId, buttonId });
     return true;
   }

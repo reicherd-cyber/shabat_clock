@@ -76,3 +76,9 @@ test('proposals: placeholders resolve to created ids, read-backs come from the a
   assert.equal(describeResult('create_order', proposals[1].input, { order_id: 31, lead_name: 'משה כהן', description: '4 בקרים', amount: 6000 }), '✅ נפתחה הזמנה #31 למשה כהן: 4 בקרים, ₪6,000');
   assert.equal(describeResult('add_finance_entry', proposals[3].input, { entry_id: 412 }), '✅ נרשמה הוצאה #412: דלק, ₪300');
 });
+
+test('the office secretary never plays the gate: its rules forbid asking for codes or announcing admin mode', async () => {
+  const { RULES } = await import('../src/services/secretary.js');
+  assert.match(RULES, /לא שער הכניסה/);
+  assert.match(RULES, /לעולם אל תבקש\/י קוד, סיסמה או אימות/);
+});
