@@ -119,16 +119,27 @@ authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, 
       throw errors.unauthenticated();
     }
     if (claims.p !== 'shelly-onboard' || !claims.uid) throw errors.unauthenticated();
+    // report=1: the installer page read the unit over its own network (model,
+    // firmware, clock) — kept on the inventory row and in the server log, so a
+    // unit that never completes its secure connection is still identified.
+    if (String(req.query.report || '') === '1') {
+      const { recordInstallerReport } = await import('../../services/shellyOnboard.js');
+      await recordInstallerReport({ mac: claims.uid, model: req.query.model, fw: req.query.fw, unixtime: req.query.unixtime, ip: req.ip });
+      return res.json({ ok: true });
+    }
     const { shellyMqttRpc } = await import('../../mqtt/client.js');
     const reply = await shellyMqttRpc(claims.uid, 'Shelly.GetDeviceInfo', undefined, 4000);
     const mac = reply?.result?.mac ? String(reply.result.mac).toLowerCase().replace(/[^0-9a-f]/g, '') : null;
     const out = { connected: !!mac, mac_ok: mac === claims.uid };
     // A verified connection means the file-installer flow completed for this
-    // unit — log it in the prepared-devices inventory (first sighting only;
-    // this endpoint is polled, so no churn).
+    // unit — log it in the prepared-devices inventory with what the unit said
+    // about itself (model / firmware), never a bare MAC.
     if (out.connected && out.mac_ok) {
-      query('INSERT IGNORE INTO prepared_devices (mac) VALUES (?)', [claims.uid])
-        .catch(() => {});
+      query(
+        `INSERT INTO prepared_devices (mac, model, fw_version) VALUES (?,?,?)
+         ON DUPLICATE KEY UPDATE model = COALESCE(model, VALUES(model)), fw_version = COALESCE(fw_version, VALUES(fw_version))`,
+        [claims.uid, reply.result.model || reply.result.app || null, reply.result.ver || null],
+      ).catch(() => {});
     }
     // ?channels=1: per-channel on/off states, for the installer's router-check step
     // (it must only cycle channels that are already ON — flipping an off channel
@@ -166,6 +177,14 @@ authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, onboardPrepareT
     if (String(req.query.candidates || '') === '1') {
       const { installCandidates } = await import('../../services/shellyOnboard.js');
       return res.json({ candidates: await installCandidates() });
+    }
+    // report=1: what the page read off the unit over the hotspot / LAN (see /status).
+    if (String(req.query.report || '') === '1') {
+      const uid = String(req.query.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+      if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
+      const { recordInstallerReport } = await import('../../services/shellyOnboard.js');
+      await recordInstallerReport({ mac: uid, model: req.query.model, fw: req.query.fw, unixtime: req.query.unixtime, ip: req.ip });
+      return res.json({ ok: true });
     }
     // check=1: no minting — just "is this device connected to the broker right
     // now?", so the installer can validate a seemingly-provisioned unit before

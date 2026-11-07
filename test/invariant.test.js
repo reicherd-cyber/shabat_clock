@@ -189,3 +189,13 @@ test('WhatsApp admin gate: "מנהל" inside admin mode is answered by the gate,
   const branch = bot.slice(bot.indexOf('  // 4. admin mode'), bot.indexOf('  // 5. the shortcut from anywhere'));
   assert.ok(branch.indexOf('מצב מנהל כבר פעיל') < branch.indexOf('await secretaryReply('));
 });
+
+test('installer: the inventory learns model and firmware from the status poll and from the page report, never a bare MAC', () => {
+  const auth = readFileSync(new URL('../src/api/routes/auth.js', import.meta.url), 'utf8');
+  assert.ok(!/INSERT IGNORE INTO prepared_devices \(mac\) VALUES/.test(auth), 'the bare-MAC insert is gone');
+  assert.equal((auth.match(/recordInstallerReport\(/g) || []).length, 2, 'both installer endpoints accept report=1');
+  const onboard = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
+  assert.ok(onboard.includes('export async function recordInstallerReport'));
+  assert.ok(onboard.includes('if(DEVIP)await identify(DEVIP,mac);'), 'the page identifies the unit once found');
+  assert.ok(onboard.includes('await deviceDiag();'), 'the page asks the unit itself after a failed server check');
+});
