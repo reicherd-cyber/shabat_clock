@@ -539,16 +539,41 @@ async function identify(ip,mac){
 }
 // After a failed server check, when the phone can still reach the unit: what the
 // unit itself says about its clock and its broker connection.
+// Returns {reached, clockOk, connected} so finish() can shape its verdict.
 async function deviceDiag(){
  // IP is where the page last reached the unit (the home LAN after the Wi-Fi
  // hop); DEVIP is the hotspot it was found on, dead once the unit moved.
- const ip=IP||DEVIP;if(!ip)return;
+ const ip=IP||DEVIP;if(!ip)return {reached:false};
  log('מתשאל את המכשיר עצמו ('+ip+')...');
  const [st,ms,mc]=await Promise.all([wsRpc(ip,'Sys.GetStatus'),wsRpc(ip,'MQTT.GetStatus'),wsRpc(ip,'MQTT.GetConfig')]);
- if(!st&&!ms&&!mc){log('לא ניתן לתשאל את המכשיר מהרשת הזו (הטלפון ברשת אחרת?)','warn');return}
- const t=st&&Number(st.unixtime)||0;
- log('אבחון מהמכשיר: שעון '+(t>1700000000?'מסונכרן':'לא מסונכרן')+' · MQTT '+(ms&&ms.connected?'מחובר':'לא מחובר')+(mc?' · שרת '+(mc.server||'?')+' · אימות תעודה '+(mc.ssl_ca||'כבוי'):''),(ms&&ms.connected)?'ok':'warn');
- if(st&&!(t>1700000000))log('הסיבה הסבירה: שעון לא מסונכרן — המכשיר דוחה את תעודת השרת. "נסה שרת זמן אחר" למטה.','warn');
+ if(!st&&!ms&&!mc){log('לא ניתן לתשאל את המכשיר מהרשת הזו (הטלפון ברשת אחרת?)','warn');return {reached:false}}
+ const t=st&&Number(st.unixtime)||0;const clockOk=t>1700000000;
+ log('אבחון מהמכשיר: שעון '+(clockOk?'מסונכרן':'לא מסונכרן')+' · MQTT '+(ms&&ms.connected?'מחובר':'לא מחובר')+(mc?' · שרת '+(mc.server||'?')+' · אימות תעודה '+(mc.ssl_ca||'כבוי'):''),(ms&&ms.connected)?'ok':'warn');
+ return {reached:true,clockOk:clockOk||!st,connected:!!(ms&&ms.connected)};
+}
+// Encrypted without server-certificate verification: the fallback for a line
+// that blocks time servers (firmware 1.3 refuses our certificate until the
+// clock is set). Still TLS, still per-unit credentials and topic ACL.
+async function noVerifyAndCheck(){
+ log('מגדיר חיבור מוצפן ללא אימות תעודה ומאתחל...');
+ await rpc(B.noVerify);await rpc(B.reboot).catch(()=>{});await waitBack();
+ const r2=await serverCheck(90);
+ if(r2==='ok')verdict('מחובר ✓ — מוצפן, ללא אימות תעודת השרת (הקו חוסם שרתי זמן). דווחו על כך למנהל המערכת.','warn');
+ else verdict('אין חיבור גם ללא אימות תעודה. צלמו מסך ודווחו.','bad');
+}
+// Firmware 1.3.x checks the server certificate's dates, so the unit needs the
+// time BEFORE its first secure connection (1.6 does not). Wait for the clock,
+// rotate time servers (each needs its own reboot), and report. true = synced.
+async function ensureClock(){
+ if(!IP)return true;
+ log('ממתין שהמכשיר יקבל שעה משרת הזמן (עד כדקה)...');
+ for(;;){
+  for(let i=0;i<9;i++){const st=await wsRpc(IP,'Sys.GetStatus',4000);if(st&&Number(st.unixtime)>1700000000){log('השעון מסונכרן ✓','ok');return true}await sleep(5000)}
+  if(sntpIdx>=B.sntp.length-1)return false;
+  sntpIdx++;log('השעון עדיין לא מסונכרן — מגדיר שרת זמן חלופי ('+(sntpIdx+1)+'/'+B.sntp.length+') ומאתחל...','warn');
+  await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});
+  if(!(await waitBack()))return false;
+ }
 }
 // ── Wi-Fi scan, shared: one in-flight scan at a time, result reused for 90 s ──
 // (the picker and the send step would otherwise scan twice back to back, and the
@@ -679,7 +704,12 @@ async function finish(){
  // can exceed the 90s window — seen on a real 4PM install). Encourage a retry
  // before unloading the filtered-line suspicion.
  finTries++;
- await deviceDiag();
+ const diag=await deviceDiag();
+ if(diag&&diag.reached&&!diag.clockOk){
+  verdict('המכשיר לא מתחבר כי השעון שלו לא מסונכרן — קו האינטרנט חוסם שרתי זמן (אופייני לקו מסונן), והמכשיר דוחה את תעודת השרת. אפשרויות: לפתוח NTP (UDP 123) אצל ספק הסינון, או להמשיך בחיבור מוצפן ללא אימות תעודה.','warn');
+  actionBtn('המשך בחיבור מוצפן ללא אימות תעודה',noVerifyAndCheck);
+  if(sntpIdx<B.sntp.length-1)actionBtn('נסה שרת זמן אחר',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true);
+  return}
  if(finTries<2){
   verdict('המכשיר עדיין לא התחבר — וזה קורה: חיבור ראשון לוקח לפעמים עד כ-4 דקות (המכשיר מסנכרן שעון ומתחבר מוצפן). לחצו "בדוק שוב מול השרת" — הבדיקה הבאה תמתין עד 4 דקות. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו קודם ל-Wi-Fi רגיל.','warn');
   actionBtn('בדוק שוב מול השרת (עד 4 דקות)',async()=>{await finish()},true);
@@ -687,7 +717,7 @@ async function finish(){
  verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> המכשיר מתחבר לשרת בכתובת <span dir="ltr">'+BROKER+'</span>, שרוב הסינונים מעבירים — אבל יש קווים שחוסמים גם אותה. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את הכתובת הזו (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.<br><br>בדיקה מלאה ממחשב Windows על אותו קו — הדביקו שורה אחת ב-PowerShell (בודקת פורט + יירוט הצפנה ומדפיסה פסק דין):<br><code dir="ltr" style="display:block;background:#efe9df;border-radius:8px;padding:6px 8px;margin-top:4px;text-align:left">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>','warn');
  actionBtn('בדוק שוב מול השרת',async()=>{await finish()},true);
  if(sntpIdx<B.sntp.length-1){actionBtn('נסה שרת זמן אחר (בעיית שעון נפוצה)',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true)}
- actionBtn('נסה חיבור ללא אימות תעודה (עדיין מוצפן)',async()=>{log('מגדיר חיבור ללא אימות תעודה ומאתחל...');await rpc(B.noVerify);await rpc(B.reboot).catch(()=>{});await waitBack();const r2=await serverCheck(90);if(r2==='ok'){verdict('מחובר — אבל ללא אימות תעודה. דווחו על כך למנהל המערכת.','warn')}else{verdict('אין חיבור גם ללא אימות תעודה. צלמו מסך ודווחו.','bad')}},true);
+ actionBtn('נסה חיבור ללא אימות תעודה (עדיין מוצפן)',noVerifyAndCheck,true);
 }
 $('go').onclick=async()=>{
  $('go').disabled=true;$('progress').classList.remove('hidden');$('log').innerHTML='';$('verdict').innerHTML='';$('actions').innerHTML='';
@@ -929,6 +959,11 @@ async function stageComplete(){
  }catch(e){verdict('שגיאה בשליחת ההגדרות: '+e.message+' — ודאו שנשארתם על אותו Wi-Fi ונסו שוב.','bad');return}
  if(!(await waitBack())){verdict('המכשיר לא חזר אחרי האתחול — המתינו חצי דקה ולחצו "בדוק מול השרת".','warn');actionBtn('בדוק מול השרת',async()=>{await finish()});return}
  log('המכשיר חזר לרשת.','ok');
+ if(!(await ensureClock())){
+  verdict('המכשיר לא מקבל שעה מאף שרת זמן — קו האינטרנט כאן חוסם NTP (אופייני לקו מסונן). בלי שעה המכשיר דוחה את תעודת השרת ולא יתחבר. אפשרויות: לבקש מספק הסינון לפתוח NTP (UDP 123), או להמשיך בחיבור מוצפן ללא אימות תעודה.','warn');
+  actionBtn('המשך בחיבור מוצפן ללא אימות תעודה',noVerifyAndCheck);
+  actionBtn('בדוק מול השרת בכל זאת',async()=>{await finish()},true);
+  return}
  await finish();
 }
 // Stage 2: mint credentials (internet) + send everything to the device (local).
@@ -1201,6 +1236,8 @@ export async function prepLinks({ mac, wifiSsid, wifiPass, confirm = false }) {
       wifi: wifiSsid
         ? `${base}/Wifi.SetConfig?config=${encodeURIComponent(JSON.stringify({ sta: { ssid: wifiSsid, pass: wifiPass || '', enable: true } }))}`
         : null,
+      // Firmware 1.3.x needs the time before it accepts our certificate.
+      sntp: `${base}/Sys.SetConfig?config=${encodeURIComponent(JSON.stringify({ sntp: { server: SNTP_SERVERS[0] } }))}`,
       reboot: `${base}/Shelly.Reboot`,
     },
   };
@@ -1230,7 +1267,17 @@ export async function prepStatus({ mac, adminId = null }) {
     ).catch((e) => console.error('prepared_devices upsert:', e.message));
     return { status: 'ready', model: info.result?.model || null, fw: info.result?.ver || null };
   }
-  // Connected on the interim no-verify config — push the CA and flip to verified.
+  // Connected on the interim no-verify config. Firmware 1.3.x refuses a
+  // certificate while its clock is unset, so flipping to verification then
+  // would leave the unit in an endless failed-handshake loop (2026-11-07):
+  // the clock is checked first, a time server is set, and the admin is told.
+  const sys = await shellyMqttRpc(uid, 'Sys.GetStatus', undefined, 4000);
+  const unixtime = Number(sys?.result?.unixtime || 0);
+  if (sys?.result && !(unixtime > 1_700_000_000)) {
+    await shellyMqttRpc(uid, 'Sys.SetConfig', { config: { sntp: { server: SNTP_SERVERS[0] } } }, 4000).catch(() => {});
+    console.warn(`[prep] ${uid}: clock unsynced (${unixtime}) — not switching to certificate verification yet`);
+    return { status: 'clock', message: 'המכשיר מחובר אך השעון שלו לא מסונכרן — ללא שעה הוא ידחה את תעודת השרת. ודאו שהקו מאפשר NTP (UDP 123) ובדקו שוב בעוד דקה.' };
+  }
   const ca = fs.readFileSync(env.deviceBroker.caFile, 'utf8');
   const put = await shellyMqttRpc(uid, 'Shelly.PutUserCA', { append: false, data: ca }, 8000);
   if (!put || put.error) return { status: 'error', message: 'העלאת תעודת האבטחה נכשלה — נסו שוב' };

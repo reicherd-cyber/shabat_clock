@@ -206,3 +206,14 @@ test('installer: the inventory learns model and firmware from the status poll an
   assert.ok((all.match(/COALESCE\(VALUES\(model\), model\)/g) || []).length >= 3, 'every inventory upsert lets a fresh reading win');
   assert.ok(!/model = COALESCE\(model, VALUES\(model\)\)/.test(all), 'no upsert keeps a stale model over a fresh one');
 });
+
+test('installer: the clock is settled before the first verified connection, on the page and in the server flow (firmware 1.3 refuses a certificate without the time)', () => {
+  const onboard = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
+  assert.ok(onboard.includes('if(!(await ensureClock())){'), 'the page waits for the clock before the server check');
+  assert.ok(onboard.indexOf('if(!(await ensureClock())){') < onboard.search(/ await finish\(\);\r?\n\}\r?\n\/\/ Stage 2: mint credentials/), 'before finish()');
+  const prep = onboard.slice(onboard.indexOf('export async function prepStatus'), onboard.indexOf('export async function prepareDevice'));
+  assert.ok(prep.indexOf("'Sys.GetStatus'") < prep.indexOf("'Shelly.PutUserCA'"), 'the server flow reads the clock before pushing the CA');
+  assert.ok(/status: 'clock'/.test(prep));
+  const links = onboard.slice(onboard.indexOf('export async function prepLinks'), onboard.indexOf('export async function prepStatus'));
+  assert.ok(links.includes('Sys.SetConfig?config='), 'the home-prep links set a time server');
+});
