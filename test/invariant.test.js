@@ -198,4 +198,11 @@ test('installer: the inventory learns model and firmware from the status poll an
   assert.ok(onboard.includes('export async function recordInstallerReport'));
   assert.ok(onboard.includes('if(DEVIP)await identify(DEVIP,mac);'), 'the page identifies the unit once found');
   assert.ok(onboard.includes('await deviceDiag();'), 'the page asks the unit itself after a failed server check');
+  // review 2026-11-07: identity per MAC (the sweep is parallel), the diag asks the address last reached, one upsert order everywhere
+  assert.ok(onboard.includes('const INFO_BY_MAC={};') && !/let INFO=null/.test(onboard));
+  assert.ok(onboard.includes('const ip=IP||DEVIP;'));
+  assert.ok(/await registeredDevice\(uid\)\) return;/.test(onboard), 'a registered customer unit gains no inventory row from a report');
+  const all = [auth, onboard, readFileSync(new URL('../src/mqtt/client.js', import.meta.url), 'utf8')].join('\n');
+  assert.ok((all.match(/COALESCE\(VALUES\(model\), model\)/g) || []).length >= 3, 'every inventory upsert lets a fresh reading win');
+  assert.ok(!/model = COALESCE\(model, VALUES\(model\)\)/.test(all), 'no upsert keeps a stale model over a fresh one');
 });

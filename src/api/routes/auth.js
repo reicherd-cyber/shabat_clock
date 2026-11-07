@@ -137,8 +137,8 @@ authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, 
     if (out.connected && out.mac_ok) {
       query(
         `INSERT INTO prepared_devices (mac, model, fw_version) VALUES (?,?,?)
-         ON DUPLICATE KEY UPDATE model = COALESCE(model, VALUES(model)), fw_version = COALESCE(fw_version, VALUES(fw_version))`,
-        [claims.uid, reply.result.model || reply.result.app || null, reply.result.ver || null],
+         ON DUPLICATE KEY UPDATE model = COALESCE(VALUES(model), model), fw_version = COALESCE(VALUES(fw_version), fw_version)`,
+        [claims.uid, reply.result.model || null, reply.result.ver || null],
       ).catch(() => {});
     }
     // ?channels=1: per-channel on/off states, for the installer's router-check step
@@ -180,10 +180,8 @@ authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, onboardPrepareT
     }
     // report=1: what the page read off the unit over the hotspot / LAN (see /status).
     if (String(req.query.report || '') === '1') {
-      const uid = String(req.query.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
-      if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
       const { recordInstallerReport } = await import('../../services/shellyOnboard.js');
-      await recordInstallerReport({ mac: uid, model: req.query.model, fw: req.query.fw, unixtime: req.query.unixtime, ip: req.ip });
+      await recordInstallerReport({ mac: req.query.mac, model: req.query.model, fw: req.query.fw, unixtime: req.query.unixtime, ip: req.ip });
       return res.json({ ok: true });
     }
     // check=1: no minting — just "is this device connected to the broker right
