@@ -134,6 +134,7 @@ async function handleShellyMessage(topic, buf) {
       if (text === 'true' && /^[0-9a-f]{12}$/.test(uid)) {
         const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 4000).catch(() => null);
         if (info?.result) {
+          if (!info.result.model) console.warn(`[mqtt] prepared unit ${uid} answered GetDeviceInfo without a model: ${JSON.stringify(info.result).slice(0, 300)}`);
           await query(
             `INSERT INTO prepared_devices (mac, model, fw_version) VALUES (?,?,?)
              ON DUPLICATE KEY UPDATE model = COALESCE(VALUES(model), model),

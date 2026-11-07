@@ -512,7 +512,44 @@ async function lanSweep(){
  const hits=await Promise.all(names.map(async(n)=>{const m=await wsMac(n);return m?{mac:m,host:n}:null}));
  return hits.find(Boolean)||null;
 }
-async function wsMac(ip){const r=await wsRpc(ip,'Shelly.GetDeviceInfo');if(!r)return null;const m=String(r.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');if(m.length!==12)return null;MODEL=parseModel(String(r.id||''))||MODEL;return m}
+// Per-MAC identity from each unit's own GetDeviceInfo: the LAN sweep asks many
+// units in parallel, so a single "last answer" variable would attach one
+// unit's model to another's MAC. Model is the model CODE only (SPSW-…), never
+// the app name; firmware is ver only (fw_id is a build string).
+const INFO_BY_MAC={};
+async function wsMac(ip){const r=await wsRpc(ip,'Shelly.GetDeviceInfo');if(!r)return null;const m=String(r.mac||'').toLowerCase().replace(/[^0-9a-f]/g,'');if(m.length!==12)return null;INFO_BY_MAC[m]={model:String(r.model||''),fw:String(r.ver||''),word:parseModel(String(r.id||''))};return m}
+// Identity line + clock, read off the unit and reported to the server, so a unit
+// that never completes its secure connection is still identified in the
+// inventory and the server log. A firmware below 1.0 cannot hold our CA; an
+// unsynced clock makes the server certificate look invalid to the device.
+async function identify(ip,mac){
+ const info=INFO_BY_MAC[mac]||{};
+ if(info.word)MODEL=info.word;
+ const st=await wsRpc(ip,'Sys.GetStatus');
+ const t=st&&Number(st.unixtime)||0;const clockOk=t>1700000000;
+ const fw=info.fw||'';const model=info.model||'';
+ log('זיהוי: דגם '+(model||'לא ידוע')+' · קושחה '+(fw||'לא ידועה')+' · שעון '+(clockOk?'מסונכרן':(t?'לא מסונכרן ('+t+')':'לא ידוע')),clockOk?'ok':'warn');
+ if(fw&&/^0\./.test(fw))log('קושחה ישנה ('+fw+') — יש לעדכן את המכשיר לפני ההתקנה (באפליקציית Shelly או דרך האינטרנט של המכשיר), אחרת החיבור המאובטח לשרת לא ייפתח.','warn');
+ if(st&&!clockOk)log('השעון במכשיר לא מסונכרן — עד שיקבל שעה משרת זמן, חיבור מאובטח לשרת עלול להיכשל. בקו מסונן בקשו לפתוח NTP (UDP 123).','warn');
+ try{
+  const q='&report=1&model='+encodeURIComponent(model)+'&fw='+encodeURIComponent(fw)+'&unixtime='+encodeURIComponent(t||'');
+  const u=PREPARE_URL?PREPARE_URL+'&mac='+encodeURIComponent(mac)+q:(STATUS_URL?STATUS_URL+q:'');
+  if(u)fetch(u,{cache:'no-store',signal:AbortSignal.timeout(6000)}).catch(()=>{});
+ }catch(e){}
+}
+// After a failed server check, when the phone can still reach the unit: what the
+// unit itself says about its clock and its broker connection.
+async function deviceDiag(){
+ // IP is where the page last reached the unit (the home LAN after the Wi-Fi
+ // hop); DEVIP is the hotspot it was found on, dead once the unit moved.
+ const ip=IP||DEVIP;if(!ip)return;
+ log('מתשאל את המכשיר עצמו ('+ip+')...');
+ const [st,ms,mc]=await Promise.all([wsRpc(ip,'Sys.GetStatus'),wsRpc(ip,'MQTT.GetStatus'),wsRpc(ip,'MQTT.GetConfig')]);
+ if(!st&&!ms&&!mc){log('לא ניתן לתשאל את המכשיר מהרשת הזו (הטלפון ברשת אחרת?)','warn');return}
+ const t=st&&Number(st.unixtime)||0;
+ log('אבחון מהמכשיר: שעון '+(t>1700000000?'מסונכרן':'לא מסונכרן')+' · MQTT '+(ms&&ms.connected?'מחובר':'לא מחובר')+(mc?' · שרת '+(mc.server||'?')+' · אימות תעודה '+(mc.ssl_ca||'כבוי'):''),(ms&&ms.connected)?'ok':'warn');
+ if(st&&!(t>1700000000))log('הסיבה הסבירה: שעון לא מסונכרן — המכשיר דוחה את תעודת השרת. "נסה שרת זמן אחר" למטה.','warn');
+}
 // ── Wi-Fi scan, shared: one in-flight scan at a time, result reused for 90 s ──
 // (the picker and the send step would otherwise scan twice back to back, and the
 // device rejects a scan while one runs). Returns the deduped networks, strongest
@@ -642,6 +679,7 @@ async function finish(){
  // can exceed the 90s window — seen on a real 4PM install). Encourage a retry
  // before unloading the filtered-line suspicion.
  finTries++;
+ await deviceDiag();
  if(finTries<2){
   verdict('המכשיר עדיין לא התחבר — וזה קורה: חיבור ראשון לוקח לפעמים עד כ-4 דקות (המכשיר מסנכרן שעון ומתחבר מוצפן). לחצו "בדוק שוב מול השרת" — הבדיקה הבאה תמתין עד 4 דקות. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו קודם ל-Wi-Fi רגיל.','warn');
   actionBtn('בדוק שוב מול השרת (עד 4 דקות)',async()=>{await finish()},true);
@@ -720,7 +758,8 @@ async function stageDetect(){
   if(cfg&&cfg.enable&&cfg.server===BROKER)PROVISIONED=true;
  }
  if(!MODEL)MODEL=parseModel($('mac').value);
- $('foundMac').textContent=mac+(MODEL?' ('+MODEL+')':'')+(PROVISIONED?' · מוגדר מראש לשרת ✓':'');
+ if(DEVIP)await identify(DEVIP,mac);
+ $('foundMac').textContent=mac+(MODEL?' ('+MODEL+')':'')+(INFO_BY_MAC[mac]&&INFO_BY_MAC[mac].fw?' · קושחה '+INFO_BY_MAC[mac].fw:'')+(PROVISIONED?' · מוגדר מראש לשרת ✓':'');
  $('foundBox').classList.remove('hidden');
  // On the device's network: Wi-Fi comes FIRST — it's a local setting needing no
  // internet, and once the device joins the home LAN, everything else (creds,
@@ -967,6 +1006,31 @@ export function mdnsPrefixForModel(code) {
   if (!m) return null;
   const p = `shelly${m[1] === 'P' ? 'pro' : 'plus'}${Number(m[2])}${m[3] === 'P' ? 'pm' : ''}`;
   return MDNS_PREFIXES.includes(p) ? p : null;
+}
+
+// What the installer page read off a unit over its own network: model, firmware,
+// clock. Kept on the inventory row (the unit's own identity, before it ever
+// reaches the broker) and in the server log — a three-channel unit that never
+// completes its secure connection is still named (2026-11-07).
+// Owns the validation for both installer endpoints: a bad MAC throws, values
+// are cut to printable ASCII before they reach the log (query strings are
+// untrusted), a model is accepted only as a model CODE, and a registered
+// customer unit never gains an inventory row from a page report. A fresh
+// reading wins over an older row, like the broker's own upsert.
+const printable = (v, n) => String(v ?? '').replace(/[^\x20-\x7e]/g, '').trim().slice(0, n) || null;
+export async function recordInstallerReport({ mac, model, fw, unixtime, ip }) {
+  const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
+  const m = printable(model, 40); const code = m && /^S[A-Z0-9]{2,3}-[A-Z0-9]{6,12}$/i.test(m) ? m.toUpperCase() : null;
+  const v = printable(fw, 40);
+  const t = Number(unixtime); const clock = Number.isFinite(t) && t > 1_700_000_000 ? 'synced' : (Number.isFinite(t) && t > 0 ? `unsynced (${t})` : 'unknown');
+  console.log(`[installer] ${uid}: model=${code || m || '?'} fw=${v || '?'} clock=${clock} from ${printable(ip, 45) || '?'}`);
+  if (await registeredDevice(uid)) return; // a live customer unit is not "awaiting install"
+  await query(
+    `INSERT INTO prepared_devices (mac, model, fw_version) VALUES (?,?,?)
+     ON DUPLICATE KEY UPDATE model = COALESCE(VALUES(model), model), fw_version = COALESCE(VALUES(fw_version), fw_version)`,
+    [uid, code, v],
+  ).catch((e) => console.error('installer report upsert:', e.message));
 }
 
 // Units awaiting an install — prepared stock plus devices assigned offline that
