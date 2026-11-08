@@ -85,6 +85,10 @@ const MODEL_NAMES = {
 // built-in 50×30 mm. Printing is the browser's dialog, where the Xprinter XP-365B
 // label printer takes the @page size as the label.
 const LOGO_DATA_URI = 'data:image/png;base64,' + fs.readFileSync(new URL('./assets/zimna-logo-print.png', import.meta.url)).toString('base64');
+// The controls script is cached (express.static max-age + the browser); its URL carries a
+// content hash so every deploy of it reaches the page — a stale copy once sized only the
+// inner label, the wrapper collapsed and the sticker printed blank.
+const STICKER_JS_VERSION = crypto.createHash('sha1').update(fs.readFileSync(new URL('../web/public/sticker.js', import.meta.url))).digest('hex').slice(0, 10);
 const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // A JS string literal safe inside a <script> body: every "<" becomes <, so no
 // "</script" (or "<!--") in the data can end the page's script.
@@ -110,7 +114,7 @@ export function stickerHtml({ mac, model, date, who, base }) {
     + '#ctl button{font-size:16px;padding:8px 16px;border:0;border-radius:8px;background:#b3654a;color:#fff}'
     + '#hint{width:100%;color:#6b655a;font-size:13px}'
     + '#wrap{padding:16px;display:flex;justify-content:center}'
-    + '#rot{position:relative;background:#fff;outline:1px dashed #999;overflow:hidden}'
+    + '#rot{position:relative;background:#fff;outline:1px dashed #999;overflow:hidden;margin:0 auto}'
     + '#lab{position:absolute;top:0;left:0;transform-origin:top left;background:#fff;box-sizing:border-box;overflow:hidden;display:flex;flex-direction:column}'
     + '#logo{flex:0 0 50%;box-sizing:border-box;padding:1.2mm 2mm .4mm;display:flex;align-items:center;justify-content:center;min-height:0}'
     + '#logo img{max-width:100%;max-height:100%;object-fit:contain}'
@@ -121,12 +125,12 @@ export function stickerHtml({ mac, model, date, who, base }) {
     + '</style><style id="pg">' + stickerSizeCss(40, 25, false) + '</style></head><body>'
     + '<div id="ctl">גודל מדבקה: <select id="sz">' + opts + '<option value="custom">אחר</option></select>'
     + ' <input id="w" type="number" min="20" max="110" step="0.5" inputmode="decimal"> × <input id="h" type="number" min="10" max="200" step="0.5" inputmode="decimal"> מ"מ'
-    + ' <label><input type="checkbox" id="rot"> סובב 90°</label>'
+    + ' <label><input type="checkbox" id="rotchk"> סובב 90°</label>'
     + ' <button id="pr">הדפס</button>'
     + '<div id="hint">בחלון ההדפסה: מדפסת המדבקות (Xprinter), שוליים "ללא" (מסיר גם את הכותרות), גודל נייר = גודל המדבקה (מגדירים פעם אחת בהעדפות המדפסת ב-Windows). יצא מסובב לרוחב הגליל? סמנו "סובב 90°".</div></div>'
     + '<div id="wrap"><div id="rot"><div id="lab"><div id="logo"><img alt="זימנא" src="' + LOGO_DATA_URI + '"></div>'
     + '<div id="txt"><div class="mac">' + escHtml(mac) + '</div><div class="sub">' + escHtml(model) + ' · ' + escHtml(date) + '</div><div class="who">' + escHtml(who) + '</div></div></div></div></div>'
-    + '<script src="' + escHtml(String(base || '').replace(/\/+$/, '')) + '/sticker.js"></script></body></html>';
+    + '<script src="' + escHtml(String(base || '').replace(/\/+$/, '')) + '/sticker.js?v=' + STICKER_JS_VERSION + '"></script></body></html>';
 }
 // Our record for a unit's sticker: id · name of the devices row that holds (or held)
 // this MAC — pre-assigned units (first_contact_pending) and removed ones included,

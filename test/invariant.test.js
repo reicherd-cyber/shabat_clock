@@ -237,7 +237,9 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.ok(onboard.includes("const STICKER_TPL=$" + "{js(stickerHtml({ mac: '__MAC__'") && !onboard.includes('jsStr'), 'the installer page embeds the sticker template through the one script-safe encoder');
   // The admin window inherits the site's CSP (script-src 'self'): the controls are a same-origin file, never inline.
   const stickerCode = onboard.slice(onboard.indexOf('export function stickerHtml('), onboard.indexOf('export async function stickerFor('));
-  assert.ok(!/<script>/.test(stickerCode) && stickerCode.includes("/sticker.js\"></script>"), 'sticker controls come from /sticker.js, not an inline script');
+  assert.ok(!/<script>/.test(stickerCode) && stickerCode.includes("/sticker.js?v=' + STICKER_JS_VERSION + '\"></script>"), 'sticker controls come from /sticker.js with a content hash, not an inline script');
+  assert.ok(!/id="rot"/.test(stickerCode) || !/id="rot"[\s\S]*id="rot"/.test(stickerCode), 'one element per id');
+  assert.ok(/'Cache-Control', 'no-cache'/.test(app), '/sticker.js is never served stale');
   assert.ok(readFileSync(new URL('../src/web/public/sticker.js', import.meta.url), 'utf8').includes("getItem('stickerSize')"), 'the static controls script exists');
   assert.ok(onboard.includes("base=new URL(PREPARE_URL||STATUS_URL).origin"), 'the installer page points the script at our server');
   // The installer page is a foreign origin (file://): helmet's CORP same-origin would refuse it the script.

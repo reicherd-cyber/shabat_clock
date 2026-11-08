@@ -4,7 +4,7 @@
 // file is allowed, and the installer page (file://) loads it over https as well.
 (function () {
   var el = function (id) { return document.getElementById(id); };
-  var sel = el('sz'), w = el('w'), h = el('h'), pr = el('pr'), rot = el('rot');
+  var sel = el('sz'), w = el('w'), h = el('h'), pr = el('pr'), rot = el('rotchk');
   if (!sel || !w || !h || !pr || !rot) return;
   var saved = null;
   try { saved = JSON.parse(localStorage.getItem('stickerSize') || 'null'); } catch (e) {}

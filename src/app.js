@@ -113,6 +113,7 @@ export function createApp() {
   // would refuse it the script — this one file is explicitly cross-origin.
   app.get('/sticker.js', (req, res) => {
     res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.set('Cache-Control', 'no-cache'); // the page names it with a content hash; revalidate, never serve a stale copy
     res.type('application/javascript; charset=utf-8').sendFile(path.join(dist, 'sticker.js'));
   });
   app.use(express.static(dist));
