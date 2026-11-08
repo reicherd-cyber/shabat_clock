@@ -131,6 +131,13 @@ authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, 
     const reply = await shellyMqttRpc(claims.uid, 'Shelly.GetDeviceInfo', undefined, 4000);
     const mac = reply?.result?.mac ? String(reply.result.mac).toLowerCase().replace(/[^0-9a-f]/g, '') : null;
     const out = { connected: !!mac, mac_ok: mac === claims.uid };
+    // The sticker printed at the end of the install names our record when the
+    // unit is already a customer's device (pre-assigned); fresh inventory has none.
+    if (out.connected && out.mac_ok) {
+      const { registeredDevice } = await import('../../services/shellyOnboard.js');
+      const dev = await registeredDevice(claims.uid).catch(() => null);
+      out.device = dev ? { id: dev.id, name: dev.name } : null;
+    }
     // A verified connection means the file-installer flow completed for this
     // unit — log it in the prepared-devices inventory with what the unit said
     // about itself (model / firmware), never a bare MAC.
@@ -193,7 +200,15 @@ authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, onboardPrepareT
       const { shellyMqttRpc } = await import('../../mqtt/client.js');
       const reply = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 4000);
       const mac = reply?.result?.mac ? String(reply.result.mac).toLowerCase().replace(/[^0-9a-f]/g, '') : null;
-      return res.json({ connected: !!mac, mac_ok: mac === uid });
+      const out = { connected: !!mac, mac_ok: mac === uid };
+      // The sticker printed at the end of the install names our record when the
+      // unit is already a customer's device (pre-assigned); fresh inventory has none.
+      if (out.connected && out.mac_ok) {
+        const { registeredDevice } = await import('../../services/shellyOnboard.js');
+        const dev = await registeredDevice(uid).catch(() => null);
+        out.device = dev ? { id: dev.id, name: dev.name } : null;
+      }
+      return res.json(out);
     }
     // The row behind claims.jti decides whether this file may still mint (revoked /
     // expired), and a MAC that is a registered customer device is refused there.

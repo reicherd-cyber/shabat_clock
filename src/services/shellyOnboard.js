@@ -67,6 +67,11 @@ const MDNS_PREFIXES = [
   'shellypro4pm', 'shellypro2', 'shellypro1', 'shellypro2pm', 'shellypro1pm', 'shellypro3',
   'shellyplus2pm', 'shellyplus1pm', 'shellyplus1',
 ];
+// Printed on the unit's sticker (the mDNS word is what the page knows for sure).
+const MODEL_NAMES = {
+  shellypro4pm: 'Shelly Pro 4PM', shellypro2: 'Shelly Pro 2', shellypro1: 'Shelly Pro 1', shellypro2pm: 'Shelly Pro 2PM',
+  shellypro1pm: 'Shelly Pro 1PM', shellypro3: 'Shelly Pro 3', shellyplus2pm: 'Shelly Plus 2PM', shellyplus1pm: 'Shelly Plus 1PM', shellyplus1: 'Shelly Plus 1',
+};
 const mdnsCandidates = (uid) => MDNS_PREFIXES.map((p) => `${p}-${uid}.local`);
 
 // The RPC bodies are serialized server-side so the scripts stay dumb pipes — no
@@ -436,6 +441,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
 let UID=${inject.uid}, STATUS_URL=${inject.statusUrl}, B=${inject.bodies};
 const PREPARE_URL=${inject.prepareUrl}, BROKER=${inject.broker};
 let IP='', sntpIdx=0, PROVISIONED=false, DEVIP='', STA_IP='';
+let SERVER_DEV=null, ROUTER_OFFERED=false; // our record for the unit (from the server check) · the router check is on offer
 const ANDROID=/Android/i.test(navigator.userAgent); // no mDNS in Android Chrome — .local lookups fail there
 // Model word of the unit ('shellypro1'…), learned from its device id over the
 // hotspot or from the network name the installer typed. Known → the LAN lookup
@@ -463,6 +469,7 @@ function parseModel(v){const s=v.trim().toLowerCase();if(!s.includes('-'))return
 // then the rest of the list — a mistyped word ("ShellyPro4-…") must not lose a
 // unit the full walk would have found.
 const ALL_PREFIXES=${JSON.stringify(MDNS_PREFIXES)};
+const MODEL_NAMES=${JSON.stringify(MODEL_NAMES)};
 function knownModel(){return MODEL||parseModel($('mac').value)}
 function mdnsNames(uid){const m=knownModel();const list=m?[m].concat(ALL_PREFIXES.filter(p=>p!==m)):ALL_PREFIXES;return list.map(p=>p+'-'+uid+'.local')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
@@ -662,7 +669,7 @@ function offerSkip(){if(STAGE==='wifi'&&!PROVISIONED&&DEVIP)actionBtn(SKIP_LABEL
 const isHotspot=(ip)=>ip&&(ip===DEVIP||ip==='192.168.33.1');
 async function rpc(body){await fetch('http://'+IP+'/rpc',{method:'POST',mode:'no-cors',cache:'no-store',body,signal:AbortSignal.timeout(10000)})}
 async function waitBack(){log('ממתין שהמכשיר יופעל מחדש...');await sleep(6000);for(let i=0;i<30;i++){if(await ping(IP))return true;await sleep(2000)}return false}
-async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok)return 'ok';if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
+async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;return 'ok'}if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
 function actionBtn(txt,fn,alt){const b=document.createElement('button');b.textContent=txt;if(alt)b.className='alt';b.onclick=()=>{$('actions').innerHTML='';fn()};$('actions').appendChild(b)}
 // Router check: the router must not be powered THROUGH a Shelly channel — a real
 // install had the Wi-Fi router on a channel, and every off-command cut the house's
@@ -671,7 +678,60 @@ function actionBtn(txt,fn,alt){const b=document.createElement('button');b.textCo
 // with the device-local toggle_after timer, which restores power even if Wi-Fi
 // dies mid-test.
 async function quickConnected(){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();return !!r.connected}catch(e){return false}}
-function offerRouterCheck(){actionBtn('בדיקה: האם הנתב מחובר דרך המכשיר? (מומלץ)',routerCheck,true)}
+function offerRouterCheck(){ROUTER_OFFERED=true;actionBtn('בדיקה: האם הנתב מחובר דרך המכשיר? (מומלץ)',routerCheck,true);offerSticker()}
+// Sticker for the unit: the MAC is our key in the admin, plus the model and our
+// record (id · name) when the unit was pre-assigned. A preview window sized to the
+// label roll hands the page to the browser's print dialog — the Xprinter XP-365B
+// label printer (USB, Windows) prints it as-is. Page code is a template literal:
+// no backslashes and no "$" + "{" in here (see the invariant test).
+const STICKER_SIZES=[[40,30],[50,30],[58,40],[60,40]];
+function offerSticker(){actionBtn('הדפס מדבקה למכשיר (MAC)',printSticker,true)}
+function printSticker(){
+ const mac=parseMac($('mac').value).toUpperCase();
+ const m=knownModel();const info=INFO_BY_MAC[mac.toLowerCase()]||{};
+ const model=MODEL_NAMES[m]||(m?m.replace('shelly','Shelly '):'')||info.model||'Shelly';
+ const date=new Date().toLocaleDateString('he-IL');
+ const who=SERVER_DEV?'מזהה '+SERVER_DEV.id+(SERVER_DEV.name?' · '+SERVER_DEV.name:''):'';
+ const w=window.open('','_blank','width=560,height=440');
+ if(!w){verdict('הדפדפן חסם את חלון המדבקה — אפשרו חלונות קופצים לדף הזה ולחצו שוב.','warn');reofferDone();return}
+ let saved=null;try{saved=JSON.parse(localStorage.getItem('stickerSize')||'null')}catch(e){}
+ const sz=(saved&&saved.w&&saved.h)?saved:{w:50,h:30};
+ const opts=STICKER_SIZES.map(s=>'<option value="'+s[0]+'x'+s[1]+'">'+s[0]+'×'+s[1]+' מ"מ</option>').join('');
+ w.document.write('<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה '+esc(mac)+'</title><style>'
+  +'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
+  +'#ctl{padding:10px 12px;background:#fff;border-bottom:1px solid #cfc9bb;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:15px}'
+  +'#ctl input{width:58px;font-size:15px;padding:4px;text-align:center}#ctl select{font-size:15px;padding:4px}'
+  +'#ctl button{font-size:16px;padding:8px 16px;border:0;border-radius:8px;background:#b3654a;color:#fff}'
+  +'#hint{width:100%;color:#6b655a;font-size:13px}'
+  +'#wrap{padding:16px;display:flex;justify-content:center}'
+  +'#lab{background:#fff;box-sizing:border-box;overflow:hidden;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:.6mm;padding:1.5mm;outline:1px dashed #999}'
+  +'.brand{font-weight:700;white-space:nowrap}.mac{direction:ltr;font-family:Consolas,Menlo,monospace;font-weight:700;white-space:nowrap;line-height:1}'
+  +'.sub{direction:rtl;white-space:nowrap}.who{font-weight:700;white-space:nowrap}'
+  +'@media print{body{background:#fff}#ctl{display:none}#wrap{padding:0;display:block}#lab{outline:0}}'
+  +'</style><style id="pg"></style></head><body>'
+  +'<div id="ctl">גודל מדבקה: <select id="sz">'+opts+'<option value="custom">אחר</option></select>'
+  +' <input id="w" type="number" min="20" max="110" step="1" inputmode="numeric"> × <input id="h" type="number" min="10" max="200" step="1" inputmode="numeric"> מ"מ'
+  +' <button id="pr">הדפס</button>'
+  +'<div id="hint">בחלון ההדפסה: בחרו את מדפסת המדבקות (Xprinter), שוליים "ללא", וגודל נייר שתואם למדבקה.</div></div>'
+  +'<div id="wrap"><div id="lab"><div class="brand">TelTech · שעון שבת</div><div class="mac">'+esc(mac)+'</div>'
+  +'<div class="sub">'+esc(model)+' · '+esc(date)+'</div>'+(who?'<div class="who">'+esc(who)+'</div>':'')+'</div></div></body></html>');
+ w.document.close();
+ const d=w.document,el=(id)=>d.getElementById(id);
+ function apply(){
+  const W=Math.max(20,Math.min(110,Number(el('w').value)||50)),H=Math.max(10,Math.min(200,Number(el('h').value)||30));
+  const macMm=Math.min((W-4)/7.6,H*0.26); // 12 monospace glyphs ≈ 0.62em each fill the width; never over a quarter of the height
+  el('pg').textContent='@page{size:'+W+'mm '+H+'mm;margin:0}#lab{width:'+W+'mm;height:'+H+'mm}.mac{font-size:'+macMm.toFixed(2)+'mm}.brand{font-size:'+(macMm*0.5).toFixed(2)+'mm}.sub,.who{font-size:'+(macMm*0.45).toFixed(2)+'mm}';
+  try{localStorage.setItem('stickerSize',JSON.stringify({w:W,h:H}))}catch(e){}
+ }
+ el('w').value=sz.w;el('h').value=sz.h;
+ const preset=STICKER_SIZES.find(s=>s[0]===sz.w&&s[1]===sz.h);el('sz').value=preset?preset[0]+'x'+preset[1]:'custom';
+ el('sz').onchange=()=>{const v=el('sz').value;if(v!=='custom'){const p=v.split('x');el('w').value=p[0];el('h').value=p[1]}apply()};
+ el('w').oninput=el('h').oninput=()=>{el('sz').value='custom';apply()};
+ el('pr').onclick=()=>{apply();w.focus();w.print()};
+ apply();
+ reofferDone();
+}
+function reofferDone(){if(ROUTER_OFFERED)offerRouterCheck();else offerSticker()}
 async function routerCheck(){
  log('בודק אילו ערוצים דולקים...');
  let ch=null;
@@ -689,10 +749,11 @@ async function routerCheck(){
    const until=Date.now()+180000;let back=false;
    while(Date.now()<until){await sleep(5000);if(await quickConnected()){back=true;break}}
    verdict('נמצא: הנתב (ראוטר) מקבל חשמל דרך ערוץ '+c.relay_no+'! חברו את הנתב לחשמל ישיר (לא דרך המכשיר) — אחרת כל כיבוי של הערוץ ינתק את הבית מהאינטרנט ואת המכשיר מהשרת.'+(back?'':'<br>הרשת עדיין לא חזרה — בדקו שהנתב נדלק.'),'bad');
-   return}
+   offerSticker();return}
   log('ערוץ '+c.relay_no+' תקין — הנתב לא שם.','ok');
  }
  verdict('מצוין — הנתב אינו מחובר דרך אף ערוץ דולק ('+on.map(c=>c.relay_no).join(', ')+'). המכשיר מוכן.','ok');
+ offerSticker();
 }
 let finTries=0;
 async function finish(){
@@ -933,12 +994,12 @@ async function stageComplete(){
   const mac=parseMac($('mac').value);
   let ok=false;
   for(let i=0;i<12;i++){
-   try{const r=await(await fetch(PREPARE_URL+'&mac='+mac+'&check=1',{cache:'no-store',signal:AbortSignal.timeout(6000)})).json();if(r.connected&&r.mac_ok){ok=true;break}}
+   try{const r=await(await fetch(PREPARE_URL+'&mac='+mac+'&check=1',{cache:'no-store',signal:AbortSignal.timeout(6000)})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;ok=true;break}}
    catch(e){log('אין אינטרנט כרגע — ודאו שהטלפון על ה-Wi-Fi הביתי...','warn')}
    if(i%4===3)log('עדיין בודק... ('+(i+1)+'/12)','warn');
    await sleep(5000);
   }
-  if(ok){verdict('סיימתם! המכשיר מחובר לשרת. אפשר לשייך אותו ללקוח במסך הניהול.','ok');STAGE='done';$('go').textContent='סיום';return}
+  if(ok){verdict('סיימתם! המכשיר מחובר לשרת. אפשר לשייך אותו ללקוח במסך הניהול.','ok');STAGE='done';$('go').textContent='סיום';offerSticker();return}
   log('המכשיר לא מצליח להתחבר עם ההגדרות הקיימות — מגדיר אותו מחדש...','warn');
   PROVISIONED=false;
  }

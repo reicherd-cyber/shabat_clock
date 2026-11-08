@@ -217,3 +217,15 @@ test('installer: the clock is settled before the first verified connection, on t
   const links = onboard.slice(onboard.indexOf('export async function prepLinks'), onboard.indexOf('export async function prepStatus'));
   assert.ok(links.includes('Sys.SetConfig?config='), 'the home-prep links set a time server');
 });
+
+test('installer: a sticker (MAC · model · our record when pre-assigned) is on offer from every verified-connection path, and its page code survives the template literal', () => {
+  const onboard = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
+  const auth = readFileSync(new URL('../src/api/routes/auth.js', import.meta.url), 'utf8');
+  assert.ok(onboard.includes('function printSticker('));
+  assert.ok(onboard.includes("STAGE='done';$('go').textContent='סיום';offerSticker();"), 'the pre-provisioned done path offers the sticker');
+  assert.ok(/function offerRouterCheck\(\)\{ROUTER_OFFERED=true;[^\n]*offerSticker\(\)\}/.test(onboard), 'the verified path offers the sticker next to the router check');
+  assert.equal((onboard.match(/SERVER_DEV=r\.device\|\|null/g) || []).length, 2, 'both server checks keep our record for the sticker');
+  assert.equal((auth.match(/out\.device = dev \? \{ id: dev\.id, name: dev\.name \} : null/g) || []).length, 2, 'both status endpoints name our record');
+  const code = onboard.slice(onboard.indexOf('function printSticker('), onboard.indexOf('function reofferDone('));
+  assert.ok(code.length > 1000 && !code.includes('\\') && !code.includes('$' + '{'), 'no backslashes or interpolations inside the sticker code');
+});
