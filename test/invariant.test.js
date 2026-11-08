@@ -240,6 +240,9 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.ok(!/<script>/.test(stickerCode) && stickerCode.includes("/sticker.js\"></script>"), 'sticker controls come from /sticker.js, not an inline script');
   assert.ok(readFileSync(new URL('../src/web/public/sticker.js', import.meta.url), 'utf8').includes("getItem('stickerSize')"), 'the static controls script exists');
   assert.ok(onboard.includes("base=new URL(PREPARE_URL||STATUS_URL).origin"), 'the installer page points the script at our server');
+  // The installer page is a foreign origin (file://): helmet's CORP same-origin would refuse it the script.
+  const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  assert.ok(/app\.get\('\/sticker\.js',[\s\S]{0,200}'Cross-Origin-Resource-Policy', 'cross-origin'/.test(app), '/sticker.js is served cross-origin');
   assert.ok(onboard.includes('export async function stickerFor(') && onboard.includes("'2805a5' + crypto.randomBytes(3)"), 'admin stickers by MAC, test print with a random Shelly MAC');
   const admin = readFileSync(new URL('../src/api/routes/admin.js', import.meta.url), 'utf8');
   assert.ok(admin.includes("adminRouter.get('/shelly/sticker'"), 'admin route');
