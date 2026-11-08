@@ -90,33 +90,41 @@ const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;
 // "</script" (or "<!--") in the data can end the page's script.
 const js = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
 const STICKER_SIZES = [[40, 30], [50, 30], [58, 40], [60, 40]];
-const stickerSizeCss = (W, H) => {
+// Label geometry (twin of apply() in src/web/public/sticker.js — keep in step). The
+// label is always laid out W×H; "rot" turns the whole label 90° inside an H×W page,
+// for a driver whose paper form is reported the other way round (a label printer
+// prints the page as given — the browser's landscape flip ends up across the roll).
+const stickerSizeCss = (W, H, rot) => {
   const macMm = Math.min((W - 4) / 7.6, H * 0.21);
-  return '@page{size:' + W + 'mm ' + H + 'mm;margin:0}#lab{width:' + W + 'mm;height:' + H + 'mm}.mac{font-size:' + macMm.toFixed(2) + 'mm}.sub,.who{font-size:' + (macMm * 0.45).toFixed(2) + 'mm}';
+  const page = rot ? H + 'mm ' + W + 'mm' : W + 'mm ' + H + 'mm';
+  return '@page{size:' + page + ';margin:0}#rot{width:' + page.replace(' ', ';height:') + '}#lab{width:' + W + 'mm;height:' + H + 'mm'
+    + (rot ? ';transform:rotate(90deg) translateY(-100%)' : '') + '}.mac{font-size:' + macMm.toFixed(2) + 'mm}.sub,.who{font-size:' + (macMm * 0.45).toFixed(2) + 'mm}';
 };
 export function stickerHtml({ mac, model, date, who, base }) {
   const opts = STICKER_SIZES.map((s) => '<option value="' + s[0] + 'x' + s[1] + '">' + s[0] + '×' + s[1] + ' מ"מ</option>').join('');
   return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
     + 'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
     + '#ctl{padding:10px 12px;background:#fff;border-bottom:1px solid #cfc9bb;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:15px}'
-    + '#ctl input{width:58px;font-size:15px;padding:4px;text-align:center}#ctl select{font-size:15px;padding:4px}'
+    + '#ctl input[type=number]{width:58px;font-size:15px;padding:4px;text-align:center}#ctl select{font-size:15px;padding:4px}#ctl label{display:inline-flex;align-items:center;gap:4px}'
     + '#ctl button{font-size:16px;padding:8px 16px;border:0;border-radius:8px;background:#b3654a;color:#fff}'
     + '#hint{width:100%;color:#6b655a;font-size:13px}'
     + '#wrap{padding:16px;display:flex;justify-content:center}'
-    + '#lab{background:#fff;box-sizing:border-box;overflow:hidden;display:flex;flex-direction:column;outline:1px dashed #999}'
+    + '#rot{position:relative;background:#fff;outline:1px dashed #999;overflow:hidden}'
+    + '#lab{position:absolute;top:0;left:0;transform-origin:top left;background:#fff;box-sizing:border-box;overflow:hidden;display:flex;flex-direction:column}'
     + '#logo{flex:0 0 50%;box-sizing:border-box;padding:1.2mm 2mm .4mm;display:flex;align-items:center;justify-content:center;min-height:0}'
     + '#logo img{max-width:100%;max-height:100%;object-fit:contain}'
     + '#txt{flex:0 0 50%;box-sizing:border-box;padding:0 1.5mm 1mm;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:.5mm;min-height:0}'
     + '.mac{direction:ltr;font-family:Consolas,Menlo,monospace;font-weight:700;white-space:nowrap;line-height:1}'
     + '.sub{direction:rtl;white-space:nowrap}.who{font-weight:700;white-space:nowrap}.who:empty{display:none}'
-    + '@media print{body{background:#fff}#ctl{display:none}#wrap{padding:0;display:block}#lab{outline:0}}'
-    + '</style><style id="pg">' + stickerSizeCss(50, 30) + '</style></head><body>'
+    + '@media print{body{background:#fff}#ctl{display:none}#wrap{padding:0;display:block}#rot{outline:0}}'
+    + '</style><style id="pg">' + stickerSizeCss(50, 30, false) + '</style></head><body>'
     + '<div id="ctl">גודל מדבקה: <select id="sz">' + opts + '<option value="custom">אחר</option></select>'
     + ' <input id="w" type="number" min="20" max="110" step="1" inputmode="numeric"> × <input id="h" type="number" min="10" max="200" step="1" inputmode="numeric"> מ"מ'
+    + ' <label><input type="checkbox" id="rot"> סובב 90°</label>'
     + ' <button id="pr">הדפס</button>'
-    + '<div id="hint">בחלון ההדפסה: בחרו את מדפסת המדבקות (Xprinter), שוליים "ללא", וגודל נייר שתואם למדבקה.</div></div>'
-    + '<div id="wrap"><div id="lab"><div id="logo"><img alt="זימנא" src="' + LOGO_DATA_URI + '"></div>'
-    + '<div id="txt"><div class="mac">' + escHtml(mac) + '</div><div class="sub">' + escHtml(model) + ' · ' + escHtml(date) + '</div><div class="who">' + escHtml(who) + '</div></div></div></div>'
+    + '<div id="hint">בחלון ההדפסה: מדפסת המדבקות (Xprinter), שוליים "ללא" (מסיר גם את הכותרות), גודל נייר = גודל המדבקה (מגדירים פעם אחת בהעדפות המדפסת ב-Windows). יצא מסובב לרוחב הגליל? סמנו "סובב 90°".</div></div>'
+    + '<div id="wrap"><div id="rot"><div id="lab"><div id="logo"><img alt="זימנא" src="' + LOGO_DATA_URI + '"></div>'
+    + '<div id="txt"><div class="mac">' + escHtml(mac) + '</div><div class="sub">' + escHtml(model) + ' · ' + escHtml(date) + '</div><div class="who">' + escHtml(who) + '</div></div></div></div></div>'
     + '<script src="' + escHtml(String(base || '').replace(/\/+$/, '')) + '/sticker.js"></script></body></html>';
 }
 // Our record for a unit's sticker: id · name of the devices row that holds (or held)
