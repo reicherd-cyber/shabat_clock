@@ -89,7 +89,8 @@ const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;
 // A JS string literal safe inside a <script> body: every "<" becomes <, so no
 // "</script" (or "<!--") in the data can end the page's script.
 const js = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
-const STICKER_SIZES = [[40, 30], [50, 30], [58, 40], [60, 40]];
+// The user's roll (measured from the driver stock they defined, 2026-11-09) comes first.
+const STICKER_SIZES = [[77.5, 50], [50, 30], [40, 30], [58, 40], [60, 40]];
 // Label geometry (twin of apply() in src/web/public/sticker.js — keep in step). The
 // label is always laid out W×H; "rot" turns the whole label 90° inside an H×W page,
 // for a driver whose paper form is reported the other way round (a label printer
@@ -117,9 +118,9 @@ export function stickerHtml({ mac, model, date, who, base }) {
     + '.mac{direction:ltr;font-family:Consolas,Menlo,monospace;font-weight:700;white-space:nowrap;line-height:1}'
     + '.sub{direction:rtl;white-space:nowrap}.who{font-weight:700;white-space:nowrap}.who:empty{display:none}'
     + '@media print{body{background:#fff}#ctl{display:none}#wrap{padding:0;display:block}#rot{outline:0}}'
-    + '</style><style id="pg">' + stickerSizeCss(50, 30, false) + '</style></head><body>'
+    + '</style><style id="pg">' + stickerSizeCss(77.5, 50, false) + '</style></head><body>'
     + '<div id="ctl">גודל מדבקה: <select id="sz">' + opts + '<option value="custom">אחר</option></select>'
-    + ' <input id="w" type="number" min="20" max="110" step="1" inputmode="numeric"> × <input id="h" type="number" min="10" max="200" step="1" inputmode="numeric"> מ"מ'
+    + ' <input id="w" type="number" min="20" max="110" step="0.5" inputmode="decimal"> × <input id="h" type="number" min="10" max="200" step="0.5" inputmode="decimal"> מ"מ'
     + ' <label><input type="checkbox" id="rot"> סובב 90°</label>'
     + ' <button id="pr">הדפס</button>'
     + '<div id="hint">בחלון ההדפסה: מדפסת המדבקות (Xprinter), שוליים "ללא" (מסיר גם את הכותרות), גודל נייר = גודל המדבקה (מגדירים פעם אחת בהעדפות המדפסת ב-Windows). יצא מסובב לרוחב הגליל? סמנו "סובב 90°".</div></div>'
