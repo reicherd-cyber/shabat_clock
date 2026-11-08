@@ -156,9 +156,11 @@ export default function Devices() {
     const w = window.open('', '_blank', 'width=560,height=560');
     run(async () => {
       if (!w) throw new Error('הדפדפן חסם את חלון המדבקה — אפשרו חלונות קופצים לאתר ונסו שוב');
-      const { html } = await adminApi.get(`/shelly/sticker?${new URLSearchParams(params)}`);
-      w.document.write(html); w.document.close();
-    });
+      try {
+        const { html } = await adminApi.get(`/shelly/sticker?${new URLSearchParams(params)}`);
+        w.document.write(html); w.document.close();
+      } catch (e) { w.close(); throw e; }
+    }).catch(() => {}); // run() has shown the error
   };
   const downloadUniversal = () => run(async () => {
     const { script_html, audience, valid_days } = await adminApi.post('/shelly/universal-installer', installerForm);

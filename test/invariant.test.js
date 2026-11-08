@@ -225,12 +225,21 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.ok(onboard.includes("STAGE='done';$('go').textContent='סיום';offerSticker();"), 'the pre-provisioned done path offers the sticker');
   assert.ok(/function offerRouterCheck\(\)\{ROUTER_OFFERED=true;[^\n]*offerSticker\(\)\}/.test(onboard), 'the verified path offers the sticker next to the router check');
   assert.equal((onboard.match(/SERVER_DEV=r\.device\|\|null/g) || []).length, 2, 'both server checks keep our record for the sticker');
-  assert.equal((auth.match(/out\.device = dev \? \{ id: dev\.id, name: dev\.name \} : null/g) || []).length, 2, 'both status endpoints name our record');
+  // Our record rides only the per-device token (bound to one uid); the universal file's check path stays customer-data free.
+  assert.ok(auth.includes('out.device = await stickerRecord(claims.uid)'), 'the per-device status names our record');
+  assert.ok(!auth.includes('stickerRecord(uid)') && !auth.includes('registeredDevice(uid)'), 'the universal check path exposes no customer record');
+  assert.equal((auth.match(/model_name: |out\.model_name = /g) || []).length, 2, 'both paths name the model by the same server rule');
+  assert.ok(onboard.includes("import { shellyModelName } from './shelly-model.js'") && !/^export function shellyModelName/m.test(onboard), 'one model-name rule, in shelly-model.js');
+  assert.ok(/ORDER BY is_enabled DESC, id DESC LIMIT 1/.test(onboard), 'the sticker record lookup covers pre-assigned and removed units');
   const code = onboard.slice(onboard.indexOf('function printSticker('), onboard.indexOf('function reofferDone('));
   assert.ok(code.length > 300 && !code.includes('\\') && !code.includes('$' + '{'), 'no backslashes or interpolations inside the sticker code');
   // One sticker page for every path: the installer file gets it as a template (script-safe), the admin by MAC.
-  assert.ok(onboard.includes("const STICKER_TPL=$" + "{jsStr(stickerHtml({ mac: '__MAC__'"), 'the installer page embeds the server-rendered sticker template');
-  assert.ok(/const jsStr = \(s\) => JSON\.stringify\(s\)\.replace\(\/<\\\/\/g, '<\\\\\/'\)/.test(onboard), 'the embedded template cannot close the page script');
+  assert.ok(onboard.includes("const STICKER_TPL=$" + "{js(stickerHtml({ mac: '__MAC__'") && !onboard.includes('jsStr'), 'the installer page embeds the sticker template through the one script-safe encoder');
+  // The admin window inherits the site's CSP (script-src 'self'): the controls are a same-origin file, never inline.
+  const stickerCode = onboard.slice(onboard.indexOf('export function stickerHtml('), onboard.indexOf('export async function stickerFor('));
+  assert.ok(!/<script>/.test(stickerCode) && stickerCode.includes("/sticker.js\"></script>"), 'sticker controls come from /sticker.js, not an inline script');
+  assert.ok(readFileSync(new URL('../src/web/public/sticker.js', import.meta.url), 'utf8').includes("getItem('stickerSize')"), 'the static controls script exists');
+  assert.ok(onboard.includes("base=new URL(PREPARE_URL||STATUS_URL).origin"), 'the installer page points the script at our server');
   assert.ok(onboard.includes('export async function stickerFor(') && onboard.includes("'2805a5' + crypto.randomBytes(3)"), 'admin stickers by MAC, test print with a random Shelly MAC');
   const admin = readFileSync(new URL('../src/api/routes/admin.js', import.meta.url), 'utf8');
   assert.ok(admin.includes("adminRouter.get('/shelly/sticker'"), 'admin route');

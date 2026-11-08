@@ -12,6 +12,7 @@ import { env } from '../config/env.js';
 import { errors } from '../config/errors.js';
 import { query } from '../db/pool.js';
 import { mosquittoPasswdHash, writeBrokerPasswdEntry } from './devices.js';
+import { shellyModelName } from './shelly-model.js';
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const generatePassword = (len = 24) =>
@@ -77,21 +78,23 @@ const MODEL_NAMES = {
 // One page for every path: the top half is the זימנא logo (black on white — the
 // thermal printer knows no colour), the bottom half the MAC (our key in the admin),
 // the model and the date, plus our record (id · name) when the unit is a customer's.
-// Size controls live inside the page, so the installer page (file://), the admin and
-// a browser tab all print it the same way: through the print dialog, where the
-// Xprinter XP-365B label printer takes the @page size as the label.
+// The size controls are a static script on OUR origin (src/web/public/sticker.js):
+// a window opened from the admin inherits the site's CSP (script-src 'self'), which
+// kills inline scripts, so the page names the script by absolute URL — the installer
+// page (file://) loads it over https too. Without it the page still prints at the
+// built-in 50×30 mm. Printing is the browser's dialog, where the Xprinter XP-365B
+// label printer takes the @page size as the label.
 const LOGO_DATA_URI = 'data:image/png;base64,' + fs.readFileSync(new URL('./assets/zimna-logo-print.png', import.meta.url)).toString('base64');
 const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-// A JS string literal safe inside a <script> body (a "</script" in the data must not end the page's script).
-const jsStr = (s) => JSON.stringify(s).replace(/<\//g, '<\\/');
+// A JS string literal safe inside a <script> body: every "<" becomes <, so no
+// "</script" (or "<!--") in the data can end the page's script.
+const js = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
 const STICKER_SIZES = [[40, 30], [50, 30], [58, 40], [60, 40]];
-export function shellyModelName(code) {
-  const p = mdnsPrefixForModel(code);
-  if (p && MODEL_NAMES[p]) return MODEL_NAMES[p];
-  const m = /^S([NP])SW-\d?(\d\d)([PX])/.exec(String(code || '').toUpperCase());
-  return m ? 'Shelly ' + (m[1] === 'P' ? 'Pro' : 'Plus') + ' ' + Number(m[2]) + (m[3] === 'P' ? 'PM' : '') : '';
-}
-export function stickerHtml({ mac, model, date, who }) {
+const stickerSizeCss = (W, H) => {
+  const macMm = Math.min((W - 4) / 7.6, H * 0.21);
+  return '@page{size:' + W + 'mm ' + H + 'mm;margin:0}#lab{width:' + W + 'mm;height:' + H + 'mm}.mac{font-size:' + macMm.toFixed(2) + 'mm}.sub,.who{font-size:' + (macMm * 0.45).toFixed(2) + 'mm}';
+};
+export function stickerHtml({ mac, model, date, who, base }) {
   const opts = STICKER_SIZES.map((s) => '<option value="' + s[0] + 'x' + s[1] + '">' + s[0] + '×' + s[1] + ' מ"מ</option>').join('');
   return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
     + 'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
@@ -107,39 +110,36 @@ export function stickerHtml({ mac, model, date, who }) {
     + '.mac{direction:ltr;font-family:Consolas,Menlo,monospace;font-weight:700;white-space:nowrap;line-height:1}'
     + '.sub{direction:rtl;white-space:nowrap}.who{font-weight:700;white-space:nowrap}.who:empty{display:none}'
     + '@media print{body{background:#fff}#ctl{display:none}#wrap{padding:0;display:block}#lab{outline:0}}'
-    + '</style><style id="pg"></style></head><body>'
+    + '</style><style id="pg">' + stickerSizeCss(50, 30) + '</style></head><body>'
     + '<div id="ctl">גודל מדבקה: <select id="sz">' + opts + '<option value="custom">אחר</option></select>'
     + ' <input id="w" type="number" min="20" max="110" step="1" inputmode="numeric"> × <input id="h" type="number" min="10" max="200" step="1" inputmode="numeric"> מ"מ'
     + ' <button id="pr">הדפס</button>'
     + '<div id="hint">בחלון ההדפסה: בחרו את מדפסת המדבקות (Xprinter), שוליים "ללא", וגודל נייר שתואם למדבקה.</div></div>'
     + '<div id="wrap"><div id="lab"><div id="logo"><img alt="זימנא" src="' + LOGO_DATA_URI + '"></div>'
     + '<div id="txt"><div class="mac">' + escHtml(mac) + '</div><div class="sub">' + escHtml(model) + ' · ' + escHtml(date) + '</div><div class="who">' + escHtml(who) + '</div></div></div></div>'
-    + '<script>(function(){'
-    + 'var el=function(id){return document.getElementById(id)};var sel=el("sz");'
-    + 'var saved=null;try{saved=JSON.parse(localStorage.getItem("stickerSize")||"null")}catch(e){}'
-    + 'var sz=(saved&&saved.w&&saved.h)?saved:{w:50,h:30};'
-    + 'function apply(){var W=Math.max(20,Math.min(110,Number(el("w").value)||50)),H=Math.max(10,Math.min(200,Number(el("h").value)||30));'
-    + 'var macMm=Math.min((W-4)/7.6,H*0.21);' // 12 monospace glyphs ≈ 0.62em each fill the width; the bottom half must also hold two small lines
-    + 'el("pg").textContent="@page{size:"+W+"mm "+H+"mm;margin:0}#lab{width:"+W+"mm;height:"+H+"mm}.mac{font-size:"+macMm.toFixed(2)+"mm}.sub,.who{font-size:"+(macMm*0.45).toFixed(2)+"mm}";'
-    + 'try{localStorage.setItem("stickerSize",JSON.stringify({w:W,h:H}))}catch(e){}}'
-    + 'el("w").value=sz.w;el("h").value=sz.h;var pv=sz.w+"x"+sz.h;sel.value=pv;if(sel.value!==pv)sel.value="custom";'
-    + 'sel.onchange=function(){var v=sel.value;if(v!=="custom"){var p=v.split("x");el("w").value=p[0];el("h").value=p[1]}apply()};'
-    + 'el("w").oninput=el("h").oninput=function(){sel.value="custom";apply()};'
-    + 'el("pr").onclick=function(){apply();window.focus();window.print()};apply();'
-    + '})();</script></body></html>';
+    + '<script src="' + escHtml(String(base || '').replace(/\/+$/, '')) + '/sticker.js"></script></body></html>';
+}
+// Our record for a unit's sticker: id · name of the devices row that holds (or held)
+// this MAC — pre-assigned units (first_contact_pending) and removed ones included,
+// unlike registeredDevice(), which answers "is this a live customer unit".
+export async function stickerRecord(uid) {
+  const [row] = await query(
+    `SELECT id, name FROM devices WHERE device_uid = ? OR removed_uid = ?
+     ORDER BY is_enabled DESC, id DESC LIMIT 1`, [uid, uid]);
+  return row ? { id: row.id, name: row.name } : null;
 }
 // Admin: a sticker for any unit by MAC — inventory rows, customer devices, or a
 // test print (random MAC with a Shelly prefix) to dial in the label roll.
-export async function stickerFor({ mac, test }) {
+export async function stickerFor({ mac, test, base }) {
   let uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   if (test && uid.length !== 12) uid = '2805a5' + crypto.randomBytes(3).toString('hex');
   if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
-  const dev = test ? null : await registeredDevice(uid);
-  const [prep] = test ? [null] : await query('SELECT model FROM prepared_devices WHERE mac = ?', [uid]);
-  const model = shellyModelName(prep?.model) || (prep?.model ? String(prep.model) : 'Shelly');
+  const [dev, [prep]] = test ? [null, [null]]
+    : await Promise.all([stickerRecord(uid), query('SELECT model FROM prepared_devices WHERE mac = ?', [uid])]);
+  const model = shellyModelName(prep?.model) || 'Shelly';
   const date = new Date().toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
   const who = test ? 'מדבקת בדיקה' : dev ? 'מזהה ' + dev.id + (dev.name ? ' · ' + dev.name : '') : '';
-  return stickerHtml({ mac: uid.toUpperCase(), model, date, who });
+  return stickerHtml({ mac: uid.toUpperCase(), model, date, who, base });
 }
 const mdnsCandidates = (uid) => MDNS_PREFIXES.map((p) => `${p}-${uid}.local`);
 
@@ -386,7 +386,6 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
   // beyond '); JSON.stringify once more makes them safe literals.
   // JSON.stringify does NOT escape '<', so a value containing "</script>" would
   // break out of the inline script — escape it into a < literal.
-  const js = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
   const inject = {
     uid: js(uid || ''),
     statusUrl: js(statusUrl || ''),
@@ -510,7 +509,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
 let UID=${inject.uid}, STATUS_URL=${inject.statusUrl}, B=${inject.bodies};
 const PREPARE_URL=${inject.prepareUrl}, BROKER=${inject.broker};
 let IP='', sntpIdx=0, PROVISIONED=false, DEVIP='', STA_IP='';
-let SERVER_DEV=null, ROUTER_OFFERED=false; // our record for the unit (from the server check) · the router check is on offer
+let SERVER_DEV=null, SERVER_MODEL='', ROUTER_OFFERED=false; // our record + model name for the unit (from the server check) · the router check is on offer
 const ANDROID=/Android/i.test(navigator.userAgent); // no mDNS in Android Chrome — .local lookups fail there
 // Model word of the unit ('shellypro1'…), learned from its device id over the
 // hotspot or from the network name the installer typed. Known → the LAN lookup
@@ -539,7 +538,7 @@ function parseModel(v){const s=v.trim().toLowerCase();if(!s.includes('-'))return
 // unit the full walk would have found.
 const ALL_PREFIXES=${JSON.stringify(MDNS_PREFIXES)};
 const MODEL_NAMES=${JSON.stringify(MODEL_NAMES)};
-const STICKER_TPL=${jsStr(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__' }))};
+const STICKER_TPL=${js(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__', base: '__BASE__' }))};
 function knownModel(){return MODEL||parseModel($('mac').value)}
 function mdnsNames(uid){const m=knownModel();const list=m?[m].concat(ALL_PREFIXES.filter(p=>p!==m)):ALL_PREFIXES;return list.map(p=>p+'-'+uid+'.local')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
@@ -739,7 +738,7 @@ function offerSkip(){if(STAGE==='wifi'&&!PROVISIONED&&DEVIP)actionBtn(SKIP_LABEL
 const isHotspot=(ip)=>ip&&(ip===DEVIP||ip==='192.168.33.1');
 async function rpc(body){await fetch('http://'+IP+'/rpc',{method:'POST',mode:'no-cors',cache:'no-store',body,signal:AbortSignal.timeout(10000)})}
 async function waitBack(){log('ממתין שהמכשיר יופעל מחדש...');await sleep(6000);for(let i=0;i<30;i++){if(await ping(IP))return true;await sleep(2000)}return false}
-async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;return 'ok'}if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
+async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;SERVER_MODEL=r.model_name||'';return 'ok'}if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
 function actionBtn(txt,fn,alt){const b=document.createElement('button');b.textContent=txt;if(alt)b.className='alt';b.onclick=()=>{$('actions').innerHTML='';fn()};$('actions').appendChild(b)}
 // Router check: the router must not be powered THROUGH a Shelly channel — a real
 // install had the Wi-Fi router on a channel, and every off-command cut the house's
@@ -756,13 +755,13 @@ function offerRouterCheck(){ROUTER_OFFERED=true;actionBtn('בדיקה: האם ה
 function offerSticker(){actionBtn('הדפס מדבקה למכשיר (MAC)',printSticker,true)}
 function printSticker(){
  const mac=parseMac($('mac').value).toUpperCase();
- const m=knownModel();const info=INFO_BY_MAC[mac.toLowerCase()]||{};
- const model=MODEL_NAMES[m]||(m?m.replace('shelly','Shelly '):'')||info.model||'Shelly';
+ const model=SERVER_MODEL||MODEL_NAMES[knownModel()]||'Shelly';
  const date=new Date().toLocaleDateString('he-IL');
  const who=SERVER_DEV?'מזהה '+SERVER_DEV.id+(SERVER_DEV.name?' · '+SERVER_DEV.name:''):'';
  const w=window.open('','_blank','width=560,height=560');
- if(!w){verdict('הדפדפן חסם את חלון המדבקה — אפשרו חלונות קופצים לדף הזה ולחצו שוב.','warn');reofferDone();return}
- const html=STICKER_TPL.split('__MAC__').join(esc(mac)).split('__MODEL__').join(esc(model)).split('__DATE__').join(esc(date)).split('__WHO__').join(esc(who));
+ if(!w){log('הדפדפן חסם את חלון המדבקה — אפשרו חלונות קופצים לדף הזה ולחצו שוב.','warn');reofferDone();return}
+ let base='';try{base=new URL(PREPARE_URL||STATUS_URL).origin}catch(e){}
+ const html=STICKER_TPL.split('__MAC__').join(esc(mac)).split('__MODEL__').join(esc(model)).split('__DATE__').join(esc(date)).split('__WHO__').join(esc(who)).split('__BASE__').join(esc(base));
  w.document.write(html);w.document.close();
  reofferDone();
 }
@@ -784,11 +783,11 @@ async function routerCheck(){
    const until=Date.now()+180000;let back=false;
    while(Date.now()<until){await sleep(5000);if(await quickConnected()){back=true;break}}
    verdict('נמצא: הנתב (ראוטר) מקבל חשמל דרך ערוץ '+c.relay_no+'! חברו את הנתב לחשמל ישיר (לא דרך המכשיר) — אחרת כל כיבוי של הערוץ ינתק את הבית מהאינטרנט ואת המכשיר מהשרת.'+(back?'':'<br>הרשת עדיין לא חזרה — בדקו שהנתב נדלק.'),'bad');
-   offerSticker();return}
+   ROUTER_OFFERED=false;offerSticker();return}
   log('ערוץ '+c.relay_no+' תקין — הנתב לא שם.','ok');
  }
  verdict('מצוין — הנתב אינו מחובר דרך אף ערוץ דולק ('+on.map(c=>c.relay_no).join(', ')+'). המכשיר מוכן.','ok');
- offerSticker();
+ ROUTER_OFFERED=false;offerSticker();
 }
 let finTries=0;
 async function finish(){
@@ -1029,7 +1028,7 @@ async function stageComplete(){
   const mac=parseMac($('mac').value);
   let ok=false;
   for(let i=0;i<12;i++){
-   try{const r=await(await fetch(PREPARE_URL+'&mac='+mac+'&check=1',{cache:'no-store',signal:AbortSignal.timeout(6000)})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;ok=true;break}}
+   try{const r=await(await fetch(PREPARE_URL+'&mac='+mac+'&check=1',{cache:'no-store',signal:AbortSignal.timeout(6000)})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;SERVER_MODEL=r.model_name||'';ok=true;break}}
    catch(e){log('אין אינטרנט כרגע — ודאו שהטלפון על ה-Wi-Fi הביתי...','warn')}
    if(i%4===3)log('עדיין בודק... ('+(i+1)+'/12)','warn');
    await sleep(5000);
