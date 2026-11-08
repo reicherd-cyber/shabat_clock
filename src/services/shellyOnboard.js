@@ -110,7 +110,7 @@ export function stickerHtml({ mac, model, date, who, base }) {
   return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
     + 'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
     + '#ctl{padding:10px 12px;background:#fff;border-bottom:1px solid #cfc9bb;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:15px}'
-    + '#ctl input[type=number]{width:58px;font-size:15px;padding:4px;text-align:center}#ctl select{font-size:15px;padding:4px}#ctl label{display:inline-flex;align-items:center;gap:4px}'
+    + '#ctl input[type=number]{width:58px;font-size:15px;padding:4px;text-align:center}#ctl select{font-size:15px;padding:4px}#ctl label{display:inline-flex;align-items:center;gap:4px}#ctl .adj{color:#6b655a}'
     + '#ctl button{font-size:16px;padding:8px 16px;border:0;border-radius:8px;background:#b3654a;color:#fff}'
     + '#hint{width:100%;color:#6b655a;font-size:13px}'
     + '#wrap{padding:16px;display:flex;justify-content:center}'
@@ -126,8 +126,11 @@ export function stickerHtml({ mac, model, date, who, base }) {
     + '<div id="ctl">גודל מדבקה: <select id="sz">' + opts + '<option value="custom">אחר</option></select>'
     + ' <input id="w" type="number" min="20" max="110" step="0.5" inputmode="decimal"> × <input id="h" type="number" min="10" max="200" step="0.5" inputmode="decimal"> מ"מ'
     + ' <label><input type="checkbox" id="rotchk"> סובב 90°</label>'
+    // Fine position: the driver decides where the label sits inside its stock (liner edges,
+    // sensor offset) — a half-millimetre nudge, remembered, lands every sticker centred.
+    + ' <span class="adj">הזזה: ימינה/שמאלה <input id="dx" type="number" min="-10" max="10" step="0.5" inputmode="decimal"> למעלה/למטה <input id="dy" type="number" min="-10" max="10" step="0.5" inputmode="decimal"> מ"מ</span>'
     + ' <button id="pr">הדפס</button>'
-    + '<div id="hint">בחלון ההדפסה: מדפסת המדבקות (Xprinter), שוליים "ללא" (מסיר גם את הכותרות), גודל נייר = גודל המדבקה (מגדירים פעם אחת בהעדפות המדפסת ב-Windows). יצא מסובב לרוחב הגליל? סמנו "סובב 90°".</div></div>'
+    + '<div id="hint">בחלון ההדפסה: מדפסת המדבקות (Xprinter), שוליים "ללא" (מסיר גם את הכותרות), גודל נייר = גודל המדבקה (מגדירים פעם אחת בהעדפות המדפסת ב-Windows). יצא מסובב לרוחב הגליל? סמנו "סובב 90°". לא במרכז? הזיזו בחצאי מ"מ (ימינה/למעלה = חיובי, כשהלוגו קריא) — נשמר להדפסות הבאות.</div></div>'
     + '<div id="wrap"><div id="rot"><div id="lab"><div id="logo"><img alt="זימנא" src="' + LOGO_DATA_URI + '"></div>'
     + '<div id="txt"><div class="mac">' + escHtml(mac) + '</div><div class="sub">' + escHtml(model) + ' · ' + escHtml(date) + '</div><div class="who">' + escHtml(who) + '</div></div></div></div></div>'
     + '<script src="' + escHtml(String(base || '').replace(/\/+$/, '')) + '/sticker.js?v=' + STICKER_JS_VERSION + '"></script></body></html>';
