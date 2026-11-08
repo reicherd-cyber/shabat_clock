@@ -72,6 +72,75 @@ const MODEL_NAMES = {
   shellypro4pm: 'Shelly Pro 4PM', shellypro2: 'Shelly Pro 2', shellypro1: 'Shelly Pro 1', shellypro2pm: 'Shelly Pro 2PM',
   shellypro1pm: 'Shelly Pro 1PM', shellypro3: 'Shelly Pro 3', shellyplus2pm: 'Shelly Plus 2PM', shellyplus1pm: 'Shelly Plus 1PM', shellyplus1: 'Shelly Plus 1',
 };
+
+// ---- Unit sticker (installer page end + admin) ------------------------------
+// One page for every path: the top half is the זימנא logo (black on white — the
+// thermal printer knows no colour), the bottom half the MAC (our key in the admin),
+// the model and the date, plus our record (id · name) when the unit is a customer's.
+// Size controls live inside the page, so the installer page (file://), the admin and
+// a browser tab all print it the same way: through the print dialog, where the
+// Xprinter XP-365B label printer takes the @page size as the label.
+const LOGO_DATA_URI = 'data:image/png;base64,' + fs.readFileSync(new URL('./assets/zimna-logo-print.png', import.meta.url)).toString('base64');
+const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// A JS string literal safe inside a <script> body (a "</script" in the data must not end the page's script).
+const jsStr = (s) => JSON.stringify(s).replace(/<\//g, '<\\/');
+const STICKER_SIZES = [[40, 30], [50, 30], [58, 40], [60, 40]];
+export function shellyModelName(code) {
+  const p = mdnsPrefixForModel(code);
+  if (p && MODEL_NAMES[p]) return MODEL_NAMES[p];
+  const m = /^S([NP])SW-\d?(\d\d)([PX])/.exec(String(code || '').toUpperCase());
+  return m ? 'Shelly ' + (m[1] === 'P' ? 'Pro' : 'Plus') + ' ' + Number(m[2]) + (m[3] === 'P' ? 'PM' : '') : '';
+}
+export function stickerHtml({ mac, model, date, who }) {
+  const opts = STICKER_SIZES.map((s) => '<option value="' + s[0] + 'x' + s[1] + '">' + s[0] + '×' + s[1] + ' מ"מ</option>').join('');
+  return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
+    + 'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
+    + '#ctl{padding:10px 12px;background:#fff;border-bottom:1px solid #cfc9bb;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:15px}'
+    + '#ctl input{width:58px;font-size:15px;padding:4px;text-align:center}#ctl select{font-size:15px;padding:4px}'
+    + '#ctl button{font-size:16px;padding:8px 16px;border:0;border-radius:8px;background:#b3654a;color:#fff}'
+    + '#hint{width:100%;color:#6b655a;font-size:13px}'
+    + '#wrap{padding:16px;display:flex;justify-content:center}'
+    + '#lab{background:#fff;box-sizing:border-box;overflow:hidden;display:flex;flex-direction:column;outline:1px dashed #999}'
+    + '#logo{flex:0 0 50%;box-sizing:border-box;padding:1.2mm 2mm .4mm;display:flex;align-items:center;justify-content:center;min-height:0}'
+    + '#logo img{max-width:100%;max-height:100%;object-fit:contain}'
+    + '#txt{flex:0 0 50%;box-sizing:border-box;padding:0 1.5mm 1mm;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:.5mm;min-height:0}'
+    + '.mac{direction:ltr;font-family:Consolas,Menlo,monospace;font-weight:700;white-space:nowrap;line-height:1}'
+    + '.sub{direction:rtl;white-space:nowrap}.who{font-weight:700;white-space:nowrap}.who:empty{display:none}'
+    + '@media print{body{background:#fff}#ctl{display:none}#wrap{padding:0;display:block}#lab{outline:0}}'
+    + '</style><style id="pg"></style></head><body>'
+    + '<div id="ctl">גודל מדבקה: <select id="sz">' + opts + '<option value="custom">אחר</option></select>'
+    + ' <input id="w" type="number" min="20" max="110" step="1" inputmode="numeric"> × <input id="h" type="number" min="10" max="200" step="1" inputmode="numeric"> מ"מ'
+    + ' <button id="pr">הדפס</button>'
+    + '<div id="hint">בחלון ההדפסה: בחרו את מדפסת המדבקות (Xprinter), שוליים "ללא", וגודל נייר שתואם למדבקה.</div></div>'
+    + '<div id="wrap"><div id="lab"><div id="logo"><img alt="זימנא" src="' + LOGO_DATA_URI + '"></div>'
+    + '<div id="txt"><div class="mac">' + escHtml(mac) + '</div><div class="sub">' + escHtml(model) + ' · ' + escHtml(date) + '</div><div class="who">' + escHtml(who) + '</div></div></div></div>'
+    + '<script>(function(){'
+    + 'var el=function(id){return document.getElementById(id)};var sel=el("sz");'
+    + 'var saved=null;try{saved=JSON.parse(localStorage.getItem("stickerSize")||"null")}catch(e){}'
+    + 'var sz=(saved&&saved.w&&saved.h)?saved:{w:50,h:30};'
+    + 'function apply(){var W=Math.max(20,Math.min(110,Number(el("w").value)||50)),H=Math.max(10,Math.min(200,Number(el("h").value)||30));'
+    + 'var macMm=Math.min((W-4)/7.6,H*0.21);' // 12 monospace glyphs ≈ 0.62em each fill the width; the bottom half must also hold two small lines
+    + 'el("pg").textContent="@page{size:"+W+"mm "+H+"mm;margin:0}#lab{width:"+W+"mm;height:"+H+"mm}.mac{font-size:"+macMm.toFixed(2)+"mm}.sub,.who{font-size:"+(macMm*0.45).toFixed(2)+"mm}";'
+    + 'try{localStorage.setItem("stickerSize",JSON.stringify({w:W,h:H}))}catch(e){}}'
+    + 'el("w").value=sz.w;el("h").value=sz.h;var pv=sz.w+"x"+sz.h;sel.value=pv;if(sel.value!==pv)sel.value="custom";'
+    + 'sel.onchange=function(){var v=sel.value;if(v!=="custom"){var p=v.split("x");el("w").value=p[0];el("h").value=p[1]}apply()};'
+    + 'el("w").oninput=el("h").oninput=function(){sel.value="custom";apply()};'
+    + 'el("pr").onclick=function(){apply();window.focus();window.print()};apply();'
+    + '})();</script></body></html>';
+}
+// Admin: a sticker for any unit by MAC — inventory rows, customer devices, or a
+// test print (random MAC with a Shelly prefix) to dial in the label roll.
+export async function stickerFor({ mac, test }) {
+  let uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (test && uid.length !== 12) uid = '2805a5' + crypto.randomBytes(3).toString('hex');
+  if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
+  const dev = test ? null : await registeredDevice(uid);
+  const [prep] = test ? [null] : await query('SELECT model FROM prepared_devices WHERE mac = ?', [uid]);
+  const model = shellyModelName(prep?.model) || (prep?.model ? String(prep.model) : 'Shelly');
+  const date = new Date().toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
+  const who = test ? 'מדבקת בדיקה' : dev ? 'מזהה ' + dev.id + (dev.name ? ' · ' + dev.name : '') : '';
+  return stickerHtml({ mac: uid.toUpperCase(), model, date, who });
+}
 const mdnsCandidates = (uid) => MDNS_PREFIXES.map((p) => `${p}-${uid}.local`);
 
 // The RPC bodies are serialized server-side so the scripts stay dumb pipes — no
@@ -470,6 +539,7 @@ function parseModel(v){const s=v.trim().toLowerCase();if(!s.includes('-'))return
 // unit the full walk would have found.
 const ALL_PREFIXES=${JSON.stringify(MDNS_PREFIXES)};
 const MODEL_NAMES=${JSON.stringify(MODEL_NAMES)};
+const STICKER_TPL=${jsStr(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__' }))};
 function knownModel(){return MODEL||parseModel($('mac').value)}
 function mdnsNames(uid){const m=knownModel();const list=m?[m].concat(ALL_PREFIXES.filter(p=>p!==m)):ALL_PREFIXES;return list.map(p=>p+'-'+uid+'.local')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
@@ -679,12 +749,10 @@ function actionBtn(txt,fn,alt){const b=document.createElement('button');b.textCo
 // dies mid-test.
 async function quickConnected(){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();return !!r.connected}catch(e){return false}}
 function offerRouterCheck(){ROUTER_OFFERED=true;actionBtn('בדיקה: האם הנתב מחובר דרך המכשיר? (מומלץ)',routerCheck,true);offerSticker()}
-// Sticker for the unit: the MAC is our key in the admin, plus the model and our
-// record (id · name) when the unit was pre-assigned. A preview window sized to the
-// label roll hands the page to the browser's print dialog — the Xprinter XP-365B
-// label printer (USB, Windows) prints it as-is. Page code is a template literal:
-// no backslashes and no "$" + "{" in here (see the invariant test).
-const STICKER_SIZES=[[40,30],[50,30],[58,40],[60,40]];
+// Sticker for the unit at the end of the install: the server-rendered sticker page
+// (logo, size controls — see stickerHtml) with this unit's details filled into its
+// placeholders. Page code is a template literal: no backslashes and no "$" + "{" in
+// here (see the invariant test).
 function offerSticker(){actionBtn('הדפס מדבקה למכשיר (MAC)',printSticker,true)}
 function printSticker(){
  const mac=parseMac($('mac').value).toUpperCase();
@@ -692,43 +760,10 @@ function printSticker(){
  const model=MODEL_NAMES[m]||(m?m.replace('shelly','Shelly '):'')||info.model||'Shelly';
  const date=new Date().toLocaleDateString('he-IL');
  const who=SERVER_DEV?'מזהה '+SERVER_DEV.id+(SERVER_DEV.name?' · '+SERVER_DEV.name:''):'';
- const w=window.open('','_blank','width=560,height=440');
+ const w=window.open('','_blank','width=560,height=560');
  if(!w){verdict('הדפדפן חסם את חלון המדבקה — אפשרו חלונות קופצים לדף הזה ולחצו שוב.','warn');reofferDone();return}
- let saved=null;try{saved=JSON.parse(localStorage.getItem('stickerSize')||'null')}catch(e){}
- const sz=(saved&&saved.w&&saved.h)?saved:{w:50,h:30};
- const opts=STICKER_SIZES.map(s=>'<option value="'+s[0]+'x'+s[1]+'">'+s[0]+'×'+s[1]+' מ"מ</option>').join('');
- w.document.write('<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה '+esc(mac)+'</title><style>'
-  +'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
-  +'#ctl{padding:10px 12px;background:#fff;border-bottom:1px solid #cfc9bb;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:15px}'
-  +'#ctl input{width:58px;font-size:15px;padding:4px;text-align:center}#ctl select{font-size:15px;padding:4px}'
-  +'#ctl button{font-size:16px;padding:8px 16px;border:0;border-radius:8px;background:#b3654a;color:#fff}'
-  +'#hint{width:100%;color:#6b655a;font-size:13px}'
-  +'#wrap{padding:16px;display:flex;justify-content:center}'
-  +'#lab{background:#fff;box-sizing:border-box;overflow:hidden;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:.6mm;padding:1.5mm;outline:1px dashed #999}'
-  +'.brand{font-weight:700;white-space:nowrap}.mac{direction:ltr;font-family:Consolas,Menlo,monospace;font-weight:700;white-space:nowrap;line-height:1}'
-  +'.sub{direction:rtl;white-space:nowrap}.who{font-weight:700;white-space:nowrap}'
-  +'@media print{body{background:#fff}#ctl{display:none}#wrap{padding:0;display:block}#lab{outline:0}}'
-  +'</style><style id="pg"></style></head><body>'
-  +'<div id="ctl">גודל מדבקה: <select id="sz">'+opts+'<option value="custom">אחר</option></select>'
-  +' <input id="w" type="number" min="20" max="110" step="1" inputmode="numeric"> × <input id="h" type="number" min="10" max="200" step="1" inputmode="numeric"> מ"מ'
-  +' <button id="pr">הדפס</button>'
-  +'<div id="hint">בחלון ההדפסה: בחרו את מדפסת המדבקות (Xprinter), שוליים "ללא", וגודל נייר שתואם למדבקה.</div></div>'
-  +'<div id="wrap"><div id="lab"><div class="brand">TelTech · שעון שבת</div><div class="mac">'+esc(mac)+'</div>'
-  +'<div class="sub">'+esc(model)+' · '+esc(date)+'</div>'+(who?'<div class="who">'+esc(who)+'</div>':'')+'</div></div></body></html>');
- w.document.close();
- const d=w.document,el=(id)=>d.getElementById(id);
- function apply(){
-  const W=Math.max(20,Math.min(110,Number(el('w').value)||50)),H=Math.max(10,Math.min(200,Number(el('h').value)||30));
-  const macMm=Math.min((W-4)/7.6,H*0.26); // 12 monospace glyphs ≈ 0.62em each fill the width; never over a quarter of the height
-  el('pg').textContent='@page{size:'+W+'mm '+H+'mm;margin:0}#lab{width:'+W+'mm;height:'+H+'mm}.mac{font-size:'+macMm.toFixed(2)+'mm}.brand{font-size:'+(macMm*0.5).toFixed(2)+'mm}.sub,.who{font-size:'+(macMm*0.45).toFixed(2)+'mm}';
-  try{localStorage.setItem('stickerSize',JSON.stringify({w:W,h:H}))}catch(e){}
- }
- el('w').value=sz.w;el('h').value=sz.h;
- const preset=STICKER_SIZES.find(s=>s[0]===sz.w&&s[1]===sz.h);el('sz').value=preset?preset[0]+'x'+preset[1]:'custom';
- el('sz').onchange=()=>{const v=el('sz').value;if(v!=='custom'){const p=v.split('x');el('w').value=p[0];el('h').value=p[1]}apply()};
- el('w').oninput=el('h').oninput=()=>{el('sz').value='custom';apply()};
- el('pr').onclick=()=>{apply();w.focus();w.print()};
- apply();
+ const html=STICKER_TPL.split('__MAC__').join(esc(mac)).split('__MODEL__').join(esc(model)).split('__DATE__').join(esc(date)).split('__WHO__').join(esc(who));
+ w.document.write(html);w.document.close();
  reofferDone();
 }
 function reofferDone(){if(ROUTER_OFFERED)offerRouterCheck();else offerSticker()}

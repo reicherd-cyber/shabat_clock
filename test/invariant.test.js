@@ -227,5 +227,14 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.equal((onboard.match(/SERVER_DEV=r\.device\|\|null/g) || []).length, 2, 'both server checks keep our record for the sticker');
   assert.equal((auth.match(/out\.device = dev \? \{ id: dev\.id, name: dev\.name \} : null/g) || []).length, 2, 'both status endpoints name our record');
   const code = onboard.slice(onboard.indexOf('function printSticker('), onboard.indexOf('function reofferDone('));
-  assert.ok(code.length > 1000 && !code.includes('\\') && !code.includes('$' + '{'), 'no backslashes or interpolations inside the sticker code');
+  assert.ok(code.length > 300 && !code.includes('\\') && !code.includes('$' + '{'), 'no backslashes or interpolations inside the sticker code');
+  // One sticker page for every path: the installer file gets it as a template (script-safe), the admin by MAC.
+  assert.ok(onboard.includes("const STICKER_TPL=$" + "{jsStr(stickerHtml({ mac: '__MAC__'"), 'the installer page embeds the server-rendered sticker template');
+  assert.ok(/const jsStr = \(s\) => JSON\.stringify\(s\)\.replace\(\/<\\\/\/g, '<\\\\\/'\)/.test(onboard), 'the embedded template cannot close the page script');
+  assert.ok(onboard.includes('export async function stickerFor(') && onboard.includes("'2805a5' + crypto.randomBytes(3)"), 'admin stickers by MAC, test print with a random Shelly MAC');
+  const admin = readFileSync(new URL('../src/api/routes/admin.js', import.meta.url), 'utf8');
+  assert.ok(admin.includes("adminRouter.get('/shelly/sticker'"), 'admin route');
+  const page = readFileSync(new URL('../src/web/src/admin/Devices.jsx', import.meta.url), 'utf8');
+  assert.equal((page.match(/printSticker\(\{ mac: /g) || []).length, 2, 'inventory rows and customer devices both print a sticker');
+  assert.ok(page.includes("printSticker({ test: '1' })"), 'test sticker');
 });
