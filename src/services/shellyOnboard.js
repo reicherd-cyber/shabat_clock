@@ -478,7 +478,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}, ap
   <button type="button" class="itab" data-k="cable" role="tab" aria-selected="false" onclick="instTab('cable')">בכבל רשת מהנתב</button>
  </div>
  <ol class="ipanel" data-k="wifi" style="margin:6px 0 0;padding-inline-start:18px">
-  <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly) ולחצו "התחל התקנה" —
+  <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly, או ...-Zimna ביחידה שכבר הותקנה) ולחצו "התחל התקנה" —
    הדף מזהה את המכשיר לבד. (אם הטלפון שואל אם להישאר ברשת בלי אינטרנט — הישארו.)
    <div id="apBox" style="margin-top:6px;color:#a06a00">
     <b>הרשת של המכשיר מבקשת סיסמה?</b> יחידה שכבר חוברה לשרת מגינה על הרשת שלה.
@@ -860,10 +860,10 @@ async function finish(){
   if(sntpIdx<B.sntp.length-1)actionBtn('נסה שרת זמן אחר',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true);
   return}
  if(finTries<2){
-  verdict('המכשיר עדיין לא התחבר — וזה קורה: חיבור ראשון לוקח לפעמים עד כ-4 דקות (המכשיר מסנכרן שעון ומתחבר מוצפן). לחצו "בדוק שוב מול השרת" — הבדיקה הבאה תמתין עד 4 דקות. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו קודם ל-Wi-Fi רגיל.','warn');
+  verdict('המכשיר עדיין לא התחבר — וזה קורה: חיבור ראשון לוקח לפעמים עד כ-4 דקות (המכשיר מסנכרן שעון ומתחבר מוצפן). לחצו "בדוק שוב מול השרת" — הבדיקה הבאה תמתין עד 4 דקות. אם הטלפון עדיין על רשת המכשיר (Shelly... או Zimna...) — חזרו קודם ל-Wi-Fi רגיל.','warn');
   actionBtn('בדוק שוב מול השרת (עד 4 דקות)',async()=>{await finish()},true);
   return}
- verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> המכשיר מתחבר לשרת בכתובת <span dir="ltr">'+BROKER+'</span>, שרוב הסינונים מעבירים — אבל יש קווים שחוסמים גם אותה. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את הכתובת הזו (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.<br><br>בדיקה מלאה ממחשב Windows על אותו קו — הדביקו שורה אחת ב-PowerShell (בודקת פורט + יירוט הצפנה ומדפיסה פסק דין):<br><code dir="ltr" style="display:block;background:#efe9df;border-radius:8px;padding:6px 8px;margin-top:4px;text-align:left">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>','warn');
+ verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (Shelly... או Zimna...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> המכשיר מתחבר לשרת בכתובת <span dir="ltr">'+BROKER+'</span>, שרוב הסינונים מעבירים — אבל יש קווים שחוסמים גם אותה. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את הכתובת הזו (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.<br><br>בדיקה מלאה ממחשב Windows על אותו קו — הדביקו שורה אחת ב-PowerShell (בודקת פורט + יירוט הצפנה ומדפיסה פסק דין):<br><code dir="ltr" style="display:block;background:#efe9df;border-radius:8px;padding:6px 8px;margin-top:4px;text-align:left">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>','warn');
  actionBtn('בדוק שוב מול השרת',async()=>{await finish()},true);
  if(sntpIdx<B.sntp.length-1){actionBtn('נסה שרת זמן אחר (בעיית שעון נפוצה)',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true)}
  actionBtn('נסה חיבור ללא אימות תעודה (עדיין מוצפן)',noVerifyAndCheck,true);
@@ -927,7 +927,7 @@ async function stageDetect(){
    ?'המכשיר נמצא אך לא ניתן לקרוא ממנו את הקוד. הקלידו את הקוד ידנית בשדה שנפתח למעלה (האותיות והספרות שאחרי המקף בשם הרשת Shelly...) ולחצו שוב.'
    :$('ip').value.trim()
     ?'הכתובת '+probe+' לא עונה. בדקו אותה ברשימת המכשירים של הנתב, ודאו שהטלפון על אותה רשת — או הקלידו את שם הרשת שהמכשיר משדר בשדה שנפתח למעלה.'
-    :'לא נמצא מכשיר — לא ברשת שהוא משדר ולא ברשת הביתית. בהתקנה ב-Wi-Fi: ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב. בהתקנה בכבל: ודאו שהמחשב/הטלפון על אותה רשת כמו המכשיר, או הקלידו למעלה את שמו (ShellyPro...) או את כתובת ה-IP שלו מרשימת המכשירים בנתב.','warn');
+    :'לא נמצא מכשיר — לא ברשת שהוא משדר ולא ברשת הביתית. בהתקנה ב-Wi-Fi: ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly או Zimna... או Zimna...) ולחצו שוב. בהתקנה בכבל: ודאו שהמחשב/הטלפון על אותה רשת כמו המכשיר, או הקלידו למעלה את שמו (ShellyPro...) או את כתובת ה-IP שלו מרשימת המכשירים בנתב.','warn');
   return}
  // Pre-provisioned unit (configured for our broker in advance, e.g. at the
  // seller's desk): the on-site visit collapses to Wi-Fi-only — one network,
@@ -1022,7 +1022,7 @@ async function tryMint(){
  $('wifiBlock').classList.remove('hidden');
  $('go').textContent='שלח הגדרות למכשיר ›';
  STAGE='install';
- verdict('פרטי החיבור מוכנים ✓. מלאו את פרטי ה-Wi-Fi הביתי, עברו לרשת שהמכשיר משדר (Shelly...) ולחצו "שלח הגדרות למכשיר" — מעבר אחד ויחיד.','ok');
+ verdict('פרטי החיבור מוכנים ✓. מלאו את פרטי ה-Wi-Fi הביתי, עברו לרשת שהמכשיר משדר (Shelly... או Zimna...) ולחצו "שלח הגדרות למכשיר" — מעבר אחד ויחיד.','ok');
 }
 // Stage 'wifi' (on the device network): the Wi-Fi join, verified.
 async function stageWifi(){
@@ -1050,7 +1050,7 @@ async function stageWifi(){
 async function sendWifi(ssid,wifiPass,r){
  log('שולח את פרטי הרשת "'+ssid+'" למכשיר...');
  try{await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}))}
- catch(e){verdict('שגיאה בשליחה — ודאו שהטלפון עדיין על רשת המכשיר (Shelly...) ונסו שוב.','bad');offerSkip();return}
+ catch(e){verdict('שגיאה בשליחה — ודאו שהטלפון עדיין על רשת המכשיר (Shelly... או Zimna...) ונסו שוב.','bad');offerSkip();return}
  log('ממתין שהמכשיר יתחבר לרשת...');
  let st=null;
  for(let i=0;i<15;i++){await sleep(2000);st=await wsRpc(DEVIP,'Wifi.GetStatus');if(st&&st.status==='got ip'&&st.sta_ip)break}
@@ -1122,7 +1122,7 @@ async function stageInstall(){
   const typed=$('wifiSsid').value, wifiPass=$('wifiPass').value;
   if(!typed.trim()){verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה ולחצו שוב.','warn');return}
   IP=(DEVIP&&await ping(DEVIP))?DEVIP:(await ping('192.168.33.1')?'192.168.33.1':'');
-  if(!IP){verdict('המכשיר לא נמצא — ודאו שהטלפון על הרשת שהמכשיר משדר (Shelly...) ולחצו שוב.','warn');return}
+  if(!IP){verdict('המכשיר לא נמצא — ודאו שהטלפון על הרשת שהמכשיר משדר (Shelly... או Zimna...) ולחצו שוב.','warn');return}
   const ssid=isHotspot(IP)?(await resolveSsid(IP,typed)).ssid:typed.trim();
   try{
    log('שולח את פרטי ה-Wi-Fi למכשיר...');
@@ -1149,10 +1149,10 @@ async function stageInstall(){
   // "not found" — a real install read the generic message as a failure.
   if(PREPARE_URL&&B){
    $('ip').classList.remove('hidden');
-   verdict('פרטי החיבור נוצרו ונשמרו ✓. עכשיו חברו את הטלפון לרשת שהמכשיר משדר (Shelly...) ולחצו שוב על "שלח הגדרות למכשיר" — זו הלחיצה האחרונה. (כבר על רשת המכשיר ועדיין לא נמצא? הזינו את כתובת ה-IP שלו בשדה שנפתח למעלה.)','ok');
+   verdict('פרטי החיבור נוצרו ונשמרו ✓. עכשיו חברו את הטלפון לרשת שהמכשיר משדר (Shelly... או Zimna...) ולחצו שוב על "שלח הגדרות למכשיר" — זו הלחיצה האחרונה. (כבר על רשת המכשיר ועדיין לא נמצא? הזינו את כתובת ה-IP שלו בשדה שנפתח למעלה.)','ok');
    return}
   $('ip').classList.remove('hidden');
-  verdict('המכשיר לא נמצא. התחברו לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הזינו את כתובת ה-IP שלו (מאפליקציית Shelly או מהנתב) בשדה שנפתח למעלה.','warn');
+  verdict('המכשיר לא נמצא. התחברו לרשת שהמכשיר משדר (Shelly... או Zimna...) ולחצו שוב — או הזינו את כתובת ה-IP שלו (מאפליקציית Shelly או מהנתב) בשדה שנפתח למעלה.','warn');
   $('go').disabled=false;return}
  log('המכשיר נמצא ('+IP+'). שולח הגדרות...','ok');
  const typed=$('wifiSsid').value, wifiPass=$('wifiPass').value;
