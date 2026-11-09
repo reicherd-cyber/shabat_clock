@@ -420,9 +420,13 @@ async function checkShelly(device) {
   health.reachable = true;
   // Until stamped, once an hour per unit: close the unit's own open hotspot with
   // its password and switch off the factory reset by input (services/shellyAp.js,
-  // the fleet rollout). A timed-out sweep is retried, not forgotten; the stamp ends it.
-  if (!device.ap_secured_at && active() && Date.now() - (st.apTriedAt || 0) > AP_RETRY_MS) {
+  // the fleet rollout). A timed-out sweep is retried, not forgotten; the stamp ends
+  // the retries. A stamped unit is re-checked once per server lifetime (one
+  // Wifi.GetConfig) so a change in what "hardened" means — the hotspot name — rolls
+  // out on the next deploy, not on the unit's next reconnect.
+  if (active() && (!device.ap_secured_at || !st.apVerified) && Date.now() - (st.apTriedAt || 0) > AP_RETRY_MS) {
     st.apTriedAt = Date.now();
+    st.apVerified = true;
     import('../services/shellyAp.js')
       .then(({ secureShellyAp }) => secureShellyAp(device, { reason: 'probe' }))
       .catch((e) => console.error(`[health] shelly-ap ${device.device_uid}:`, e.message));
