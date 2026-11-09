@@ -289,3 +289,13 @@ test('shelly: factory reset by wired input (five toggles) is switched off on eve
   const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
   assert.ok(ap.includes("'Input.SetConfig', { id, config: { factory_reset: false } }") && ap.includes('await disableInputReset(uid, device, shellyMqttRpc)'), 'input reset off, inside the same hardening pass');
 });
+
+test('a unit that went silent while the house answers is flagged as a possible factory reset — the mail says so and links the re-install dialog', () => {
+  const diag = readFileSync(new URL('../src/services/device-diagnosis.js', import.meta.url), 'utf8');
+  assert.ok(diag.includes("evidence.factory_reset_possible = verdict === 'went_silent_house_up' || verdict === 'silent_house_up'"));
+  assert.equal((diag.match(/איפוס יצרן/g) || []).length, 2, 'both house-up verdicts name the reset');
+  const health = readFileSync(new URL('../src/monitor/health.js', import.meta.url), 'utf8');
+  assert.ok(health.includes('diag?.evidence?.factory_reset_possible') && health.includes('/admin/devices?reinstall=${device.id}'), 'the mail names the reset and links the re-install');
+  const page = readFileSync(new URL('../src/web/src/admin/Devices.jsx', import.meta.url), 'utf8');
+  assert.ok(page.includes("Number(params.get('reinstall'))") && page.includes("next.delete('reinstall')"), 'the admin page opens the re-install dialog from the link');
+});

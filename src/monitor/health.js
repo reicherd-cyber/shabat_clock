@@ -372,6 +372,17 @@ async function checkShelly(device) {
       if (diag?.category === 'service') {
         await alert(`unreachable:${device.id}`, `המכשיר "${device.name}" לא מגיב — תקלה בשירות`,
           `בדיקת הבריאות לא מצליחה להגיע למכשיר "${device.name}" (${device.device_uid}) כבר ${st.failures} דקות, והאבחון מצביע על תקלה בצד שלנו: ${diag.text}`);
+      } else if (diag?.evidence?.factory_reset_possible) {
+        // The house answers but the unit stopped trying to reach us: a unit that is
+        // powered has, in all likelihood, been factory-reset by its button (it forgets
+        // the Wi-Fi and the server and never tries again). Nothing on the server can
+        // bring it back — the mail says so and hands over the re-install link.
+        const { env } = await import('../config/env.js');
+        await alert(`reset:${device.id}`, `המכשיר "${device.name}" השתתק — ייתכן איפוס יצרן`,
+          `המכשיר "${device.name}" (${device.device_uid}) לא מגיב כבר ${st.failures} דקות, אבל הבית מגיב לבדיקה. ${diag.text}\n\n`
+          + 'אם המכשיר דולק — זה כמעט בוודאות איפוס יצרן בכפתור RESET: המכשיר שכח את ה-Wi-Fi ואת השרת ולא ינסה להתחבר שוב בעצמו. '
+          + `הפתרון: התקנה מחדש במקום, עם קובץ התקנה למכשיר הזה:\n${env.publicUrl}/admin/devices?reinstall=${device.id}\n\n`
+          + 'אם המכשיר כבוי — זו הפסקת חשמל למכשיר, והוא יתחבר לבד כשיחזור.');
       }
     }
     // The mirrored local Schedule jobs carry the schedule through an outage —
