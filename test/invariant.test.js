@@ -227,7 +227,8 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.equal((onboard.match(/SERVER_DEV=r\.device\|\|null/g) || []).length, 2, 'both server checks keep our record for the sticker');
   // Our record rides only the per-device token (bound to one uid); the universal file's check path stays customer-data free.
   assert.ok(auth.includes('out.device = await stickerRecord(claims.uid)'), 'the per-device status names our record');
-  assert.ok(!auth.includes('stickerRecord(uid)') && !auth.includes('registeredDevice(uid)'), 'the universal check path exposes no customer record');
+  const checkBranch = auth.slice(auth.indexOf("req.query.check || '') === '1'"), auth.indexOf('const { prepareDevice }'));
+  assert.ok(checkBranch.length > 100 && !/stickerRecord|registeredDevice/.test(checkBranch), 'the universal check path exposes no customer record');
   assert.equal((auth.match(/model_name: |out\.model_name = /g) || []).length, 2, 'both paths name the model by the same server rule');
   assert.ok(onboard.includes("import { shellyModelName } from './shelly-model.js'") && !/^export function shellyModelName/m.test(onboard), 'one model-name rule, in shelly-model.js');
   const rec = onboard.slice(onboard.indexOf('export async function stickerRecord('), onboard.indexOf('async function stickerModel('));
@@ -265,4 +266,21 @@ test('a removed (soft-deleted) phone no longer identifies a caller — IVR and W
   const fn = users.slice(users.indexOf('export async function findUserByPhone('), users.indexOf('export async function findUserByIvrCode('));
   assert.ok(/p\.verified_at IS NOT NULL AND p\.deleted_at IS NULL/.test(fn), 'verified and not removed');
   for (const f of ['../src/ivr/router.js', '../src/whatsapp/bot.js']) assert.ok(readFileSync(new URL(f, import.meta.url), 'utf8').includes('findUserByPhone('), f + ' resolves callers through the shared lookup');
+});
+
+test('shelly hotspot: every unit gets a per-unit password (server secret + MAC), applied by the server on hello/probe when the hotspot is open; installer files carry/ask for it; external files never for a registered unit', () => {
+  const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
+  assert.ok(/createHmac\('sha256', await apSecret\(\)\)\.update\('shelly-ap:' \+ u\)/.test(ap), 'per-unit derivation from one server secret');
+  assert.ok(ap.includes("if (ap.is_open === false) {") && ap.includes("{ config: { ap: { enable: true, is_open: false, pass } } }"), 'closes only an open hotspot');
+  const mq = readFileSync(new URL('../src/mqtt/client.js', import.meta.url), 'utf8');
+  assert.ok(mq.includes("secureShellyAp(device, { reason: 'hello' })"), 'hello re-checks the real AP state (factory reset)');
+  const health = readFileSync(new URL('../src/monitor/health.js', import.meta.url), 'utf8');
+  assert.ok(health.includes('!st.apChecked && active() && !device.ap_secured_at') && health.includes('d.ap_secured_at'), 'the probe rolls the fleet out once, until stamped');
+  const onboard = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
+  assert.ok(onboard.includes("{}, await apPasswordFor(uid)),"), 'the per-device file carries the password');
+  assert.ok(onboard.includes("PREPARE_URL+'&mac='+mac+'&appass=1'"), 'the universal file asks by MAC');
+  const auth = readFileSync(new URL('../src/api/routes/auth.js', import.meta.url), 'utf8');
+  assert.ok(/tokenRow\.audience !== 'internal' && await registeredDevice\(uid\)/.test(auth), 'external files never get a registered unit password');
+  const idx = readFileSync(new URL('../src/db/migrations/index.js', import.meta.url), 'utf8');
+  assert.ok(idx.includes('{ version: 94, up: migrate94 }'), 'migration 94 registered');
 });

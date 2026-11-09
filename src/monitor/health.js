@@ -388,6 +388,14 @@ async function checkShelly(device) {
   const wasOffline = !device.is_online;
   st.failures = 0;
   health.reachable = true;
+  // Once per unit per server lifetime, until stamped: close the unit's own open
+  // hotspot with its password (services/shellyAp.js — the fleet rollout).
+  if (!st.apChecked && active() && !device.ap_secured_at) {
+    st.apChecked = true;
+    import('../services/shellyAp.js')
+      .then(({ secureShellyAp }) => secureShellyAp(device, { reason: 'probe' }))
+      .catch((e) => console.error(`[health] shelly-ap ${device.device_uid}:`, e.message));
+  }
   // Once per unit per server lifetime: make every channel boot-safe. Units
   // that were offline when the fleet was fixed get it on their first probe.
   if (!st.bootSafeChecked && active()) {
@@ -547,7 +555,7 @@ export async function healthTick() {
   // incidents; the broker_down alert already covers them. LAN devices still probe.
   const devices = await query(
     `SELECT d.id, CONCAT(u.full_name, ' — ', d.name) AS name, d.device_uid, d.transport,
-            d.ip_address, d.relay_count, d.is_online, d.mute_alerts, d.timezone
+            d.ip_address, d.relay_count, d.is_online, d.mute_alerts, d.timezone, d.ap_secured_at
      FROM devices d JOIN users u ON u.id = d.user_id
      WHERE d.device_type = 'shelly' AND d.is_enabled = TRUE AND d.device_uid IS NOT NULL
        AND d.first_contact_pending = FALSE`,
