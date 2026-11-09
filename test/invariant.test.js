@@ -270,8 +270,10 @@ test('a removed (soft-deleted) phone no longer identifies a caller — IVR and W
 
 test('shelly hotspot: every unit gets a per-unit password (server secret + MAC), applied by the server on hello/probe when the hotspot is open; installer files carry/ask for it; external files never for a registered unit', () => {
   const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
-  assert.ok(/createHmac\('sha256', await apSecret\(\)\)\.update\('shelly-ap:' \+ u\)/.test(ap), 'per-unit derivation from one server secret');
-  assert.ok(ap.includes("if (ap.is_open === false) {") && ap.includes("{ config: { ap: { enable: true, is_open: false, pass } } }"), 'closes only an open hotspot');
+  assert.ok(/hkdfSync\('sha256', env\.jwtSecret, 'shabat-clock', 'shelly-ap-v1', 32\)/.test(ap) && /createHmac\('sha256', apKey\(\)\)\.update\('shelly-ap:' \+ u\)/.test(ap), 'per-unit derivation from the server key, never a stored or shown secret');
+  assert.ok(!ap.includes('getSetting') && !ap.includes('ap_secret'), 'no secret in the settings table');
+  assert.ok(ap.includes("if (stamped && ap.is_open === false) return") && ap.includes("if (ap.enable === false) {") && ap.includes("{ config: { ap: { is_open: false, pass: apPasswordFor(uid) } } }"), 'a stamped closed hotspot is left alone, a switched-off one stays off, enable is never forced');
+  assert.ok(ap.includes('if (apSet && inputs.complete) {') && ap.includes('const inFlight = new Map();'), 'stamped only after both steps succeeded; one pass at a time');
   const mq = readFileSync(new URL('../src/mqtt/client.js', import.meta.url), 'utf8');
   assert.ok(mq.includes("secureShellyAp(device, { reason: 'hello' })"), 'hello re-checks the real AP state (factory reset)');
   const health = readFileSync(new URL('../src/monitor/health.js', import.meta.url), 'utf8');
@@ -287,7 +289,7 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
 
 test('shelly: factory reset by wired input (five toggles) is switched off on every input when the server hardens a unit', () => {
   const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
-  assert.ok(ap.includes("'Input.SetConfig', { id, config: { factory_reset: false } }") && ap.includes('await disableInputReset(uid, device, shellyMqttRpc)'), 'input reset off, inside the same hardening pass');
+  assert.ok(ap.includes("'Input.SetConfig', { id, config: { factory_reset: false } }") && ap.includes('await disableInputReset(uid, shellyMqttRpc)') && ap.includes('const MAX_INPUTS = 8;'), 'input reset off on every input the unit has (not bounded by relay_count), inside the same hardening pass');
 });
 
 test('a unit that went silent while the house answers is flagged as a possible factory reset — the mail says so and links the re-install dialog', () => {
@@ -295,7 +297,8 @@ test('a unit that went silent while the house answers is flagged as a possible f
   assert.ok(diag.includes("evidence.factory_reset_possible = verdict === 'went_silent_house_up' || verdict === 'silent_house_up'"));
   assert.equal((diag.match(/איפוס יצרן/g) || []).length, 2, 'both house-up verdicts name the reset');
   const health = readFileSync(new URL('../src/monitor/health.js', import.meta.url), 'utf8');
-  assert.ok(health.includes('diag?.evidence?.factory_reset_possible') && health.includes('/admin/devices?reinstall=${device.id}'), 'the mail names the reset and links the re-install');
+  assert.ok(health.includes("diag?.verdict === 'went_silent_house_up' && await resetMailDue(device)") && health.includes('/admin/devices?reinstall=${device.id}'), 'the mail names the reset and links the re-install, for a recent outage only');
+  assert.ok(health.includes("event = 'reset_suspected' AND created_at > ?") && health.includes('d.last_seen_at'), 'once per outage, judged against the last contact — survives restarts');
   const page = readFileSync(new URL('../src/web/src/admin/Devices.jsx', import.meta.url), 'utf8');
   assert.ok(page.includes("Number(params.get('reinstall'))") && page.includes("next.delete('reinstall')"), 'the admin page opens the re-install dialog from the link');
 });

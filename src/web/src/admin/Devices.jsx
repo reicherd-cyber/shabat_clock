@@ -62,6 +62,7 @@ export default function Devices() {
     if (!id || !devices) return;
     const d = devices.find((x) => x.id === id);
     if (d) { setError(null); setReinstall({ device: d }); }
+    else setError(new Error(`המכשיר (מזהה ${id}) לא נמצא ברשימת המכשירים — אולי הוסר או הוחזר למלאי`));
     setParams((prev) => { const next = new URLSearchParams(prev); next.delete('reinstall'); return next; }, { replace: true });
   }, [devices, params]);
   // Column sorting, one state per table (the two device tables share one).
