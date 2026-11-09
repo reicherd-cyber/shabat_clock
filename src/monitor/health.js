@@ -339,6 +339,8 @@ async function tryReboot(device, st) {
   return ok;
 }
 
+const AP_RETRY_MS = 60 * 60 * 1000; // hardening attempts while a unit is unstamped
+
 // One "ייתכן איפוס יצרן" mail per outage: stamped in device_events, judged against
 // the unit's last contact — in-memory alert times would re-mail after a restart.
 async function resetMailDue(device) {
@@ -416,10 +418,11 @@ async function checkShelly(device) {
   const wasOffline = !device.is_online;
   st.failures = 0;
   health.reachable = true;
-  // Once per unit per server lifetime, until stamped: close the unit's own open
-  // hotspot with its password (services/shellyAp.js — the fleet rollout).
-  if (!st.apChecked && active() && !device.ap_secured_at) {
-    st.apChecked = true;
+  // Until stamped, once an hour per unit: close the unit's own open hotspot with
+  // its password and switch off the factory reset by input (services/shellyAp.js,
+  // the fleet rollout). A timed-out sweep is retried, not forgotten; the stamp ends it.
+  if (!device.ap_secured_at && active() && Date.now() - (st.apTriedAt || 0) > AP_RETRY_MS) {
+    st.apTriedAt = Date.now();
     import('../services/shellyAp.js')
       .then(({ secureShellyAp }) => secureShellyAp(device, { reason: 'probe' }))
       .catch((e) => console.error(`[health] shelly-ap ${device.device_uid}:`, e.message));

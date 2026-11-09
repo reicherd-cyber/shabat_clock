@@ -277,7 +277,8 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
   const mq = readFileSync(new URL('../src/mqtt/client.js', import.meta.url), 'utf8');
   assert.ok(mq.includes("secureShellyAp(device, { reason: 'hello' })"), 'hello re-checks the real AP state (factory reset)');
   const health = readFileSync(new URL('../src/monitor/health.js', import.meta.url), 'utf8');
-  assert.ok(health.includes('!st.apChecked && active() && !device.ap_secured_at') && health.includes('d.ap_secured_at'), 'the probe rolls the fleet out once, until stamped');
+  assert.ok(health.includes('!device.ap_secured_at && active() && Date.now() - (st.apTriedAt || 0) > AP_RETRY_MS') && health.includes('d.ap_secured_at'), 'the probe retries hourly until stamped');
+  assert.ok(ap.includes("const { shellyCall } = await import('./shelly.js');") && !ap.includes('shellyMqttRpc'), 'hardening is transport-aware (LAN units too)');
   const onboard = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
   assert.ok(onboard.includes("{}, await apPasswordFor(uid)),"), 'the per-device file carries the password');
   assert.ok(onboard.includes("PREPARE_URL+'&mac='+mac+'&appass=1'"), 'the universal file asks by MAC');
@@ -289,7 +290,7 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
 
 test('shelly: factory reset by wired input (five toggles) is switched off on every input when the server hardens a unit', () => {
   const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
-  assert.ok(ap.includes("'Input.SetConfig', { id, config: { factory_reset: false } }") && ap.includes('await disableInputReset(uid, shellyMqttRpc)') && ap.includes('const MAX_INPUTS = 8;'), 'input reset off on every input the unit has (not bounded by relay_count), inside the same hardening pass');
+  assert.ok(ap.includes("'Input.SetConfig', { id, config: { factory_reset: false } }") && ap.includes('await disableInputReset(call)') && ap.includes('const MAX_INPUTS = 8;'), 'input reset off on every input the unit has (not bounded by relay_count), inside the same hardening pass');
 });
 
 test('a unit that went silent while the house answers is flagged as a possible factory reset — the mail says so and links the re-install dialog', () => {

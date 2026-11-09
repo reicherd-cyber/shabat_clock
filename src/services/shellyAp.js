@@ -39,14 +39,14 @@ const MAX_INPUTS = 8; // more than any Shelly we register; the sweep stops at th
 // Switch off the factory reset by input on every wired input the unit has.
 // Returns the inputs changed and whether the sweep completed (an RPC that timed
 // out leaves the unit not hardened — the caller then does not stamp it).
-async function disableInputReset(uid, shellyMqttRpc) {
+async function disableInputReset(call) {
   const fixed = [];
   for (let id = 0; id < MAX_INPUTS; id++) {
-    const c = await shellyMqttRpc(uid, 'Input.GetConfig', { id }, 3000).catch(() => null);
+    const c = await call('Input.GetConfig', { id });
     if (!c) return { fixed, complete: false };
     if (c.error || !c.result) break; // past the last input
     if (c.result.factory_reset === false) continue;
-    const r = await shellyMqttRpc(uid, 'Input.SetConfig', { id, config: { factory_reset: false } }, 4000).catch(() => null);
+    const r = await call('Input.SetConfig', { id, config: { factory_reset: false } });
     if (!r || r.error) return { fixed, complete: false };
     fixed.push(id);
   }
@@ -67,15 +67,19 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
   if (uid.length !== 12) return { changed: false, reason: 'no uid' };
   if (inFlight.has(uid)) return inFlight.get(uid);
   const run = (async () => {
-    const { shellyMqttRpc } = await import('../mqtt/client.js');
-    const cfg = await shellyMqttRpc(uid, 'Wifi.GetConfig', undefined, 4000).catch(() => null);
+    // Transport-aware (MQTT or LAN): null = unreachable, {error} = the unit refused.
+    const { shellyCall } = await import('./shelly.js');
+    const call = async (method, params) => {
+      try { return { result: await shellyCall(device, method, params) }; } catch (e) { return e?.rpc ? { error: e } : null; }
+    };
+    const cfg = await call('Wifi.GetConfig');
     const ap = cfg?.result?.ap;
     if (!ap) return { changed: false, reason: 'no reply' };
     const stamped = !!device.ap_secured_at;
     if (stamped && ap.is_open === false) return { changed: false, reason: 'already secured' };
     const events = [];
     // Inputs: only on the full pass (unstamped, or a hotspot found open = reset).
-    const inputs = await disableInputReset(uid, shellyMqttRpc);
+    const inputs = await disableInputReset(call);
     if (inputs.fixed.length) events.push(['input_reset_off', { via: reason, inputs: inputs.fixed }]);
     let restart = false;
     let apSet = false;
@@ -83,8 +87,7 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
       // The customer switched the hotspot off in the Shelly app — nothing to lock.
       apSet = true;
     } else {
-      const r = await shellyMqttRpc(uid, 'Wifi.SetConfig', { config: { ap: { is_open: false, pass: apPasswordFor(uid) } } }, 6000)
-        .catch((e) => ({ error: { message: e.message } }));
+      const r = await call('Wifi.SetConfig', { config: { ap: { is_open: false, pass: apPasswordFor(uid) } } });
       if (!r || r.error) {
         console.error(`[shelly-ap] ${uid}: hotspot password not applied: ${r?.error?.message || 'no reply'}`);
       } else {
