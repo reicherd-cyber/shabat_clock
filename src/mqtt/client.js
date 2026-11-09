@@ -176,6 +176,11 @@ async function handleShellyMessage(topic, buf) {
         const { firstContactShelly } = await import('../services/devices.js');
         await firstContactShelly(device).catch((e) => console.error(`shelly first contact ${device.device_uid}:`, e.message));
       }
+      // The unit's own hotspot must not stay open (fresh unit, factory reset): read
+      // its real AP state and close it with the unit's password when it is open.
+      import('../services/shellyAp.js')
+        .then(({ secureShellyAp }) => secureShellyAp(device, { reason: 'hello' }))
+        .catch((e) => console.error(`shelly-ap ${device.device_uid}:`, e.message));
       const { reconcileShellyDevice } = await import('../services/shelly-schedules.js');
       // Reconcile (read the true states), then catch up: a Shabbat ON missed
       // during the outage is re-applied now, unless a hand switched it since.

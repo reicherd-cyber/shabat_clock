@@ -339,6 +339,22 @@ async function tryReboot(device, st) {
   return ok;
 }
 
+const AP_RETRY_MS = 60 * 60 * 1000; // hardening attempts while a unit is unstamped
+
+// One "ייתכן איפוס יצרן" mail per outage: stamped in device_events, judged against
+// the unit's last contact — in-memory alert times would re-mail after a restart.
+async function resetMailDue(device) {
+  if (!device.last_seen_at) return false;
+  const [recent] = await query('SELECT 1 AS ok FROM devices WHERE id = ? AND last_seen_at > UTC_TIMESTAMP() - INTERVAL 24 HOUR', [device.id]).catch(() => []);
+  if (!recent) return false;
+  const [sent] = await query(
+    "SELECT 1 AS ok FROM device_events WHERE device_id = ? AND event = 'reset_suspected' AND created_at > ? LIMIT 1",
+    [device.id, device.last_seen_at]).catch(() => []);
+  if (sent) return false;
+  await query("INSERT INTO device_events (device_id, event, payload) VALUES (?,?,?)", [device.id, 'reset_suspected', JSON.stringify({ via: 'health' })]).catch(() => {});
+  return true;
+}
+
 async function checkShelly(device) {
   const st = deviceState.get(device.id) ?? { failures: 0, lastUptime: null, lastOutputs: null, expectReboot: false, lastRebootAt: 0 };
   deviceState.set(device.id, st);
@@ -372,6 +388,20 @@ async function checkShelly(device) {
       if (diag?.category === 'service') {
         await alert(`unreachable:${device.id}`, `המכשיר "${device.name}" לא מגיב — תקלה בשירות`,
           `בדיקת הבריאות לא מצליחה להגיע למכשיר "${device.name}" (${device.device_uid}) כבר ${st.failures} דקות, והאבחון מצביע על תקלה בצד שלנו: ${diag.text}`);
+      } else if (diag?.verdict === 'went_silent_house_up' && await resetMailDue(device)) {
+        // The house answers but the unit stopped trying to reach us: a unit that is
+        // powered has, in all likelihood, been factory-reset by its button (it forgets
+        // the Wi-Fi and the server and never tries again). Nothing on the server can
+        // bring it back — the mail says so and hands over the re-install link. Only
+        // for an outage that began recently (went_silent = it was connected within
+        // the broker's window), once per outage — units dead for weeks stay in the
+        // panel's disconnected table, and a server restart does not re-mail.
+        const { env } = await import('../config/env.js');
+        await alert(`reset:${device.id}`, `המכשיר "${device.name}" השתתק — ייתכן איפוס יצרן`,
+          `המכשיר "${device.name}" (${device.device_uid}) לא מגיב כבר ${st.failures} דקות, אבל הבית מגיב לבדיקה. ${diag.text}\n\n`
+          + 'אם המכשיר דולק — זה כמעט בוודאות איפוס יצרן בכפתור RESET: המכשיר שכח את ה-Wi-Fi ואת השרת ולא ינסה להתחבר שוב בעצמו. '
+          + `הפתרון: התקנה מחדש במקום, עם קובץ התקנה למכשיר הזה:\n${env.publicUrl}/admin/devices?reinstall=${device.id}\n\n`
+          + 'אם המכשיר כבוי — זו הפסקת חשמל למכשיר, והוא יתחבר לבד כשיחזור.');
       }
     }
     // The mirrored local Schedule jobs carry the schedule through an outage —
@@ -388,6 +418,15 @@ async function checkShelly(device) {
   const wasOffline = !device.is_online;
   st.failures = 0;
   health.reachable = true;
+  // Until stamped, once an hour per unit: close the unit's own open hotspot with
+  // its password and switch off the factory reset by input (services/shellyAp.js,
+  // the fleet rollout). A timed-out sweep is retried, not forgotten; the stamp ends it.
+  if (!device.ap_secured_at && active() && Date.now() - (st.apTriedAt || 0) > AP_RETRY_MS) {
+    st.apTriedAt = Date.now();
+    import('../services/shellyAp.js')
+      .then(({ secureShellyAp }) => secureShellyAp(device, { reason: 'probe' }))
+      .catch((e) => console.error(`[health] shelly-ap ${device.device_uid}:`, e.message));
+  }
   // Once per unit per server lifetime: make every channel boot-safe. Units
   // that were offline when the fleet was fixed get it on their first probe.
   if (!st.bootSafeChecked && active()) {
@@ -547,7 +586,7 @@ export async function healthTick() {
   // incidents; the broker_down alert already covers them. LAN devices still probe.
   const devices = await query(
     `SELECT d.id, CONCAT(u.full_name, ' — ', d.name) AS name, d.device_uid, d.transport,
-            d.ip_address, d.relay_count, d.is_online, d.mute_alerts, d.timezone
+            d.ip_address, d.relay_count, d.is_online, d.mute_alerts, d.timezone, d.ap_secured_at, d.last_seen_at
      FROM devices d JOIN users u ON u.id = d.user_id
      WHERE d.device_type = 'shelly' AND d.is_enabled = TRUE AND d.device_uid IS NOT NULL
        AND d.first_contact_pending = FALSE`,

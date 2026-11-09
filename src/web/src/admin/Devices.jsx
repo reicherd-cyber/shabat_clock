@@ -55,6 +55,16 @@ export default function Devices() {
   const [onboardConfirm, setOnboardConfirm] = useState(null); // {mac, registered:{user_name, device_name}} — re-mint for a live device
   const [reinstall, setReinstall] = useState(null);       // {device, done?} — factory-reset device: re-mint + per-device installer file
   const { busy, error, run, setError } = useAsync();
+  // ?reinstall=<device id> (the "ייתכן איפוס יצרן" email) opens the re-install dialog
+  // for that device and drops the parameter from the address.
+  useEffect(() => {
+    const id = Number(params.get('reinstall'));
+    if (!id || !devices) return;
+    const d = devices.find((x) => x.id === id);
+    if (d) { setError(null); setReinstall({ device: d }); }
+    else setError(new Error(`המכשיר (מזהה ${id}) לא נמצא ברשימת המכשירים — אולי הוסר או הוחזר למלאי`));
+    setParams((prev) => { const next = new URLSearchParams(prev); next.delete('reinstall'); return next; }, { replace: true });
+  }, [devices, params]);
   // Column sorting, one state per table (the two device tables share one).
   const devSort = useSort();
   const demoSort = useSort();

@@ -179,7 +179,7 @@ authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, onboardPrepareT
     if (claims.p !== 'shelly-onboard-any') throw errors.unauthenticated();
     // Revoked / expired / pre-registry files stop here — for the poll too.
     const { liveInstallerToken } = await import('../../services/shellyOnboard.js');
-    await liveInstallerToken(claims.jti);
+    const tokenRow = await liveInstallerToken(claims.jti);
     // candidates=1: no minting — the MACs (and model prefixes) of units awaiting
     // an install, so the page can find a cabled unit on the home LAN by its
     // .local name instead of asking the helper for a MAC.
@@ -192,6 +192,20 @@ authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, onboardPrepareT
       const { recordInstallerReport } = await import('../../services/shellyOnboard.js');
       await recordInstallerReport({ mac: req.query.mac, model: req.query.model, fw: req.query.fw, unixtime: req.query.unixtime, ip: req.ip });
       return res.json({ ok: true });
+    }
+    // appass=1: the unit's hotspot password (services/shellyAp.js) — a provisioned
+    // unit protects its own network; the helper reads the MAC off the network name
+    // or the sticker. Same rule as minting: an external file never gets a registered
+    // customer unit's password (re-installs of those go through a per-device file).
+    if (String(req.query.appass || '') === '1') {
+      const uid = String(req.query.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+      if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
+      const { registeredDevice } = await import('../../services/shellyOnboard.js');
+      if (tokenRow.audience !== 'internal' && await registeredDevice(uid)) {
+        throw errors.forbidden('יחידה של לקוח רשום — סיסמת הרשת שלה ניתנת רק בקובץ התקנה למכשיר הזה');
+      }
+      const { apPasswordFor } = await import('../../services/shellyAp.js');
+      return res.json({ ap_pass: await apPasswordFor(uid) });
     }
     // check=1: no minting — just "is this device connected to the broker right
     // now?", so the installer can validate a seemingly-provisioned unit before

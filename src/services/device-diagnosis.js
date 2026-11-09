@@ -180,7 +180,7 @@ export async function diagnoseDevice(deviceId) {
   } else if (connects24 === 0 && attempts24 === 0) {
     if (houseUp === true) {
       verdict = 'silent_house_up';
-      text = 'אין שום ניסיון התחברות מהמכשיר, אבל הראוטר בבית הלקוח מגיב — כנראה המכשיר מנותק מחשמל, או שהסינון חוסם את היציאה לגמרי. כדאי לבקש מהלקוח לבדוק שהמכשיר דולק.';
+      text = 'אין שום ניסיון התחברות מהמכשיר, אבל הראוטר בבית הלקוח מגיב — כנראה המכשיר מנותק מחשמל, או שבוצע איפוס יצרן (לחיצה ארוכה על כפתור RESET: המכשיר שוכח את ה-Wi-Fi ואת השרת ולא ינסה להתחבר שוב — אם המכשיר דולק, זו הסיבה הסבירה ונדרשת התקנה מחדש), או שהסינון חוסם את היציאה לגמרי. כדאי לבקש מהלקוח לבדוק שהמכשיר דולק.';
     } else {
       verdict = 'silent_house_down';
       text = 'אין שום ניסיון התחברות והבית לא מגיב לבדיקה — ככל הנראה הפסקת חשמל או נפילת אינטרנט בבית הלקוח. (ייתכן גם שהראוטר פשוט לא עונה לפינג — עדות תומכת, לא מוחלטת.)';
@@ -195,7 +195,7 @@ export async function diagnoseDevice(deviceId) {
       text = `הקו נפל והתחבר שוב ושוב (${connects24} התחברויות ביממה, חציון חיבור ${medianSession} שניות) ולפני ${ago} השתתק לגמרי — דפוס מובהק של חסימת סינון שהחמירה. נדרשת החרגה אצל ספק הסינון.`;
     } else if (houseUp === true) {
       verdict = 'went_silent_house_up';
-      text = `המכשיר התחבר לאחרונה לפני ${ago} ומאז שקט, אבל הבית עצמו מגיב — או שהמכשיר כבה, או שהסינון החמיר לחסימה מלאה. כדאי לבדוק מול הלקוח.`;
+      text = `המכשיר התחבר לאחרונה לפני ${ago} ומאז שקט, אבל הבית עצמו מגיב — או שהמכשיר כבה, או שבוצע איפוס יצרן (לחיצה ארוכה על כפתור RESET: המכשיר שוכח את ה-Wi-Fi ואת השרת ולא ינסה להתחבר שוב — אם המכשיר דולק, זו הסיבה הסבירה ונדרשת התקנה מחדש), או שהסינון החמיר לחסימה מלאה. כדאי לבדוק מול הלקוח.`;
     } else {
       verdict = 'went_silent';
       text = `המכשיר התחבר לאחרונה לפני ${ago} ומאז שקט, והבית לא מגיב לבדיקה — ייתכן ניתוק חשמל/אינטרנט בבית, או החמרה של חסימת הסינון.`;
@@ -217,6 +217,10 @@ export async function diagnoseDevice(deviceId) {
     went_silent: 'customer',
     no_data: 'unknown',
   };
+  // A powered unit that stopped trying to reach us while the house answers has,
+  // in all likelihood, been factory-reset by its button — the server cannot see
+  // the reset itself, only this pattern; the unreachable mail names it.
+  evidence.factory_reset_possible = verdict === 'went_silent_house_up' || verdict === 'silent_house_up';
   return { verdict, category: CATEGORY[verdict] || 'unknown', text, evidence };
 }
 

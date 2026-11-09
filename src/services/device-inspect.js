@@ -31,7 +31,7 @@ export async function inspectDevice(deviceId, { userId = null } = {}) {
   const [d] = await query(
     `SELECT d.id, d.user_id, d.name, d.device_uid, d.device_type, d.transport, d.ip_address, d.fw_version,
             d.relay_count, d.is_online, d.last_seen_at, d.created_at, d.timezone, d.mute_alerts,
-            d.first_contact_pending, d.sync_status, d.sync_error, d.last_pushed_at, p.model
+            d.first_contact_pending, d.sync_status, d.sync_error, d.last_pushed_at, d.ap_secured_at, p.model
        FROM devices d LEFT JOIN prepared_devices p ON p.device_id = d.id
       WHERE d.id = ?${userId != null ? ' AND d.user_id = ?' : ''} LIMIT 1`,
     userId != null ? [deviceId, userId] : [deviceId],
@@ -56,5 +56,7 @@ export async function inspectDevice(deviceId, { userId = null } = {}) {
     ]);
     liveData = { info, status, updates };
   }
-  return { fetched_at: new Date().toISOString(), device: d, relays, timeline, boots, health, live: liveData };
+  // The unit's hotspot password (services/shellyAp.js) — for a support call or a visit.
+  const apPass = d.device_type === 'shelly' && d.device_uid ? await (await import('./shellyAp.js')).apPasswordFor(d.device_uid) : '';
+  return { fetched_at: new Date().toISOString(), device: d, relays, timeline, boots, health, live: liveData, ap_pass: apPass };
 }

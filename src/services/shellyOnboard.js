@@ -13,6 +13,7 @@ import { errors } from '../config/errors.js';
 import { query } from '../db/pool.js';
 import { mosquittoPasswdHash, writeBrokerPasswdEntry } from './devices.js';
 import { shellyModelName } from './shelly-model.js';
+import { apPasswordFor } from './shellyAp.js';
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const generatePassword = (len = 24) =>
@@ -433,7 +434,7 @@ exit 1
 //  - universal:  the helper types the MAC; the page asks the server to mint that
 //    device's credentials at install time (GET prepareUrl&mac=..., authorized by the
 //    installer token in the URL — a revocable installer_tokens row), then proceeds identically.
-function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
+function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}, apPass = '') {
   // Injected as JS string literals — the RPC bodies are JSON (no backticks/quotes issues
   // beyond '); JSON.stringify once more makes them safe literals.
   // JSON.stringify does NOT escape '<', so a value containing "</script>" would
@@ -445,6 +446,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
     broker: js(broker),
     wifiSsid: js(wifi.ssid || ''),
     wifiPass: js(wifi.pass || ''),
+    apPass: js(apPass || ''),
     bodies: b ? js({ putCa: b.putCa, mqtt: b.mqtt, noVerify: b.mqttNoVerify, reboot: b.reboot, sntp: b.sntp }) : 'null',
   };
   return `<!doctype html>
@@ -486,7 +488,15 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
  </div>
  <ol class="ipanel" data-k="wifi" style="margin:6px 0 0;padding-inline-start:18px">
   <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly) ולחצו "התחל התקנה" —
-   הדף מזהה את המכשיר לבד. (אם הטלפון שואל אם להישאר ברשת בלי אינטרנט — הישארו.)</li>
+   הדף מזהה את המכשיר לבד. (אם הטלפון שואל אם להישאר ברשת בלי אינטרנט — הישארו.)
+   <div id="apBox" style="margin-top:6px;color:#a06a00">
+    <b>הרשת של המכשיר מבקשת סיסמה?</b> יחידה שכבר חוברה לשרת מגינה על הרשת שלה.
+    <span id="apKnown" class="hidden">הסיסמה: <b id="apPassTxt" dir="ltr"></b></span>
+    <span id="apAsk">הקלידו את הקוד שבסוף שם הרשת (12 התווים אחרי המקף) או מהמדבקה:
+     <input id="apMac" placeholder="למשל 2805A5CBCA34" style="margin-top:4px">
+     <button type="button" id="apBtn" class="alt" style="font-size:15px;padding:8px">הצג סיסמה</button>
+     <div id="apOut" dir="ltr" style="font-weight:700;margin-top:4px"></div></span>
+   </div></li>
   <li>מלאו את פרטי ה-Wi-Fi הביתי ולחצו "חבר לרשת הביתית" — הדף מוודא במקום
    שהמכשיר באמת התחבר (סיסמה שגויה מתגלה מיד, כשקל לתקן).</li>
   <li>חברו את הטלפון בחזרה ל-Wi-Fi הביתי ולחצו "השלם התקנה" — יצירת פרטי
@@ -560,6 +570,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
 <script>
 let UID=${inject.uid}, STATUS_URL=${inject.statusUrl}, B=${inject.bodies};
 const PREPARE_URL=${inject.prepareUrl}, BROKER=${inject.broker};
+const AP_PASS=${inject.apPass};
 let IP='', sntpIdx=0, PROVISIONED=false, DEVIP='', STA_IP='';
 let SERVER_DEV=null, SERVER_MODEL='', ROUTER_OFFERED=false; // our record + model name for the unit (from the server check) · the router check is on offer
 const ANDROID=/Android/i.test(navigator.userAgent); // no mDNS in Android Chrome — .local lookups fail there
@@ -1171,6 +1182,19 @@ async function stageInstall(){
  await finish();
  $('go').disabled=false;
 };
+// Hotspot password (services/shellyAp.js): the per-device file knows it; the
+// universal file asks the server by MAC (its own token — it already mints for a
+// MAC; registered customer units are refused to external files there as well).
+(function(){const box=document.getElementById('apBox');if(!box)return;
+ if(AP_PASS){document.getElementById('apPassTxt').textContent=AP_PASS;document.getElementById('apKnown').classList.remove('hidden');document.getElementById('apAsk').classList.add('hidden');return}
+ if(!PREPARE_URL){box.classList.add('hidden');return}
+ document.getElementById('apBtn').onclick=async()=>{const out=document.getElementById('apOut');const mac=parseMac(document.getElementById('apMac').value);
+  if(mac.length!==12){out.style.color='#b3372f';out.textContent='הקלידו 12 תווים';return}
+  out.style.color='';out.textContent='...';
+  try{const res=await fetch(PREPARE_URL+'&mac='+mac+'&appass=1',{cache:'no-store',signal:AbortSignal.timeout(8000)});const r=await res.json();
+   out.style.color=res.ok&&r.ap_pass?'':'#b3372f';out.textContent=res.ok&&r.ap_pass?'סיסמה: '+r.ap_pass:(r.error&&r.error.message)||r.message||'לא ניתן להציג';
+  }catch(e){out.style.color='#b3372f';out.textContent='אין חיבור לשרת — ודאו אינטרנט (נתונים סלולריים) ונסו שוב'}};
+})();
 </script></body></html>`;
 }
 
@@ -1291,7 +1315,7 @@ export async function onboardShelly({ mac, statusBase = '', confirm = false }) {
     script_ps: stamp + powershellScript(uid, bodies),
     // keep the shebang as line 1 — the stamp goes right after it
     script_sh: bashScript(uid, bodies).replace('\n', `\n${stamp}`),
-    script_html: htmlPage(uid, bodies, statusUrlFor(uid, statusBase), '', `${env.deviceBroker.host}:${env.deviceBroker.port}`),
+    script_html: htmlPage(uid, bodies, statusUrlFor(uid, statusBase), '', `${env.deviceBroker.host}:${env.deviceBroker.port}`, {}, await apPasswordFor(uid)),
   };
 }
 

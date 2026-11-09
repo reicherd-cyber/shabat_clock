@@ -146,6 +146,12 @@ function InspectModal({ device, onClose }) {
             <Row label="Wi-Fi">{st?.wifi ? `${st.wifi.ssid || '—'} · ${st.wifi.status || ''}` : '—'}</Row>
             <Row label="עוצמת אות">{st?.wifi?.rssi != null ? `${st.wifi.rssi} dBm` : '—'}</Row>
             <Row label="כתובת IP"><span dir="ltr">{st?.wifi?.sta_ip || st?.eth?.ip || d.ip_address || '—'}</span></Row>
+            {data?.ap_pass && (
+              <Row label="הרשת של המכשיר (hotspot)">
+                סיסמה <b dir="ltr">{data.ap_pass}</b>
+                <span className="text-muted"> · {d.ap_secured_at ? 'נעולה' : 'עדיין פתוחה — תינעל בחיבור הבא'}</span>
+              </Row>
+            )}
             <Row label="MQTT (השרת שלנו)">{st?.mqtt ? (st.mqtt.connected ? 'מחובר' : 'מנותק') : '—'}</Row>
             <Row label="Shelly Cloud">{st?.cloud ? (st.cloud.connected ? 'מחובר' : 'מנותק') : '—'}</Row>
             <Row label="סנכרון תזמונים">{d.sync_status}{d.sync_error ? ` · ${d.sync_error}` : ''}{d.last_pushed_at ? ` · נשלח ${fmtTs(d.last_pushed_at)}` : ''}</Row>

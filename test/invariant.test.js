@@ -227,7 +227,8 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.equal((onboard.match(/SERVER_DEV=r\.device\|\|null/g) || []).length, 2, 'both server checks keep our record for the sticker');
   // Our record rides only the per-device token (bound to one uid); the universal file's check path stays customer-data free.
   assert.ok(auth.includes('out.device = await stickerRecord(claims.uid)'), 'the per-device status names our record');
-  assert.ok(!auth.includes('stickerRecord(uid)') && !auth.includes('registeredDevice(uid)'), 'the universal check path exposes no customer record');
+  const checkBranch = auth.slice(auth.indexOf("req.query.check || '') === '1'"), auth.indexOf('const { prepareDevice }'));
+  assert.ok(checkBranch.length > 100 && !/stickerRecord|registeredDevice/.test(checkBranch), 'the universal check path exposes no customer record');
   assert.equal((auth.match(/model_name: |out\.model_name = /g) || []).length, 2, 'both paths name the model by the same server rule');
   assert.ok(onboard.includes("import { shellyModelName } from './shelly-model.js'") && !/^export function shellyModelName/m.test(onboard), 'one model-name rule, in shelly-model.js');
   const rec = onboard.slice(onboard.indexOf('export async function stickerRecord('), onboard.indexOf('async function stickerModel('));
@@ -265,4 +266,40 @@ test('a removed (soft-deleted) phone no longer identifies a caller — IVR and W
   const fn = users.slice(users.indexOf('export async function findUserByPhone('), users.indexOf('export async function findUserByIvrCode('));
   assert.ok(/p\.verified_at IS NOT NULL AND p\.deleted_at IS NULL/.test(fn), 'verified and not removed');
   for (const f of ['../src/ivr/router.js', '../src/whatsapp/bot.js']) assert.ok(readFileSync(new URL(f, import.meta.url), 'utf8').includes('findUserByPhone('), f + ' resolves callers through the shared lookup');
+});
+
+test('shelly hotspot: every unit gets a per-unit password (server secret + MAC), applied by the server on hello/probe when the hotspot is open; installer files carry/ask for it; external files never for a registered unit', () => {
+  const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
+  assert.ok(/hkdfSync\('sha256', env\.jwtSecret, 'shabat-clock', 'shelly-ap-v1', 32\)/.test(ap) && /createHmac\('sha256', apKey\(\)\)\.update\('shelly-ap:' \+ u\)/.test(ap), 'per-unit derivation from the server key, never a stored or shown secret');
+  assert.ok(!ap.includes('getSetting') && !ap.includes('ap_secret'), 'no secret in the settings table');
+  assert.ok(ap.includes("if (stamped && ap.is_open === false) return") && ap.includes("if (ap.enable === false) {") && ap.includes("{ config: { ap: { is_open: false, pass: apPasswordFor(uid) } } }"), 'a stamped closed hotspot is left alone, a switched-off one stays off, enable is never forced');
+  assert.ok(ap.includes('if (apSet && inputs.complete) {') && ap.includes('const inFlight = new Map();'), 'stamped only after both steps succeeded; one pass at a time');
+  const mq = readFileSync(new URL('../src/mqtt/client.js', import.meta.url), 'utf8');
+  assert.ok(mq.includes("secureShellyAp(device, { reason: 'hello' })"), 'hello re-checks the real AP state (factory reset)');
+  const health = readFileSync(new URL('../src/monitor/health.js', import.meta.url), 'utf8');
+  assert.ok(health.includes('!device.ap_secured_at && active() && Date.now() - (st.apTriedAt || 0) > AP_RETRY_MS') && health.includes('d.ap_secured_at'), 'the probe retries hourly until stamped');
+  assert.ok(ap.includes("const { shellyCall } = await import('./shelly.js');") && !ap.includes('shellyMqttRpc'), 'hardening is transport-aware (LAN units too)');
+  const onboard = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
+  assert.ok(onboard.includes("{}, await apPasswordFor(uid)),"), 'the per-device file carries the password');
+  assert.ok(onboard.includes("PREPARE_URL+'&mac='+mac+'&appass=1'"), 'the universal file asks by MAC');
+  const auth = readFileSync(new URL('../src/api/routes/auth.js', import.meta.url), 'utf8');
+  assert.ok(/tokenRow\.audience !== 'internal' && await registeredDevice\(uid\)/.test(auth), 'external files never get a registered unit password');
+  const idx = readFileSync(new URL('../src/db/migrations/index.js', import.meta.url), 'utf8');
+  assert.ok(idx.includes('{ version: 94, up: migrate94 }'), 'migration 94 registered');
+});
+
+test('shelly: factory reset by wired input (five toggles) is switched off on every input when the server hardens a unit', () => {
+  const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
+  assert.ok(ap.includes("'Input.SetConfig', { id, config: { factory_reset: false } }") && ap.includes('await disableInputReset(call)') && ap.includes('const MAX_INPUTS = 8;'), 'input reset off on every input the unit has (not bounded by relay_count), inside the same hardening pass');
+});
+
+test('a unit that went silent while the house answers is flagged as a possible factory reset — the mail says so and links the re-install dialog', () => {
+  const diag = readFileSync(new URL('../src/services/device-diagnosis.js', import.meta.url), 'utf8');
+  assert.ok(diag.includes("evidence.factory_reset_possible = verdict === 'went_silent_house_up' || verdict === 'silent_house_up'"));
+  assert.equal((diag.match(/איפוס יצרן/g) || []).length, 2, 'both house-up verdicts name the reset');
+  const health = readFileSync(new URL('../src/monitor/health.js', import.meta.url), 'utf8');
+  assert.ok(health.includes("diag?.verdict === 'went_silent_house_up' && await resetMailDue(device)") && health.includes('/admin/devices?reinstall=${device.id}'), 'the mail names the reset and links the re-install, for a recent outage only');
+  assert.ok(health.includes("event = 'reset_suspected' AND created_at > ?") && health.includes('d.last_seen_at'), 'once per outage, judged against the last contact — survives restarts');
+  const page = readFileSync(new URL('../src/web/src/admin/Devices.jsx', import.meta.url), 'utf8');
+  assert.ok(page.includes("Number(params.get('reinstall'))") && page.includes("next.delete('reinstall')"), 'the admin page opens the re-install dialog from the link');
 });
