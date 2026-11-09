@@ -72,8 +72,9 @@ const inFlight = new Map();
 // — the write is idempotent — or whenever the hotspot is found open or under the
 // factory name again, i.e. after a factory reset) and factory-reset-by-input off.
 // Once stamped, a call costs one Wifi.GetConfig and acts only on a hotspot that is
-// open or misnamed. A hotspot the customer switched OFF stays off, under whatever
-// name it had. Never throws on an unreachable unit.
+// open or misnamed. A hotspot the customer switched OFF stays off — but its name
+// and password are set all the same, so it comes up locked if anyone switches it
+// on. Never throws on an unreachable unit.
 export async function secureShellyAp(device, { reason = 'probe' } = {}) {
   const uid = String(device.device_uid || '').toLowerCase();
   if (uid.length !== 12) return { changed: false, reason: 'no uid' };
@@ -88,7 +89,10 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
     const ap = cfg?.result?.ap;
     if (!ap) return { changed: false, reason: 'no reply' };
     const stamped = !!device.ap_secured_at;
-    const apDone = ap.enable === false || (ap.is_open === false && ap.ssid === apSsidFor(uid));
+    // Name + password must be in the unit's config whether or not the hotspot is
+    // on: a hotspot switched on later (Shelly app) then comes up locked and named
+    // from its first second. The enable flag itself is never touched.
+    const apDone = ap.is_open === false && ap.ssid === apSsidFor(uid);
     if (stamped && apDone) return { changed: false, reason: 'already secured' };
     const events = [];
     // Inputs: only on the full pass (unstamped, or a hotspot found open = reset).
@@ -96,10 +100,7 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
     if (inputs.fixed.length) events.push(['input_reset_off', { via: reason, inputs: inputs.fixed }]);
     let restart = false;
     let apSet = false;
-    if (ap.enable === false) {
-      // The customer switched the hotspot off in the Shelly app — nothing to lock.
-      apSet = true;
-    } else {
+    if (!apDone) {
       const r = await call('Wifi.SetConfig', { config: { ap: { ssid: apSsidFor(uid), is_open: false, pass: apPasswordFor(uid) } } });
       if (!r || r.error) {
         console.error(`[shelly-ap] ${uid}: hotspot password not applied: ${r?.error?.message || 'no reply'}`);
@@ -108,8 +109,10 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
         // Some firmware applies the AP change only after a restart; the config is
         // stored either way and the next reboot (fw update, power cut) closes it.
         restart = !!r.result?.restart_required;
-        events.push(['ap_secured', { via: reason, restart_required: restart, was_open: ap.is_open !== false, ssid: apSsidFor(uid), was_ssid: ap.ssid || null }]);
+        events.push(['ap_secured', { via: reason, restart_required: restart, enabled: ap.enable !== false, was_open: ap.is_open !== false, ssid: apSsidFor(uid), was_ssid: ap.ssid || null }]);
       }
+    } else {
+      apSet = true; // already ours (unstamped only because an earlier pass stopped short on the inputs)
     }
     if (!inputs.complete) console.warn(`[shelly-ap] ${uid}: input sweep incomplete (RPC timeout) — not stamped, will retry`);
     if (apSet && inputs.complete) {

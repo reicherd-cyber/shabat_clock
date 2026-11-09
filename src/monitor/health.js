@@ -340,6 +340,7 @@ async function tryReboot(device, st) {
 }
 
 const AP_RETRY_MS = 60 * 60 * 1000; // hardening attempts while a unit is unstamped
+const AP_RECHECK_MS = 24 * 60 * 60 * 1000; // a stamped unit: one Wifi.GetConfig a day — a hotspot switched on and left open is locked within a day
 
 // One "ייתכן איפוס יצרן" mail per outage: stamped in device_events, judged against
 // the unit's last contact — in-memory alert times would re-mail after a restart.
@@ -421,12 +422,12 @@ async function checkShelly(device) {
   // Until stamped, once an hour per unit: close the unit's own open hotspot with
   // its password and switch off the factory reset by input (services/shellyAp.js,
   // the fleet rollout). A timed-out sweep is retried, not forgotten; the stamp ends
-  // the retries. A stamped unit is re-checked once per server lifetime (one
-  // Wifi.GetConfig) so a change in what "hardened" means — the hotspot name — rolls
-  // out on the next deploy, not on the unit's next reconnect.
-  if (active() && (!device.ap_secured_at || !st.apVerified) && Date.now() - (st.apTriedAt || 0) > AP_RETRY_MS) {
+  // the retries. A stamped unit is re-checked once a day (one Wifi.GetConfig) so a
+  // change in what "hardened" means rolls out on deploy, and a hotspot someone
+  // switched on and left open is locked within a day, reconnect or not.
+  const apWait = device.ap_secured_at ? AP_RECHECK_MS : AP_RETRY_MS;
+  if (active() && Date.now() - (st.apTriedAt || 0) > apWait) {
     st.apTriedAt = Date.now();
-    st.apVerified = true;
     import('../services/shellyAp.js')
       .then(({ secureShellyAp }) => secureShellyAp(device, { reason: 'probe' }))
       .catch((e) => console.error(`[health] shelly-ap ${device.device_uid}:`, e.message));
