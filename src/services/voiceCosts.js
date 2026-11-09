@@ -129,15 +129,20 @@ export async function getVoiceCosts({ from, to, userId, phone, q, source, kind }
   const usageArgs = [];
   if (from) { usageWhere.push('created_at >= ? - INTERVAL 3 MINUTE'); usageArgs.push(from); }
   if (to) { usageWhere.push('created_at <= ? + INTERVAL 3 MINUTE'); usageArgs.push(to); }
-  const [stt, usage, users] = await Promise.all([
+  const [stt, usage, users, names] = await Promise.all([
     fetchYemotSttTransactions(),
     query(
       `SELECT id, user_id, phone, source, kind, text, model, input_tokens, output_tokens, cost_usd, created_at
          FROM nlu_usage ${usageWhere.length ? `WHERE ${usageWhere.join(' AND ')}` : ''} ORDER BY id DESC`,
       usageArgs,
     ),
-    query('SELECT up.phone, up.user_id, u.full_name FROM user_phones up JOIN users u ON u.id = up.user_id'),
+    // Same identity rule as findUserByPhone: a verified, not-removed phone names its owner.
+    query('SELECT up.phone, up.user_id, u.full_name FROM user_phones up JOIN users u ON u.id = up.user_id WHERE up.deleted_at IS NULL AND up.verified_at IS NOT NULL'),
+    // A recorded user_id names its owner directly — a customer whose phones were all
+    // removed keeps the name on their historical usage.
+    query('SELECT id, full_name FROM users'),
   ]);
+  const nameById = new Map(names.map((u) => [Number(u.id), u.full_name]));
   const nameByPhone = new Map(users.map((u) => [String(u.phone), u.full_name]));
   const userIdByPhone = new Map(users.map((u) => [String(u.phone), u.user_id]));
 
@@ -159,7 +164,7 @@ export async function getVoiceCosts({ from, to, userId, phone, q, source, kind }
       when: s.when.toISOString(),
       phone: s.phone,
       user_id: best?.user_id ?? userIdByPhone.get(s.phone) ?? null,
-      user_name: nameByPhone.get(s.phone) || null,
+      user_name: nameById.get(Number(best?.user_id)) || nameByPhone.get(s.phone) || null,
       source: 'phone',
       kind: 'command',
       text: s.text || best?.text || '',
@@ -174,14 +179,13 @@ export async function getVoiceCosts({ from, to, userId, phone, q, source, kind }
 
   // Usage rows Yemot has no charge for (site help questions, the WhatsApp bot,
   // phone orders whose STT line hasn't shown up in Yemot's ledger yet) still count.
-  const nameById = new Map(users.map((u) => [Number(u.user_id), u.full_name]));
   for (const u of freeUsage) {
     if (u.claimed) continue;
     rows.push({
       when: new Date(u.created_at).toISOString(),
       phone: u.phone || '',
       user_id: u.user_id ?? userIdByPhone.get(String(u.phone)) ?? null,
-      user_name: nameByPhone.get(String(u.phone)) || nameById.get(Number(u.user_id)) || null,
+      user_name: nameById.get(Number(u.user_id)) || nameByPhone.get(String(u.phone)) || null,
       source: u.source || 'unknown',
       kind: u.kind || 'command',
       text: u.text || '',

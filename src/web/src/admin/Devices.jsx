@@ -150,6 +150,18 @@ export default function Devices() {
   // Who gets it decides validity + contents (internal: 7 days + saved Wi-Fi prefill;
   // external: 3 days, no Wi-Fi), so the download goes through a small form.
   const openInstallerForm = () => { setError(null); setInstallerForm({ audience: '', label: '' }); };
+  // Sticker for a unit (logo · MAC · model · our record): the window opens inside the
+  // click (popup blockers), the server renders the page, the label printer prints it.
+  const printSticker = (params) => {
+    const w = window.open('', '_blank', 'width=560,height=560');
+    run(async () => {
+      if (!w) throw new Error('הדפדפן חסם את חלון המדבקה — אפשרו חלונות קופצים לאתר ונסו שוב');
+      try {
+        const { html } = await adminApi.get(`/shelly/sticker?${new URLSearchParams(params)}`);
+        w.document.write(html); w.document.close();
+      } catch (e) { w.close(); throw e; }
+    }).catch(() => {}); // run() has shown the error
+  };
   const downloadUniversal = () => run(async () => {
     const { script_html, audience, valid_days } = await adminApi.post('/shelly/universal-installer', installerForm);
     downloadHtml(`shelly-setup-${audience}-${today()}.html`, script_html);
@@ -406,6 +418,11 @@ export default function Devices() {
                               title="המכשיר אופס להגדרות יצרן? קובץ התקנה למכשיר הזה בלבד"
                               onClick={() => { setError(null); setReinstall({ device: d }); }}>התקנה מחדש</Button>
                           )}
+                          {d.device_type === 'shelly' && !!(d.device_uid || d.removed_uid) && (
+                            <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                              title="מדבקה למכשיר: לוגו, MAC, דגם ומזהה — למדפסת המדבקות"
+                              onClick={() => printSticker({ device_id: d.id })}>מדבקה</Button>
+                          )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             onClick={() => setTransferForm({ device: d, user_id: '' })}>העבר ללקוח</Button>
                           {d.device_type === 'shelly' && !!(d.is_enabled ? d.device_uid : d.removed_uid) && !d.returned_to_stock_at && (
@@ -496,6 +513,8 @@ export default function Devices() {
             <input type="checkbox" checked={showDeadInstallers} onChange={(e) => setShowDeadInstallers(e.target.checked)} />
             הצג גם שבוטלו / פגי תוקף ({installers.filter((t) => !t.is_live).length})
           </label>
+          <Button variant="ghost" disabled={busy} title="מדבקה עם MAC אקראי — לכיוון גליל המדבקות והמדפסת"
+            onClick={() => printSticker({ test: '1' })}>מדבקת בדיקה</Button>
           <Button disabled={busy} onClick={openInstallerForm}>
             <span className="inline-flex items-center gap-1.5"><Download size={15} />קובץ התקנה חדש</span>
           </Button>
@@ -610,6 +629,9 @@ export default function Devices() {
                       הפעל ללקוח ›
                     </Button>
                   )}
+                  <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                    title="מדבקה ליחידה: לוגו, MAC ודגם — למדפסת המדבקות"
+                    onClick={() => printSticker({ mac: p.mac })}>מדבקה</Button>
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                     onClick={() => run(async () => {
                       if (!confirm(`למחוק את ${p.mac} מהמלאי? (לא נוגע במכשיר עצמו)`)) return;

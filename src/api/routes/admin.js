@@ -384,6 +384,15 @@ adminRouter.post('/shelly/universal-installer', requireWrite, async (req, res, n
   } catch (e) { next(e); }
 });
 
+// A unit's sticker (logo · MAC · model · our record) as a ready-to-print page — any
+// MAC (inventory or customer device), or test=1 for a random one to dial in the roll.
+adminRouter.get('/shelly/sticker', async (req, res, next) => {
+  try {
+    const { stickerFor } = await import('../../services/shellyOnboard.js');
+    res.json({ html: await stickerFor({ mac: req.query.mac, device_id: req.query.device_id, test: String(req.query.test || '') === '1', base: `${req.protocol}://${req.get('host')}` }) });
+  } catch (e) { next(e); }
+});
+
 // Issued installer files: who made them, for whom, how often used, live/revoked.
 adminRouter.get('/shelly/installers', async (req, res, next) => {
   try {

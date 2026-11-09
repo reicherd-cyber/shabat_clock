@@ -133,8 +133,17 @@ authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, 
     const out = { connected: !!mac, mac_ok: mac === claims.uid };
     // A verified connection means the file-installer flow completed for this
     // unit — log it in the prepared-devices inventory with what the unit said
-    // about itself (model / firmware), never a bare MAC.
+    // about itself (model / firmware), never a bare MAC. The sticker printed at
+    // the end names the unit by that same model code, and by our record (id ·
+    // name) when it is already a devices row — this token is bound to this one
+    // uid, so the answer says nothing about any other unit.
     if (out.connected && out.mac_ok) {
+      const { stickerRecord } = await import('../../services/shellyOnboard.js');
+      const { shellyModelName } = await import('../../services/shelly-model.js');
+      out.model_name = shellyModelName(reply.result.model);
+      // who=1: the sticker's record — asked for by the final check only, not by the
+      // router check's 5-second polls of this route.
+      if (String(req.query.who || '') === '1') out.device = await stickerRecord(claims.uid).catch(() => null);
       query(
         `INSERT INTO prepared_devices (mac, model, fw_version) VALUES (?,?,?)
          ON DUPLICATE KEY UPDATE model = COALESCE(VALUES(model), model), fw_version = COALESCE(VALUES(fw_version), fw_version)`,
@@ -193,7 +202,11 @@ authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, onboardPrepareT
       const { shellyMqttRpc } = await import('../../mqtt/client.js');
       const reply = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 4000);
       const mac = reply?.result?.mac ? String(reply.result.mac).toLowerCase().replace(/[^0-9a-f]/g, '') : null;
-      return res.json({ connected: !!mac, mac_ok: mac === uid });
+      // No customer data on this path: any holder of a universal file may ask about
+      // any MAC (installCandidates / mintDeviceCreds keep the same rule). The model
+      // name is the unit's own word and serves the sticker.
+      const { shellyModelName } = await import('../../services/shelly-model.js');
+      return res.json({ connected: !!mac, mac_ok: mac === uid, model_name: mac ? shellyModelName(reply.result.model) : '' });
     }
     // The row behind claims.jti decides whether this file may still mint (revoked /
     // expired), and a MAC that is a registered customer device is refused there.

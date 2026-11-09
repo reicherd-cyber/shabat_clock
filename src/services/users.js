@@ -265,10 +265,12 @@ export function validateUiPrefs(patch, current = {}, allowedRelayIds = null) {
 
 export async function findUserByPhone(phone) {
   // [D34] verified rows only — an unverified phone is treated as not found.
+  // A removed phone is a soft delete (deleted_at); it must stop identifying the
+  // caller at once — the IVR and the WhatsApp bot both come through here.
   const rows = await query(
     `SELECT u.* FROM users u
      JOIN user_phones p ON p.user_id = u.id
-     WHERE p.phone = ? AND p.verified_at IS NOT NULL`,
+     WHERE p.phone = ? AND p.verified_at IS NOT NULL AND p.deleted_at IS NULL`,
     [phone],
   );
   return rows[0] || null;

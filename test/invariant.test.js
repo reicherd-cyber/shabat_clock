@@ -217,3 +217,52 @@ test('installer: the clock is settled before the first verified connection, on t
   const links = onboard.slice(onboard.indexOf('export async function prepLinks'), onboard.indexOf('export async function prepStatus'));
   assert.ok(links.includes('Sys.SetConfig?config='), 'the home-prep links set a time server');
 });
+
+test('installer: a sticker (MAC · model · our record when pre-assigned) is on offer from every verified-connection path, and its page code survives the template literal', () => {
+  const onboard = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
+  const auth = readFileSync(new URL('../src/api/routes/auth.js', import.meta.url), 'utf8');
+  assert.ok(onboard.includes('function printSticker('));
+  assert.ok(onboard.includes("STAGE='done';$('go').textContent='סיום';offerSticker();"), 'the pre-provisioned done path offers the sticker');
+  assert.ok(/function offerRouterCheck\(\)\{ROUTER_OFFERED=true;[^\n]*offerSticker\(\)\}/.test(onboard), 'the verified path offers the sticker next to the router check');
+  assert.equal((onboard.match(/SERVER_DEV=r\.device\|\|null/g) || []).length, 2, 'both server checks keep our record for the sticker');
+  // Our record rides only the per-device token (bound to one uid); the universal file's check path stays customer-data free.
+  assert.ok(auth.includes('out.device = await stickerRecord(claims.uid)'), 'the per-device status names our record');
+  assert.ok(!auth.includes('stickerRecord(uid)') && !auth.includes('registeredDevice(uid)'), 'the universal check path exposes no customer record');
+  assert.equal((auth.match(/model_name: |out\.model_name = /g) || []).length, 2, 'both paths name the model by the same server rule');
+  assert.ok(onboard.includes("import { shellyModelName } from './shelly-model.js'") && !/^export function shellyModelName/m.test(onboard), 'one model-name rule, in shelly-model.js');
+  const rec = onboard.slice(onboard.indexOf('export async function stickerRecord('), onboard.indexOf('async function stickerModel('));
+  assert.ok(/device_uid = \? AND is_enabled = TRUE AND returned_to_stock_at IS NULL/.test(rec) && !rec.includes('removed_uid'), 'the sticker names only the row that owns the MAC now — a stock unit never prints its previous customer');
+  assert.ok(onboard.includes("STATUS_URL+'&who=1'") && auth.includes("req.query.who || '') === '1') out.device"), 'the record rides the final check only, not the router-check polls');
+  assert.ok(/MODEL_NAMES = Object\.fromEntries\(MDNS_PREFIXES\.map/.test(onboard), 'the page model table is derived, not a second list');
+  assert.ok(/const readAsset = \(rel\) => \{ try \{/.test(onboard) && !/^const (LOGO_DATA_URI|STICKER_JS_VERSION) =/m.test(onboard), 'web assets are read lazily and never fatal');
+  const vc = readFileSync(new URL('../src/services/voiceCosts.js', import.meta.url), 'utf8');
+  assert.ok(vc.includes('WHERE up.deleted_at IS NULL AND up.verified_at IS NOT NULL'), 'voice-cost attribution shares the phone identity rule');
+  assert.ok(vc.includes("query('SELECT id, full_name FROM users')") && (vc.match(/nameById\.get\(Number\((best\?|u)\.user_id\)\) \|\| nameByPhone/g) || []).length === 2, 'a recorded user_id names its owner even after their phones were removed');
+  const code = onboard.slice(onboard.indexOf('function printSticker('), onboard.indexOf('function reofferDone('));
+  assert.ok(code.length > 300 && !code.includes('\\') && !code.includes('$' + '{'), 'no backslashes or interpolations inside the sticker code');
+  // One sticker page for every path: the installer file gets it as a template (script-safe), the admin by MAC.
+  assert.ok(onboard.includes("const STICKER_TPL=$" + "{js(stickerHtml({ mac: '__MAC__'") && !onboard.includes('jsStr'), 'the installer page embeds the sticker template through the one script-safe encoder');
+  // The admin window inherits the site's CSP (script-src 'self'): the controls are a same-origin file, never inline.
+  const stickerCode = onboard.slice(onboard.indexOf('export function stickerHtml('), onboard.indexOf('export async function stickerFor('));
+  assert.ok(!/<script>/.test(stickerCode) && stickerCode.includes("/sticker.js?v=' + STICKER_JS_VERSION + '\"></script>"), 'sticker controls come from /sticker.js with a content hash, not an inline script');
+  assert.ok(!/id="rot"/.test(stickerCode) || !/id="rot"[\s\S]*id="rot"/.test(stickerCode), 'one element per id');
+  assert.ok(readFileSync(new URL('../src/web/public/sticker.js', import.meta.url), 'utf8').includes("getItem('stickerSize')"), 'the static controls script exists');
+  assert.ok(onboard.includes("base=new URL(PREPARE_URL||STATUS_URL).origin"), 'the installer page points the script at our server');
+  // The installer page is a foreign origin (file://): helmet's CORP same-origin would refuse it the script.
+  const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  assert.ok(/app\.get\('\/sticker\.js',[\s\S]{0,200}'Cross-Origin-Resource-Policy', 'cross-origin'/.test(app), '/sticker.js is served cross-origin');
+  assert.ok(/'Cache-Control', 'no-cache'/.test(app), '/sticker.js is never served stale');
+  assert.ok(onboard.includes('export async function stickerFor(') && onboard.includes("'2805a5' + crypto.randomBytes(3)"), 'admin stickers by MAC, test print with a random Shelly MAC');
+  const admin = readFileSync(new URL('../src/api/routes/admin.js', import.meta.url), 'utf8');
+  assert.ok(admin.includes("adminRouter.get('/shelly/sticker'"), 'admin route');
+  const page = readFileSync(new URL('../src/web/src/admin/Devices.jsx', import.meta.url), 'utf8');
+  assert.ok(page.includes('printSticker({ device_id: d.id })') && page.includes('printSticker({ mac: p.mac })'), 'device rows print by row id, inventory rows by MAC');
+  assert.ok(page.includes("printSticker({ test: '1' })"), 'test sticker');
+});
+
+test('a removed (soft-deleted) phone no longer identifies a caller — IVR and WhatsApp share findUserByPhone', () => {
+  const users = readFileSync(new URL('../src/services/users.js', import.meta.url), 'utf8');
+  const fn = users.slice(users.indexOf('export async function findUserByPhone('), users.indexOf('export async function findUserByIvrCode('));
+  assert.ok(/p\.verified_at IS NOT NULL AND p\.deleted_at IS NULL/.test(fn), 'verified and not removed');
+  for (const f of ['../src/ivr/router.js', '../src/whatsapp/bot.js']) assert.ok(readFileSync(new URL(f, import.meta.url), 'utf8').includes('findUserByPhone('), f + ' resolves callers through the shared lookup');
+});

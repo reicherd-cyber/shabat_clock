@@ -108,6 +108,14 @@ export function createApp() {
   // Line-check script must be text/plain so `irm ... | iex` gets a string, not bytes
   // (express.static would serve .ps1 as octet-stream).
   app.get('/linecheck.ps1', (req, res) => res.type('text/plain; charset=utf-8').sendFile(path.join(dist, 'linecheck.ps1')));
+  // Sticker size controls (see stickerHtml): the installer page runs from file://,
+  // a foreign origin, and helmet's default Cross-Origin-Resource-Policy: same-origin
+  // would refuse it the script — this one file is explicitly cross-origin.
+  app.get('/sticker.js', (req, res) => {
+    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.set('Cache-Control', 'no-cache'); // the page names it with a content hash; revalidate, never serve a stale copy
+    res.type('application/javascript; charset=utf-8').sendFile(path.join(dist, 'sticker.js'));
+  });
   app.use(express.static(dist));
   app.get(/^\/(?!api|ivr|whatsapp).*/, (req, res) => {
     res.sendFile(path.join(dist, 'index.html'), (err) => {

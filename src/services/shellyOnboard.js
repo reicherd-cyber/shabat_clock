@@ -12,6 +12,7 @@ import { env } from '../config/env.js';
 import { errors } from '../config/errors.js';
 import { query } from '../db/pool.js';
 import { mosquittoPasswdHash, writeBrokerPasswdEntry } from './devices.js';
+import { shellyModelName } from './shelly-model.js';
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const generatePassword = (len = 24) =>
@@ -67,6 +68,131 @@ const MDNS_PREFIXES = [
   'shellypro4pm', 'shellypro2', 'shellypro1', 'shellypro2pm', 'shellypro1pm', 'shellypro3',
   'shellyplus2pm', 'shellyplus1pm', 'shellyplus1',
 ];
+// The page's fallback model name when the server has not named the unit yet: the
+// mDNS word it knows for sure → "Shelly Pro 4PM". Derived, not a second list.
+const nameFromPrefix = (p) => { const m = /^shelly(pro|plus)(\d)(pm)?$/.exec(p); return m ? `Shelly ${m[1] === 'pro' ? 'Pro' : 'Plus'} ${m[2]}${m[3] ? 'PM' : ''}` : ''; };
+const MODEL_NAMES = Object.fromEntries(MDNS_PREFIXES.map((p) => [p, nameFromPrefix(p)]));
+
+// ---- Unit sticker (installer page end + admin) ------------------------------
+// One page for every path: the top half is the זימנא logo (black on white — the
+// thermal printer knows no colour), the bottom half the MAC (our key in the admin),
+// the model and the date, plus our record (id · name) when the unit is a customer's.
+// The size controls are a static script on OUR origin (src/web/public/sticker.js):
+// a window opened from the admin inherits the site's CSP (script-src 'self'), which
+// kills inline scripts, so the page names the script by absolute URL — the installer
+// page (file://) loads it over https too. Without it the page still prints at the
+// built-in 50×30 mm. Printing is the browser's dialog, where the Xprinter XP-365B
+// label printer takes the @page size as the label.
+// The controls script is cached (express.static max-age + Cloudflare + the browser); its
+// URL carries a content hash so every deploy of it reaches the page — a stale copy once
+// sized only the inner label, the wrapper collapsed and the sticker printed blank. The
+// served file is web/dist/sticker.js (vite copies public/), so that is what is hashed.
+// Both web assets are read lazily and never fatal: a missing file costs the sticker its
+// logo or a fixed version, not the installer routes that import this module.
+const readAsset = (rel) => { try { return fs.readFileSync(new URL(rel, import.meta.url)); } catch { return null; } };
+let stickerAssets = null;
+function assets() {
+  if (stickerAssets) return stickerAssets;
+  const logo = readAsset('./assets/zimna-logo-print.png');
+  const js = readAsset('../web/dist/sticker.js') || readAsset('../web/public/sticker.js');
+  stickerAssets = {
+    logo: logo ? 'data:image/png;base64,' + logo.toString('base64') : '',
+    version: js ? crypto.createHash('sha1').update(js).digest('hex').slice(0, 10) : String(Date.now()),
+  };
+  return stickerAssets;
+}
+const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// A JS string literal safe inside a <script> body: every "<" becomes <, so no
+// "</script" (or "<!--") in the data can end the page's script.
+const js = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
+// The user's roll (measured 2026-11-09: 50 × 30 mm) comes first and is the default.
+const STICKER_SIZES = [[50, 30], [40, 25], [40, 30], [58, 40], [60, 40]];
+// Label geometry (twin of apply() in src/web/public/sticker.js — keep in step). The
+// label is always laid out W×H; "rot" turns the whole label 90° inside an H×W page,
+// for a driver whose paper form is reported the other way round (a label printer
+// prints the page as given — the browser's landscape flip ends up across the roll).
+const stickerSizeCss = (W, H, rot) => {
+  const macMm = Math.min((W - 4) / 7.6, H * 0.21);
+  const page = rot ? H + 'mm ' + W + 'mm' : W + 'mm ' + H + 'mm';
+  return '@page{size:' + page + ';margin:0}#rot{width:' + page.replace(' ', ';height:') + '}#lab{width:' + W + 'mm;height:' + H + 'mm'
+    + (rot ? ';transform:rotate(90deg) translateY(-100%)' : '') + '}.mac{font-size:' + macMm.toFixed(2) + 'mm}.sub,.who{font-size:' + (macMm * 0.45).toFixed(2) + 'mm}';
+};
+export function stickerHtml({ mac, model, date, who, base }) {
+  const { logo: LOGO_DATA_URI, version: STICKER_JS_VERSION } = assets();
+  const opts = STICKER_SIZES.map((s) => '<option value="' + s[0] + 'x' + s[1] + '">' + s[0] + '×' + s[1] + ' מ"מ</option>').join('');
+  return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
+    + 'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
+    + '#ctl{padding:10px 12px;background:#fff;border-bottom:1px solid #cfc9bb;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:15px}'
+    + '#ctl input[type=number]{width:58px;font-size:15px;padding:4px;text-align:center}#ctl select{font-size:15px;padding:4px}#ctl label{display:inline-flex;align-items:center;gap:4px}#ctl .adj{color:#6b655a}'
+    + '#ctl button{font-size:16px;padding:8px 16px;border:0;border-radius:8px;background:#b3654a;color:#fff}'
+    + '#hint{width:100%;color:#6b655a;font-size:13px}'
+    + '#wrap{padding:16px;display:flex;justify-content:center}'
+    + '#rot{position:relative;background:#fff;outline:1px dashed #999;overflow:hidden;margin:0 auto}'
+    + '#lab{position:absolute;top:0;left:0;transform-origin:top left;background:#fff;box-sizing:border-box;overflow:hidden;display:flex;flex-direction:column}'
+    + '#logo{flex:0 0 50%;box-sizing:border-box;padding:1.2mm 2mm .4mm;display:flex;align-items:center;justify-content:center;min-height:0}'
+    + '#logo img{max-width:100%;max-height:100%;object-fit:contain}'
+    + '#txt{flex:0 0 50%;box-sizing:border-box;padding:0 1.5mm 1mm;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:.5mm;min-height:0}'
+    + '.mac{direction:ltr;font-family:Consolas,Menlo,monospace;font-weight:700;white-space:nowrap;line-height:1}'
+    + '.sub{direction:rtl;white-space:nowrap}.who{font-weight:700;white-space:nowrap}.who:empty{display:none}'
+    + '@media print{body{background:#fff}#ctl{display:none}#wrap{padding:0;display:block}#rot{outline:0}}'
+    + '</style><style id="pg">' + stickerSizeCss(50, 30, false) + '</style></head><body>'
+    + '<div id="ctl">גודל מדבקה: <select id="sz">' + opts + '<option value="custom">אחר</option></select>'
+    + ' <input id="w" type="number" min="20" max="110" step="0.5" inputmode="decimal"> × <input id="h" type="number" min="10" max="200" step="0.5" inputmode="decimal"> מ"מ'
+    + ' <label><input type="checkbox" id="rotchk"> סובב 90°</label>'
+    // Fine position: the driver decides where the label sits inside its stock (liner edges,
+    // sensor offset) — a half-millimetre nudge, remembered, lands every sticker centred.
+    + ' <span class="adj">הזזה: ימינה/שמאלה <input id="dx" type="number" min="-10" max="10" step="0.5" inputmode="decimal"> למעלה/למטה <input id="dy" type="number" min="-10" max="10" step="0.5" inputmode="decimal"> מ"מ</span>'
+    + ' <button id="pr">הדפס</button>'
+    + '<div id="hint">בחלון ההדפסה: מדפסת המדבקות (Xprinter), שוליים "ללא" (מסיר גם את הכותרות), גודל נייר = גודל המדבקה (מגדירים פעם אחת בהעדפות המדפסת ב-Windows). יצא מסובב לרוחב הגליל? סמנו "סובב 90°". לא במרכז? הזיזו בחצאי מ"מ (ימינה/למעלה = חיובי, כשהלוגו קריא) — נשמר להדפסות הבאות.</div></div>'
+    + '<div id="wrap"><div id="rot"><div id="lab"><div id="logo"><img alt="זימנא" src="' + LOGO_DATA_URI + '"></div>'
+    + '<div id="txt"><div class="mac">' + escHtml(mac) + '</div><div class="sub">' + escHtml(model) + ' · ' + escHtml(date) + '</div><div class="who">' + escHtml(who) + '</div></div></div></div></div>'
+    + '<script src="' + escHtml(String(base || '').replace(/\/+$/, '')) + '/sticker.js?v=' + STICKER_JS_VERSION + '"></script></body></html>';
+}
+// Our record for a unit's sticker: the devices row that OWNS this MAC right now —
+// enabled and not returned to stock; pre-assigned units (first_contact_pending)
+// included, unlike registeredDevice(). A removed MAC is deliberately not followed:
+// a unit back in stock must never print its previous customer's name.
+export async function stickerRecord(uid) {
+  const [row] = await query(
+    `SELECT id, name FROM devices
+     WHERE device_uid = ? AND is_enabled = TRUE AND returned_to_stock_at IS NULL
+     ORDER BY id DESC LIMIT 1`, [uid]);
+  return row ? { id: row.id, name: row.name } : null;
+}
+// The unit's model for the sticker: the inventory row when there is one, else the
+// unit itself (units registered before the inventory existed have no row).
+async function stickerModel(uid) {
+  const [prep] = await query('SELECT model FROM prepared_devices WHERE mac = ?', [uid]);
+  let name = shellyModelName(prep?.model);
+  if (!name) {
+    try {
+      const { shellyMqttRpc } = await import('../mqtt/client.js');
+      const r = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 2500);
+      name = shellyModelName(r?.result?.model);
+    } catch { /* offline: the generic word */ }
+  }
+  return name || 'Shelly';
+}
+// Admin: a sticker for a device row (its own id · name, by whichever MAC it holds),
+// for an inventory unit by MAC (no customer record, ever), or a test print (random
+// MAC with a Shelly prefix) to dial in the label roll.
+export async function stickerFor({ mac, device_id, test, base }) {
+  let uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  let dev = null;
+  if (device_id) {
+    const [row] = await query('SELECT id, name, device_uid, removed_uid FROM devices WHERE id = ?', [Number(device_id)]);
+    if (!row) throw errors.notFound('NOT_FOUND', 'המכשיר לא נמצא');
+    uid = String(row.device_uid || row.removed_uid || '').toLowerCase();
+    dev = { id: row.id, name: row.name };
+  }
+  if (test && uid.length !== 12) uid = '2805a5' + crypto.randomBytes(3).toString('hex');
+  if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
+  let model = 'Shelly';
+  if (!test) [dev, model] = await Promise.all([device_id ? dev : stickerRecord(uid), stickerModel(uid)]);
+  const date = new Date().toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
+  const who = test ? 'מדבקת בדיקה' : dev ? 'מזהה ' + dev.id + (dev.name ? ' · ' + dev.name : '') : '';
+  return stickerHtml({ mac: uid.toUpperCase(), model, date, who, base });
+}
 const mdnsCandidates = (uid) => MDNS_PREFIXES.map((p) => `${p}-${uid}.local`);
 
 // The RPC bodies are serialized server-side so the scripts stay dumb pipes — no
@@ -312,7 +438,6 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
   // beyond '); JSON.stringify once more makes them safe literals.
   // JSON.stringify does NOT escape '<', so a value containing "</script>" would
   // break out of the inline script — escape it into a < literal.
-  const js = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
   const inject = {
     uid: js(uid || ''),
     statusUrl: js(statusUrl || ''),
@@ -436,6 +561,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}) {
 let UID=${inject.uid}, STATUS_URL=${inject.statusUrl}, B=${inject.bodies};
 const PREPARE_URL=${inject.prepareUrl}, BROKER=${inject.broker};
 let IP='', sntpIdx=0, PROVISIONED=false, DEVIP='', STA_IP='';
+let SERVER_DEV=null, SERVER_MODEL='', ROUTER_OFFERED=false; // our record + model name for the unit (from the server check) · the router check is on offer
 const ANDROID=/Android/i.test(navigator.userAgent); // no mDNS in Android Chrome — .local lookups fail there
 // Model word of the unit ('shellypro1'…), learned from its device id over the
 // hotspot or from the network name the installer typed. Known → the LAN lookup
@@ -463,6 +589,8 @@ function parseModel(v){const s=v.trim().toLowerCase();if(!s.includes('-'))return
 // then the rest of the list — a mistyped word ("ShellyPro4-…") must not lose a
 // unit the full walk would have found.
 const ALL_PREFIXES=${JSON.stringify(MDNS_PREFIXES)};
+const MODEL_NAMES=${JSON.stringify(MODEL_NAMES)};
+const STICKER_TPL=${js(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__', base: '__BASE__' }))};
 function knownModel(){return MODEL||parseModel($('mac').value)}
 function mdnsNames(uid){const m=knownModel();const list=m?[m].concat(ALL_PREFIXES.filter(p=>p!==m)):ALL_PREFIXES;return list.map(p=>p+'-'+uid+'.local')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
@@ -662,7 +790,7 @@ function offerSkip(){if(STAGE==='wifi'&&!PROVISIONED&&DEVIP)actionBtn(SKIP_LABEL
 const isHotspot=(ip)=>ip&&(ip===DEVIP||ip==='192.168.33.1');
 async function rpc(body){await fetch('http://'+IP+'/rpc',{method:'POST',mode:'no-cors',cache:'no-store',body,signal:AbortSignal.timeout(10000)})}
 async function waitBack(){log('ממתין שהמכשיר יופעל מחדש...');await sleep(6000);for(let i=0;i<30;i++){if(await ping(IP))return true;await sleep(2000)}return false}
-async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok)return 'ok';if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
+async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL+'&who=1',{cache:'no-store'})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;SERVER_MODEL=r.model_name||'';return 'ok'}if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
 function actionBtn(txt,fn,alt){const b=document.createElement('button');b.textContent=txt;if(alt)b.className='alt';b.onclick=()=>{$('actions').innerHTML='';fn()};$('actions').appendChild(b)}
 // Router check: the router must not be powered THROUGH a Shelly channel — a real
 // install had the Wi-Fi router on a channel, and every off-command cut the house's
@@ -671,7 +799,25 @@ function actionBtn(txt,fn,alt){const b=document.createElement('button');b.textCo
 // with the device-local toggle_after timer, which restores power even if Wi-Fi
 // dies mid-test.
 async function quickConnected(){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();return !!r.connected}catch(e){return false}}
-function offerRouterCheck(){actionBtn('בדיקה: האם הנתב מחובר דרך המכשיר? (מומלץ)',routerCheck,true)}
+function offerRouterCheck(){ROUTER_OFFERED=true;actionBtn('בדיקה: האם הנתב מחובר דרך המכשיר? (מומלץ)',routerCheck,true);offerSticker()}
+// Sticker for the unit at the end of the install: the server-rendered sticker page
+// (logo, size controls — see stickerHtml) with this unit's details filled into its
+// placeholders. Page code is a template literal: no backslashes and no "$" + "{" in
+// here (see the invariant test).
+function offerSticker(){actionBtn('הדפס מדבקה למכשיר (MAC)',printSticker,true)}
+function printSticker(){
+ const mac=parseMac($('mac').value).toUpperCase();
+ const model=SERVER_MODEL||MODEL_NAMES[knownModel()]||'Shelly';
+ const date=new Date().toLocaleDateString('he-IL');
+ const who=SERVER_DEV?'מזהה '+SERVER_DEV.id+(SERVER_DEV.name?' · '+SERVER_DEV.name:''):'';
+ const w=window.open('','_blank','width=560,height=560');
+ if(!w){log('הדפדפן חסם את חלון המדבקה — אפשרו חלונות קופצים לדף הזה ולחצו שוב.','warn');reofferDone();return}
+ let base='';try{base=new URL(PREPARE_URL||STATUS_URL).origin}catch(e){}
+ const html=STICKER_TPL.split('__MAC__').join(esc(mac)).split('__MODEL__').join(esc(model)).split('__DATE__').join(esc(date)).split('__WHO__').join(esc(who)).split('__BASE__').join(esc(base));
+ w.document.write(html);w.document.close();
+ reofferDone();
+}
+function reofferDone(){if(ROUTER_OFFERED)offerRouterCheck();else offerSticker()}
 async function routerCheck(){
  log('בודק אילו ערוצים דולקים...');
  let ch=null;
@@ -689,10 +835,11 @@ async function routerCheck(){
    const until=Date.now()+180000;let back=false;
    while(Date.now()<until){await sleep(5000);if(await quickConnected()){back=true;break}}
    verdict('נמצא: הנתב (ראוטר) מקבל חשמל דרך ערוץ '+c.relay_no+'! חברו את הנתב לחשמל ישיר (לא דרך המכשיר) — אחרת כל כיבוי של הערוץ ינתק את הבית מהאינטרנט ואת המכשיר מהשרת.'+(back?'':'<br>הרשת עדיין לא חזרה — בדקו שהנתב נדלק.'),'bad');
-   return}
+   ROUTER_OFFERED=false;offerSticker();return}
   log('ערוץ '+c.relay_no+' תקין — הנתב לא שם.','ok');
  }
  verdict('מצוין — הנתב אינו מחובר דרך אף ערוץ דולק ('+on.map(c=>c.relay_no).join(', ')+'). המכשיר מוכן.','ok');
+ ROUTER_OFFERED=false;offerSticker();
 }
 let finTries=0;
 async function finish(){
@@ -933,12 +1080,12 @@ async function stageComplete(){
   const mac=parseMac($('mac').value);
   let ok=false;
   for(let i=0;i<12;i++){
-   try{const r=await(await fetch(PREPARE_URL+'&mac='+mac+'&check=1',{cache:'no-store',signal:AbortSignal.timeout(6000)})).json();if(r.connected&&r.mac_ok){ok=true;break}}
+   try{const r=await(await fetch(PREPARE_URL+'&mac='+mac+'&check=1&who=1',{cache:'no-store',signal:AbortSignal.timeout(6000)})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;SERVER_MODEL=r.model_name||'';ok=true;break}}
    catch(e){log('אין אינטרנט כרגע — ודאו שהטלפון על ה-Wi-Fi הביתי...','warn')}
    if(i%4===3)log('עדיין בודק... ('+(i+1)+'/12)','warn');
    await sleep(5000);
   }
-  if(ok){verdict('סיימתם! המכשיר מחובר לשרת. אפשר לשייך אותו ללקוח במסך הניהול.','ok');STAGE='done';$('go').textContent='סיום';return}
+  if(ok){verdict('סיימתם! המכשיר מחובר לשרת. אפשר לשייך אותו ללקוח במסך הניהול.','ok');STAGE='done';$('go').textContent='סיום';offerSticker();return}
   log('המכשיר לא מצליח להתחבר עם ההגדרות הקיימות — מגדיר אותו מחדש...','warn');
   PROVISIONED=false;
  }
