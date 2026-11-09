@@ -14,6 +14,7 @@ import { query } from '../db/pool.js';
 import { mosquittoPasswdHash, writeBrokerPasswdEntry } from './devices.js';
 import { shellyModelName } from './shelly-model.js';
 import { apPasswordFor } from './shellyAp.js';
+import { STICKER_SCRIPT } from './stickerScript.js';
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const generatePassword = (len = 24) =>
@@ -78,29 +79,19 @@ const MODEL_NAMES = Object.fromEntries(MDNS_PREFIXES.map((p) => [p, nameFromPref
 // One page for every path: the top half is the זימנא logo (black on white — the
 // thermal printer knows no colour), the bottom half the MAC (our key in the admin),
 // the model and the date, plus our record (id · name) when the unit is a customer's.
-// The size controls are a static script on OUR origin (src/web/public/sticker.js):
-// a window opened from the admin inherits the site's CSP (script-src 'self'), which
-// kills inline scripts, so the page names the script by absolute URL — the installer
-// page (file://) loads it over https too. Without it the page still prints at the
-// built-in 50×30 mm. Printing is the browser's dialog, where the Xprinter XP-365B
-// label printer takes the @page size as the label.
-// The controls script is cached (express.static max-age + Cloudflare + the browser); its
-// URL carries a content hash so every deploy of it reaches the page — a stale copy once
-// sized only the inner label, the wrapper collapsed and the sticker printed blank. The
-// served file is web/dist/sticker.js (vite copies public/), so that is what is hashed.
-// Both web assets are read lazily and never fatal: a missing file costs the sticker its
-// logo or a fixed version, not the installer routes that import this module.
-const readAsset = (rel) => { try { return fs.readFileSync(new URL(rel, import.meta.url)); } catch { return null; } };
-let stickerAssets = null;
-function assets() {
-  if (stickerAssets) return stickerAssets;
-  const logo = readAsset('./assets/zimna-logo-print.png');
-  const js = readAsset('../web/dist/sticker.js') || readAsset('../web/public/sticker.js');
-  stickerAssets = {
-    logo: logo ? 'data:image/png;base64,' + logo.toString('base64') : '',
-    version: js ? crypto.createHash('sha1').update(js).digest('hex').slice(0, 10) : String(Date.now()),
-  };
-  return stickerAssets;
+// The size controls (src/web/public/sticker.js) are INLINED, allowed by their hash
+// in the site CSP (services/stickerScript.js) — an external file kept arriving
+// stale from one cache or another, with the controls dead. Without the script the
+// page still prints at the built-in size. Printing is the browser's dialog, where
+// the Xprinter XP-365B label printer takes the @page size as the label.
+// The logo is read lazily and never fatal: a missing file costs the sticker its
+// logo, not the installer routes that import this module.
+let logoDataUri = null;
+function logoUri() {
+  if (logoDataUri !== null) return logoDataUri;
+  try { logoDataUri = 'data:image/png;base64,' + fs.readFileSync(new URL('./assets/zimna-logo-print.png', import.meta.url)).toString('base64'); }
+  catch { logoDataUri = ''; }
+  return logoDataUri;
 }
 const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // A JS string literal safe inside a <script> body: every "<" becomes <, so no
@@ -119,7 +110,7 @@ const stickerSizeCss = (W, H, rot) => {
     + (rot ? ';transform:rotate(90deg) translateY(-100%)' : '') + '}.mac{font-size:' + macMm.toFixed(2) + 'mm}.sub,.who{font-size:' + (macMm * 0.45).toFixed(2) + 'mm}';
 };
 export function stickerHtml({ mac, model, date, who, base }) {
-  const { logo: LOGO_DATA_URI, version: STICKER_JS_VERSION } = assets();
+  const LOGO_DATA_URI = logoUri();
   const opts = STICKER_SIZES.map((s) => '<option value="' + s[0] + 'x' + s[1] + '">' + s[0] + '×' + s[1] + ' מ"מ</option>').join('');
   return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
     + 'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
@@ -147,7 +138,7 @@ export function stickerHtml({ mac, model, date, who, base }) {
     + '<div id="hint">בחלון ההדפסה: מדפסת המדבקות (Xprinter), שוליים "ללא" (מסיר גם את הכותרות), גודל נייר = גודל המדבקה (מגדירים פעם אחת בהעדפות המדפסת ב-Windows). יצא מסובב לרוחב הגליל? סמנו "סובב 90°". לא במרכז? הזיזו בחצאי מ"מ (ימינה/למעלה = חיובי, כשהלוגו קריא) — נשמר להדפסות הבאות.</div></div>'
     + '<div id="wrap"><div id="rot"><div id="lab"><div id="logo"><img alt="זימנא" src="' + LOGO_DATA_URI + '"></div>'
     + '<div id="txt"><div class="mac">' + escHtml(mac) + '</div><div class="sub">' + escHtml(model) + ' · ' + escHtml(date) + '</div><div class="who">' + escHtml(who) + '</div></div></div></div></div>'
-    + '<script src="' + escHtml(String(base || '').replace(/\/+$/, '')) + '/sticker.js?v=' + STICKER_JS_VERSION + '"></script></body></html>';
+    + '<script>' + STICKER_SCRIPT + '</script></body></html>';
 }
 // Our record for a unit's sticker: the devices row that OWNS this MAC right now —
 // enabled and not returned to stock; pre-assigned units (first_contact_pending)
@@ -487,7 +478,7 @@ function htmlPage(uid, b, statusUrl, prepareUrl = '', broker = '', wifi = {}, ap
   <button type="button" class="itab" data-k="cable" role="tab" aria-selected="false" onclick="instTab('cable')">בכבל רשת מהנתב</button>
  </div>
  <ol class="ipanel" data-k="wifi" style="margin:6px 0 0;padding-inline-start:18px">
-  <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly) ולחצו "התחל התקנה" —
+  <li>חברו את הטלפון לרשת שהמכשיר משדר (...-Shelly, או ...-Zimna ביחידה שכבר הותקנה) ולחצו "התחל התקנה" —
    הדף מזהה את המכשיר לבד. (אם הטלפון שואל אם להישאר ברשת בלי אינטרנט — הישארו.)
    <div id="apBox" style="margin-top:6px;color:#a06a00">
     <b>הרשת של המכשיר מבקשת סיסמה?</b> יחידה שכבר חוברה לשרת מגינה על הרשת שלה.
@@ -869,10 +860,10 @@ async function finish(){
   if(sntpIdx<B.sntp.length-1)actionBtn('נסה שרת זמן אחר',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true);
   return}
  if(finTries<2){
-  verdict('המכשיר עדיין לא התחבר — וזה קורה: חיבור ראשון לוקח לפעמים עד כ-4 דקות (המכשיר מסנכרן שעון ומתחבר מוצפן). לחצו "בדוק שוב מול השרת" — הבדיקה הבאה תמתין עד 4 דקות. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו קודם ל-Wi-Fi רגיל.','warn');
+  verdict('המכשיר עדיין לא התחבר — וזה קורה: חיבור ראשון לוקח לפעמים עד כ-4 דקות (המכשיר מסנכרן שעון ומתחבר מוצפן). לחצו "בדוק שוב מול השרת" — הבדיקה הבאה תמתין עד 4 דקות. אם הטלפון עדיין על רשת המכשיר (Shelly... או Zimna...) — חזרו קודם ל-Wi-Fi רגיל.','warn');
   actionBtn('בדוק שוב מול השרת (עד 4 דקות)',async()=>{await finish()},true);
   return}
- verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (Shelly...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> המכשיר מתחבר לשרת בכתובת <span dir="ltr">'+BROKER+'</span>, שרוב הסינונים מעבירים — אבל יש קווים שחוסמים גם אותה. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את הכתובת הזו (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.<br><br>בדיקה מלאה ממחשב Windows על אותו קו — הדביקו שורה אחת ב-PowerShell (בודקת פורט + יירוט הצפנה ומדפיסה פסק דין):<br><code dir="ltr" style="display:block;background:#efe9df;border-radius:8px;padding:6px 8px;margin-top:4px;text-align:left">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>','warn');
+ verdict('המכשיר עדיין לא התחבר לשרת. אם הטלפון עדיין על רשת המכשיר (Shelly... או Zimna...) — חזרו ל-Wi-Fi רגיל ולחצו "בדוק שוב" (הבדיקה מול השרת דורשת אינטרנט).<br><br><b>הבית על קו אינטרנט מסונן (נטפרי / אתרוג / רימון)?</b> המכשיר מתחבר לשרת בכתובת <span dir="ltr">'+BROKER+'</span>, שרוב הסינונים מעבירים — אבל יש קווים שחוסמים גם אותה. בדיקה: העבירו זמנית את ה-Wi-Fi של המכשיר לנקודה חמה של טלפון — אם התחבר מיד, זו הסיבה. הפתרון: לבקש מספק הסינון להחריג את הכתובת הזו (וגם את kosher-teltech.com), ואז המכשיר יתחבר מעצמו.<br><br>בדיקה מלאה ממחשב Windows על אותו קו — הדביקו שורה אחת ב-PowerShell (בודקת פורט + יירוט הצפנה ומדפיסה פסק דין):<br><code dir="ltr" style="display:block;background:#efe9df;border-radius:8px;padding:6px 8px;margin-top:4px;text-align:left">irm https://kosher-teltech.com/linecheck.ps1 | iex</code>','warn');
  actionBtn('בדוק שוב מול השרת',async()=>{await finish()},true);
  if(sntpIdx<B.sntp.length-1){actionBtn('נסה שרת זמן אחר (בעיית שעון נפוצה)',async()=>{sntpIdx++;log('מגדיר שרת זמן חלופי ומאתחל...');await rpc(B.sntp[sntpIdx]);await rpc(B.reboot).catch(()=>{});await waitBack();await finish()},true)}
  actionBtn('נסה חיבור ללא אימות תעודה (עדיין מוצפן)',noVerifyAndCheck,true);
@@ -936,7 +927,7 @@ async function stageDetect(){
    ?'המכשיר נמצא אך לא ניתן לקרוא ממנו את הקוד. הקלידו את הקוד ידנית בשדה שנפתח למעלה (האותיות והספרות שאחרי המקף בשם הרשת Shelly...) ולחצו שוב.'
    :$('ip').value.trim()
     ?'הכתובת '+probe+' לא עונה. בדקו אותה ברשימת המכשירים של הנתב, ודאו שהטלפון על אותה רשת — או הקלידו את שם הרשת שהמכשיר משדר בשדה שנפתח למעלה.'
-    :'לא נמצא מכשיר — לא ברשת שהוא משדר ולא ברשת הביתית. בהתקנה ב-Wi-Fi: ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly...) ולחצו שוב. בהתקנה בכבל: ודאו שהמחשב/הטלפון על אותה רשת כמו המכשיר, או הקלידו למעלה את שמו (ShellyPro...) או את כתובת ה-IP שלו מרשימת המכשירים בנתב.','warn');
+    :'לא נמצא מכשיר — לא ברשת שהוא משדר ולא ברשת הביתית. בהתקנה ב-Wi-Fi: ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly או Zimna... או Zimna...) ולחצו שוב. בהתקנה בכבל: ודאו שהמחשב/הטלפון על אותה רשת כמו המכשיר, או הקלידו למעלה את שמו (ShellyPro...) או את כתובת ה-IP שלו מרשימת המכשירים בנתב.','warn');
   return}
  // Pre-provisioned unit (configured for our broker in advance, e.g. at the
  // seller's desk): the on-site visit collapses to Wi-Fi-only — one network,
@@ -1031,7 +1022,7 @@ async function tryMint(){
  $('wifiBlock').classList.remove('hidden');
  $('go').textContent='שלח הגדרות למכשיר ›';
  STAGE='install';
- verdict('פרטי החיבור מוכנים ✓. מלאו את פרטי ה-Wi-Fi הביתי, עברו לרשת שהמכשיר משדר (Shelly...) ולחצו "שלח הגדרות למכשיר" — מעבר אחד ויחיד.','ok');
+ verdict('פרטי החיבור מוכנים ✓. מלאו את פרטי ה-Wi-Fi הביתי, עברו לרשת שהמכשיר משדר (Shelly... או Zimna...) ולחצו "שלח הגדרות למכשיר" — מעבר אחד ויחיד.','ok');
 }
 // Stage 'wifi' (on the device network): the Wi-Fi join, verified.
 async function stageWifi(){
@@ -1059,7 +1050,7 @@ async function stageWifi(){
 async function sendWifi(ssid,wifiPass,r){
  log('שולח את פרטי הרשת "'+ssid+'" למכשיר...');
  try{await rpc(JSON.stringify({id:8001,method:'Wifi.SetConfig',params:{config:{sta:{ssid:ssid,pass:wifiPass,enable:true}}}}))}
- catch(e){verdict('שגיאה בשליחה — ודאו שהטלפון עדיין על רשת המכשיר (Shelly...) ונסו שוב.','bad');offerSkip();return}
+ catch(e){verdict('שגיאה בשליחה — ודאו שהטלפון עדיין על רשת המכשיר (Shelly... או Zimna...) ונסו שוב.','bad');offerSkip();return}
  log('ממתין שהמכשיר יתחבר לרשת...');
  let st=null;
  for(let i=0;i<15;i++){await sleep(2000);st=await wsRpc(DEVIP,'Wifi.GetStatus');if(st&&st.status==='got ip'&&st.sta_ip)break}
@@ -1131,7 +1122,7 @@ async function stageInstall(){
   const typed=$('wifiSsid').value, wifiPass=$('wifiPass').value;
   if(!typed.trim()){verdict('הזינו את שם רשת ה-Wi-Fi הביתית והסיסמה ולחצו שוב.','warn');return}
   IP=(DEVIP&&await ping(DEVIP))?DEVIP:(await ping('192.168.33.1')?'192.168.33.1':'');
-  if(!IP){verdict('המכשיר לא נמצא — ודאו שהטלפון על הרשת שהמכשיר משדר (Shelly...) ולחצו שוב.','warn');return}
+  if(!IP){verdict('המכשיר לא נמצא — ודאו שהטלפון על הרשת שהמכשיר משדר (Shelly... או Zimna...) ולחצו שוב.','warn');return}
   const ssid=isHotspot(IP)?(await resolveSsid(IP,typed)).ssid:typed.trim();
   try{
    log('שולח את פרטי ה-Wi-Fi למכשיר...');
@@ -1158,10 +1149,10 @@ async function stageInstall(){
   // "not found" — a real install read the generic message as a failure.
   if(PREPARE_URL&&B){
    $('ip').classList.remove('hidden');
-   verdict('פרטי החיבור נוצרו ונשמרו ✓. עכשיו חברו את הטלפון לרשת שהמכשיר משדר (Shelly...) ולחצו שוב על "שלח הגדרות למכשיר" — זו הלחיצה האחרונה. (כבר על רשת המכשיר ועדיין לא נמצא? הזינו את כתובת ה-IP שלו בשדה שנפתח למעלה.)','ok');
+   verdict('פרטי החיבור נוצרו ונשמרו ✓. עכשיו חברו את הטלפון לרשת שהמכשיר משדר (Shelly... או Zimna...) ולחצו שוב על "שלח הגדרות למכשיר" — זו הלחיצה האחרונה. (כבר על רשת המכשיר ועדיין לא נמצא? הזינו את כתובת ה-IP שלו בשדה שנפתח למעלה.)','ok');
    return}
   $('ip').classList.remove('hidden');
-  verdict('המכשיר לא נמצא. התחברו לרשת שהמכשיר משדר (Shelly...) ולחצו שוב — או הזינו את כתובת ה-IP שלו (מאפליקציית Shelly או מהנתב) בשדה שנפתח למעלה.','warn');
+  verdict('המכשיר לא נמצא. התחברו לרשת שהמכשיר משדר (Shelly... או Zimna...) ולחצו שוב — או הזינו את כתובת ה-IP שלו (מאפליקציית Shelly או מהנתב) בשדה שנפתח למעלה.','warn');
   $('go').disabled=false;return}
  log('המכשיר נמצא ('+IP+'). שולח הגדרות...','ok');
  const typed=$('wifiSsid').value, wifiPass=$('wifiPass').value;

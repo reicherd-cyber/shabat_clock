@@ -2,6 +2,7 @@ import express from 'express';
 import helmet from 'helmet';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { STICKER_SCRIPT_CSP } from './services/stickerScript.js';
 import { errorHandler } from './config/errors.js';
 import { ivrRouter } from './ivr/router.js';
 import { ivrLimiter, whatsappLimiter } from './api/middleware.js';
@@ -30,7 +31,9 @@ export function createApp() {
       useDefaults: false,
       directives: {
         'default-src': ["'self'"],
-        'script-src': ["'self'", 'https://accounts.google.com/gsi/client'],
+        // The sticker page's inline controls, by hash (services/stickerScript.js):
+        // a window opened from the admin inherits this policy.
+        'script-src': ["'self'", 'https://accounts.google.com/gsi/client', ...(STICKER_SCRIPT_CSP ? [STICKER_SCRIPT_CSP] : [])],
         'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://accounts.google.com/gsi/style'],
         'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
         'img-src': ["'self'", 'data:', 'blob:', 'https:'],
