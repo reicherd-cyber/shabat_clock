@@ -252,3 +252,10 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.equal((page.match(/printSticker\(\{ mac: /g) || []).length, 2, 'inventory rows and customer devices both print a sticker');
   assert.ok(page.includes("printSticker({ test: '1' })"), 'test sticker');
 });
+
+test('a removed (soft-deleted) phone no longer identifies a caller — IVR and WhatsApp share findUserByPhone', () => {
+  const users = readFileSync(new URL('../src/services/users.js', import.meta.url), 'utf8');
+  const fn = users.slice(users.indexOf('export async function findUserByPhone('), users.indexOf('export async function findUserByIvrCode('));
+  assert.ok(/p\.verified_at IS NOT NULL AND p\.deleted_at IS NULL/.test(fn), 'verified and not removed');
+  for (const f of ['../src/ivr/router.js', '../src/whatsapp/bot.js']) assert.ok(readFileSync(new URL(f, import.meta.url), 'utf8').includes('findUserByPhone('), f + ' resolves callers through the shared lookup');
+});
