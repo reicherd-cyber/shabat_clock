@@ -284,3 +284,8 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
   const idx = readFileSync(new URL('../src/db/migrations/index.js', import.meta.url), 'utf8');
   assert.ok(idx.includes('{ version: 94, up: migrate94 }'), 'migration 94 registered');
 });
+
+test('shelly: factory reset by wired input (five toggles) is switched off on every input when the server hardens a unit', () => {
+  const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
+  assert.ok(ap.includes("'Input.SetConfig', { id, config: { factory_reset: false } }") && ap.includes('await disableInputReset(uid, device, shellyMqttRpc)'), 'input reset off, inside the same hardening pass');
+});
