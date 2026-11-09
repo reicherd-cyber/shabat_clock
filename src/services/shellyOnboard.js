@@ -93,8 +93,8 @@ const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;
 // A JS string literal safe inside a <script> body: every "<" becomes <, so no
 // "</script" (or "<!--") in the data can end the page's script.
 const js = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
-// The user's roll (measured 2026-11-09: 50 × 28 mm) comes first and is the default.
-const STICKER_SIZES = [[50, 28], [50, 30], [40, 25], [58, 40], [60, 40]];
+// The user's roll (measured 2026-11-09: 50 × 30 mm) comes first and is the default.
+const STICKER_SIZES = [[50, 30], [40, 25], [40, 30], [58, 40], [60, 40]];
 // Label geometry (twin of apply() in src/web/public/sticker.js — keep in step). The
 // label is always laid out W×H; "rot" turns the whole label 90° inside an H×W page,
 // for a driver whose paper form is reported the other way round (a label printer
@@ -122,7 +122,7 @@ export function stickerHtml({ mac, model, date, who, base }) {
     + '.mac{direction:ltr;font-family:Consolas,Menlo,monospace;font-weight:700;white-space:nowrap;line-height:1}'
     + '.sub{direction:rtl;white-space:nowrap}.who{font-weight:700;white-space:nowrap}.who:empty{display:none}'
     + '@media print{body{background:#fff}#ctl{display:none}#wrap{padding:0;display:block}#rot{outline:0}}'
-    + '</style><style id="pg">' + stickerSizeCss(50, 28, false) + '</style></head><body>'
+    + '</style><style id="pg">' + stickerSizeCss(50, 30, false) + '</style></head><body>'
     + '<div id="ctl">גודל מדבקה: <select id="sz">' + opts + '<option value="custom">אחר</option></select>'
     + ' <input id="w" type="number" min="20" max="110" step="0.5" inputmode="decimal"> × <input id="h" type="number" min="10" max="200" step="0.5" inputmode="decimal"> מ"מ'
     + ' <label><input type="checkbox" id="rotchk"> סובב 90°</label>'
