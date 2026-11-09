@@ -8,12 +8,12 @@
   if (!sel || !w || !h || !pr || !rot || !dx || !dy) return;
   var saved = null;
   try { saved = JSON.parse(localStorage.getItem('stickerSize') || 'null'); } catch (e) {}
-  var sz = (saved && saved.w && saved.h) ? saved : { w: 40, h: 25 }; // the user's roll
+  var sz = (saved && saved.w && saved.h) ? saved : { w: 50, h: 28 }; // the user's roll
   // Twin of stickerSizeCss() in src/services/shellyOnboard.js — keep in step. The label
   // is laid out W×H; "rot" turns it 90° inside an H×W page, for a driver whose paper
   // form is reported the other way round (a label printer prints the page as given).
   function apply() {
-    var W = Math.max(20, Math.min(110, Number(w.value) || 40)), H = Math.max(10, Math.min(200, Number(h.value) || 25));
+    var W = Math.max(20, Math.min(110, Number(w.value) || 50)), H = Math.max(10, Math.min(200, Number(h.value) || 28));
     var R = !!rot.checked;
     // Fine position (mm): the driver's own placement of the label inside its stock is unknown here.
     var DX = Math.max(-10, Math.min(10, Number(dx.value) || 0)), DY = Math.max(-10, Math.min(10, Number(dy.value) || 0));
