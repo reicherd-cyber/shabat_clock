@@ -237,6 +237,7 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.ok(/const readAsset = \(rel\) => \{ try \{/.test(onboard) && !/^const (LOGO_DATA_URI|STICKER_JS_VERSION) =/m.test(onboard), 'web assets are read lazily and never fatal');
   const vc = readFileSync(new URL('../src/services/voiceCosts.js', import.meta.url), 'utf8');
   assert.ok(vc.includes('WHERE up.deleted_at IS NULL AND up.verified_at IS NOT NULL'), 'voice-cost attribution shares the phone identity rule');
+  assert.ok(vc.includes("query('SELECT id, full_name FROM users')") && (vc.match(/nameById.get(Number((best?|u).user_id)) || nameByPhone/g) || []).length === 2, 'a recorded user_id names its owner even after their phones were removed');
   const code = onboard.slice(onboard.indexOf('function printSticker('), onboard.indexOf('function reofferDone('));
   assert.ok(code.length > 300 && !code.includes('\\') && !code.includes('$' + '{'), 'no backslashes or interpolations inside the sticker code');
   // One sticker page for every path: the installer file gets it as a template (script-safe), the admin by MAC.
