@@ -92,6 +92,7 @@ import { migrate91 } from './migrate91.js';
 import { migrate92 } from './migrate92.js';
 import { migrate93 } from './migrate93.js';
 import { migrate94 } from './migrate94.js';
+import { migrate95 } from './migrate95.js';
 
 export const migrations = [
   { version: 1, up: migrate1 },
@@ -188,4 +189,5 @@ export const migrations = [
   { version: 92, up: migrate92 },
   { version: 93, up: migrate93 },
   { version: 94, up: migrate94 },
+  { version: 95, up: migrate95 },
 ];

@@ -303,3 +303,9 @@ test('a unit that went silent while the house answers is flagged as a possible f
   const page = readFileSync(new URL('../src/web/src/admin/Devices.jsx', import.meta.url), 'utf8');
   assert.ok(page.includes("Number(params.get('reinstall'))") && page.includes("next.delete('reinstall')"), 'the admin page opens the re-install dialog from the link');
 });
+
+test('device_events.event (an ENUM) knows every event name the code writes — a name outside it is dropped silently', () => {
+  const m95 = readFileSync(new URL('../src/db/migrations/migrate95.js', import.meta.url), 'utf8');
+  for (const name of ['ap_secured', 'input_reset_off', 'reset_suspected', 'first_contact', 'channel_mismatch']) assert.ok(m95.includes("'" + name + "'"), name);
+  assert.ok(readFileSync(new URL('../src/db/migrations/index.js', import.meta.url), 'utf8').includes('{ version: 95, up: migrate95 }'));
+});
