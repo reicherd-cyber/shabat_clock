@@ -247,12 +247,12 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   const stickerCode = onboard.slice(onboard.indexOf('export function stickerHtml('), onboard.indexOf('export async function stickerFor('));
   assert.ok(stickerCode.includes("'<script>' + STICKER_SCRIPT + '</script>"), 'sticker controls are inlined (every external delivery arrived stale from a cache)');
   const ss = readFileSync(new URL('../src/services/stickerScript.js', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
   assert.ok(/createHash\('sha256'\)\.update\(source, 'utf8'\)\.digest\('base64'\)/.test(ss) && app.includes('STICKER_SCRIPT_CSP') && /'script-src': \["'self'", 'https:\/\/accounts\.google\.com\/gsi\/client', \.\.\.\(STICKER_SCRIPT_CSP/.test(app), 'the site CSP allows exactly that inline script by hash');
   assert.ok(!/id="rot"/.test(stickerCode) || !/id="rot"[\s\S]*id="rot"/.test(stickerCode), 'one element per id');
   assert.ok(readFileSync(new URL('../src/web/public/sticker.js', import.meta.url), 'utf8').includes("getItem('stickerSize')"), 'the static controls script exists');
   assert.ok(onboard.includes("base=new URL(PREPARE_URL||STATUS_URL).origin"), 'the installer page points the script at our server');
   // The installer page is a foreign origin (file://): helmet's CORP same-origin would refuse it the script.
-  const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
   assert.ok(/app\.get\('\/sticker\.js',[\s\S]{0,200}'Cross-Origin-Resource-Policy', 'cross-origin'/.test(app), '/sticker.js is served cross-origin');
   assert.ok(onboard.includes('export async function stickerFor(') && onboard.includes("'2805a5' + crypto.randomBytes(3)"), 'admin stickers by MAC, test print with a random Shelly MAC');
   const admin = readFileSync(new URL('../src/api/routes/admin.js', import.meta.url), 'utf8');
