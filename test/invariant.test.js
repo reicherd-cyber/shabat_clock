@@ -275,7 +275,7 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
   assert.ok(!ap.includes('getSetting') && !ap.includes('ap_secret'), 'no secret in the settings table');
   assert.ok(ap.includes("const apDone = ap.enable === false || (ap.is_open === false && ap.ssid === apSsidFor(uid));") && ap.includes("if (ap.enable === false) {") && ap.includes("{ config: { ap: { ssid: apSsidFor(uid), is_open: false, pass: apPasswordFor(uid) } } }"), 'our name + password; a stamped, closed, correctly named hotspot is left alone; a switched-off one stays off; enable is never forced');
   assert.ok(/'Zimna-' \+ u\.toUpperCase\(\)/.test(ap), 'hotspot name = brand + MAC');
-  assert.ok((onboard.match(/Zimna/g) || []).length >= 4, 'the installer page names both hotspot names');
+  assert.ok((readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8').match(/Zimna/g) || []).length >= 4, 'the installer page names both hotspot names');
   assert.ok(ap.includes('if (apSet && inputs.complete) {') && ap.includes('const inFlight = new Map();'), 'stamped only after both steps succeeded; one pass at a time');
   const mq = readFileSync(new URL('../src/mqtt/client.js', import.meta.url), 'utf8');
   assert.ok(mq.includes("secureShellyAp(device, { reason: 'hello' })"), 'hello re-checks the real AP state (factory reset)');
