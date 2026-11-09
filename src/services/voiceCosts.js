@@ -136,7 +136,8 @@ export async function getVoiceCosts({ from, to, userId, phone, q, source, kind }
          FROM nlu_usage ${usageWhere.length ? `WHERE ${usageWhere.join(' AND ')}` : ''} ORDER BY id DESC`,
       usageArgs,
     ),
-    query('SELECT up.phone, up.user_id, u.full_name FROM user_phones up JOIN users u ON u.id = up.user_id'),
+    // Same identity rule as findUserByPhone: a verified, not-removed phone names its owner.
+    query('SELECT up.phone, up.user_id, u.full_name FROM user_phones up JOIN users u ON u.id = up.user_id WHERE up.deleted_at IS NULL AND up.verified_at IS NOT NULL'),
   ]);
   const nameByPhone = new Map(users.map((u) => [String(u.phone), u.full_name]));
   const userIdByPhone = new Map(users.map((u) => [String(u.phone), u.user_id]));

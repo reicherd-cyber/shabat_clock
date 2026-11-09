@@ -421,7 +421,7 @@ export default function Devices() {
                           {d.device_type === 'shelly' && !!(d.device_uid || d.removed_uid) && (
                             <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                               title="מדבקה למכשיר: לוגו, MAC, דגם ומזהה — למדפסת המדבקות"
-                              onClick={() => printSticker({ mac: d.device_uid || d.removed_uid })}>מדבקה</Button>
+                              onClick={() => printSticker({ device_id: d.id })}>מדבקה</Button>
                           )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             onClick={() => setTransferForm({ device: d, user_id: '' })}>העבר ללקוח</Button>

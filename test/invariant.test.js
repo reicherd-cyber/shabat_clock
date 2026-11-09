@@ -230,7 +230,13 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.ok(!auth.includes('stickerRecord(uid)') && !auth.includes('registeredDevice(uid)'), 'the universal check path exposes no customer record');
   assert.equal((auth.match(/model_name: |out\.model_name = /g) || []).length, 2, 'both paths name the model by the same server rule');
   assert.ok(onboard.includes("import { shellyModelName } from './shelly-model.js'") && !/^export function shellyModelName/m.test(onboard), 'one model-name rule, in shelly-model.js');
-  assert.ok(/ORDER BY is_enabled DESC, id DESC LIMIT 1/.test(onboard), 'the sticker record lookup covers pre-assigned and removed units');
+  const rec = onboard.slice(onboard.indexOf('export async function stickerRecord('), onboard.indexOf('async function stickerModel('));
+  assert.ok(/device_uid = \? AND is_enabled = TRUE AND returned_to_stock_at IS NULL/.test(rec) && !rec.includes('removed_uid'), 'the sticker names only the row that owns the MAC now — a stock unit never prints its previous customer');
+  assert.ok(onboard.includes("STATUS_URL+'&who=1'") && auth.includes("req.query.who || '') === '1') out.device"), 'the record rides the final check only, not the router-check polls');
+  assert.ok(/MODEL_NAMES = Object\.fromEntries\(MDNS_PREFIXES\.map/.test(onboard), 'the page model table is derived, not a second list');
+  assert.ok(/const readAsset = \(rel\) => \{ try \{/.test(onboard) && !/^const (LOGO_DATA_URI|STICKER_JS_VERSION) =/m.test(onboard), 'web assets are read lazily and never fatal');
+  const vc = readFileSync(new URL('../src/services/voiceCosts.js', import.meta.url), 'utf8');
+  assert.ok(vc.includes('WHERE up.deleted_at IS NULL AND up.verified_at IS NOT NULL'), 'voice-cost attribution shares the phone identity rule');
   const code = onboard.slice(onboard.indexOf('function printSticker('), onboard.indexOf('function reofferDone('));
   assert.ok(code.length > 300 && !code.includes('\\') && !code.includes('$' + '{'), 'no backslashes or interpolations inside the sticker code');
   // One sticker page for every path: the installer file gets it as a template (script-safe), the admin by MAC.
@@ -249,7 +255,7 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   const admin = readFileSync(new URL('../src/api/routes/admin.js', import.meta.url), 'utf8');
   assert.ok(admin.includes("adminRouter.get('/shelly/sticker'"), 'admin route');
   const page = readFileSync(new URL('../src/web/src/admin/Devices.jsx', import.meta.url), 'utf8');
-  assert.equal((page.match(/printSticker\(\{ mac: /g) || []).length, 2, 'inventory rows and customer devices both print a sticker');
+  assert.ok(page.includes('printSticker({ device_id: d.id })') && page.includes('printSticker({ mac: p.mac })'), 'device rows print by row id, inventory rows by MAC');
   assert.ok(page.includes("printSticker({ test: '1' })"), 'test sticker');
 });
 

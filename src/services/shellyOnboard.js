@@ -68,11 +68,10 @@ const MDNS_PREFIXES = [
   'shellypro4pm', 'shellypro2', 'shellypro1', 'shellypro2pm', 'shellypro1pm', 'shellypro3',
   'shellyplus2pm', 'shellyplus1pm', 'shellyplus1',
 ];
-// Printed on the unit's sticker (the mDNS word is what the page knows for sure).
-const MODEL_NAMES = {
-  shellypro4pm: 'Shelly Pro 4PM', shellypro2: 'Shelly Pro 2', shellypro1: 'Shelly Pro 1', shellypro2pm: 'Shelly Pro 2PM',
-  shellypro1pm: 'Shelly Pro 1PM', shellypro3: 'Shelly Pro 3', shellyplus2pm: 'Shelly Plus 2PM', shellyplus1pm: 'Shelly Plus 1PM', shellyplus1: 'Shelly Plus 1',
-};
+// The page's fallback model name when the server has not named the unit yet: the
+// mDNS word it knows for sure → "Shelly Pro 4PM". Derived, not a second list.
+const nameFromPrefix = (p) => { const m = /^shelly(pro|plus)(\d)(pm)?$/.exec(p); return m ? `Shelly ${m[1] === 'pro' ? 'Pro' : 'Plus'} ${m[2]}${m[3] ? 'PM' : ''}` : ''; };
+const MODEL_NAMES = Object.fromEntries(MDNS_PREFIXES.map((p) => [p, nameFromPrefix(p)]));
 
 // ---- Unit sticker (installer page end + admin) ------------------------------
 // One page for every path: the top half is the זימנא logo (black on white — the
@@ -84,11 +83,24 @@ const MODEL_NAMES = {
 // page (file://) loads it over https too. Without it the page still prints at the
 // built-in 50×30 mm. Printing is the browser's dialog, where the Xprinter XP-365B
 // label printer takes the @page size as the label.
-const LOGO_DATA_URI = 'data:image/png;base64,' + fs.readFileSync(new URL('./assets/zimna-logo-print.png', import.meta.url)).toString('base64');
-// The controls script is cached (express.static max-age + the browser); its URL carries a
-// content hash so every deploy of it reaches the page — a stale copy once sized only the
-// inner label, the wrapper collapsed and the sticker printed blank.
-const STICKER_JS_VERSION = crypto.createHash('sha1').update(fs.readFileSync(new URL('../web/public/sticker.js', import.meta.url))).digest('hex').slice(0, 10);
+// The controls script is cached (express.static max-age + Cloudflare + the browser); its
+// URL carries a content hash so every deploy of it reaches the page — a stale copy once
+// sized only the inner label, the wrapper collapsed and the sticker printed blank. The
+// served file is web/dist/sticker.js (vite copies public/), so that is what is hashed.
+// Both web assets are read lazily and never fatal: a missing file costs the sticker its
+// logo or a fixed version, not the installer routes that import this module.
+const readAsset = (rel) => { try { return fs.readFileSync(new URL(rel, import.meta.url)); } catch { return null; } };
+let stickerAssets = null;
+function assets() {
+  if (stickerAssets) return stickerAssets;
+  const logo = readAsset('./assets/zimna-logo-print.png');
+  const js = readAsset('../web/dist/sticker.js') || readAsset('../web/public/sticker.js');
+  stickerAssets = {
+    logo: logo ? 'data:image/png;base64,' + logo.toString('base64') : '',
+    version: js ? crypto.createHash('sha1').update(js).digest('hex').slice(0, 10) : String(Date.now()),
+  };
+  return stickerAssets;
+}
 const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // A JS string literal safe inside a <script> body: every "<" becomes <, so no
 // "</script" (or "<!--") in the data can end the page's script.
@@ -106,6 +118,7 @@ const stickerSizeCss = (W, H, rot) => {
     + (rot ? ';transform:rotate(90deg) translateY(-100%)' : '') + '}.mac{font-size:' + macMm.toFixed(2) + 'mm}.sub,.who{font-size:' + (macMm * 0.45).toFixed(2) + 'mm}';
 };
 export function stickerHtml({ mac, model, date, who, base }) {
+  const { logo: LOGO_DATA_URI, version: STICKER_JS_VERSION } = assets();
   const opts = STICKER_SIZES.map((s) => '<option value="' + s[0] + 'x' + s[1] + '">' + s[0] + '×' + s[1] + ' מ"מ</option>').join('');
   return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
     + 'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
@@ -135,24 +148,47 @@ export function stickerHtml({ mac, model, date, who, base }) {
     + '<div id="txt"><div class="mac">' + escHtml(mac) + '</div><div class="sub">' + escHtml(model) + ' · ' + escHtml(date) + '</div><div class="who">' + escHtml(who) + '</div></div></div></div></div>'
     + '<script src="' + escHtml(String(base || '').replace(/\/+$/, '')) + '/sticker.js?v=' + STICKER_JS_VERSION + '"></script></body></html>';
 }
-// Our record for a unit's sticker: id · name of the devices row that holds (or held)
-// this MAC — pre-assigned units (first_contact_pending) and removed ones included,
-// unlike registeredDevice(), which answers "is this a live customer unit".
+// Our record for a unit's sticker: the devices row that OWNS this MAC right now —
+// enabled and not returned to stock; pre-assigned units (first_contact_pending)
+// included, unlike registeredDevice(). A removed MAC is deliberately not followed:
+// a unit back in stock must never print its previous customer's name.
 export async function stickerRecord(uid) {
   const [row] = await query(
-    `SELECT id, name FROM devices WHERE device_uid = ? OR removed_uid = ?
-     ORDER BY is_enabled DESC, id DESC LIMIT 1`, [uid, uid]);
+    `SELECT id, name FROM devices
+     WHERE device_uid = ? AND is_enabled = TRUE AND returned_to_stock_at IS NULL
+     ORDER BY id DESC LIMIT 1`, [uid]);
   return row ? { id: row.id, name: row.name } : null;
 }
-// Admin: a sticker for any unit by MAC — inventory rows, customer devices, or a
-// test print (random MAC with a Shelly prefix) to dial in the label roll.
-export async function stickerFor({ mac, test, base }) {
+// The unit's model for the sticker: the inventory row when there is one, else the
+// unit itself (units registered before the inventory existed have no row).
+async function stickerModel(uid) {
+  const [prep] = await query('SELECT model FROM prepared_devices WHERE mac = ?', [uid]);
+  let name = shellyModelName(prep?.model);
+  if (!name) {
+    try {
+      const { shellyMqttRpc } = await import('../mqtt/client.js');
+      const r = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 2500);
+      name = shellyModelName(r?.result?.model);
+    } catch { /* offline: the generic word */ }
+  }
+  return name || 'Shelly';
+}
+// Admin: a sticker for a device row (its own id · name, by whichever MAC it holds),
+// for an inventory unit by MAC (no customer record, ever), or a test print (random
+// MAC with a Shelly prefix) to dial in the label roll.
+export async function stickerFor({ mac, device_id, test, base }) {
   let uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  let dev = null;
+  if (device_id) {
+    const [row] = await query('SELECT id, name, device_uid, removed_uid FROM devices WHERE id = ?', [Number(device_id)]);
+    if (!row) throw errors.notFound('NOT_FOUND', 'המכשיר לא נמצא');
+    uid = String(row.device_uid || row.removed_uid || '').toLowerCase();
+    dev = { id: row.id, name: row.name };
+  }
   if (test && uid.length !== 12) uid = '2805a5' + crypto.randomBytes(3).toString('hex');
   if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
-  const [dev, [prep]] = test ? [null, [null]]
-    : await Promise.all([stickerRecord(uid), query('SELECT model FROM prepared_devices WHERE mac = ?', [uid])]);
-  const model = shellyModelName(prep?.model) || 'Shelly';
+  let model = 'Shelly';
+  if (!test) [dev, model] = await Promise.all([device_id ? dev : stickerRecord(uid), stickerModel(uid)]);
   const date = new Date().toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
   const who = test ? 'מדבקת בדיקה' : dev ? 'מזהה ' + dev.id + (dev.name ? ' · ' + dev.name : '') : '';
   return stickerHtml({ mac: uid.toUpperCase(), model, date, who, base });
@@ -754,7 +790,7 @@ function offerSkip(){if(STAGE==='wifi'&&!PROVISIONED&&DEVIP)actionBtn(SKIP_LABEL
 const isHotspot=(ip)=>ip&&(ip===DEVIP||ip==='192.168.33.1');
 async function rpc(body){await fetch('http://'+IP+'/rpc',{method:'POST',mode:'no-cors',cache:'no-store',body,signal:AbortSignal.timeout(10000)})}
 async function waitBack(){log('ממתין שהמכשיר יופעל מחדש...');await sleep(6000);for(let i=0;i<30;i++){if(await ping(IP))return true;await sleep(2000)}return false}
-async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL,{cache:'no-store'})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;SERVER_MODEL=r.model_name||'';return 'ok'}if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
+async function serverCheck(seconds){log('בודק מול השרת אם המכשיר התחבר...');const until=Date.now()+seconds*1000;while(Date.now()<until){try{const r=await(await fetch(STATUS_URL+'&who=1',{cache:'no-store'})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;SERVER_MODEL=r.model_name||'';return 'ok'}if(r.connected&&!r.mac_ok)return 'wrong';}catch(e){}await sleep(4000)}return 'no'}
 function actionBtn(txt,fn,alt){const b=document.createElement('button');b.textContent=txt;if(alt)b.className='alt';b.onclick=()=>{$('actions').innerHTML='';fn()};$('actions').appendChild(b)}
 // Router check: the router must not be powered THROUGH a Shelly channel — a real
 // install had the Wi-Fi router on a channel, and every off-command cut the house's
@@ -1044,7 +1080,7 @@ async function stageComplete(){
   const mac=parseMac($('mac').value);
   let ok=false;
   for(let i=0;i<12;i++){
-   try{const r=await(await fetch(PREPARE_URL+'&mac='+mac+'&check=1',{cache:'no-store',signal:AbortSignal.timeout(6000)})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;SERVER_MODEL=r.model_name||'';ok=true;break}}
+   try{const r=await(await fetch(PREPARE_URL+'&mac='+mac+'&check=1&who=1',{cache:'no-store',signal:AbortSignal.timeout(6000)})).json();if(r.connected&&r.mac_ok){SERVER_DEV=r.device||null;SERVER_MODEL=r.model_name||'';ok=true;break}}
    catch(e){log('אין אינטרנט כרגע — ודאו שהטלפון על ה-Wi-Fi הביתי...','warn')}
    if(i%4===3)log('עדיין בודק... ('+(i+1)+'/12)','warn');
    await sleep(5000);

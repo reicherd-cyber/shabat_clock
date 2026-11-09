@@ -141,7 +141,9 @@ authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, 
       const { stickerRecord } = await import('../../services/shellyOnboard.js');
       const { shellyModelName } = await import('../../services/shelly-model.js');
       out.model_name = shellyModelName(reply.result.model);
-      out.device = await stickerRecord(claims.uid).catch(() => null);
+      // who=1: the sticker's record — asked for by the final check only, not by the
+      // router check's 5-second polls of this route.
+      if (String(req.query.who || '') === '1') out.device = await stickerRecord(claims.uid).catch(() => null);
       query(
         `INSERT INTO prepared_devices (mac, model, fw_version) VALUES (?,?,?)
          ON DUPLICATE KEY UPDATE model = COALESCE(VALUES(model), model), fw_version = COALESCE(VALUES(fw_version), fw_version)`,
