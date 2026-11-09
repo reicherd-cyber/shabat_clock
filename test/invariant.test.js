@@ -235,7 +235,7 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.ok(/device_uid = \? AND is_enabled = TRUE AND returned_to_stock_at IS NULL/.test(rec) && !rec.includes('removed_uid'), 'the sticker names only the row that owns the MAC now — a stock unit never prints its previous customer');
   assert.ok(onboard.includes("STATUS_URL+'&who=1'") && auth.includes("req.query.who || '') === '1') out.device"), 'the record rides the final check only, not the router-check polls');
   assert.ok(/MODEL_NAMES = Object\.fromEntries\(MDNS_PREFIXES\.map/.test(onboard), 'the page model table is derived, not a second list');
-  assert.ok(/const readAsset = \(rel\) => \{ try \{/.test(onboard) && !/^const (LOGO_DATA_URI|STICKER_JS_VERSION) =/m.test(onboard), 'web assets are read lazily and never fatal');
+  assert.ok(/function logoUri\(\) \{/.test(onboard) && /catch \{ logoDataUri = ''; \}/.test(onboard) && !/^const LOGO_DATA_URI =/m.test(onboard), 'the logo is read lazily and never fatal');
   const vc = readFileSync(new URL('../src/services/voiceCosts.js', import.meta.url), 'utf8');
   assert.ok(vc.includes('WHERE up.deleted_at IS NULL AND up.verified_at IS NOT NULL'), 'voice-cost attribution shares the phone identity rule');
   assert.ok(vc.includes("query('SELECT id, full_name FROM users')") && (vc.match(/nameById\.get\(Number\((best\?|u)\.user_id\)\) \|\| nameByPhone/g) || []).length === 2, 'a recorded user_id names its owner even after their phones were removed');
@@ -245,14 +245,15 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.ok(onboard.includes("const STICKER_TPL=$" + "{js(stickerHtml({ mac: '__MAC__'") && !onboard.includes('jsStr'), 'the installer page embeds the sticker template through the one script-safe encoder');
   // The admin window inherits the site's CSP (script-src 'self'): the controls are a same-origin file, never inline.
   const stickerCode = onboard.slice(onboard.indexOf('export function stickerHtml('), onboard.indexOf('export async function stickerFor('));
-  assert.ok(!/<script>/.test(stickerCode) && stickerCode.includes("/sticker.js?v=' + STICKER_JS_VERSION + '\"></script>"), 'sticker controls come from /sticker.js with a content hash, not an inline script');
+  assert.ok(stickerCode.includes("'<script>' + STICKER_SCRIPT + '</script>"), 'sticker controls are inlined (every external delivery arrived stale from a cache)');
+  const ss = readFileSync(new URL('../src/services/stickerScript.js', import.meta.url), 'utf8');
+  assert.ok(/createHash\('sha256'\)\.update\(source, 'utf8'\)\.digest\('base64'\)/.test(ss) && app.includes('STICKER_SCRIPT_CSP') && /'script-src': \["'self'", 'https:\/\/accounts\.google\.com\/gsi\/client', \.\.\.\(STICKER_SCRIPT_CSP/.test(app), 'the site CSP allows exactly that inline script by hash');
   assert.ok(!/id="rot"/.test(stickerCode) || !/id="rot"[\s\S]*id="rot"/.test(stickerCode), 'one element per id');
   assert.ok(readFileSync(new URL('../src/web/public/sticker.js', import.meta.url), 'utf8').includes("getItem('stickerSize')"), 'the static controls script exists');
   assert.ok(onboard.includes("base=new URL(PREPARE_URL||STATUS_URL).origin"), 'the installer page points the script at our server');
   // The installer page is a foreign origin (file://): helmet's CORP same-origin would refuse it the script.
   const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
   assert.ok(/app\.get\('\/sticker\.js',[\s\S]{0,200}'Cross-Origin-Resource-Policy', 'cross-origin'/.test(app), '/sticker.js is served cross-origin');
-  assert.ok(/'Cache-Control', 'no-cache'/.test(app), '/sticker.js is never served stale');
   assert.ok(onboard.includes('export async function stickerFor(') && onboard.includes("'2805a5' + crypto.randomBytes(3)"), 'admin stickers by MAC, test print with a random Shelly MAC');
   const admin = readFileSync(new URL('../src/api/routes/admin.js', import.meta.url), 'utf8');
   assert.ok(admin.includes("adminRouter.get('/shelly/sticker'"), 'admin route');

@@ -14,6 +14,7 @@ import { query } from '../db/pool.js';
 import { mosquittoPasswdHash, writeBrokerPasswdEntry } from './devices.js';
 import { shellyModelName } from './shelly-model.js';
 import { apPasswordFor } from './shellyAp.js';
+import { STICKER_SCRIPT } from './stickerScript.js';
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const generatePassword = (len = 24) =>
@@ -78,29 +79,19 @@ const MODEL_NAMES = Object.fromEntries(MDNS_PREFIXES.map((p) => [p, nameFromPref
 // One page for every path: the top half is the זימנא logo (black on white — the
 // thermal printer knows no colour), the bottom half the MAC (our key in the admin),
 // the model and the date, plus our record (id · name) when the unit is a customer's.
-// The size controls are a static script on OUR origin (src/web/public/sticker.js):
-// a window opened from the admin inherits the site's CSP (script-src 'self'), which
-// kills inline scripts, so the page names the script by absolute URL — the installer
-// page (file://) loads it over https too. Without it the page still prints at the
-// built-in 50×30 mm. Printing is the browser's dialog, where the Xprinter XP-365B
-// label printer takes the @page size as the label.
-// The controls script is cached (express.static max-age + Cloudflare + the browser); its
-// URL carries a content hash so every deploy of it reaches the page — a stale copy once
-// sized only the inner label, the wrapper collapsed and the sticker printed blank. The
-// served file is web/dist/sticker.js (vite copies public/), so that is what is hashed.
-// Both web assets are read lazily and never fatal: a missing file costs the sticker its
-// logo or a fixed version, not the installer routes that import this module.
-const readAsset = (rel) => { try { return fs.readFileSync(new URL(rel, import.meta.url)); } catch { return null; } };
-let stickerAssets = null;
-function assets() {
-  if (stickerAssets) return stickerAssets;
-  const logo = readAsset('./assets/zimna-logo-print.png');
-  const js = readAsset('../web/dist/sticker.js') || readAsset('../web/public/sticker.js');
-  stickerAssets = {
-    logo: logo ? 'data:image/png;base64,' + logo.toString('base64') : '',
-    version: js ? crypto.createHash('sha1').update(js).digest('hex').slice(0, 10) : String(Date.now()),
-  };
-  return stickerAssets;
+// The size controls (src/web/public/sticker.js) are INLINED, allowed by their hash
+// in the site CSP (services/stickerScript.js) — an external file kept arriving
+// stale from one cache or another, with the controls dead. Without the script the
+// page still prints at the built-in size. Printing is the browser's dialog, where
+// the Xprinter XP-365B label printer takes the @page size as the label.
+// The logo is read lazily and never fatal: a missing file costs the sticker its
+// logo, not the installer routes that import this module.
+let logoDataUri = null;
+function logoUri() {
+  if (logoDataUri !== null) return logoDataUri;
+  try { logoDataUri = 'data:image/png;base64,' + fs.readFileSync(new URL('./assets/zimna-logo-print.png', import.meta.url)).toString('base64'); }
+  catch { logoDataUri = ''; }
+  return logoDataUri;
 }
 const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // A JS string literal safe inside a <script> body: every "<" becomes <, so no
@@ -119,7 +110,7 @@ const stickerSizeCss = (W, H, rot) => {
     + (rot ? ';transform:rotate(90deg) translateY(-100%)' : '') + '}.mac{font-size:' + macMm.toFixed(2) + 'mm}.sub,.who{font-size:' + (macMm * 0.45).toFixed(2) + 'mm}';
 };
 export function stickerHtml({ mac, model, date, who, base }) {
-  const { logo: LOGO_DATA_URI, version: STICKER_JS_VERSION } = assets();
+  const LOGO_DATA_URI = logoUri();
   const opts = STICKER_SIZES.map((s) => '<option value="' + s[0] + 'x' + s[1] + '">' + s[0] + '×' + s[1] + ' מ"מ</option>').join('');
   return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
     + 'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
@@ -147,7 +138,7 @@ export function stickerHtml({ mac, model, date, who, base }) {
     + '<div id="hint">בחלון ההדפסה: מדפסת המדבקות (Xprinter), שוליים "ללא" (מסיר גם את הכותרות), גודל נייר = גודל המדבקה (מגדירים פעם אחת בהעדפות המדפסת ב-Windows). יצא מסובב לרוחב הגליל? סמנו "סובב 90°". לא במרכז? הזיזו בחצאי מ"מ (ימינה/למעלה = חיובי, כשהלוגו קריא) — נשמר להדפסות הבאות.</div></div>'
     + '<div id="wrap"><div id="rot"><div id="lab"><div id="logo"><img alt="זימנא" src="' + LOGO_DATA_URI + '"></div>'
     + '<div id="txt"><div class="mac">' + escHtml(mac) + '</div><div class="sub">' + escHtml(model) + ' · ' + escHtml(date) + '</div><div class="who">' + escHtml(who) + '</div></div></div></div></div>'
-    + '<script src="' + escHtml(String(base || '').replace(/\/+$/, '')) + '/sticker.js?v=' + STICKER_JS_VERSION + '"></script></body></html>';
+    + '<script>' + STICKER_SCRIPT + '</script></body></html>';
 }
 // Our record for a unit's sticker: the devices row that OWNS this MAC right now —
 // enabled and not returned to stock; pre-assigned units (first_contact_pending)
