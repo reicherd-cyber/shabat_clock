@@ -53,7 +53,10 @@ async function disableInputReset(call) {
     const c = await call('Input.GetConfig', { id });
     if (!c) return { fixed, complete: false };
     if (c.error || !c.result) break; // past the last input
-    if (c.result.factory_reset === false) continue;
+    // Only firmware that exposes the option has the five-toggle reset (single-relay
+    // units); the Pro 4PM reports no such field — nothing to switch off there, and
+    // sending it anyway was accepted, ignored and logged as a change every pass.
+    if (!('factory_reset' in c.result) || c.result.factory_reset === false) continue;
     const r = await call('Input.SetConfig', { id, config: { factory_reset: false } });
     if (!r || r.error) return { fixed, complete: false };
     fixed.push(id);

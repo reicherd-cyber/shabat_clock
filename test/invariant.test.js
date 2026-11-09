@@ -293,7 +293,7 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
 
 test('shelly: factory reset by wired input (five toggles) is switched off on every input when the server hardens a unit', () => {
   const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
-  assert.ok(ap.includes("'Input.SetConfig', { id, config: { factory_reset: false } }") && ap.includes('await disableInputReset(call)') && ap.includes('const MAX_INPUTS = 8;'), 'input reset off on every input the unit has (not bounded by relay_count), inside the same hardening pass');
+  assert.ok(ap.includes("'Input.SetConfig', { id, config: { factory_reset: false } }") && ap.includes('await disableInputReset(call)') && ap.includes('const MAX_INPUTS = 8;') && ap.includes("if (!('factory_reset' in c.result) || c.result.factory_reset === false) continue;"), 'input reset off on every input that exposes the option (not bounded by relay_count; the Pro 4PM has none), inside the same hardening pass');
 });
 
 test('a unit that went silent while the house answers is flagged as a possible factory reset — the mail says so and links the re-install dialog', () => {
