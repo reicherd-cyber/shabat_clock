@@ -239,11 +239,27 @@ export default function WifiCard({ devices }) {
           {shelly.map((d, i) => <span key={d.id}>{i > 0 && ', '}<b dir="ltr">{d.device_uid.toUpperCase()}</b></span>)}.
           אם הטלפון מזהיר שאין אינטרנט ברשת — הישארו בה.
           {shelly.some((d) => d.ap_pass) && (
-            <div className="mt-1">
-              הרשת של המכשיר נעולה בסיסמה (כך שרק אתם מגיעים אליו):{' '}
-              {shelly.filter((d) => d.ap_pass).map((d, i) => (
-                <span key={d.id}>{i > 0 && ' · '}{shelly.length > 1 && <><b dir="ltr">{d.device_uid.toUpperCase()}</b>: </>}<b dir="ltr">{d.ap_pass}</b></span>
-              ))}
+            <div className="mt-2">
+              <div className="text-muted">הרשת של המכשיר נעולה בסיסמה, כך שרק אתם מגיעים אליו:</div>
+              <table className="mt-1 text-sm">
+                <thead>
+                  <tr className="text-muted text-xs">
+                    <th className="text-right pe-4 font-normal">מכשיר</th>
+                    <th className="text-right pe-4 font-normal">שם הרשת</th>
+                    <th className="text-right font-normal">סיסמה</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shelly.filter((d) => d.ap_pass).map((d) => (
+                    <tr key={d.id}>
+                      <td className="pe-4 py-0.5">{d.name}</td>
+                      <td className="pe-4 py-0.5"><span dir="ltr">Zimna-{d.device_uid.toUpperCase()}</span></td>
+                      <td className="py-0.5"><b dir="ltr">{d.ap_pass}</b></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="text-off text-xs mt-1">במכשיר שטרם חובר לשרת הרשת עדיין נקראת Shelly… ופתוחה.</div>
             </div>
           )}
         </li>

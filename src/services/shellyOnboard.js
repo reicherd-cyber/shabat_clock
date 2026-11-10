@@ -109,10 +109,12 @@ const stickerSizeCss = (W, H, rot) => {
   return '@page{size:' + page + ';margin:0}#rot{width:' + page.replace(' ', ';height:') + '}#lab{width:' + W + 'mm;height:' + H + 'mm'
     + (rot ? ';transform:rotate(90deg) translateY(-100%)' : '') + '}.mac{font-size:' + macMm.toFixed(2) + 'mm}.sub,.who{font-size:' + (macMm * 0.45).toFixed(2) + 'mm}';
 };
-export function stickerHtml({ mac, model, date, who }) {
+// auto: print at once with the remembered (or built-in) size and close after —
+// the installer's button; the admin keeps the preview with the size controls.
+export function stickerHtml({ mac, model, date, who, auto = false }) {
   const LOGO_DATA_URI = logoUri();
   const opts = STICKER_SIZES.map((s) => '<option value="' + s[0] + 'x' + s[1] + '">' + s[0] + '×' + s[1] + ' מ"מ</option>').join('');
-  return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
+  return '<!doctype html><html lang="he" dir="rtl"' + (auto ? ' data-auto="1"' : '') + '><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
     + 'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
     + '#ctl{padding:10px 12px;background:#fff;border-bottom:1px solid #cfc9bb;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:15px}'
     + '#ctl input[type=number]{width:58px;font-size:15px;padding:4px;text-align:center}#ctl select{font-size:15px;padding:4px}#ctl label{display:inline-flex;align-items:center;gap:4px}#ctl .adj{color:#6b655a}'
@@ -592,7 +594,7 @@ function parseModel(v){const s=v.trim().toLowerCase();if(!s.includes('-'))return
 // unit the full walk would have found.
 const ALL_PREFIXES=${JSON.stringify(MDNS_PREFIXES)};
 const MODEL_NAMES=${JSON.stringify(MODEL_NAMES)};
-const STICKER_TPL=${js(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__' }))};
+const STICKER_TPL=${js(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__', auto: true }))};
 function knownModel(){return MODEL||parseModel($('mac').value)}
 function mdnsNames(uid){const m=knownModel();const list=m?[m].concat(ALL_PREFIXES.filter(p=>p!==m)):ALL_PREFIXES;return list.map(p=>p+'-'+uid+'.local')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';

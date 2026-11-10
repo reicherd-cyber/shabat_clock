@@ -276,7 +276,7 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
   assert.ok(/'Zimna-' \+ u\.toUpperCase\(\)/.test(ap), 'hotspot name = brand + MAC');
   assert.ok(ap.includes('await renamePending(device.id, device.fw_version)') && ap.includes('rename_unsupported: unsupported') && ap.includes("JSON_UNQUOTE(JSON_EXTRACT(payload, '$.fw')) <=> ?"), 'a firmware that keeps the password but not the name is noted once per firmware version, not re-sent daily — a newer firmware gets the rename tried again');
   assert.ok(readFileSync(new URL('../src/web/src/ui.jsx', import.meta.url), 'utf8').includes("const tail = s.includes('-') ? s.slice(s.lastIndexOf('-') + 1) : s;"), 'the admin MAC helper takes the part after the last dash (Zimna-<mac> too)');
-  assert.equal((readFileSync(new URL('../src/web/src/user/WifiCard.jsx', import.meta.url), 'utf8').match(/Zimna/g) || []).length, 3, 'the customer Wi-Fi card names the new hotspot name');
+  assert.equal((readFileSync(new URL('../src/web/src/user/WifiCard.jsx', import.meta.url), 'utf8').match(/Zimna/g) || []).length >= 3, true, 'the customer Wi-Fi card names the new hotspot name');
   const onboardSrc = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
   assert.ok(!onboardSrc.includes('__BASE__') && !/stickerHtml\(\{[^}]*base/.test(onboardSrc), 'no dead base plumbing');
   assert.ok((readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8').match(/Zimna/g) || []).length >= 4, 'the installer page names both hotspot names');
