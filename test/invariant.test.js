@@ -257,7 +257,7 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   const admin = readFileSync(new URL('../src/api/routes/admin.js', import.meta.url), 'utf8');
   assert.ok(admin.includes("adminRouter.get('/shelly/sticker'"), 'admin route');
   const page = readFileSync(new URL('../src/web/src/admin/Devices.jsx', import.meta.url), 'utf8');
-  assert.ok(page.includes('printSticker({ device_id: d.id })') && page.includes('printSticker({ mac: p.mac })'), 'device rows print by row id, inventory rows by MAC');
+  assert.ok(page.includes("printSticker({ device_id: d.id, auto: '1' })") && page.includes("printSticker({ mac: p.mac, auto: '1' })"), 'device rows print by row id, inventory rows by MAC');
   assert.ok(page.includes("printSticker({ test: '1' })"), 'test sticker');
 });
 

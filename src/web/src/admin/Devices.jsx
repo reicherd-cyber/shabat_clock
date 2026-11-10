@@ -163,7 +163,8 @@ export default function Devices() {
   // Sticker for a unit (logo · MAC · model · our record): the window opens inside the
   // click (popup blockers), the server renders the page, the label printer prints it.
   const printSticker = (params) => {
-    const w = window.open('', '_blank', 'width=560,height=560');
+    // Row buttons print at once (auto) — the test button keeps the preview with the size fields.
+    const w = window.open('', '_blank', params.auto ? 'width=420,height=320' : 'width=560,height=560');
     run(async () => {
       if (!w) throw new Error('הדפדפן חסם את חלון המדבקה — אפשרו חלונות קופצים לאתר ונסו שוב');
       try {
@@ -431,7 +432,7 @@ export default function Devices() {
                           {d.device_type === 'shelly' && !!(d.device_uid || d.removed_uid) && (
                             <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                               title="מדבקה למכשיר: לוגו, MAC, דגם ומזהה — למדפסת המדבקות"
-                              onClick={() => printSticker({ device_id: d.id })}>מדבקה</Button>
+                              onClick={() => printSticker({ device_id: d.id, auto: '1' })}>מדבקה</Button>
                           )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             onClick={() => setTransferForm({ device: d, user_id: '' })}>העבר ללקוח</Button>
@@ -641,7 +642,7 @@ export default function Devices() {
                   )}
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                     title="מדבקה ליחידה: לוגו, MAC ודגם — למדפסת המדבקות"
-                    onClick={() => printSticker({ mac: p.mac })}>מדבקה</Button>
+                    onClick={() => printSticker({ mac: p.mac, auto: '1' })}>מדבקה</Button>
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                     onClick={() => run(async () => {
                       if (!confirm(`למחוק את ${p.mac} מהמלאי? (לא נוגע במכשיר עצמו)`)) return;

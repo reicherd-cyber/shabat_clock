@@ -170,7 +170,7 @@ async function stickerModel(uid) {
 // Admin: a sticker for a device row (its own id · name, by whichever MAC it holds),
 // for an inventory unit by MAC (no customer record, ever), or a test print (random
 // MAC with a Shelly prefix) to dial in the label roll.
-export async function stickerFor({ mac, device_id, test }) {
+export async function stickerFor({ mac, device_id, test, auto = false }) {
   let uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   let dev = null;
   if (device_id) {
@@ -185,7 +185,7 @@ export async function stickerFor({ mac, device_id, test }) {
   if (!test) [dev, model] = await Promise.all([device_id ? dev : stickerRecord(uid), stickerModel(uid)]);
   const date = new Date().toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
   const who = test ? 'מדבקת בדיקה' : dev ? 'מזהה ' + dev.id + (dev.name ? ' · ' + dev.name : '') : '';
-  return stickerHtml({ mac: uid.toUpperCase(), model, date, who });
+  return stickerHtml({ mac: uid.toUpperCase(), model, date, who, auto });
 }
 const mdnsCandidates = (uid) => MDNS_PREFIXES.map((p) => `${p}-${uid}.local`);
 
