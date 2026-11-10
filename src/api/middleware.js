@@ -202,7 +202,9 @@ export const onboardStatusLimiter = limited({ windowMs: 60_000, limit: 30 });
 // The mint caps are sized so no real installer session can reach them — they exist
 // only so a leaked universal file cannot reload the broker in a loop (every mint
 // rewrites passwd/ACL and SIGHUPs mosquitto, which the whole fleet depends on).
-const isOnboardCheck = (req) => String(req.query.check || '') === '1';
+// check=1 and the end-of-install actions (fw / fwupdate / harden) are polls and
+// unit actions, not mints: they ride the poll limiter, not the mint budget.
+const isOnboardCheck = (req) => ['check', 'fw', 'fwupdate', 'harden'].some((k) => String(req.query[k] || '') === '1');
 export const onboardPrepareLimiter = limited({ windowMs: 10 * 60_000, limit: 100, skip: isOnboardCheck });
 // The polls: each is a live MQTT RPC holding a 4 s waiter on the fleet broker, so a
 // leaked file must not get to fire them without bound. 300/10min per IP+file is

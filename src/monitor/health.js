@@ -55,6 +55,12 @@ const loopDelay = monitorEventLoopDelay({ resolution: 20 });
 // lastSwitchErrors — all initialised lazily with ??=, lost on restart (dead
 // onsets are the exception: they live in relays.dead_since).
 const deviceState = new Map();
+// An installer-started firmware update reboots the unit on purpose (services/shellyAp.js
+// fwUpdateStart): told here, the next probe files no "unexpected reboot" incident.
+export function markExpectedReboot(deviceId) {
+  const st = deviceState.get(Number(deviceId));
+  if (st) st.expectReboot = true;
+}
 const alertTimes = new Map();  // incident key → last email epoch ms
 const incidents = [];          // newest first, capped at INCIDENTS_KEPT
 let dbFailures = 0;
@@ -426,9 +432,12 @@ async function checkShelly(device) {
   // change in what "hardened" means rolls out on deploy, and a hotspot someone
   // switched on and left open is locked within a day, reconnect or not.
   const apWait = device.ap_secured_at ? AP_RECHECK_MS : AP_RETRY_MS;
-  // First check after a server start spread over half an hour across the fleet —
-  // not every unit on the first probe, racing the hello passes of the reconnect.
-  if (st.apTriedAt === undefined) st.apTriedAt = Date.now() - apWait + Math.floor(Math.random() * 30 * 60 * 1000);
+  // A stamped unit's first re-check after a server start is spread over half an
+  // hour across the fleet — not every unit on the first probe, racing the hello
+  // passes of the reconnect. An unstamped unit gets its first probe pass after 1–5
+  // minutes: activation and hello already harden the common cases, so the probe is
+  // the retry, not a second full pass racing them on the same minute.
+  if (st.apTriedAt === undefined) st.apTriedAt = Date.now() - apWait + (device.ap_secured_at ? Math.floor(Math.random() * 30 * 60 * 1000) : 60_000 + Math.floor(Math.random() * 4 * 60_000));
   if (active() && Date.now() - st.apTriedAt > apWait) {
     st.apTriedAt = Date.now();
     import('../services/shellyAp.js')
@@ -594,7 +603,7 @@ export async function healthTick() {
   // incidents; the broker_down alert already covers them. LAN devices still probe.
   const devices = await query(
     `SELECT d.id, CONCAT(u.full_name, ' — ', d.name) AS name, d.device_uid, d.transport,
-            d.ip_address, d.relay_count, d.is_online, d.mute_alerts, d.timezone, d.ap_secured_at, d.last_seen_at
+            d.ip_address, d.relay_count, d.is_online, d.mute_alerts, d.timezone, d.ap_secured_at, d.last_seen_at, d.fw_version
      FROM devices d JOIN users u ON u.id = d.user_id
      WHERE d.device_type = 'shelly' AND d.is_enabled = TRUE AND d.device_uid IS NOT NULL
        AND d.first_contact_pending = FALSE`,

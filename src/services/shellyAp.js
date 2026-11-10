@@ -12,6 +12,8 @@
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
 import { query } from '../db/pool.js';
+import { localParts } from './time.js';
+import { dayKeysOn } from './holidays.js';
 
 // Like secretbox.js: a key derived from JWT_SECRET, never stored or shown anywhere.
 // Rotating JWT_SECRET changes every unit's password — the same hazard secretbox
@@ -72,11 +74,14 @@ const failLogged = new Set(); // one "not applied" line per unit per process; th
 // Firmware that accepted our write but still shows the old name (or applies AP
 // changes only after a restart we never force): remembered in the event row, so
 // the daily check does not re-send and log a phantom change every day.
-async function renamePending(deviceId) {
+// Scoped to the firmware the note was taken on: a newer firmware (fw 1.3.2 refused
+// the name, later releases take it) gets the rename tried again.
+async function renamePending(deviceId, fw) {
   const [row] = await query(
     `SELECT 1 AS ok FROM device_events WHERE device_id = ? AND event = 'ap_secured'
        AND (JSON_EXTRACT(payload, '$.rename_unsupported') = true OR JSON_EXTRACT(payload, '$.restart_required') = true)
-       AND created_at > UTC_TIMESTAMP() - INTERVAL 30 DAY LIMIT 1`, [deviceId]).catch(() => []);
+       AND IFNULL(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.fw')), 'null') = IFNULL(?, 'null')
+       AND created_at > UTC_TIMESTAMP() - INTERVAL 30 DAY LIMIT 1`, [deviceId, fw || null]).catch(() => []);
   return !!row;
 }
 
@@ -104,7 +109,7 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
     // Name + password must be in the unit's config whether or not the hotspot is
     // on: a hotspot switched on later (Shelly app) then comes up locked and named
     // from its first second. The enable flag itself is never touched.
-    const apDone = ap.is_open === false && (ap.ssid === apSsidFor(uid) || await renamePending(device.id));
+    const apDone = ap.is_open === false && (ap.ssid === apSsidFor(uid) || (device.id ? await renamePending(device.id, device.fw_version) : false));
     if (stamped && apDone) return { changed: false, reason: 'already secured' };
     const events = [];
     // Inputs: only on the full pass (unstamped, or a hotspot found open = reset).
@@ -126,16 +131,18 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
         const renamed = after?.result?.ap?.ssid === apSsidFor(uid);
         const unsupported = !restart && !!after?.result?.ap && !renamed && after.result.ap.is_open === false;
         if (unsupported) console.warn(`[shelly-ap] ${uid}: password set, hotspot name not accepted by this firmware — left as ${after.result.ap.ssid}`);
-        events.push(['ap_secured', { via: reason, restart_required: restart, rename_unsupported: unsupported, enabled: ap.enable !== false, was_open: ap.is_open !== false, ssid: apSsidFor(uid), was_ssid: ap.ssid || null }]);
+        events.push(['ap_secured', { via: reason, fw: device.fw_version || null, restart_required: restart, rename_unsupported: unsupported, enabled: ap.enable !== false, was_open: ap.is_open !== false, ssid: apSsidFor(uid), was_ssid: ap.ssid || null }]);
       }
     } else {
       apSet = true; // already ours (unstamped only because an earlier pass stopped short on the inputs)
     }
     if (!inputs.complete) console.warn(`[shelly-ap] ${uid}: input sweep incomplete (RPC timeout) — not stamped, will retry`);
-    if (apSet && inputs.complete) {
+    // An inventory unit (no device row yet) is hardened all the same, just not
+    // stamped — activation stamps it on its own pass.
+    if (apSet && inputs.complete && device.id) {
       await query('UPDATE devices SET ap_secured_at = UTC_TIMESTAMP() WHERE id = ?', [device.id]).catch(() => {});
     }
-    for (const [event, payload] of events) {
+    for (const [event, payload] of device.id ? events : []) {
       await query('INSERT INTO device_events (device_id, event, payload) VALUES (?,?,?)', [device.id, event, JSON.stringify(payload)]).catch(() => {});
     }
     if (events.length) console.log(`[shelly-ap] ${uid}: ${events.map(([e]) => e).join(' + ')} (${reason}${restart ? ', AP applies after restart' : ''})`);
@@ -143,4 +150,61 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
   })().finally(() => inFlight.delete(uid));
   inFlight.set(uid, run);
   return run;
+}
+
+// ---- Installer page, after the verified connection (token-gated routes in auth.js) ----
+// The unit's firmware and the stable release it is offered, if any. A dark unit
+// (no GetDeviceInfo) is not asked for updates — one short wait, not two long ones.
+export async function fwOffered(uid) {
+  const { shellyMqttRpc } = await import('../mqtt/client.js');
+  const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 5000).catch(() => null);
+  if (!info?.result) return { fw: null, next: null };
+  const chk = await shellyMqttRpc(uid, 'Shelly.CheckForUpdate', undefined, 15000).catch(() => null);
+  return { fw: info.result.ver ?? null, next: chk?.result?.stable?.version ?? null };
+}
+// Start the stable update the unit is offered; it downloads and reboots on its own.
+// A live customer unit keeps the auto-updater's safety gates that matter here (no
+// update on שבת/יום טוב, none with a schedule due within 15 minutes — the reboot
+// leaves the relays undriven for a couple of minutes) and its bookkeeping: the
+// reboot is ours (health probe), and the diary row says so.
+export async function fwUpdateStart(uid) {
+  const o = await fwOffered(uid);
+  if (!o.next) return { ...o, started: false };
+  const [dev] = await query('SELECT id, name, timezone FROM devices WHERE device_uid = ? AND is_enabled = TRUE ORDER BY id DESC LIMIT 1', [uid]).catch(() => []);
+  if (dev) {
+    const p = localParts(new Date(), dev.timezone || 'Asia/Jerusalem');
+    if (dayKeysOn(p).length) return { ...o, started: false, blocked: 'rest_day', blocked_he: 'לא מעדכנים בשבת/חג' };
+    const { deviceScheduleDueBetween } = await import('../scheduler/tick.js');
+    const due = await deviceScheduleDueBetween(dev.id, new Date(), new Date(Date.now() + 15 * 60_000)).catch(() => true);
+    if (due) return { ...o, started: false, blocked: 'schedule_due', blocked_he: 'תזמון קרוב על אחד הערוצים — נסו שוב בעוד רבע שעה' };
+  }
+  const { shellyMqttRpc } = await import('../mqtt/client.js');
+  const r = await shellyMqttRpc(uid, 'Shelly.Update', { stage: 'stable' }, 10000).catch(() => null);
+  const started = !!r && !r.error;
+  if (started && dev) {
+    const { markExpectedReboot } = await import('../monitor/health.js');
+    markExpectedReboot(dev.id);
+    await query('INSERT INTO device_events (device_id, event, payload) VALUES (?,?,?)',
+      [dev.id, 'config', JSON.stringify({ kind: 'fw_update_started', from: o.fw, to: o.next, stage: 'stable', via: 'installer' })]).catch(() => {});
+  }
+  return { ...o, started };
+}
+// Lock + rename the hotspot now (and the input reset off), for a registered unit or
+// an inventory unit alike; answers with the hotspot as the unit then reports it.
+// The unit's live firmware version is taken (and stored) first: the rename note is
+// per firmware, and a unit the page just updated must not be judged by the old one.
+export async function hardenByUid(uid, reason = 'install') {
+  const { shellyMqttRpc } = await import('../mqtt/client.js');
+  const [row] = await query('SELECT * FROM devices WHERE device_uid = ? AND is_enabled = TRUE ORDER BY id DESC LIMIT 1', [uid]).catch(() => []);
+  const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 5000).catch(() => null);
+  const liveFw = info?.result?.ver ?? null;
+  if (row && liveFw && liveFw !== row.fw_version) {
+    row.fw_version = liveFw;
+    await query('UPDATE devices SET fw_version = ? WHERE id = ?', [liveFw, row.id]).catch(() => {});
+  }
+  const device = row || { id: null, device_uid: uid, transport: 'mqtt', ip_address: null, fw_version: liveFw, ap_secured_at: null };
+  const res = await secureShellyAp(device, { reason });
+  const cfg = await shellyMqttRpc(uid, 'Wifi.GetConfig', undefined, 5000).catch(() => null);
+  const ap = cfg?.result?.ap || null;
+  return { ...res, fw: liveFw, ssid: ap?.ssid ?? null, locked: ap ? ap.is_open === false : null, renamed: !!ap && ap.ssid === apSsidFor(uid), enabled: ap ? ap.enable !== false : null };
 }

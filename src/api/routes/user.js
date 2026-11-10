@@ -10,6 +10,7 @@ import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { ensureDemoState } from '../../services/demo.js';
 import { patchDevice } from '../../services/devices.js';
+import { apPasswordFor } from '../../services/shellyAp.js';
 import { sendImmediateCommand } from '../../services/commands.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules, savePlan, previewScheduler, setPlanEnabled, lastLoggedPlanBody, deletePlan, planMemberIds } from '../../services/schedules.js';
 import { getHistory } from '../../services/history.js';
@@ -302,7 +303,27 @@ userRouter.delete('/me/phones/:id', async (req, res, next) => {
 userRouter.get('/devices', async (req, res, next) => {
   try {
     await ensureDemoState(req.auth.userId);
-    res.json(await listDevicesWithRelays(req.auth.userId));
+    const list = await listDevicesWithRelays(req.auth.userId);
+    // The unit's own hotspot is locked (services/shellyAp.js); its password is the
+    // household's to know — הגדרות → הגדרת Wi-Fi (WifiCard.jsx) shows it next to
+    // the network name. Not for a read-only invitee (a credential, not a view),
+    // and the name shown is the one the unit actually holds: the latest hardening
+    // event says whether the firmware took the Zimna name or kept the old one.
+    if (!req.readOnly) {
+      const units = list.filter((d) => d.device_type === 'shelly' && d.device_uid);
+      const latest = units.length ? await query(
+        `SELECT e.device_id, e.payload FROM device_events e
+          JOIN (SELECT device_id, MAX(id) AS id FROM device_events WHERE event = 'ap_secured' AND device_id IN (?) GROUP BY device_id) m ON m.id = e.id`,
+        [units.map((d) => d.id)]).catch(() => []) : [];
+      const byId = new Map(latest.map((r) => { let p = {}; try { p = JSON.parse(r.payload || '{}') || {}; } catch { /* hand-edited row */ } return [Number(r.device_id), p]; }));
+      for (const d of units) {
+        const p = byId.get(Number(d.id));
+        d.ap_pass = apPasswordFor(d.device_uid);
+        d.ap_ssid = p ? (p.rename_unsupported ? p.was_ssid || null : p.ssid || null) : null; // null = not hardened yet (factory name, open)
+        d.ap_locked = !!p;
+      }
+    }
+    res.json(list);
   } catch (e) { next(e); }
 });
 

@@ -109,10 +109,12 @@ const stickerSizeCss = (W, H, rot) => {
   return '@page{size:' + page + ';margin:0}#rot{width:' + page.replace(' ', ';height:') + '}#lab{width:' + W + 'mm;height:' + H + 'mm'
     + (rot ? ';transform:rotate(90deg) translateY(-100%)' : '') + '}.mac{font-size:' + macMm.toFixed(2) + 'mm}.sub,.who{font-size:' + (macMm * 0.45).toFixed(2) + 'mm}';
 };
-export function stickerHtml({ mac, model, date, who }) {
+// auto: print at once with the remembered (or built-in) size and close after —
+// the installer's button; the admin keeps the preview with the size controls.
+export function stickerHtml({ mac, model, date, who, auto = false }) {
   const LOGO_DATA_URI = logoUri();
   const opts = STICKER_SIZES.map((s) => '<option value="' + s[0] + 'x' + s[1] + '">' + s[0] + '×' + s[1] + ' מ"מ</option>').join('');
-  return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
+  return '<!doctype html><html lang="he" dir="rtl"' + (auto ? ' data-auto="1"' : '') + '><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
     + 'body{font-family:system-ui,sans-serif;margin:0;background:#e9e5dd;color:#000}'
     + '#ctl{padding:10px 12px;background:#fff;border-bottom:1px solid #cfc9bb;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:15px}'
     + '#ctl input[type=number]{width:58px;font-size:15px;padding:4px;text-align:center}#ctl select{font-size:15px;padding:4px}#ctl label{display:inline-flex;align-items:center;gap:4px}#ctl .adj{color:#6b655a}'
@@ -168,7 +170,7 @@ async function stickerModel(uid) {
 // Admin: a sticker for a device row (its own id · name, by whichever MAC it holds),
 // for an inventory unit by MAC (no customer record, ever), or a test print (random
 // MAC with a Shelly prefix) to dial in the label roll.
-export async function stickerFor({ mac, device_id, test }) {
+export async function stickerFor({ mac, device_id, test, auto = false }) {
   let uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   let dev = null;
   if (device_id) {
@@ -183,7 +185,7 @@ export async function stickerFor({ mac, device_id, test }) {
   if (!test) [dev, model] = await Promise.all([device_id ? dev : stickerRecord(uid), stickerModel(uid)]);
   const date = new Date().toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
   const who = test ? 'מדבקת בדיקה' : dev ? 'מזהה ' + dev.id + (dev.name ? ' · ' + dev.name : '') : '';
-  return stickerHtml({ mac: uid.toUpperCase(), model, date, who });
+  return stickerHtml({ mac: uid.toUpperCase(), model, date, who, auto });
 }
 const mdnsCandidates = (uid) => MDNS_PREFIXES.map((p) => `${p}-${uid}.local`);
 
@@ -592,7 +594,7 @@ function parseModel(v){const s=v.trim().toLowerCase();if(!s.includes('-'))return
 // unit the full walk would have found.
 const ALL_PREFIXES=${JSON.stringify(MDNS_PREFIXES)};
 const MODEL_NAMES=${JSON.stringify(MODEL_NAMES)};
-const STICKER_TPL=${js(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__' }))};
+const STICKER_TPL=${js(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__', auto: true }))};
 function knownModel(){return MODEL||parseModel($('mac').value)}
 function mdnsNames(uid){const m=knownModel();const list=m?[m].concat(ALL_PREFIXES.filter(p=>p!==m)):ALL_PREFIXES;return list.map(p=>p+'-'+uid+'.local')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
@@ -819,6 +821,43 @@ function printSticker(){
  reofferDone();
 }
 function reofferDone(){if(ROUTER_OFFERED)offerRouterCheck();else offerSticker()}
+// After the verified connection: current firmware → the hotspot is locked and
+// renamed right now; older firmware → the update is offered first (old releases
+// refuse the name), and the rename follows the last step. Server actions ride the
+// file's own token (fw=1 / fwupdate=1 / harden=1).
+async function srvAction(q){const u=STATUS_URL?STATUS_URL+'&'+q:PREPARE_URL+'&mac='+parseMac($('mac').value)+'&'+q;const res=await fetch(u,{cache:'no-store',signal:AbortSignal.timeout(40000)});return await res.json()}
+async function afterSuccess(){
+ let o=null;try{o=await srvAction('fw=1')}catch(e){}
+ if(o&&o.next){
+  log('גרסת הקושחה במכשיר: '+(o.fw||'?')+' — זמינה גרסה '+o.next+'. בגרסה ישנה רשת המכשיר לא מקבלת את השם החדש; מומלץ לעדכן עכשיו.','warn');
+  actionBtn('עדכן גרסה ל-'+o.next+' (כ-2 דקות לכל שלב)',updateFw,false);
+  return}
+ await hardenNow();
+}
+async function hardenNow(){
+ log('מגדיר את רשת המכשיר (שם וסיסמה)...');
+ let h=null;try{h=await srvAction('harden=1')}catch(e){}
+ if(!h||h.locked===null){log('לא הצלחנו להגדיר את רשת המכשיר כרגע — השרת ישלים זאת מעצמו בחיבור הבא.','warn');return}
+ if(h.enabled===false)log('רשת המכשיר כבויה — השם והסיסמה נשמרו למקרה שתופעל.','ok');
+ else if(h.renamed)log('רשת המכשיר: '+h.ssid+' — נעולה; הסיסמה מופיעה בקובץ ההתקנה. (אם הטלפון היה מחובר לרשת המכשיר — התחברו מחדש לשם החדש.)','ok');
+ else if(h.locked)log('רשת המכשיר נעולה בסיסמה; השם '+h.ssid+' נשאר — הקושחה הזו לא מקבלת שינוי שם.','warn');
+ else if(h.restart_required)log('השם והסיסמה נשמרו במכשיר וייכנסו לתוקף באתחול הבא שלו.','ok');
+ else log('רשת המכשיר עדיין פתוחה — השרת ינסה שוב בחיבור הבא.','warn');
+}
+async function updateFw(){
+ for(let step=0;step<3;step++){
+  let s=null;try{s=await srvAction('fwupdate=1')}catch(e){}
+  if(!s||!s.started){log(s&&s.blocked_he?s.blocked_he:(s&&!s.next?'המכשיר כבר בגרסה העדכנית ('+(s.fw||'')+').':'העדכון לא התחיל — נסו שוב בעוד רגע.'),s&&!s.next?'ok':'warn');break}
+  log('מעדכן קושחה '+(s.fw||'?')+' ← '+s.next+' — המכשיר מוריד ומאתחל (עד כ-4 דקות)...');
+  const from=s.fw;const until=Date.now()+240000;let back=null;
+  while(Date.now()<until){await sleep(10000);try{const o=await srvAction('fw=1');if(o.fw&&o.fw!==from){back=o;break}}catch(e){}}
+  if(!back){log('המכשיר עדיין לא חזר מהעדכון — אפשר להמשיך; השרת ישלים את העדכון בלילה.','warn');reofferDone();return}
+  log('המכשיר חזר בגרסה '+back.fw+'.','ok');
+  if(!back.next)break;
+ }
+ await hardenNow();
+ reofferDone();
+}
 async function routerCheck(){
  log('בודק אילו ערוצים דולקים...');
  let ch=null;
@@ -846,7 +885,7 @@ let finTries=0;
 async function finish(){
  // Retries watch longer: a real first connect took ~4 minutes end to end.
  const r=await serverCheck(finTries===0?90:240);
- if(r==='ok'){verdict('הצליח! המכשיר מחובר לשרת. אפשר לחזור למסך הניהול וללחוץ "בדוק חיבור".','ok');offerRouterCheck();return}
+ if(r==='ok'){verdict('הצליח! המכשיר מחובר לשרת. אפשר לחזור למסך הניהול וללחוץ "בדוק חיבור".','ok');offerRouterCheck();await afterSuccess();return}
  if(r==='wrong'){verdict('מכשיר אחר התחבר עם ההגדרות האלה — כנראה הוזנה כתובת IP של Shelly אחר. בדקו את הכתובת והריצו שוב.','bad');return}
  // First miss is usually just a slow first connect (reboot + clock sync + TLS
  // can exceed the 90s window — seen on a real 4PM install). Encourage a retry
@@ -1086,7 +1125,7 @@ async function stageComplete(){
    if(i%4===3)log('עדיין בודק... ('+(i+1)+'/12)','warn');
    await sleep(5000);
   }
-  if(ok){verdict('סיימתם! המכשיר מחובר לשרת. אפשר לשייך אותו ללקוח במסך הניהול.','ok');STAGE='done';$('go').textContent='סיום';offerSticker();return}
+  if(ok){verdict('סיימתם! המכשיר מחובר לשרת. אפשר לשייך אותו ללקוח במסך הניהול.','ok');STAGE='done';$('go').textContent='סיום';offerSticker();await afterSuccess();return}
   log('המכשיר לא מצליח להתחבר עם ההגדרות הקיימות — מגדיר אותו מחדש...','warn');
   PROVISIONED=false;
  }

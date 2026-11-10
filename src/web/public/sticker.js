@@ -34,4 +34,11 @@
   w.oninput = h.oninput = function () { sel.value = 'custom'; apply(); };
   pr.onclick = function () { apply(); window.focus(); window.print(); };
   apply();
+  // data-auto (the installer's button): no preview — print at once with the
+  // remembered size and close the window once the dialog is done.
+  if (document.documentElement.getAttribute('data-auto') === '1') {
+    var ctl = el('ctl'); if (ctl) ctl.style.display = 'none';
+    window.addEventListener('afterprint', function () { setTimeout(function () { window.close(); }, 200); });
+    setTimeout(function () { window.focus(); window.print(); }, 300);
+  }
 })();
