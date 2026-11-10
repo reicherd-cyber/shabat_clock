@@ -512,6 +512,14 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
        WHERE mac = ?`,
       [userId, result.id, probe.model || null, probe.mac],
     ).catch((e) => console.error('prepared_devices activate:', e.message));
+    // Activated while already online — no hello will come: harden the hotspot now
+    // (name, password, input reset — services/shellyAp.js) instead of waiting
+    // for the probe. Best-effort, like the boot-safe pass above.
+    if (!offline) {
+      import('./shellyAp.js')
+        .then(({ secureShellyAp }) => secureShellyAp({ id: result.id, device_uid: probe.mac, transport, ip_address: ip ?? null, ap_secured_at: null }, { reason: 'activate' }))
+        .catch((e) => console.error(`shelly-ap ${probe.mac} (activate):`, e.message));
+    }
     return result;
   });
 }

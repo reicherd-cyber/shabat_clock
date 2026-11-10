@@ -285,6 +285,8 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
   assert.ok(mq.includes("secureShellyAp(device, { reason: 'hello' })"), 'hello re-checks the real AP state (factory reset)');
   const health = readFileSync(new URL('../src/monitor/health.js', import.meta.url), 'utf8');
   assert.ok(health.includes('const apWait = device.ap_secured_at ? AP_RECHECK_MS : AP_RETRY_MS;') && health.includes('AP_RECHECK_MS = 24 * 60 * 60 * 1000') && health.includes('d.ap_secured_at'), 'the probe retries hourly until stamped and re-checks stamped units daily');
+  assert.ok(health.includes('st.apTriedAt = device.ap_secured_at ? Date.now() - apWait + Math.floor(Math.random() * 30 * 60 * 1000) : 0;'), 'an unstamped unit is hardened on its first probe; only stamped re-checks are spread out');
+  assert.ok(readFileSync(new URL('../src/services/devices.js', import.meta.url), 'utf8').includes("secureShellyAp({ id: result.id, device_uid: probe.mac, transport, ip_address: ip ?? null, ap_secured_at: null }, { reason: 'activate' })"), 'activation of an online unit hardens it at once (no hello will come)');
   assert.ok(ap.includes("const { shellyCall } = await import('./shelly.js');") && !ap.includes('shellyMqttRpc'), 'hardening is transport-aware (LAN units too)');
   const onboard = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
   assert.ok(onboard.includes("{}, await apPasswordFor(uid)),"), 'the per-device file carries the password');
