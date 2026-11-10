@@ -109,7 +109,7 @@ const stickerSizeCss = (W, H, rot) => {
   return '@page{size:' + page + ';margin:0}#rot{width:' + page.replace(' ', ';height:') + '}#lab{width:' + W + 'mm;height:' + H + 'mm'
     + (rot ? ';transform:rotate(90deg) translateY(-100%)' : '') + '}.mac{font-size:' + macMm.toFixed(2) + 'mm}.sub,.who{font-size:' + (macMm * 0.45).toFixed(2) + 'mm}';
 };
-export function stickerHtml({ mac, model, date, who, base }) {
+export function stickerHtml({ mac, model, date, who }) {
   const LOGO_DATA_URI = logoUri();
   const opts = STICKER_SIZES.map((s) => '<option value="' + s[0] + 'x' + s[1] + '">' + s[0] + '×' + s[1] + ' מ"מ</option>').join('');
   return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
@@ -168,7 +168,7 @@ async function stickerModel(uid) {
 // Admin: a sticker for a device row (its own id · name, by whichever MAC it holds),
 // for an inventory unit by MAC (no customer record, ever), or a test print (random
 // MAC with a Shelly prefix) to dial in the label roll.
-export async function stickerFor({ mac, device_id, test, base }) {
+export async function stickerFor({ mac, device_id, test }) {
   let uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   let dev = null;
   if (device_id) {
@@ -183,7 +183,7 @@ export async function stickerFor({ mac, device_id, test, base }) {
   if (!test) [dev, model] = await Promise.all([device_id ? dev : stickerRecord(uid), stickerModel(uid)]);
   const date = new Date().toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
   const who = test ? 'מדבקת בדיקה' : dev ? 'מזהה ' + dev.id + (dev.name ? ' · ' + dev.name : '') : '';
-  return stickerHtml({ mac: uid.toUpperCase(), model, date, who, base });
+  return stickerHtml({ mac: uid.toUpperCase(), model, date, who });
 }
 const mdnsCandidates = (uid) => MDNS_PREFIXES.map((p) => `${p}-${uid}.local`);
 
@@ -592,7 +592,7 @@ function parseModel(v){const s=v.trim().toLowerCase();if(!s.includes('-'))return
 // unit the full walk would have found.
 const ALL_PREFIXES=${JSON.stringify(MDNS_PREFIXES)};
 const MODEL_NAMES=${JSON.stringify(MODEL_NAMES)};
-const STICKER_TPL=${js(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__', base: '__BASE__' }))};
+const STICKER_TPL=${js(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__' }))};
 function knownModel(){return MODEL||parseModel($('mac').value)}
 function mdnsNames(uid){const m=knownModel();const list=m?[m].concat(ALL_PREFIXES.filter(p=>p!==m)):ALL_PREFIXES;return list.map(p=>p+'-'+uid+'.local')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
@@ -601,7 +601,7 @@ const esc=(v)=>String(v).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&
 const verdict=(t,cls)=>{$('verdict').innerHTML='<div class="verdict '+cls+'">'+t+'</div>'};
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 // no-cors: an opaque response still resolves = the device answered; reject = unreachable.
-async function ping(ip){try{await fetch('http://'+ip+'/rpc/Shelly.GetDeviceInfo',{mode:'no-cors',cache:'no-store',signal:AbortSignal.timeout(4000)});return true}catch{return false}}
+async function ping(ip,ms){try{await fetch('http://'+ip+'/rpc/Shelly.GetDeviceInfo',{mode:'no-cors',cache:'no-store',signal:AbortSignal.timeout(ms||4000)});return true}catch{return false}}
 // WebSocket RPC is the one readable channel: HTTP replies lack CORS headers (the
 // browser can send but never read them — the reason the MAC is typed by hand),
 // but ws://<ip>/rpc has no such restriction, so the page can interrogate the
@@ -814,8 +814,7 @@ function printSticker(){
  const who=SERVER_DEV?'מזהה '+SERVER_DEV.id+(SERVER_DEV.name?' · '+SERVER_DEV.name:''):'';
  const w=window.open('','_blank','width=560,height=560');
  if(!w){log('הדפדפן חסם את חלון המדבקה — אפשרו חלונות קופצים לדף הזה ולחצו שוב.','warn');reofferDone();return}
- let base='';try{base=new URL(PREPARE_URL||STATUS_URL).origin}catch(e){}
- const html=STICKER_TPL.split('__MAC__').join(esc(mac)).split('__MODEL__').join(esc(model)).split('__DATE__').join(esc(date)).split('__WHO__').join(esc(who)).split('__BASE__').join(esc(base));
+ const html=STICKER_TPL.split('__MAC__').join(esc(mac)).split('__MODEL__').join(esc(model)).split('__DATE__').join(esc(date)).split('__WHO__').join(esc(who));
  w.document.write(html);w.document.close();
  reofferDone();
 }
@@ -927,7 +926,7 @@ async function stageDetect(){
    ?'המכשיר נמצא אך לא ניתן לקרוא ממנו את הקוד. הקלידו את הקוד ידנית בשדה שנפתח למעלה (האותיות והספרות שאחרי המקף בשם הרשת Shelly...) ולחצו שוב.'
    :$('ip').value.trim()
     ?'הכתובת '+probe+' לא עונה. בדקו אותה ברשימת המכשירים של הנתב, ודאו שהטלפון על אותה רשת — או הקלידו את שם הרשת שהמכשיר משדר בשדה שנפתח למעלה.'
-    :'לא נמצא מכשיר — לא ברשת שהוא משדר ולא ברשת הביתית. בהתקנה ב-Wi-Fi: ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly או Zimna... או Zimna...) ולחצו שוב. בהתקנה בכבל: ודאו שהמחשב/הטלפון על אותה רשת כמו המכשיר, או הקלידו למעלה את שמו (ShellyPro...) או את כתובת ה-IP שלו מרשימת המכשירים בנתב.','warn');
+    :'לא נמצא מכשיר — לא ברשת שהוא משדר ולא ברשת הביתית. בהתקנה ב-Wi-Fi: ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly... או Zimna...) ולחצו שוב. בהתקנה בכבל: ודאו שהמחשב/הטלפון על אותה רשת כמו המכשיר, או הקלידו למעלה את שמו (ShellyPro...) או את כתובת ה-IP שלו מרשימת המכשירים בנתב.','warn');
   return}
  // Pre-provisioned unit (configured for our broker in advance, e.g. at the
  // seller's desk): the on-site visit collapses to Wi-Fi-only — one network,
@@ -1096,7 +1095,17 @@ async function stageComplete(){
  const candidates=[...new Set([manual,STA_IP,DEVIP].filter(Boolean))]
   .concat(mdnsNames(UID));
  IP='';
- for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
+ // A unit fresh on the home network can be slow to answer (a reset Pro 2 on a weak
+ // signal took over 4 s per call, and a reconnecting one answers nothing for a
+ // while): keep trying for a minute, the known address first every round, with a
+ // longer timeout — not one 4-second shot followed by a .local walk that cannot
+ // succeed on a phone.
+ const deadline=Date.now()+60000;let round=0;
+ while(!IP&&Date.now()<deadline){
+  const list=round===0?candidates:candidates.slice(0,2);
+  for(const c of list){if(round===0)log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c,6000)){IP=c;break}}
+  if(!IP){round++;if(round===1)log('עדיין מחפש — מכשיר שזה עתה התחבר לרשת עונה לפעמים רק אחרי כמה שניות...','warn');await sleep(2000)}
+ }
  if(!IP){
   $('ip').classList.remove('hidden');
   verdict('המכשיר לא נמצא ברשת הזו. ודאו שהטלפון על אותו Wi-Fi ביתי שאליו חיברתם את המכשיר ולחצו שוב — או הזינו את כתובת ה-IP שלו ('+(STA_IP||'מהנתב')+') בשדה שנפתח למעלה.','warn');

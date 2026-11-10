@@ -389,7 +389,7 @@ adminRouter.post('/shelly/universal-installer', requireWrite, async (req, res, n
 adminRouter.get('/shelly/sticker', async (req, res, next) => {
   try {
     const { stickerFor } = await import('../../services/shellyOnboard.js');
-    res.json({ html: await stickerFor({ mac: req.query.mac, device_id: req.query.device_id, test: String(req.query.test || '') === '1', base: `${req.protocol}://${req.get('host')}` }) });
+    res.json({ html: await stickerFor({ mac: req.query.mac, device_id: req.query.device_id, test: String(req.query.test || '') === '1' }) });
   } catch (e) { next(e); }
 });
 

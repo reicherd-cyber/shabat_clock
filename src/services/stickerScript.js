@@ -15,6 +15,7 @@ try {
 } catch { source = ''; }
 // A "</script" inside would end the inline block early; the file never contains one.
 if (/<\/script/i.test(source)) source = '';
+if (!source) console.warn('[sticker] src/web/public/sticker.js missing or unusable — stickers print at the built-in size with no controls');
 
 export const STICKER_SCRIPT = source;
 // CSP hash-source of the inline block: sha256 over the exact script text.

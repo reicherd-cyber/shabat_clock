@@ -1,7 +1,7 @@
 // Unit sticker page (see stickerHtml in src/services/shellyOnboard.js): label size
-// controls. A separate file, not inline: a window opened from the admin inherits
-// the site's CSP (script-src 'self'), which blocks inline scripts — a same-origin
-// file is allowed, and the installer page (file://) loads it over https as well.
+// controls. Inlined into the page by the server (services/stickerScript.js) and
+// allowed by its hash in the site CSP — never put a closing script tag in this
+// file. Also served at /sticker.js for installer files generated before the inlining.
 (function () {
   var el = function (id) { return document.getElementById(id); };
   var sel = el('sz'), w = el('w'), h = el('h'), pr = el('pr'), rot = el('rotchk'), dx = el('dx'), dy = el('dy');

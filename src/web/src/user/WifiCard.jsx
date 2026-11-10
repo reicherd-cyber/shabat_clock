@@ -133,7 +133,7 @@ export default function WifiCard({ devices }) {
       const r = await callDevice('Shelly.GetDeviceInfo');
       setScanNote(r === 'sent'
         ? 'הדפדפן הזה לא מאפשר לקרוא את רשימת הרשתות מהמכשיר — הקלידו את שם הרשת ידנית.'
-        : 'לא הצלחנו להגיע למכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly…) ולחצו שוב.');
+        : 'לא הצלחנו להגיע למכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Zimna… או Shelly…) ולחצו שוב.');
     }
     setScanning(false);
   };
@@ -234,7 +234,7 @@ export default function WifiCard({ devices }) {
       </p>
       <ol className="list-decimal ps-5 space-y-2 text-sm">
         <li>
-          בהגדרות ה-Wi-Fi של הטלפון התחברו לרשת שהמכשיר משדר — שמה מתחיל ב-<b dir="ltr">Shelly</b> ומסתיים
+          בהגדרות ה-Wi-Fi של הטלפון התחברו לרשת שהמכשיר משדר — שמה מתחיל ב-<b dir="ltr">Zimna</b> (או ב-<b dir="ltr">Shelly</b> במכשיר שטרם חובר לשרת) ומסתיים
           בקוד המכשיר{' '}
           {shelly.map((d, i) => <span key={d.id}>{i > 0 && ', '}<b dir="ltr">{d.device_uid.toUpperCase()}</b></span>)}.
           אם הטלפון מזהיר שאין אינטרנט ברשת — הישארו בה.
@@ -297,7 +297,7 @@ export default function WifiCard({ devices }) {
 
       {phase === 'unreachable' && (
         <p className="text-sm mt-3 bg-off-bg text-off rounded-xl px-3 py-2">
-          לא הצלחנו להגיע למכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly…) — ולחצו שוב.
+          לא הצלחנו להגיע למכשיר. ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Zimna… או Shelly…) — ולחצו שוב.
         </p>
       )}
 

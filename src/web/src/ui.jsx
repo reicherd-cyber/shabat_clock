@@ -596,10 +596,14 @@ export function StackedDayChart({ rows, series, range, ariaLabel }) {
 // "80f3dac8dca8" and a hotspot/device name "ShellyPro4PM-80F3DAC8DCA8" (only a
 // leading Shelly model word is cut off — a dash is otherwise just a separator).
 export const normalizeMac = (v) => {
+  // A hotspot name pasted as is — 'ShellyPro4PM-<mac>' or our 'Zimna-<mac>' — is
+  // the part after the last dash; a bare MAC with separators is the whole string.
   const s = String(v || '').trim().toLowerCase();
-  const m = s.match(/^shelly[a-z0-9]*-(.+)$/);
-  const hex = (m ? m[1] : s).replace(/[^0-9a-f]/g, '');
-  return hex.length === 12 ? hex : null;
+  const tail = s.includes('-') ? s.slice(s.lastIndexOf('-') + 1) : s;
+  const hex = tail.replace(/[^0-9a-f]/g, '');
+  if (hex.length === 12) return hex;
+  const all = s.replace(/[^0-9a-f]/g, '');
+  return all.length === 12 ? all : null;
 };
 
 // Shelly model code → human name + channel count. The code's 3-digit block ends

@@ -426,7 +426,10 @@ async function checkShelly(device) {
   // change in what "hardened" means rolls out on deploy, and a hotspot someone
   // switched on and left open is locked within a day, reconnect or not.
   const apWait = device.ap_secured_at ? AP_RECHECK_MS : AP_RETRY_MS;
-  if (active() && Date.now() - (st.apTriedAt || 0) > apWait) {
+  // First check after a server start spread over half an hour across the fleet —
+  // not every unit on the first probe, racing the hello passes of the reconnect.
+  if (st.apTriedAt === undefined) st.apTriedAt = Date.now() - apWait + Math.floor(Math.random() * 30 * 60 * 1000);
+  if (active() && Date.now() - st.apTriedAt > apWait) {
     st.apTriedAt = Date.now();
     import('../services/shellyAp.js')
       .then(({ secureShellyAp }) => secureShellyAp(device, { reason: 'probe' }))
