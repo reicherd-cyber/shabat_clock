@@ -601,7 +601,7 @@ const esc=(v)=>String(v).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&
 const verdict=(t,cls)=>{$('verdict').innerHTML='<div class="verdict '+cls+'">'+t+'</div>'};
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 // no-cors: an opaque response still resolves = the device answered; reject = unreachable.
-async function ping(ip){try{await fetch('http://'+ip+'/rpc/Shelly.GetDeviceInfo',{mode:'no-cors',cache:'no-store',signal:AbortSignal.timeout(4000)});return true}catch{return false}}
+async function ping(ip,ms){try{await fetch('http://'+ip+'/rpc/Shelly.GetDeviceInfo',{mode:'no-cors',cache:'no-store',signal:AbortSignal.timeout(ms||4000)});return true}catch{return false}}
 // WebSocket RPC is the one readable channel: HTTP replies lack CORS headers (the
 // browser can send but never read them — the reason the MAC is typed by hand),
 // but ws://<ip>/rpc has no such restriction, so the page can interrogate the
@@ -1095,7 +1095,17 @@ async function stageComplete(){
  const candidates=[...new Set([manual,STA_IP,DEVIP].filter(Boolean))]
   .concat(mdnsNames(UID));
  IP='';
- for(const c of candidates){log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c)){IP=c;break}}
+ // A unit fresh on the home network can be slow to answer (a reset Pro 2 on a weak
+ // signal took over 4 s per call, and a reconnecting one answers nothing for a
+ // while): keep trying for a minute, the known address first every round, with a
+ // longer timeout — not one 4-second shot followed by a .local walk that cannot
+ // succeed on a phone.
+ const deadline=Date.now()+60000;let round=0;
+ while(!IP&&Date.now()<deadline){
+  const list=round===0?candidates:candidates.slice(0,2);
+  for(const c of list){if(round===0)log('מחפש את המכשיר בכתובת '+c+'...');if(await ping(c,6000)){IP=c;break}}
+  if(!IP){round++;if(round===1)log('עדיין מחפש — מכשיר שזה עתה התחבר לרשת עונה לפעמים רק אחרי כמה שניות...','warn');await sleep(2000)}
+ }
  if(!IP){
   $('ip').classList.remove('hidden');
   verdict('המכשיר לא נמצא ברשת הזו. ודאו שהטלפון על אותו Wi-Fi ביתי שאליו חיברתם את המכשיר ולחצו שוב — או הזינו את כתובת ה-IP שלו ('+(STA_IP||'מהנתב')+') בשדה שנפתח למעלה.','warn');
