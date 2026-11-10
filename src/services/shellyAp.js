@@ -72,11 +72,14 @@ const failLogged = new Set(); // one "not applied" line per unit per process; th
 // Firmware that accepted our write but still shows the old name (or applies AP
 // changes only after a restart we never force): remembered in the event row, so
 // the daily check does not re-send and log a phantom change every day.
-async function renamePending(deviceId) {
+// Scoped to the firmware the note was taken on: a newer firmware (fw 1.3.2 refused
+// the name, later releases take it) gets the rename tried again.
+async function renamePending(deviceId, fw) {
   const [row] = await query(
     `SELECT 1 AS ok FROM device_events WHERE device_id = ? AND event = 'ap_secured'
        AND (JSON_EXTRACT(payload, '$.rename_unsupported') = true OR JSON_EXTRACT(payload, '$.restart_required') = true)
-       AND created_at > UTC_TIMESTAMP() - INTERVAL 30 DAY LIMIT 1`, [deviceId]).catch(() => []);
+       AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.fw')) <=> ?
+       AND created_at > UTC_TIMESTAMP() - INTERVAL 30 DAY LIMIT 1`, [deviceId, fw || null]).catch(() => []);
   return !!row;
 }
 
@@ -104,7 +107,7 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
     // Name + password must be in the unit's config whether or not the hotspot is
     // on: a hotspot switched on later (Shelly app) then comes up locked and named
     // from its first second. The enable flag itself is never touched.
-    const apDone = ap.is_open === false && (ap.ssid === apSsidFor(uid) || await renamePending(device.id));
+    const apDone = ap.is_open === false && (ap.ssid === apSsidFor(uid) || await renamePending(device.id, device.fw_version));
     if (stamped && apDone) return { changed: false, reason: 'already secured' };
     const events = [];
     // Inputs: only on the full pass (unstamped, or a hotspot found open = reset).
@@ -126,7 +129,7 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
         const renamed = after?.result?.ap?.ssid === apSsidFor(uid);
         const unsupported = !restart && !!after?.result?.ap && !renamed && after.result.ap.is_open === false;
         if (unsupported) console.warn(`[shelly-ap] ${uid}: password set, hotspot name not accepted by this firmware — left as ${after.result.ap.ssid}`);
-        events.push(['ap_secured', { via: reason, restart_required: restart, rename_unsupported: unsupported, enabled: ap.enable !== false, was_open: ap.is_open !== false, ssid: apSsidFor(uid), was_ssid: ap.ssid || null }]);
+        events.push(['ap_secured', { via: reason, fw: device.fw_version || null, restart_required: restart, rename_unsupported: unsupported, enabled: ap.enable !== false, was_open: ap.is_open !== false, ssid: apSsidFor(uid), was_ssid: ap.ssid || null }]);
       }
     } else {
       apSet = true; // already ours (unstamped only because an earlier pass stopped short on the inputs)

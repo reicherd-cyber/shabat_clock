@@ -517,7 +517,7 @@ export async function registerShellyDevice({ userId, transport = 'lan', ip, mac,
     // for the probe. Best-effort, like the boot-safe pass above.
     if (!offline) {
       import('./shellyAp.js')
-        .then(({ secureShellyAp }) => secureShellyAp({ id: result.id, device_uid: probe.mac, transport, ip_address: ip ?? null, ap_secured_at: null }, { reason: 'activate' }))
+        .then(({ secureShellyAp }) => secureShellyAp({ id: result.id, device_uid: probe.mac, transport, ip_address: ip ?? null, fw_version: probe.fw_version ?? null, ap_secured_at: null }, { reason: 'activate' }))
         .catch((e) => console.error(`shelly-ap ${probe.mac} (activate):`, e.message));
     }
     return result;
