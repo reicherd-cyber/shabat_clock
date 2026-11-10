@@ -222,7 +222,7 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   const onboard = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
   const auth = readFileSync(new URL('../src/api/routes/auth.js', import.meta.url), 'utf8');
   assert.ok(onboard.includes('function printSticker('));
-  assert.ok(onboard.includes("STAGE='done';$('go').textContent='סיום';offerSticker();"), 'the pre-provisioned done path offers the sticker');
+  assert.ok(onboard.includes("STAGE='done';$('go').textContent='סיום';offerSticker();await afterSuccess();return}"), 'the pre-provisioned done path offers the sticker and runs the end-of-install actions too');
   assert.ok(/function offerRouterCheck\(\)\{ROUTER_OFFERED=true;[^\n]*offerSticker\(\)\}/.test(onboard), 'the verified path offers the sticker next to the router check');
   assert.equal((onboard.match(/SERVER_DEV=r\.device\|\|null/g) || []).length, 2, 'both server checks keep our record for the sticker');
   // Our record rides only the per-device token (bound to one uid); the universal file's check path stays customer-data free.
@@ -335,7 +335,7 @@ test('installer: after the verified connection the page locks + renames the hots
 
 test('the customer Wi-Fi card shows the unit hotspot password next to the network name (GET /devices carries ap_pass for shelly units)', () => {
   const user = readFileSync(new URL('../src/api/routes/user.js', import.meta.url), 'utf8');
-  assert.ok(user.includes("d.ap_pass = apPasswordFor(d.device_uid)"), 'ap_pass on the owner device list');
+  assert.ok(user.includes("d.ap_pass = apPasswordFor(d.device_uid)") && user.includes('if (!req.readOnly) {') && user.includes("p.rename_unsupported ? p.was_ssid || null : p.ssid || null"), 'ap_pass on the owner device list — never for a read-only invitee, with the hotspot name the unit actually holds');
   const card = readFileSync(new URL('../src/web/src/user/WifiCard.jsx', import.meta.url), 'utf8');
   assert.ok(card.includes('shelly.some((d) => d.ap_pass)') && card.includes('{d.ap_pass}'), 'the card renders it');
 });

@@ -1124,7 +1124,7 @@ async function stageComplete(){
    if(i%4===3)log('עדיין בודק... ('+(i+1)+'/12)','warn');
    await sleep(5000);
   }
-  if(ok){verdict('סיימתם! המכשיר מחובר לשרת. אפשר לשייך אותו ללקוח במסך הניהול.','ok');STAGE='done';$('go').textContent='סיום';offerSticker();return}
+  if(ok){verdict('סיימתם! המכשיר מחובר לשרת. אפשר לשייך אותו ללקוח במסך הניהול.','ok');STAGE='done';$('go').textContent='סיום';offerSticker();await afterSuccess();return}
   log('המכשיר לא מצליח להתחבר עם ההגדרות הקיימות — מגדיר אותו מחדש...','warn');
   PROVISIONED=false;
  }

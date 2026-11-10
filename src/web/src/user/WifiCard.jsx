@@ -253,13 +253,13 @@ export default function WifiCard({ devices }) {
                   {shelly.filter((d) => d.ap_pass).map((d) => (
                     <tr key={d.id}>
                       <td className="pe-4 py-0.5">{d.name}</td>
-                      <td className="pe-4 py-0.5"><span dir="ltr">Zimna-{d.device_uid.toUpperCase()}</span></td>
+                      <td className="pe-4 py-0.5"><span dir="ltr">{d.ap_ssid || `Shelly…-${d.device_uid.toUpperCase()}`}</span>{!d.ap_locked && <span className="text-off text-xs"> (עדיין פתוחה)</span>}</td>
                       <td className="py-0.5"><b dir="ltr">{d.ap_pass}</b></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <div className="text-off text-xs mt-1">במכשיר שטרם חובר לשרת הרשת עדיין נקראת Shelly… ופתוחה.</div>
+              <div className="text-off text-xs mt-1">השם והסיסמה נקבעים בחיבור הראשון לשרת; עד אז הרשת נקראת Shelly… ופתוחה.</div>
             </div>
           )}
         </li>
