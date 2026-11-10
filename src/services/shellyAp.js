@@ -67,6 +67,18 @@ async function disableInputReset(call) {
 // One hardening pass per unit at a time (the hello echo and the first health
 // probe of a server start arrive within the same minute).
 const inFlight = new Map();
+const failLogged = new Set(); // one "not applied" line per unit per process; the hourly retry stays quiet
+
+// Firmware that accepted our write but still shows the old name (or applies AP
+// changes only after a restart we never force): remembered in the event row, so
+// the daily check does not re-send and log a phantom change every day.
+async function renamePending(deviceId) {
+  const [row] = await query(
+    `SELECT 1 AS ok FROM device_events WHERE device_id = ? AND event = 'ap_secured'
+       AND (JSON_EXTRACT(payload, '$.rename_unsupported') = true OR JSON_EXTRACT(payload, '$.restart_required') = true)
+       AND created_at > UTC_TIMESTAMP() - INTERVAL 30 DAY LIMIT 1`, [deviceId]).catch(() => []);
+  return !!row;
+}
 
 // Harden a unit: our hotspot name + password (set whenever the unit is unstamped
 // — the write is idempotent — or whenever the hotspot is found open or under the
@@ -92,7 +104,7 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
     // Name + password must be in the unit's config whether or not the hotspot is
     // on: a hotspot switched on later (Shelly app) then comes up locked and named
     // from its first second. The enable flag itself is never touched.
-    const apDone = ap.is_open === false && ap.ssid === apSsidFor(uid);
+    const apDone = ap.is_open === false && (ap.ssid === apSsidFor(uid) || await renamePending(device.id));
     if (stamped && apDone) return { changed: false, reason: 'already secured' };
     const events = [];
     // Inputs: only on the full pass (unstamped, or a hotspot found open = reset).
@@ -103,13 +115,18 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
     if (!apDone) {
       const r = await call('Wifi.SetConfig', { config: { ap: { ssid: apSsidFor(uid), is_open: false, pass: apPasswordFor(uid) } } });
       if (!r || r.error) {
-        console.error(`[shelly-ap] ${uid}: hotspot password not applied: ${r?.error?.message || 'no reply'}`);
+        if (!failLogged.has(uid)) { failLogged.add(uid); console.error(`[shelly-ap] ${uid}: hotspot password not applied: ${r?.error?.message || 'no reply'} (retrying hourly)`); }
       } else {
         apSet = true;
         // Some firmware applies the AP change only after a restart; the config is
         // stored either way and the next reboot (fw update, power cut) closes it.
         restart = !!r.result?.restart_required;
-        events.push(['ap_secured', { via: reason, restart_required: restart, enabled: ap.enable !== false, was_open: ap.is_open !== false, ssid: apSsidFor(uid), was_ssid: ap.ssid || null }]);
+        // Read back: a unit that kept the password but not the name is noted, not re-sent daily.
+        const after = await call('Wifi.GetConfig');
+        const renamed = after?.result?.ap?.ssid === apSsidFor(uid);
+        const unsupported = !restart && !!after?.result?.ap && !renamed && after.result.ap.is_open === false;
+        if (unsupported) console.warn(`[shelly-ap] ${uid}: password set, hotspot name not accepted by this firmware — left as ${after.result.ap.ssid}`);
+        events.push(['ap_secured', { via: reason, restart_required: restart, rename_unsupported: unsupported, enabled: ap.enable !== false, was_open: ap.is_open !== false, ssid: apSsidFor(uid), was_ssid: ap.ssid || null }]);
       }
     } else {
       apSet = true; // already ours (unstamped only because an earlier pass stopped short on the inputs)

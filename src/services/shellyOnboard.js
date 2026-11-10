@@ -109,7 +109,7 @@ const stickerSizeCss = (W, H, rot) => {
   return '@page{size:' + page + ';margin:0}#rot{width:' + page.replace(' ', ';height:') + '}#lab{width:' + W + 'mm;height:' + H + 'mm'
     + (rot ? ';transform:rotate(90deg) translateY(-100%)' : '') + '}.mac{font-size:' + macMm.toFixed(2) + 'mm}.sub,.who{font-size:' + (macMm * 0.45).toFixed(2) + 'mm}';
 };
-export function stickerHtml({ mac, model, date, who, base }) {
+export function stickerHtml({ mac, model, date, who }) {
   const LOGO_DATA_URI = logoUri();
   const opts = STICKER_SIZES.map((s) => '<option value="' + s[0] + 'x' + s[1] + '">' + s[0] + '×' + s[1] + ' מ"מ</option>').join('');
   return '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>מדבקה ' + escHtml(mac) + '</title><style>'
@@ -168,7 +168,7 @@ async function stickerModel(uid) {
 // Admin: a sticker for a device row (its own id · name, by whichever MAC it holds),
 // for an inventory unit by MAC (no customer record, ever), or a test print (random
 // MAC with a Shelly prefix) to dial in the label roll.
-export async function stickerFor({ mac, device_id, test, base }) {
+export async function stickerFor({ mac, device_id, test }) {
   let uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   let dev = null;
   if (device_id) {
@@ -183,7 +183,7 @@ export async function stickerFor({ mac, device_id, test, base }) {
   if (!test) [dev, model] = await Promise.all([device_id ? dev : stickerRecord(uid), stickerModel(uid)]);
   const date = new Date().toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
   const who = test ? 'מדבקת בדיקה' : dev ? 'מזהה ' + dev.id + (dev.name ? ' · ' + dev.name : '') : '';
-  return stickerHtml({ mac: uid.toUpperCase(), model, date, who, base });
+  return stickerHtml({ mac: uid.toUpperCase(), model, date, who });
 }
 const mdnsCandidates = (uid) => MDNS_PREFIXES.map((p) => `${p}-${uid}.local`);
 
@@ -592,7 +592,7 @@ function parseModel(v){const s=v.trim().toLowerCase();if(!s.includes('-'))return
 // unit the full walk would have found.
 const ALL_PREFIXES=${JSON.stringify(MDNS_PREFIXES)};
 const MODEL_NAMES=${JSON.stringify(MODEL_NAMES)};
-const STICKER_TPL=${js(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__', base: '__BASE__' }))};
+const STICKER_TPL=${js(stickerHtml({ mac: '__MAC__', model: '__MODEL__', date: '__DATE__', who: '__WHO__' }))};
 function knownModel(){return MODEL||parseModel($('mac').value)}
 function mdnsNames(uid){const m=knownModel();const list=m?[m].concat(ALL_PREFIXES.filter(p=>p!==m)):ALL_PREFIXES;return list.map(p=>p+'-'+uid+'.local')}
 if(location.protocol==='https:')$('httpsWarn').style.display='block';
@@ -814,8 +814,7 @@ function printSticker(){
  const who=SERVER_DEV?'מזהה '+SERVER_DEV.id+(SERVER_DEV.name?' · '+SERVER_DEV.name:''):'';
  const w=window.open('','_blank','width=560,height=560');
  if(!w){log('הדפדפן חסם את חלון המדבקה — אפשרו חלונות קופצים לדף הזה ולחצו שוב.','warn');reofferDone();return}
- let base='';try{base=new URL(PREPARE_URL||STATUS_URL).origin}catch(e){}
- const html=STICKER_TPL.split('__MAC__').join(esc(mac)).split('__MODEL__').join(esc(model)).split('__DATE__').join(esc(date)).split('__WHO__').join(esc(who)).split('__BASE__').join(esc(base));
+ const html=STICKER_TPL.split('__MAC__').join(esc(mac)).split('__MODEL__').join(esc(model)).split('__DATE__').join(esc(date)).split('__WHO__').join(esc(who));
  w.document.write(html);w.document.close();
  reofferDone();
 }
@@ -927,7 +926,7 @@ async function stageDetect(){
    ?'המכשיר נמצא אך לא ניתן לקרוא ממנו את הקוד. הקלידו את הקוד ידנית בשדה שנפתח למעלה (האותיות והספרות שאחרי המקף בשם הרשת Shelly...) ולחצו שוב.'
    :$('ip').value.trim()
     ?'הכתובת '+probe+' לא עונה. בדקו אותה ברשימת המכשירים של הנתב, ודאו שהטלפון על אותה רשת — או הקלידו את שם הרשת שהמכשיר משדר בשדה שנפתח למעלה.'
-    :'לא נמצא מכשיר — לא ברשת שהוא משדר ולא ברשת הביתית. בהתקנה ב-Wi-Fi: ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly או Zimna... או Zimna...) ולחצו שוב. בהתקנה בכבל: ודאו שהמחשב/הטלפון על אותה רשת כמו המכשיר, או הקלידו למעלה את שמו (ShellyPro...) או את כתובת ה-IP שלו מרשימת המכשירים בנתב.','warn');
+    :'לא נמצא מכשיר — לא ברשת שהוא משדר ולא ברשת הביתית. בהתקנה ב-Wi-Fi: ודאו שהטלפון מחובר לרשת שהמכשיר משדר (Shelly... או Zimna...) ולחצו שוב. בהתקנה בכבל: ודאו שהמחשב/הטלפון על אותה רשת כמו המכשיר, או הקלידו למעלה את שמו (ShellyPro...) או את כתובת ה-IP שלו מרשימת המכשירים בנתב.','warn');
   return}
  // Pre-provisioned unit (configured for our broker in advance, e.g. at the
  // seller's desk): the on-site visit collapses to Wi-Fi-only — one network,

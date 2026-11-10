@@ -251,9 +251,8 @@ test('installer: a sticker (MAC · model · our record when pre-assigned) is on 
   assert.ok(/createHash\('sha256'\)\.update\(source, 'utf8'\)\.digest\('base64'\)/.test(ss) && app.includes('STICKER_SCRIPT_CSP') && /'script-src': \["'self'", 'https:\/\/accounts\.google\.com\/gsi\/client', \.\.\.\(STICKER_SCRIPT_CSP/.test(app), 'the site CSP allows exactly that inline script by hash');
   assert.ok(!/id="rot"/.test(stickerCode) || !/id="rot"[\s\S]*id="rot"/.test(stickerCode), 'one element per id');
   assert.ok(readFileSync(new URL('../src/web/public/sticker.js', import.meta.url), 'utf8').includes("getItem('stickerSize')"), 'the static controls script exists');
-  assert.ok(onboard.includes("base=new URL(PREPARE_URL||STATUS_URL).origin"), 'the installer page points the script at our server');
   // The installer page is a foreign origin (file://): helmet's CORP same-origin would refuse it the script.
-  assert.ok(/app\.get\('\/sticker\.js',[\s\S]{0,200}'Cross-Origin-Resource-Policy', 'cross-origin'/.test(app), '/sticker.js is served cross-origin');
+  assert.ok(/app\.get\('\/sticker\.js',[\s\S]{0,200}'Cross-Origin-Resource-Policy', 'cross-origin'/.test(app), 'legacy /sticker.js (installer files generated before the inlining) stays served cross-origin');
   assert.ok(onboard.includes('export async function stickerFor(') && onboard.includes("'2805a5' + crypto.randomBytes(3)"), 'admin stickers by MAC, test print with a random Shelly MAC');
   const admin = readFileSync(new URL('../src/api/routes/admin.js', import.meta.url), 'utf8');
   assert.ok(admin.includes("adminRouter.get('/shelly/sticker'"), 'admin route');
@@ -273,8 +272,13 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
   const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
   assert.ok(/hkdfSync\('sha256', env\.jwtSecret, 'shabat-clock', 'shelly-ap-v1', 32\)/.test(ap) && /createHmac\('sha256', apKey\(\)\)\.update\('shelly-ap:' \+ u\)/.test(ap), 'per-unit derivation from the server key, never a stored or shown secret');
   assert.ok(!ap.includes('getSetting') && !ap.includes('ap_secret'), 'no secret in the settings table');
-  assert.ok(ap.includes("const apDone = ap.is_open === false && ap.ssid === apSsidFor(uid);") && !ap.includes("if (ap.enable === false) {") && ap.includes("{ config: { ap: { ssid: apSsidFor(uid), is_open: false, pass: apPasswordFor(uid) } } }") && !/ap: \{[^}]*enable/.test(ap), 'our name + password are set whether the hotspot is on or off (so a later switch-on comes up locked); enable is never touched');
+  assert.ok(ap.includes("const apDone = ap.is_open === false && (ap.ssid === apSsidFor(uid) || await renamePending(device.id));") && !ap.includes("if (ap.enable === false) {") && ap.includes("{ config: { ap: { ssid: apSsidFor(uid), is_open: false, pass: apPasswordFor(uid) } } }") && !/ap: \{[^}]*enable/.test(ap), 'our name + password are set whether the hotspot is on or off (so a later switch-on comes up locked); enable is never touched');
   assert.ok(/'Zimna-' \+ u\.toUpperCase\(\)/.test(ap), 'hotspot name = brand + MAC');
+  assert.ok(ap.includes('await renamePending(device.id)') && ap.includes('rename_unsupported: unsupported'), 'a firmware that keeps the password but not the name is noted once, not re-sent daily');
+  assert.ok(readFileSync(new URL('../src/web/src/ui.jsx', import.meta.url), 'utf8').includes("const tail = s.includes('-') ? s.slice(s.lastIndexOf('-') + 1) : s;"), 'the admin MAC helper takes the part after the last dash (Zimna-<mac> too)');
+  assert.equal((readFileSync(new URL('../src/web/src/user/WifiCard.jsx', import.meta.url), 'utf8').match(/Zimna/g) || []).length, 3, 'the customer Wi-Fi card names the new hotspot name');
+  const onboardSrc = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
+  assert.ok(!onboardSrc.includes('__BASE__') && !/stickerHtml\(\{[^}]*base/.test(onboardSrc), 'no dead base plumbing');
   assert.ok((readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8').match(/Zimna/g) || []).length >= 4, 'the installer page names both hotspot names');
   assert.ok(ap.includes('if (apSet && inputs.complete) {') && ap.includes('const inFlight = new Map();'), 'stamped only after both steps succeeded; one pass at a time');
   const mq = readFileSync(new URL('../src/mqtt/client.js', import.meta.url), 'utf8');
