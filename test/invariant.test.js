@@ -332,3 +332,10 @@ test('installer: after the verified connection the page locks + renames the hots
   const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
   for (const s of ['export async function fwOffered(', 'export async function fwUpdateStart(', 'export async function hardenByUid(', 'if (apSet && inputs.complete && device.id) {', 'for (const [event, payload] of device.id ? events : [])']) assert.ok(ap.includes(s), s);
 });
+
+test('the customer Wi-Fi card shows the unit hotspot password next to the network name (GET /devices carries ap_pass for shelly units)', () => {
+  const user = readFileSync(new URL('../src/api/routes/user.js', import.meta.url), 'utf8');
+  assert.ok(user.includes("d.ap_pass = apPasswordFor(d.device_uid)"), 'ap_pass on the owner device list');
+  const card = readFileSync(new URL('../src/web/src/user/WifiCard.jsx', import.meta.url), 'utf8');
+  assert.ok(card.includes('shelly.some((d) => d.ap_pass)') && card.includes('{d.ap_pass}'), 'the card renders it');
+});

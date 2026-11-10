@@ -10,6 +10,7 @@ import { requestOtp, verifyOtp } from '../../services/otp.js';
 import { listDevicesWithRelays, patchRelay } from '../../services/relays.js';
 import { ensureDemoState } from '../../services/demo.js';
 import { patchDevice } from '../../services/devices.js';
+import { apPasswordFor } from '../../services/shellyAp.js';
 import { sendImmediateCommand } from '../../services/commands.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules, savePlan, previewScheduler, setPlanEnabled, lastLoggedPlanBody, deletePlan, planMemberIds } from '../../services/schedules.js';
 import { getHistory } from '../../services/history.js';
@@ -302,7 +303,12 @@ userRouter.delete('/me/phones/:id', async (req, res, next) => {
 userRouter.get('/devices', async (req, res, next) => {
   try {
     await ensureDemoState(req.auth.userId);
-    res.json(await listDevicesWithRelays(req.auth.userId));
+    const list = await listDevicesWithRelays(req.auth.userId);
+    // The unit's own hotspot is locked (services/shellyAp.js); its password is the
+    // household's to know — הגדרות → הגדרת Wi-Fi (WifiCard.jsx) shows it next to
+    // the network name the owner is told to join.
+    for (const d of list) if (d.device_type === 'shelly' && d.device_uid) d.ap_pass = apPasswordFor(d.device_uid);
+    res.json(list);
   } catch (e) { next(e); }
 });
 

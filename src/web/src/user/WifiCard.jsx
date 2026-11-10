@@ -238,6 +238,14 @@ export default function WifiCard({ devices }) {
           בקוד המכשיר{' '}
           {shelly.map((d, i) => <span key={d.id}>{i > 0 && ', '}<b dir="ltr">{d.device_uid.toUpperCase()}</b></span>)}.
           אם הטלפון מזהיר שאין אינטרנט ברשת — הישארו בה.
+          {shelly.some((d) => d.ap_pass) && (
+            <div className="mt-1">
+              הרשת של המכשיר נעולה בסיסמה (כך שרק אתם מגיעים אליו):{' '}
+              {shelly.filter((d) => d.ap_pass).map((d, i) => (
+                <span key={d.id}>{i > 0 && ' · '}{shelly.length > 1 && <><b dir="ltr">{d.device_uid.toUpperCase()}</b>: </>}<b dir="ltr">{d.ap_pass}</b></span>
+              ))}
+            </div>
+          )}
         </li>
         <li>
           לא רואים רשת כזו? לחצו על כפתור ה-RESET הקטן במכשיר כ-5 שניות ושחררו — הרשת שלו תופיע לכמה דקות
