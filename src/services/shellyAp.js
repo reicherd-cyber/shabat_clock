@@ -107,7 +107,7 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
     // Name + password must be in the unit's config whether or not the hotspot is
     // on: a hotspot switched on later (Shelly app) then comes up locked and named
     // from its first second. The enable flag itself is never touched.
-    const apDone = ap.is_open === false && (ap.ssid === apSsidFor(uid) || await renamePending(device.id, device.fw_version));
+    const apDone = ap.is_open === false && (ap.ssid === apSsidFor(uid) || (device.id ? await renamePending(device.id, device.fw_version) : false));
     if (stamped && apDone) return { changed: false, reason: 'already secured' };
     const events = [];
     // Inputs: only on the full pass (unstamped, or a hotspot found open = reset).
@@ -135,10 +135,12 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
       apSet = true; // already ours (unstamped only because an earlier pass stopped short on the inputs)
     }
     if (!inputs.complete) console.warn(`[shelly-ap] ${uid}: input sweep incomplete (RPC timeout) — not stamped, will retry`);
-    if (apSet && inputs.complete) {
+    // An inventory unit (no device row yet) is hardened all the same, just not
+    // stamped — activation stamps it on its own pass.
+    if (apSet && inputs.complete && device.id) {
       await query('UPDATE devices SET ap_secured_at = UTC_TIMESTAMP() WHERE id = ?', [device.id]).catch(() => {});
     }
-    for (const [event, payload] of events) {
+    for (const [event, payload] of device.id ? events : []) {
       await query('INSERT INTO device_events (device_id, event, payload) VALUES (?,?,?)', [device.id, event, JSON.stringify(payload)]).catch(() => {});
     }
     if (events.length) console.log(`[shelly-ap] ${uid}: ${events.map(([e]) => e).join(' + ')} (${reason}${restart ? ', AP applies after restart' : ''})`);
@@ -146,4 +148,32 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
   })().finally(() => inFlight.delete(uid));
   inFlight.set(uid, run);
   return run;
+}
+
+// ---- Installer page, after the verified connection (token-gated routes in auth.js) ----
+// The unit's firmware and the stable release it is offered, if any.
+export async function fwOffered(uid) {
+  const { shellyMqttRpc } = await import('../mqtt/client.js');
+  const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 5000).catch(() => null);
+  const chk = await shellyMqttRpc(uid, 'Shelly.CheckForUpdate', undefined, 15000).catch(() => null);
+  return { fw: info?.result?.ver ?? null, next: chk?.result?.stable?.version ?? null };
+}
+// Start the stable update the unit is offered; it downloads and reboots on its own.
+export async function fwUpdateStart(uid) {
+  const o = await fwOffered(uid);
+  if (!o.next) return { ...o, started: false };
+  const { shellyMqttRpc } = await import('../mqtt/client.js');
+  const r = await shellyMqttRpc(uid, 'Shelly.Update', { stage: 'stable' }, 10000).catch(() => null);
+  return { ...o, started: !!r && !r.error };
+}
+// Lock + rename the hotspot now (and the input reset off), for a registered unit or
+// an inventory unit alike; answers with the hotspot as the unit then reports it.
+export async function hardenByUid(uid, reason = 'install') {
+  const [row] = await query('SELECT * FROM devices WHERE device_uid = ? AND is_enabled = TRUE ORDER BY id DESC LIMIT 1', [uid]).catch(() => []);
+  const device = row || { id: null, device_uid: uid, transport: 'mqtt', ip_address: null, fw_version: null, ap_secured_at: null };
+  const res = await secureShellyAp(device, { reason });
+  const { shellyMqttRpc } = await import('../mqtt/client.js');
+  const cfg = await shellyMqttRpc(uid, 'Wifi.GetConfig', undefined, 5000).catch(() => null);
+  const ap = cfg?.result?.ap || null;
+  return { ...res, ssid: ap?.ssid ?? null, locked: ap ? ap.is_open === false : null, renamed: !!ap && ap.ssid === apSsidFor(uid), enabled: ap ? ap.enable !== false : null };
 }

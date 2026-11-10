@@ -819,6 +819,42 @@ function printSticker(){
  reofferDone();
 }
 function reofferDone(){if(ROUTER_OFFERED)offerRouterCheck();else offerSticker()}
+// After the verified connection: current firmware → the hotspot is locked and
+// renamed right now; older firmware → the update is offered first (old releases
+// refuse the name), and the rename follows the last step. Server actions ride the
+// file's own token (fw=1 / fwupdate=1 / harden=1).
+async function srvAction(q){const u=STATUS_URL?STATUS_URL+'&'+q:PREPARE_URL+'&mac='+parseMac($('mac').value)+'&'+q;const res=await fetch(u,{cache:'no-store',signal:AbortSignal.timeout(40000)});return await res.json()}
+async function afterSuccess(){
+ let o=null;try{o=await srvAction('fw=1')}catch(e){}
+ if(o&&o.next){
+  log('גרסת הקושחה במכשיר: '+(o.fw||'?')+' — זמינה גרסה '+o.next+'. בגרסה ישנה רשת המכשיר לא מקבלת את השם החדש; מומלץ לעדכן עכשיו.','warn');
+  actionBtn('עדכן גרסה ל-'+o.next+' (כ-2 דקות לכל שלב)',updateFw,false);
+  return}
+ await hardenNow();
+}
+async function hardenNow(){
+ log('מגדיר את רשת המכשיר (שם וסיסמה)...');
+ let h=null;try{h=await srvAction('harden=1')}catch(e){}
+ if(!h||h.locked===null){log('לא הצלחנו להגדיר את רשת המכשיר כרגע — השרת ישלים זאת מעצמו בחיבור הבא.','warn');return}
+ if(h.enabled===false)log('רשת המכשיר כבויה — השם והסיסמה נשמרו למקרה שתופעל.','ok');
+ else if(h.renamed)log('רשת המכשיר: '+h.ssid+' — נעולה; הסיסמה מופיעה בקובץ ההתקנה. (אם הטלפון היה מחובר לרשת המכשיר — התחברו מחדש לשם החדש.)','ok');
+ else if(h.locked)log('רשת המכשיר נעולה בסיסמה; השם '+h.ssid+' נשאר — הקושחה הזו לא מקבלת שינוי שם.','warn');
+ else log('רשת המכשיר עדיין פתוחה — השרת ינסה שוב בחיבור הבא.','warn');
+}
+async function updateFw(){
+ for(let step=0;step<3;step++){
+  let s=null;try{s=await srvAction('fwupdate=1')}catch(e){}
+  if(!s||!s.started){log(s&&!s.next?'המכשיר כבר בגרסה העדכנית ('+(s.fw||'')+').':'העדכון לא התחיל — נסו שוב בעוד רגע.',s&&!s.next?'ok':'warn');break}
+  log('מעדכן קושחה '+(s.fw||'?')+' ← '+s.next+' — המכשיר מוריד ומאתחל (עד כ-4 דקות)...');
+  const from=s.fw;const until=Date.now()+240000;let back=null;
+  while(Date.now()<until){await sleep(10000);try{const o=await srvAction('fw=1');if(o.fw&&o.fw!==from){back=o;break}}catch(e){}}
+  if(!back){log('המכשיר עדיין לא חזר מהעדכון — אפשר להמשיך; השרת ישלים את העדכון בלילה.','warn');reofferDone();return}
+  log('המכשיר חזר בגרסה '+back.fw+'.','ok');
+  if(!back.next)break;
+ }
+ await hardenNow();
+ reofferDone();
+}
 async function routerCheck(){
  log('בודק אילו ערוצים דולקים...');
  let ch=null;
@@ -846,7 +882,7 @@ let finTries=0;
 async function finish(){
  // Retries watch longer: a real first connect took ~4 minutes end to end.
  const r=await serverCheck(finTries===0?90:240);
- if(r==='ok'){verdict('הצליח! המכשיר מחובר לשרת. אפשר לחזור למסך הניהול וללחוץ "בדוק חיבור".','ok');offerRouterCheck();return}
+ if(r==='ok'){verdict('הצליח! המכשיר מחובר לשרת. אפשר לחזור למסך הניהול וללחוץ "בדוק חיבור".','ok');offerRouterCheck();await afterSuccess();return}
  if(r==='wrong'){verdict('מכשיר אחר התחבר עם ההגדרות האלה — כנראה הוזנה כתובת IP של Shelly אחר. בדקו את הכתובת והריצו שוב.','bad');return}
  // First miss is usually just a slow first connect (reboot + clock sync + TLS
  // can exceed the 90s window — seen on a real 4PM install). Encourage a retry

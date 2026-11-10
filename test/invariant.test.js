@@ -272,7 +272,7 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
   const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
   assert.ok(/hkdfSync\('sha256', env\.jwtSecret, 'shabat-clock', 'shelly-ap-v1', 32\)/.test(ap) && /createHmac\('sha256', apKey\(\)\)\.update\('shelly-ap:' \+ u\)/.test(ap), 'per-unit derivation from the server key, never a stored or shown secret');
   assert.ok(!ap.includes('getSetting') && !ap.includes('ap_secret'), 'no secret in the settings table');
-  assert.ok(ap.includes("const apDone = ap.is_open === false && (ap.ssid === apSsidFor(uid) || await renamePending(device.id, device.fw_version));") && !ap.includes("if (ap.enable === false) {") && ap.includes("{ config: { ap: { ssid: apSsidFor(uid), is_open: false, pass: apPasswordFor(uid) } } }") && !/ap: \{[^}]*enable/.test(ap), 'our name + password are set whether the hotspot is on or off (so a later switch-on comes up locked); enable is never touched');
+  assert.ok(ap.includes("const apDone = ap.is_open === false && (ap.ssid === apSsidFor(uid) || (device.id ? await renamePending(device.id, device.fw_version) : false));") && !ap.includes("if (ap.enable === false) {") && ap.includes("{ config: { ap: { ssid: apSsidFor(uid), is_open: false, pass: apPasswordFor(uid) } } }") && !/ap: \{[^}]*enable/.test(ap), 'our name + password are set whether the hotspot is on or off (so a later switch-on comes up locked); enable is never touched');
   assert.ok(/'Zimna-' \+ u\.toUpperCase\(\)/.test(ap), 'hotspot name = brand + MAC');
   assert.ok(ap.includes('await renamePending(device.id, device.fw_version)') && ap.includes('rename_unsupported: unsupported') && ap.includes("JSON_UNQUOTE(JSON_EXTRACT(payload, '$.fw')) <=> ?"), 'a firmware that keeps the password but not the name is noted once per firmware version, not re-sent daily — a newer firmware gets the rename tried again');
   assert.ok(readFileSync(new URL('../src/web/src/ui.jsx', import.meta.url), 'utf8').includes("const tail = s.includes('-') ? s.slice(s.lastIndexOf('-') + 1) : s;"), 'the admin MAC helper takes the part after the last dash (Zimna-<mac> too)');
@@ -280,14 +280,15 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
   const onboardSrc = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
   assert.ok(!onboardSrc.includes('__BASE__') && !/stickerHtml\(\{[^}]*base/.test(onboardSrc), 'no dead base plumbing');
   assert.ok((readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8').match(/Zimna/g) || []).length >= 4, 'the installer page names both hotspot names');
-  assert.ok(ap.includes('if (apSet && inputs.complete) {') && ap.includes('const inFlight = new Map();'), 'stamped only after both steps succeeded; one pass at a time');
+  assert.ok(ap.includes('if (apSet && inputs.complete && device.id) {') && ap.includes('const inFlight = new Map();'), 'stamped only after both steps succeeded (and only a registered unit); one pass at a time');
   const mq = readFileSync(new URL('../src/mqtt/client.js', import.meta.url), 'utf8');
   assert.ok(mq.includes("secureShellyAp(device, { reason: 'hello' })"), 'hello re-checks the real AP state (factory reset)');
   const health = readFileSync(new URL('../src/monitor/health.js', import.meta.url), 'utf8');
   assert.ok(health.includes('const apWait = device.ap_secured_at ? AP_RECHECK_MS : AP_RETRY_MS;') && health.includes('AP_RECHECK_MS = 24 * 60 * 60 * 1000') && health.includes('d.ap_secured_at'), 'the probe retries hourly until stamped and re-checks stamped units daily');
   assert.ok(health.includes('st.apTriedAt = device.ap_secured_at ? Date.now() - apWait + Math.floor(Math.random() * 30 * 60 * 1000) : 0;'), 'an unstamped unit is hardened on its first probe; only stamped re-checks are spread out');
   assert.ok(readFileSync(new URL('../src/services/devices.js', import.meta.url), 'utf8').includes("secureShellyAp({ id: result.id, device_uid: probe.mac, transport, ip_address: ip ?? null, fw_version: probe.fw_version ?? null, ap_secured_at: null }, { reason: 'activate' })"), 'activation of an online unit hardens it at once (no hello will come)');
-  assert.ok(ap.includes("const { shellyCall } = await import('./shelly.js');") && !ap.includes('shellyMqttRpc'), 'hardening is transport-aware (LAN units too)');
+  const hardenFn = ap.slice(ap.indexOf('export async function secureShellyAp('), ap.indexOf('export async function fwOffered('));
+  assert.ok(hardenFn.includes("const { shellyCall } = await import('./shelly.js');") && !hardenFn.includes('shellyMqttRpc'), 'hardening is transport-aware (LAN units too)');
   const onboard = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
   assert.ok(onboard.includes("{}, await apPasswordFor(uid)),"), 'the per-device file carries the password');
   assert.ok(onboard.includes("PREPARE_URL+'&mac='+mac+'&appass=1'"), 'the universal file asks by MAC');
@@ -317,4 +318,17 @@ test('device_events.event (an ENUM) knows every event name the code writes — a
   const m95 = readFileSync(new URL('../src/db/migrations/migrate95.js', import.meta.url), 'utf8');
   for (const name of ['ap_secured', 'input_reset_off', 'reset_suspected', 'first_contact', 'channel_mismatch']) assert.ok(m95.includes("'" + name + "'"), name);
   assert.ok(readFileSync(new URL('../src/db/migrations/index.js', import.meta.url), 'utf8').includes('{ version: 95, up: migrate95 }'));
+});
+
+test('installer: after the verified connection the page locks + renames the hotspot on current firmware, or offers the firmware update first (old releases refuse the name); the actions ride the file token on both routes', () => {
+  const onboard = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
+  assert.ok(onboard.includes("offerRouterCheck();await afterSuccess();return}"), 'runs after the success verdict');
+  for (const s of ["srvAction('fw=1')", "srvAction('fwupdate=1')", "srvAction('harden=1')", 'async function updateFw(){', 'async function hardenNow(){']) assert.ok(onboard.includes(s), s);
+  const page = onboard.slice(onboard.indexOf('async function srvAction('), onboard.indexOf('async function updateFw(){') + 1500);
+  assert.ok(!page.includes(String.fromCharCode(92)) && !page.includes('$' + '{'), 'page code survives the template literal');
+  const auth = readFileSync(new URL('../src/api/routes/auth.js', import.meta.url), 'utf8');
+  assert.equal((auth.match(/req\.query\.fwupdate \|\| ''\) === '1'/g) || []).length, 2, 'both installer routes serve the actions');
+  assert.ok(auth.includes("if (['fw', 'fwupdate', 'harden'].some((k) => String(req.query[k] || '') === '1')) {") && /פעולות עליה רק מקובץ התקנה למכשיר הזה/.test(auth), 'the universal file never acts on a registered customer unit');
+  const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
+  for (const s of ['export async function fwOffered(', 'export async function fwUpdateStart(', 'export async function hardenByUid(', 'if (apSet && inputs.complete && device.id) {', 'for (const [event, payload] of device.id ? events : [])']) assert.ok(ap.includes(s), s);
 });

@@ -127,6 +127,12 @@ authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, 
       await recordInstallerReport({ mac: claims.uid, model: req.query.model, fw: req.query.fw, unixtime: req.query.unixtime, ip: req.ip });
       return res.json({ ok: true });
     }
+    // fw=1 / fwupdate=1 / harden=1: the end-of-install actions (services/shellyAp.js) —
+    // the page offers the firmware update when a newer stable is reported, and locks
+    // + renames the hotspot once the firmware accepts the name.
+    if (String(req.query.fw || '') === '1') { const { fwOffered } = await import('../../services/shellyAp.js'); return res.json(await fwOffered(claims.uid)); }
+    if (String(req.query.fwupdate || '') === '1') { const { fwUpdateStart } = await import('../../services/shellyAp.js'); return res.json(await fwUpdateStart(claims.uid)); }
+    if (String(req.query.harden || '') === '1') { const { hardenByUid } = await import('../../services/shellyAp.js'); return res.json(await hardenByUid(claims.uid, 'install')); }
     const { shellyMqttRpc } = await import('../../mqtt/client.js');
     const reply = await shellyMqttRpc(claims.uid, 'Shelly.GetDeviceInfo', undefined, 4000);
     const mac = reply?.result?.mac ? String(reply.result.mac).toLowerCase().replace(/[^0-9a-f]/g, '') : null;
@@ -206,6 +212,20 @@ authRouter.get('/shelly-onboard/prepare', onboardPrepareLimiter, onboardPrepareT
       }
       const { apPasswordFor } = await import('../../services/shellyAp.js');
       return res.json({ ap_pass: await apPasswordFor(uid) });
+    }
+    if (['fw', 'fwupdate', 'harden'].some((k) => String(req.query[k] || '') === '1')) {
+      const uid = String(req.query.mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+      if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה', { mac: 'invalid' });
+      const { registeredDevice } = await import('../../services/shellyOnboard.js');
+      if (tokenRow.audience !== 'internal' && await registeredDevice(uid)) {
+        throw errors.forbidden('יחידה של לקוח רשום — פעולות עליה רק מקובץ התקנה למכשיר הזה');
+      }
+      // fw=1 / fwupdate=1 / harden=1: the end-of-install actions (services/shellyAp.js) —
+      // the page offers the firmware update when a newer stable is reported, and locks
+      // + renames the hotspot once the firmware accepts the name.
+      if (String(req.query.fw || '') === '1') { const { fwOffered } = await import('../../services/shellyAp.js'); return res.json(await fwOffered(uid)); }
+      if (String(req.query.fwupdate || '') === '1') { const { fwUpdateStart } = await import('../../services/shellyAp.js'); return res.json(await fwUpdateStart(uid)); }
+      if (String(req.query.harden || '') === '1') { const { hardenByUid } = await import('../../services/shellyAp.js'); return res.json(await hardenByUid(uid, 'install')); }
     }
     // check=1: no minting — just "is this device connected to the broker right
     // now?", so the installer can validate a seemingly-provisioned unit before
