@@ -274,7 +274,7 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
   assert.ok(!ap.includes('getSetting') && !ap.includes('ap_secret'), 'no secret in the settings table');
   assert.ok(ap.includes("const apDone = ap.is_open === false && (ap.ssid === apSsidFor(uid) || (device.id ? await renamePending(device.id, device.fw_version) : false));") && !ap.includes("if (ap.enable === false) {") && ap.includes("{ config: { ap: { ssid: apSsidFor(uid), is_open: false, pass: apPasswordFor(uid) } } }") && !/ap: \{[^}]*enable/.test(ap), 'our name + password are set whether the hotspot is on or off (so a later switch-on comes up locked); enable is never touched');
   assert.ok(/'Zimna-' \+ u\.toUpperCase\(\)/.test(ap), 'hotspot name = brand + MAC');
-  assert.ok(ap.includes('await renamePending(device.id, device.fw_version)') && ap.includes('rename_unsupported: unsupported') && ap.includes("JSON_UNQUOTE(JSON_EXTRACT(payload, '$.fw')) <=> ?"), 'a firmware that keeps the password but not the name is noted once per firmware version, not re-sent daily — a newer firmware gets the rename tried again');
+  assert.ok(ap.includes('await renamePending(device.id, device.fw_version)') && ap.includes('rename_unsupported: unsupported') && ap.includes("IFNULL(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.fw')), 'null') = IFNULL(?, 'null')"), 'a firmware that keeps the password but not the name is noted once per firmware version, not re-sent daily — a newer firmware gets the rename tried again');
   assert.ok(readFileSync(new URL('../src/web/src/ui.jsx', import.meta.url), 'utf8').includes("const tail = s.includes('-') ? s.slice(s.lastIndexOf('-') + 1) : s;"), 'the admin MAC helper takes the part after the last dash (Zimna-<mac> too)');
   assert.equal((readFileSync(new URL('../src/web/src/user/WifiCard.jsx', import.meta.url), 'utf8').match(/Zimna/g) || []).length >= 3, true, 'the customer Wi-Fi card names the new hotspot name');
   const onboardSrc = readFileSync(new URL('../src/services/shellyOnboard.js', import.meta.url), 'utf8');
@@ -285,7 +285,7 @@ test('shelly hotspot: every unit gets a per-unit password (server secret + MAC),
   assert.ok(mq.includes("secureShellyAp(device, { reason: 'hello' })"), 'hello re-checks the real AP state (factory reset)');
   const health = readFileSync(new URL('../src/monitor/health.js', import.meta.url), 'utf8');
   assert.ok(health.includes('const apWait = device.ap_secured_at ? AP_RECHECK_MS : AP_RETRY_MS;') && health.includes('AP_RECHECK_MS = 24 * 60 * 60 * 1000') && health.includes('d.ap_secured_at'), 'the probe retries hourly until stamped and re-checks stamped units daily');
-  assert.ok(health.includes('st.apTriedAt = device.ap_secured_at ? Date.now() - apWait + Math.floor(Math.random() * 30 * 60 * 1000) : 0;'), 'an unstamped unit is hardened on its first probe; only stamped re-checks are spread out');
+  assert.ok(health.includes('st.apTriedAt = Date.now() - apWait + (device.ap_secured_at ? Math.floor(Math.random() * 30 * 60 * 1000) : 60_000 + Math.floor(Math.random() * 4 * 60_000));'), 'an unstamped unit gets its first probe pass after 1–5 min (activation/hello own the first pass); stamped re-checks are spread over half an hour');
   assert.ok(readFileSync(new URL('../src/services/devices.js', import.meta.url), 'utf8').includes("secureShellyAp({ id: result.id, device_uid: probe.mac, transport, ip_address: ip ?? null, fw_version: probe.fw_version ?? null, ap_secured_at: null }, { reason: 'activate' })"), 'activation of an online unit hardens it at once (no hello will come)');
   const hardenFn = ap.slice(ap.indexOf('export async function secureShellyAp('), ap.indexOf('export async function fwOffered('));
   assert.ok(hardenFn.includes("const { shellyCall } = await import('./shelly.js');") && !hardenFn.includes('shellyMqttRpc'), 'hardening is transport-aware (LAN units too)');
@@ -330,7 +330,13 @@ test('installer: after the verified connection the page locks + renames the hots
   assert.equal((auth.match(/req\.query\.fwupdate \|\| ''\) === '1'/g) || []).length, 2, 'both installer routes serve the actions');
   assert.ok(auth.includes("if (['fw', 'fwupdate', 'harden'].some((k) => String(req.query[k] || '') === '1')) {") && /פעולות עליה רק מקובץ התקנה למכשיר הזה/.test(auth), 'the universal file never acts on a registered customer unit');
   const ap = readFileSync(new URL('../src/services/shellyAp.js', import.meta.url), 'utf8');
-  for (const s of ['export async function fwOffered(', 'export async function fwUpdateStart(', 'export async function hardenByUid(', 'if (apSet && inputs.complete && device.id) {', 'for (const [event, payload] of device.id ? events : [])']) assert.ok(ap.includes(s), s);
+  for (const s of ['export async function fwOffered(', 'export async function fwUpdateStart(', 'export async function hardenByUid(', 'if (apSet && inputs.complete && device.id) {', 'for (const [event, payload] of device.id ? events : [])', 'markExpectedReboot(dev.id);', "kind: 'fw_update_started', from: o.fw, to: o.next, stage: 'stable', via: 'installer'", "blocked: 'rest_day'", "blocked: 'schedule_due'", "await query('UPDATE devices SET fw_version = ? WHERE id = ?', [liveFw, row.id])"]) assert.ok(ap.includes(s), s);
+  const health = readFileSync(new URL('../src/monitor/health.js', import.meta.url), 'utf8');
+  assert.ok(health.includes('export function markExpectedReboot(deviceId) {'), 'an installer-started update is not an unexpected reboot');
+  assert.ok(auth.includes("Date.now() / 1000 - (claims.iat || 0) > 6 * 3600"), 'per-device token: unit-changing actions only while the file is fresh');
+  const mw = readFileSync(new URL('../src/api/middleware.js', import.meta.url), 'utf8');
+  assert.ok(mw.includes("['check', 'fw', 'fwupdate', 'harden'].some((k) => String(req.query[k] || '') === '1')"), 'the end-of-install polls ride the poll limiter, not the mint budget');
+  assert.ok(onboard.includes("else if(h.restart_required)log(") && onboard.includes('s&&s.blocked_he?s.blocked_he:'), 'the page explains a restart-pending hotspot change and a blocked update');
 });
 
 test('the customer Wi-Fi card shows the unit hotspot password next to the network name (GET /devices carries ap_pass for shelly units)', () => {

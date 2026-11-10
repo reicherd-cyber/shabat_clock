@@ -130,6 +130,12 @@ authRouter.get('/shelly-onboard/status', onboardStatusLimiter, async (req, res, 
     // fw=1 / fwupdate=1 / harden=1: the end-of-install actions (services/shellyAp.js) —
     // the page offers the firmware update when a newer stable is reported, and locks
     // + renames the hotspot once the firmware accepts the name.
+    // The per-device token has no revocation row (unlike the universal one): the
+    // actions that change the unit — a reboot, its hotspot — are allowed only while
+    // the file is fresh, not for its whole 48 h.
+    if (['fwupdate', 'harden'].some((k) => String(req.query[k] || '') === '1') && Date.now() / 1000 - (claims.iat || 0) > 6 * 3600) {
+      throw errors.forbidden('קובץ ההתקנה ישן מדי לפעולה הזו — בקשו קובץ חדש (הפעולות תקפות 6 שעות מהורדתו)');
+    }
     if (String(req.query.fw || '') === '1') { const { fwOffered } = await import('../../services/shellyAp.js'); return res.json(await fwOffered(claims.uid)); }
     if (String(req.query.fwupdate || '') === '1') { const { fwUpdateStart } = await import('../../services/shellyAp.js'); return res.json(await fwUpdateStart(claims.uid)); }
     if (String(req.query.harden || '') === '1') { const { hardenByUid } = await import('../../services/shellyAp.js'); return res.json(await hardenByUid(claims.uid, 'install')); }

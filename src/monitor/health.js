@@ -55,6 +55,12 @@ const loopDelay = monitorEventLoopDelay({ resolution: 20 });
 // lastSwitchErrors — all initialised lazily with ??=, lost on restart (dead
 // onsets are the exception: they live in relays.dead_since).
 const deviceState = new Map();
+// An installer-started firmware update reboots the unit on purpose (services/shellyAp.js
+// fwUpdateStart): told here, the next probe files no "unexpected reboot" incident.
+export function markExpectedReboot(deviceId) {
+  const st = deviceState.get(Number(deviceId));
+  if (st) st.expectReboot = true;
+}
 const alertTimes = new Map();  // incident key → last email epoch ms
 const incidents = [];          // newest first, capped at INCIDENTS_KEPT
 let dbFailures = 0;
@@ -428,9 +434,10 @@ async function checkShelly(device) {
   const apWait = device.ap_secured_at ? AP_RECHECK_MS : AP_RETRY_MS;
   // A stamped unit's first re-check after a server start is spread over half an
   // hour across the fleet — not every unit on the first probe, racing the hello
-  // passes of the reconnect. An unstamped unit (just activated, already online so
-  // no hello will come) is hardened on its very first probe.
-  if (st.apTriedAt === undefined) st.apTriedAt = device.ap_secured_at ? Date.now() - apWait + Math.floor(Math.random() * 30 * 60 * 1000) : 0;
+  // passes of the reconnect. An unstamped unit gets its first probe pass after 1–5
+  // minutes: activation and hello already harden the common cases, so the probe is
+  // the retry, not a second full pass racing them on the same minute.
+  if (st.apTriedAt === undefined) st.apTriedAt = Date.now() - apWait + (device.ap_secured_at ? Math.floor(Math.random() * 30 * 60 * 1000) : 60_000 + Math.floor(Math.random() * 4 * 60_000));
   if (active() && Date.now() - st.apTriedAt > apWait) {
     st.apTriedAt = Date.now();
     import('../services/shellyAp.js')

@@ -12,6 +12,8 @@
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
 import { query } from '../db/pool.js';
+import { localParts } from './time.js';
+import { dayKeysOn } from './holidays.js';
 
 // Like secretbox.js: a key derived from JWT_SECRET, never stored or shown anywhere.
 // Rotating JWT_SECRET changes every unit's password — the same hazard secretbox
@@ -78,7 +80,7 @@ async function renamePending(deviceId, fw) {
   const [row] = await query(
     `SELECT 1 AS ok FROM device_events WHERE device_id = ? AND event = 'ap_secured'
        AND (JSON_EXTRACT(payload, '$.rename_unsupported') = true OR JSON_EXTRACT(payload, '$.restart_required') = true)
-       AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.fw')) <=> ?
+       AND IFNULL(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.fw')), 'null') = IFNULL(?, 'null')
        AND created_at > UTC_TIMESTAMP() - INTERVAL 30 DAY LIMIT 1`, [deviceId, fw || null]).catch(() => []);
   return !!row;
 }
@@ -151,29 +153,58 @@ export async function secureShellyAp(device, { reason = 'probe' } = {}) {
 }
 
 // ---- Installer page, after the verified connection (token-gated routes in auth.js) ----
-// The unit's firmware and the stable release it is offered, if any.
+// The unit's firmware and the stable release it is offered, if any. A dark unit
+// (no GetDeviceInfo) is not asked for updates — one short wait, not two long ones.
 export async function fwOffered(uid) {
   const { shellyMqttRpc } = await import('../mqtt/client.js');
   const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 5000).catch(() => null);
+  if (!info?.result) return { fw: null, next: null };
   const chk = await shellyMqttRpc(uid, 'Shelly.CheckForUpdate', undefined, 15000).catch(() => null);
-  return { fw: info?.result?.ver ?? null, next: chk?.result?.stable?.version ?? null };
+  return { fw: info.result.ver ?? null, next: chk?.result?.stable?.version ?? null };
 }
 // Start the stable update the unit is offered; it downloads and reboots on its own.
+// A live customer unit keeps the auto-updater's safety gates that matter here (no
+// update on שבת/יום טוב, none with a schedule due within 15 minutes — the reboot
+// leaves the relays undriven for a couple of minutes) and its bookkeeping: the
+// reboot is ours (health probe), and the diary row says so.
 export async function fwUpdateStart(uid) {
   const o = await fwOffered(uid);
   if (!o.next) return { ...o, started: false };
+  const [dev] = await query('SELECT id, name, timezone FROM devices WHERE device_uid = ? AND is_enabled = TRUE ORDER BY id DESC LIMIT 1', [uid]).catch(() => []);
+  if (dev) {
+    const p = localParts(new Date(), dev.timezone || 'Asia/Jerusalem');
+    if (dayKeysOn(p).length) return { ...o, started: false, blocked: 'rest_day', blocked_he: 'לא מעדכנים בשבת/חג' };
+    const { deviceScheduleDueBetween } = await import('../scheduler/tick.js');
+    const due = await deviceScheduleDueBetween(dev.id, new Date(), new Date(Date.now() + 15 * 60_000)).catch(() => true);
+    if (due) return { ...o, started: false, blocked: 'schedule_due', blocked_he: 'תזמון קרוב על אחד הערוצים — נסו שוב בעוד רבע שעה' };
+  }
   const { shellyMqttRpc } = await import('../mqtt/client.js');
   const r = await shellyMqttRpc(uid, 'Shelly.Update', { stage: 'stable' }, 10000).catch(() => null);
-  return { ...o, started: !!r && !r.error };
+  const started = !!r && !r.error;
+  if (started && dev) {
+    const { markExpectedReboot } = await import('../monitor/health.js');
+    markExpectedReboot(dev.id);
+    await query('INSERT INTO device_events (device_id, event, payload) VALUES (?,?,?)',
+      [dev.id, 'config', JSON.stringify({ kind: 'fw_update_started', from: o.fw, to: o.next, stage: 'stable', via: 'installer' })]).catch(() => {});
+  }
+  return { ...o, started };
 }
 // Lock + rename the hotspot now (and the input reset off), for a registered unit or
 // an inventory unit alike; answers with the hotspot as the unit then reports it.
+// The unit's live firmware version is taken (and stored) first: the rename note is
+// per firmware, and a unit the page just updated must not be judged by the old one.
 export async function hardenByUid(uid, reason = 'install') {
-  const [row] = await query('SELECT * FROM devices WHERE device_uid = ? AND is_enabled = TRUE ORDER BY id DESC LIMIT 1', [uid]).catch(() => []);
-  const device = row || { id: null, device_uid: uid, transport: 'mqtt', ip_address: null, fw_version: null, ap_secured_at: null };
-  const res = await secureShellyAp(device, { reason });
   const { shellyMqttRpc } = await import('../mqtt/client.js');
+  const [row] = await query('SELECT * FROM devices WHERE device_uid = ? AND is_enabled = TRUE ORDER BY id DESC LIMIT 1', [uid]).catch(() => []);
+  const info = await shellyMqttRpc(uid, 'Shelly.GetDeviceInfo', undefined, 5000).catch(() => null);
+  const liveFw = info?.result?.ver ?? null;
+  if (row && liveFw && liveFw !== row.fw_version) {
+    row.fw_version = liveFw;
+    await query('UPDATE devices SET fw_version = ? WHERE id = ?', [liveFw, row.id]).catch(() => {});
+  }
+  const device = row || { id: null, device_uid: uid, transport: 'mqtt', ip_address: null, fw_version: liveFw, ap_secured_at: null };
+  const res = await secureShellyAp(device, { reason });
   const cfg = await shellyMqttRpc(uid, 'Wifi.GetConfig', undefined, 5000).catch(() => null);
   const ap = cfg?.result?.ap || null;
-  return { ...res, ssid: ap?.ssid ?? null, locked: ap ? ap.is_open === false : null, renamed: !!ap && ap.ssid === apSsidFor(uid), enabled: ap ? ap.enable !== false : null };
+  return { ...res, fw: liveFw, ssid: ap?.ssid ?? null, locked: ap ? ap.is_open === false : null, renamed: !!ap && ap.ssid === apSsidFor(uid), enabled: ap ? ap.enable !== false : null };
 }

@@ -841,12 +841,13 @@ async function hardenNow(){
  if(h.enabled===false)log('רשת המכשיר כבויה — השם והסיסמה נשמרו למקרה שתופעל.','ok');
  else if(h.renamed)log('רשת המכשיר: '+h.ssid+' — נעולה; הסיסמה מופיעה בקובץ ההתקנה. (אם הטלפון היה מחובר לרשת המכשיר — התחברו מחדש לשם החדש.)','ok');
  else if(h.locked)log('רשת המכשיר נעולה בסיסמה; השם '+h.ssid+' נשאר — הקושחה הזו לא מקבלת שינוי שם.','warn');
+ else if(h.restart_required)log('השם והסיסמה נשמרו במכשיר וייכנסו לתוקף באתחול הבא שלו.','ok');
  else log('רשת המכשיר עדיין פתוחה — השרת ינסה שוב בחיבור הבא.','warn');
 }
 async function updateFw(){
  for(let step=0;step<3;step++){
   let s=null;try{s=await srvAction('fwupdate=1')}catch(e){}
-  if(!s||!s.started){log(s&&!s.next?'המכשיר כבר בגרסה העדכנית ('+(s.fw||'')+').':'העדכון לא התחיל — נסו שוב בעוד רגע.',s&&!s.next?'ok':'warn');break}
+  if(!s||!s.started){log(s&&s.blocked_he?s.blocked_he:(s&&!s.next?'המכשיר כבר בגרסה העדכנית ('+(s.fw||'')+').':'העדכון לא התחיל — נסו שוב בעוד רגע.'),s&&!s.next?'ok':'warn');break}
   log('מעדכן קושחה '+(s.fw||'?')+' ← '+s.next+' — המכשיר מוריד ומאתחל (עד כ-4 דקות)...');
   const from=s.fw;const until=Date.now()+240000;let back=null;
   while(Date.now()<until){await sleep(10000);try{const o=await srvAction('fw=1');if(o.fw&&o.fw!==from){back=o;break}}catch(e){}}
