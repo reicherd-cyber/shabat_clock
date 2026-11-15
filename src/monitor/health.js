@@ -22,6 +22,7 @@ import { shellyCall, shellySetBootSafe } from '../services/shelly.js';
 import { sendImmediateCommand } from '../services/commands.js';
 import { scheduleDueBetween, catchUpDevice } from '../scheduler/tick.js';
 import { sendEmail } from '../services/email.js';
+import { getSetting, putSettings } from '../services/settings.js';
 import { describeReset, RESET_HEADLINE } from './reset-reason.js';
 import { maybeAutoUpdate, fwProbeFailed } from './fw-update.js';
 import { learnOnPower, worthSaving, idleCandidates, judgeLoads, trackDeadOnsets, DEAD_RELAY_PROBES, IDLE_PROBES_TO_LEARN, REBOOT_MIN_WATCHED } from './dead-relay.js';
@@ -74,20 +75,167 @@ function recordIncident(kind, subject, detail) {
   console.error(`[health] ${kind} — ${subject}: ${detail}`);
 }
 
+// Routine events — a device rebooting (power cut / manual off-on), our own
+// scheduled reboots, and successful firmware updates — are the bulk of the
+// inbox and not actionable one by one. They accumulate in alert_digest and go
+// out as ONE daily summary (runAlertDigest, fired from the scheduler at
+// alerts.digest_hour). Everything else is a problem and emails immediately.
+const DIGEST_KINDS = new Set(['reboot', 'autoreboot', 'fw']);
+// Server/infra alerts are singletons (one server) — coalescing is meaningless,
+// and they fire exactly when the process is unhealthy and apt to restart, so
+// they must NOT sit in a buffer (and must not depend on a DB read to decide).
+// Always sent immediately and synchronously, like the original code.
+const INFRA_KINDS = new Set(['db_down', 'broker_down', 'server_heap']);
+// Burst coalescing for immediate per-device problem alerts: a shared cause
+// (broker blip → everyone unreachable) trips the units in the SAME monitor
+// pass, so they land within seconds; buffer briefly and, if ≥ alerts.coalesce_min
+// devices share the event kind, send one combined email instead of a storm.
+// Short window: long enough for one pass (slow when units are unreachable),
+// short enough that a lone alert is barely delayed.
+const COALESCE_WINDOW_MS = 30_000;
+const pendingImmediate = new Map(); // kind → [{ key, subject, text }]
+const flushTimers = new Map();      // kind → timeout
+
+const kindOf = (key) => String(key).split(':')[0];
+const deviceIdOf = (key) => { const m = /:(\d+)/.exec(key); return m ? Number(m[1]) : null; };
+
+async function superadminEmails() {
+  const admins = await query("SELECT email FROM admins WHERE is_active = TRUE AND role = 'superadmin'");
+  return admins.map((a) => a.email).filter(Boolean);
+}
+
+// Returns true only if the send actually went out (callers that persist state
+// — the digest stamp — must not record success on a swallowed failure).
+async function emailAdmins(subject, text, ref) {
+  try {
+    const emails = await superadminEmails();
+    await Promise.all(emails.map((email) =>
+      sendEmail({ to: email, subject: `שעון שבת — ${subject}`, text, kind: 'health_alert', ref })));
+    return true;
+  } catch (e) {
+    console.error('[health] alert email failed:', e.message);
+    return false;
+  }
+}
+
+async function queueDigest(key, kind, subject, text) {
+  await query(
+    'INSERT INTO alert_digest (alert_key, kind, device_id, subject, body) VALUES (?,?,?,?,?)',
+    [String(key).slice(0, 191), kind.slice(0, 64), deviceIdOf(key), subject.slice(0, 255), text],
+  ).catch((e) => console.error('[health] alert_digest insert:', e.message));
+}
+
+function queueImmediate(kind, key, subject, text) {
+  if (!pendingImmediate.has(kind)) pendingImmediate.set(kind, []);
+  pendingImmediate.get(kind).push({ key, subject, text });
+  if (!flushTimers.has(kind)) {
+    const t = setTimeout(() => { flushImmediate(kind).catch((e) => console.error('[health] alert flush:', e.message)); }, COALESCE_WINDOW_MS);
+    t.unref?.();
+    flushTimers.set(kind, t);
+  }
+}
+
+async function flushImmediate(kind) {
+  flushTimers.delete(kind);
+  const items = pendingImmediate.get(kind) ?? [];
+  pendingImmediate.delete(kind);
+  if (!items.length) return;
+  // The batch is already removed above; a throwing settings read must not drop
+  // it (the 6h cooldown would then swallow the retries). Fall back to the floor.
+  let min = 2;
+  try { min = Math.max(2, Number(await getSetting('alerts.coalesce_min', '2')) || 2); } catch { /* keep floor */ }
+  if (items.length >= min) {
+    const subject = `${items.length} התראות מאותו סוג`;
+    const text = `${items.length} מכשירים עם אותה התראה בטווח של כ-30 שניות:\n\n`
+      + items.map((it) => `• ${it.subject}`).join('\n')
+      + `\n\n―――――――――――\nפירוט מלא:\n\n`
+      + items.map((it) => it.text).join('\n\n―――\n\n');
+    await emailAdmins(subject, text, `coalesced:${kind}`);
+  } else {
+    for (const it of items) await emailAdmins(it.subject, it.text, it.key);
+  }
+}
+
 async function alertAdmins(key, subject, text) {
   if (!active()) return;
   const last = alertTimes.get(key) ?? 0;
   if (Date.now() - last < ALERT_COOLDOWN_MS) return;
   alertTimes.set(key, Date.now());
-  try {
-    const admins = await query(
-      "SELECT email FROM admins WHERE is_active = TRUE AND role = 'superadmin'",
-    );
-    await Promise.all(admins.map(({ email }) =>
-      sendEmail({ to: email, subject: `שעון שבת — ${subject}`, text, kind: 'health_alert', ref: key })));
-  } catch (e) {
-    console.error('[health] alert email failed:', e.message);
+  const kind = kindOf(key);
+  // Infra alerts: send now, synchronously, before anything DB-dependent — the
+  // DB itself may be what's down.
+  if (INFRA_KINDS.has(kind)) { await emailAdmins(subject, text, key); return; }
+  // Kill switch (alerts.digest_enabled=0): full revert to the old behavior —
+  // one immediate email per event, no digest and no coalescing. Defaults to on;
+  // a failed settings read must not silently disable alerting, so assume on.
+  let digestOn = true;
+  try { digestOn = (await getSetting('alerts.digest_enabled', '1')) !== '0'; } catch { /* keep on */ }
+  if (!digestOn) { await emailAdmins(subject, text, key); return; }
+  if (DIGEST_KINDS.has(kind)) return queueDigest(key, kind, subject, text);
+  return queueImmediate(kind, key, subject, text);
+}
+
+// Daily summary of the routine events that accumulated in alert_digest — fired
+// from the scheduler at alerts.digest_hour (Asia/Jerusalem). Sends everything
+// still unsent (≈ the previous day) as one email grouped by event kind, then
+// stamps the rows. Primary-only, like every other email path here.
+const DIGEST_HEADING = {
+  reboot: 'אתחול מכשיר (הפסקת חשמל או כיבוי/הדלקה ידניים)',
+  autoreboot: 'אתחול יזום (תחזוקה)',
+  fw: 'עדכון קושחה',
+};
+// `today` is the Jerusalem day string the caller is settling. The day is
+// recorded in settings (alerts.last_digest_day) AFTER a confirmed send, so the
+// job survives restarts (an in-memory flag reset would re-fire a same-day
+// "daily" digest) and never marks a day done on a failed send (which would drop
+// that day's summary). A send failure leaves the rows unsent and the day
+// unmarked — the next tick retries.
+export async function runAlertDigest(today) {
+  if (!active()) return { ok: false, count: 0 };
+  const rows = await query(
+    `SELECT ad.id, ad.kind, ad.subject, ad.body
+       FROM alert_digest ad
+      WHERE ad.sent_at IS NULL ORDER BY ad.kind, ad.id`,
+  ).catch((e) => { console.error('[health] alert_digest read:', e.message); return null; });
+  if (rows === null) return { ok: false, count: 0 }; // DB read failed — retry next tick
+  if (!rows.length) { await markDigestDay(today); return { ok: true, count: 0 }; }
+
+  const byKind = new Map();
+  for (const r of rows) {
+    if (!byKind.has(r.kind)) byKind.set(r.kind, []);
+    byKind.get(r.kind).push(r);
   }
+  const sections = [];
+  for (const [kind, items] of byKind) {
+    const heading = DIGEST_HEADING[kind] ?? kind;
+    // Each entry keeps its own subject (reset reason / fw version) and body
+    // (relay recovery result, advice) — the summary must not reduce an event to
+    // a bare device name. Body indented under its subject.
+    const lines = items.map((it) => {
+      const body = String(it.body ?? '').trim();
+      const indented = body ? '\n' + body.split('\n').map((l) => `    ${l}`).join('\n') : '';
+      return `  • ${it.subject}${indented}`;
+    });
+    sections.push(`${heading} — ${items.length}:\n${lines.join('\n\n')}`);
+  }
+  const subject = `סיכום יומי — ${rows.length} אירועי שגרה`;
+  const text = `סיכום אירועי השגרה מאז הסיכום הקודם (${rows.length} אירועים):\n\n`
+    + sections.join('\n\n')
+    + '\n\nתקלות (חום, ממסר מת, מכשיר שלא מגיב וכו\') נשלחות מיד ואינן כאן.';
+  const ok = await emailAdmins(subject, text, 'digest');
+  if (!ok) return { ok: false, count: rows.length }; // leave rows unsent, don't mark the day
+
+  const ids = rows.map((r) => r.id);
+  await query(`UPDATE alert_digest SET sent_at = UTC_TIMESTAMP() WHERE id IN (${ids.map(() => '?').join(',')})`, ids)
+    .catch((e) => console.error('[health] alert_digest stamp:', e.message));
+  await markDigestDay(today);
+  return { ok: true, count: rows.length };
+}
+
+async function markDigestDay(today) {
+  if (!today) return;
+  await putSettings([{ setting_key: 'alerts.last_digest_day', setting_value: String(today) }])
+    .catch((e) => console.error('[health] digest day mark:', e.message));
 }
 
 // Passive mode (a dev server on the shared prod DB) must not leave marks — its
@@ -513,7 +661,15 @@ async function checkShelly(device) {
         : reset.cat === 'power'
           ? 'המכשיר לא קרס — החשמל אליו נותק. אם הלקוח כיבה והדליק אותו בכוונה (למשל אחרי מסך תקוע), זה יירשם בדיוק כך — כדאי לשאול. אחרת: לבדוק את יציבות החשמל באתר.'
           : 'מומלץ לבדוק את יציבות החשמל/קושחה.';
-      await alert(`reboot:${device.id}`, `המכשיר "${device.name}" אותחל — ${RESET_HEADLINE[reset.cat]}`,
+      // A reboot is routine (→ daily digest) only when the unit's own
+      // reset_reason is a power event (cut / manual off-on / brownout) or a
+      // software reset (fw update / commanded) AND every relay came back the way
+      // it was. A firmware crash/watchdog (cat 'crash'), an unreported reason
+      // ('unknown' — could be a panic), or ANY reboot that left a relay in a
+      // different state is actionable and emails immediately — 'reboot-alert' is
+      // not a digest kind, so it goes straight out (coalesced only in a burst).
+      const routineReboot = (reset.cat === 'power' || reset.cat === 'software') && verdict.changed.length === 0;
+      await alert(`${routineReboot ? 'reboot' : 'reboot-alert'}:${device.id}`, `המכשיר "${device.name}" אותחל — ${RESET_HEADLINE[reset.cat]}`,
         `המכשיר "${device.name}" (${device.device_uid}) אותחל מעצמו — היה פעיל ${fmtDuration(st.lastUptime)} לפני האתחול.\n\nסיבת האתחול לפי המכשיר: ${reset.he}.\n${advice}\n\n${verdict.text}`);
     }
   }

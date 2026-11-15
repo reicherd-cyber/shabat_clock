@@ -12,6 +12,8 @@ import { freshTimesFor } from '../services/zmanim.js';
 import { freshHolidayFor, freshYearlyFor, inExclusionRange, withoutWeeklyExcl } from '../services/holidays.js';
 import { isPrimary } from '../config/role.js';
 import { sendImmediateCommand } from '../services/commands.js';
+import { runAlertDigest } from '../monitor/health.js';
+import { getSetting } from '../services/settings.js';
 
 // A unit counts as reachable for BACKUP purposes only if the primary's health
 // probe (or an MQTT presence message) touched it in the last REACHABLE_MIN
@@ -671,6 +673,20 @@ export function startScheduler() {
           lastZmanimDay = day;
         }
       } catch (e) { console.error('zmanim refresh:', e); }
+      try {
+        // Daily alert digest: once per Jerusalem day, at/after alerts.digest_hour,
+        // email the routine events (reboots, firmware) accumulated since the last
+        // send as one summary. The "already sent today" guard lives in settings
+        // (written by runAlertDigest on success), so it survives restarts and a
+        // failed send retries next tick. Ticks don't overlap (running guard), so
+        // reading the flag here and writing it there can't double-fire.
+        const dp = localParts(new Date(), 'Asia/Jerusalem');
+        const hour = Number(await getSetting('alerts.digest_hour', '8')) || 8;
+        if (dp.hh >= hour) {
+          const today = `${dp.y}-${dp.mo}-${dp.d}`;
+          if ((await getSetting('alerts.last_digest_day', '')) !== today) await runAlertDigest(today);
+        }
+      } catch (e) { console.error('alert digest:', e); }
       try {
         if (Date.now() - lastCatchUpAt >= CATCH_UP_EVERY_MIN * 60000) {
           lastCatchUpAt = Date.now();
