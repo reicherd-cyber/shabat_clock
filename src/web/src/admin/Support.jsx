@@ -4,6 +4,7 @@ import { Card, Button, Input, Modal, ErrorNote, useAsync, SectionHead, RangeFilt
 import { MessageSquare, MessageCircle, Send, Phone, PhoneOff, Inbox, Bot, BarChart3, Sparkles, RefreshCw } from 'lucide-react';
 import HelpChats from './HelpChats.jsx';
 import DeskStats from './DeskStats.jsx';
+import { CallButton } from './CallButton.jsx';
 
 // פניות תמיכה: תיבת ההודעות שמשתמשים שולחים ממרכז העזרה. סטטוסים רכים והפיכים
 // (חדשה ↔ נקראה ↔ טופלה) — לעולם לא מחיקה. פתיחת פנייה חדשה מסמנת אותה כנקראה
@@ -291,10 +292,16 @@ export function SupportInbox() {
               {isWa(open) && <span className="flex items-center gap-1"><MessageCircle size={13} className="text-[#25d366]" />פנייה מוואטסאפ{open.phone ? <> · <a dir="ltr" className="text-accent hover:underline" href={`https://wa.me/${waDigits(open.phone)}`} target="_blank" rel="noreferrer">{open.phone}</a></> : null}</span>}
             </div>
 
-            {/* הודעה קולית — הנגן מעל השיחה */}
+            {/* הודעה קולית — הנגן מעל השיחה, ולחיצה לחזור אליו ישירות מהמערכת */}
             {isPhone(open) && (
-              <div className="border border-line rounded-[10px] bg-surface2/50 px-3 py-2">
+              <div className="border border-line rounded-[10px] bg-surface2/50 px-3 py-2 space-y-2">
                 <VoicePlayer id={open.id} hungUp={!!open.voicemail_hangup} />
+                {open.phone && (
+                  <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-line">
+                    <CallButton phones={open.phone} className="text-sm !py-1.5" label="חזור אליו מהמערכת" />
+                    <span className="text-xs text-muted">מצלצל אצלך ואצל הלקוח ומחבר ביניכם</span>
+                  </div>
+                )}
               </div>
             )}
 

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
+import { Card, Input, Select, ErrorNote, useAsync, SectionHead } from '../ui.jsx';
 import {
-  PhoneCall, MessageCircle, LifeBuoy, ShoppingCart, Banknote, PhoneOutgoing,
+  PhoneCall, MessageCircle, LifeBuoy, ShoppingCart, PhoneOutgoing,
   Phone, ExternalLink, User as UserIcon, Clock,
 } from 'lucide-react';
+import { CallButton } from './CallButton.jsx';
 
 // כרטיס לקוח — הכול על אדם אחד במקום אחד: כל השיחות, הוואטסאפ, הפניות וההזמנות
 // שלו על ציר-זמן אחד, גם אם מעולם לא נפתח לו חשבון. נפתח לפי משתמש רשום (?user=),
@@ -49,8 +50,7 @@ export function ContactCard() {
   const [fKind, setFKind] = useState('');
   const [fPeriod, setFPeriod] = useState('');
   const [search, setSearch] = useState('');
-  const [callForm, setCallForm] = useState(null); // { customer, agent } — the call-back confirm
-  const { busy, error, run, setError } = useAsync();
+  const { error, setError } = useAsync();
 
   const refresh = async () => {
     const p = new URLSearchParams();
@@ -76,22 +76,6 @@ export function ContactCard() {
     return true;
   });
   const filtering = fKind || fPeriod || search;
-
-  const openCall = () => {
-    if (!primaryPhone) { setError(new Error('אין מספר טלפון לחיוג')); return; }
-    setError(null);
-    setCallForm({ customer: primaryPhone, agent: localStorage.getItem('callbackAgentPhone') || '' });
-  };
-  const placeCall = () => run(async () => {
-    localStorage.setItem('callbackAgentPhone', callForm.agent.trim());
-    const r = await adminApi.post('/contact/callback', {
-      phone: callForm.customer, agent_phone: callForm.agent,
-      lead: identity.lead?.id || null, user: identity.user?.id || null,
-    });
-    setCallForm(null);
-    await refresh();
-    if (r.status !== 'ok') setError(new Error('החיוג לא יצא — ' + (r.detail || 'בדקו את הגדרות הקו')));
-  });
 
   return (
     <div className="space-y-4">
@@ -121,9 +105,7 @@ export function ContactCard() {
               {identity.lead && <Link to={`/admin/crm?q=${encodeURIComponent(primaryPhone || identity.lead.name)}`} className="text-accent-dk hover:underline inline-flex items-center gap-1"><ExternalLink size={13} />פתח ב-CRM</Link>}
             </div>
           </div>
-          <Button onClick={openCall} disabled={!primaryPhone}>
-            <span className="inline-flex items-center gap-1.5"><PhoneOutgoing size={16} />התקשר מהמערכת</span>
-          </Button>
+          <CallButton phones={identity.phones} lead={identity.lead?.id || null} user={identity.user?.id || null} onDone={refresh} />
         </div>
       </Card>
 
@@ -189,39 +171,6 @@ export function ContactCard() {
           })
         )}
       </Card>
-
-      {/* אישור חיוג — עולה ליחידות, מצלצל אצל הנציג ואצל הלקוח ומחבר ביניהם */}
-      <Modal open={!!callForm} onClose={() => setCallForm(null)} title="חיוג ללקוח מהמערכת">
-        {callForm && (
-          <div className="space-y-3">
-            <p className="text-sm text-muted">
-              המערכת תצלצל קודם <b>אצלך</b>, ואז תחייג ללקוח ותחבר ביניכם. הלקוח יראה את מספר זמנא על הצג.
-              החיוג עולה יחידות בימות המשיח.
-            </p>
-            <label className="block text-sm">
-              <span className="text-muted">הלקוח:</span>
-              {identity.phones.length > 1 ? (
-                <Select className="w-full mt-1" dir="ltr" value={callForm.customer} onChange={(e) => setCallForm({ ...callForm, customer: e.target.value })}>
-                  {identity.phones.map((p) => <option key={p} value={p}>{p}</option>)}
-                </Select>
-              ) : (
-                <Input className="mt-1" dir="ltr" value={callForm.customer} onChange={(e) => setCallForm({ ...callForm, customer: e.target.value })} />
-              )}
-            </label>
-            <label className="block text-sm">
-              <span className="text-muted">המספר שיצלצל אצלך (הנציג):</span>
-              <Input className="mt-1" dir="ltr" placeholder="050…" value={callForm.agent} onChange={(e) => setCallForm({ ...callForm, agent: e.target.value })} />
-            </label>
-            <ErrorNote error={error} />
-            <div className="flex gap-2">
-              <Button disabled={busy || callForm.agent.trim().length < 9 || callForm.customer.trim().length < 9} onClick={placeCall}>
-                <span className="inline-flex items-center gap-1.5"><PhoneOutgoing size={15} />חייג עכשיו</span>
-              </Button>
-              <Button variant="ghost" onClick={() => setCallForm(null)}>ביטול</Button>
-            </div>
-          </div>
-        )}
-      </Modal>
     </div>
   );
 }
