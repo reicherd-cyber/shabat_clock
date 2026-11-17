@@ -22,7 +22,7 @@ import { createUser, getUser, setPin, bcryptHash, setUserEmailAdmin } from '../.
 import { createOrder, addPayment } from '../../services/crm.js';
 import { contactCard } from '../../services/contactCard.js';
 import { ensureContact } from '../../services/contacts.js';
-import { bridgeCall } from '../../services/outboundCall.js';
+import { bridgeCall, callMode } from '../../services/outboundCall.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview, returnDeviceToStock } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
@@ -1811,6 +1811,10 @@ adminRouter.get('/contact', async (req, res, next) => {
     res.json(card);
   } catch (e) { next(e); }
 });
+
+// How the call-back connects the agent: 'sip' (rings a softphone — no number
+// needed) or 'phone' (rings a mobile the UI must collect). Lets the button adapt.
+adminRouter.get('/contact/call-config', (req, res) => res.json({ mode: callMode() }));
 
 // Call this contact back from the system: a Yemot BRIDGE campaign rings the agent
 // (req.body.agent_phone, default the admin's own number) and the customer, then

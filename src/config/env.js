@@ -62,6 +62,13 @@ export const env = {
   // Caller-ID the customer sees on a "call back from the system" bridge call
   // (services/outboundCall.js). Empty → falls back to the OTP line above.
   callbackCallerId: process.env.CALLBACK_CALLER_ID || '',
+  // Optional SIP softphone for the agent leg of a call-back (Yemot CreateBridgeCall
+  // DialSipExtension). When `extension` is set the system rings that SIP extension
+  // (e.g. MicroSIP on the admin's computer) instead of a mobile; empty = mobile mode.
+  callbackSip: {
+    extension: process.env.CALLBACK_SIP_EXTENSION || '', // the SIP account number (1–6)
+    account: process.env.CALLBACK_SIP_ACCOUNT || '', // AccountNumber, blank = main account
+  },
   mosquittoPasswdFile: process.env.MOSQUITTO_PASSWD_FILE || '',
   // Remote-Shelly onboarding: the public broker devices dial into + the broker files
   // the app manages for per-device credentials. Empty host = onboarding unavailable.
