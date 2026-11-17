@@ -59,6 +59,9 @@ export const env = {
     // missed-call ping and never reliably speaks — verified 2026-07-22.
     templateId: process.env.OTP_YEMOT_TEMPLATE_ID || '70847',
   },
+  // Caller-ID the customer sees on a "call back from the system" bridge call
+  // (services/outboundCall.js). Empty → falls back to the OTP line above.
+  callbackCallerId: process.env.CALLBACK_CALLER_ID || '',
   mosquittoPasswdFile: process.env.MOSQUITTO_PASSWD_FILE || '',
   // Remote-Shelly onboarding: the public broker devices dial into + the broker files
   // the app manages for per-device credentials. Empty host = onboarding unavailable.

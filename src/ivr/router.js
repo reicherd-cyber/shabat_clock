@@ -7,6 +7,7 @@ import { normalizePhone, parsePhoneList } from '../services/phone.js';
 import { findUserByPhone, verifyPin } from '../services/users.js';
 import { isLockedOut, recordFailure } from '../services/authFailures.js';
 import { pendingPhoneAddCode } from '../services/otp.js';
+import { ensureContact } from '../services/contacts.js';
 import { enabledRelaysForUser } from '../services/relays.js';
 import { sendImmediateCommand } from '../services/commands.js';
 import { createSchedule, deleteSchedule, listSchedules, describeScheduleHe, validateScheduleRules } from '../services/schedules.js';
@@ -667,6 +668,9 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
       // Unregistered (or suspended) caller-ID → sales menu (SALES_* states): info
       // about ordering, or a voice message for the admin inbox. There is deliberately
       // no code-entry path into an account: users must call from a registered number.
+      // Open/refresh a contact card for this number so the call is captured even if
+      // they leave no message — a second call then shows up on the same card.
+      await ensureContact(phone, { channel: 'phone', actor: { type: 'ivr' } });
       session = createSession(callId, { callLogId, phone, userId: null, userName: null });
       await appendPath(callLogId, 'sales');
       return res.send(await salesMenu(session));

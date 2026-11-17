@@ -1,6 +1,6 @@
 // Compact admin pages: monitoring, call logs, commands, schedules, settings, admins.
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { adminApi, adminRole } from '../api.js';
 import { Card, Button, Input, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, Stat, fmtUptime, FilterSelect } from '../ui.jsx';
 import { UserRound, House, Fingerprint } from 'lucide-react';
@@ -293,7 +293,9 @@ export function CallLogs() {
               <tr key={l.id} className="border-b border-line last:border-0">
                 <td className="p-2 whitespace-nowrap">{new Date(l.started_at).toLocaleString('he-IL')}</td>
                 <td className="p-2 whitespace-nowrap">{l.user_name || <span className="text-muted">לא רשום</span>}</td>
-                <td className="p-2" dir="ltr">{l.phone}</td>
+                <td className="p-2" dir="ltr">
+                  {l.phone ? <Link to={`/admin/contact?phone=${encodeURIComponent(l.phone)}`} className="text-accent-dk hover:underline">{l.phone}</Link> : '—'}
+                </td>
                 <td className="p-2"><MenuPath path={l.menu_path} /></td>
                 <td className="p-2"><Badge ok={!['auth_fail', 'abandoned'].includes(l.outcome)}>{OUTCOME_LABELS[l.outcome] || l.outcome || '—'}</Badge></td>
               </tr>

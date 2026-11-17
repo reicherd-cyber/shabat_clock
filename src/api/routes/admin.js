@@ -20,6 +20,9 @@ const cleanLanIp = (transport, ip) => {
 };
 import { createUser, getUser, setPin, bcryptHash, setUserEmailAdmin } from '../../services/users.js';
 import { createOrder, addPayment } from '../../services/crm.js';
+import { contactCard } from '../../services/contactCard.js';
+import { ensureContact } from '../../services/contacts.js';
+import { bridgeCall } from '../../services/outboundCall.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview, returnDeviceToStock } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
@@ -1791,6 +1794,39 @@ adminRouter.delete('/crm/payments/:id', requireWrite, async (req, res, next) => 
     if (!r.affectedRows) throw errors.notFound();
     audit(req, 'crm_payment_delete', 'crm_payment', Number(req.params.id));
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ── כרטיס לקוח: everything about one person in one place ──
+// Opens by a registered user id (?user=), a contact/lead id (?lead=), or a raw
+// phone (?phone=) from a call log / WhatsApp row. A phone with no contact yet
+// (historical rows, predating auto-capture) gets one opened on the spot, so every
+// number in the system opens a card.
+adminRouter.get('/contact', async (req, res, next) => {
+  try {
+    const { user, lead, phone } = req.query;
+    if (phone && !user && !lead) await ensureContact(phone, { channel: 'phone', actor: { type: 'admin', id: req.auth.adminId } });
+    const card = await contactCard({ userId: user || null, leadId: lead || null, phone: phone || null });
+    if (!card) throw errors.notFound();
+    res.json(card);
+  } catch (e) { next(e); }
+});
+
+// Call this contact back from the system: a Yemot BRIDGE campaign rings the agent
+// (req.body.agent_phone, default the admin's own number) and the customer, then
+// connects them — the customer sees the Zimna caller-ID. Costs Yemot units, so the
+// UI confirms first; every attempt is logged (callbacks) and audited.
+adminRouter.post('/contact/callback', requireWrite, async (req, res, next) => {
+  try {
+    const r = await bridgeCall({
+      customerPhone: req.body?.phone,
+      agentPhone: req.body?.agent_phone,
+      leadId: req.body?.lead ? Number(req.body.lead) : null,
+      userId: req.body?.user ? Number(req.body.user) : null,
+      actor: adminActor(req),
+    });
+    audit(req, 'contact_callback', 'callback', r.id, { phone: r.phone, agent_phone: r.agentPhone });
+    res.status(201).json(r);
   } catch (e) { next(e); }
 });
 

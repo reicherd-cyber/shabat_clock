@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, Select, Modal, ErrorNote, useAsync, SectionHead, FilterSelect } from '../ui.jsx';
 import { Plus, Phone, Trash2 } from 'lucide-react';
@@ -295,6 +296,10 @@ export function Crm() {
                 );
               })}
             </div>
+
+            <Link to={`/admin/contact?lead=${open.id}`} className="text-accent-dk text-sm hover:underline inline-flex items-center gap-1">
+              <Phone size={13} />כרטיס לקוח מלא — כל השיחות, הוואטסאפ והפניות →
+            </Link>
 
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setLeadForm({

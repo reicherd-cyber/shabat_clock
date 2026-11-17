@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Badge, Modal, ErrorNote, useAsync, FilterSelect, useSort, SortTh } from '../ui.jsx';
 import { Pencil, Trash2 } from 'lucide-react';
@@ -142,6 +142,7 @@ export default function Users() {
                 </td>
                 <td className="p-3">{u.require_pin ? 'כן' : 'לא'}</td>
                 <td className="p-3 space-x-1 space-x-reverse whitespace-nowrap">
+                  <Link to={`/admin/contact?user=${u.id}`} className="inline-block rounded-lg px-2 py-1 text-xs text-accent-dk hover:bg-surface2">כרטיס</Link>
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => impersonate(u)}>כניסה בשמו</Button>
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={() => setPinReset({ id: u.id, new_pin: '' })}>איפוס PIN</Button>
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy} onClick={() => openPhones(u)}>טלפונים</Button>

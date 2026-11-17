@@ -25,6 +25,7 @@
 import { query } from '../db/pool.js';
 import { normalizePhone } from '../services/phone.js';
 import { findUserByPhone } from '../services/users.js';
+import { ensureContact } from '../services/contacts.js';
 import { enabledRelaysForUser } from '../services/relays.js';
 import { interpretCommand } from '../services/nlu.js';
 import { runNluActions } from '../services/nluExec.js';
@@ -468,6 +469,10 @@ async function handleInboundNow(msg) {
   const userId = user?.id ?? null;
   // A superadmin's own number (admins.phone): the secretary answers it, below.
   const admin = await adminByPhone(phone);
+  // An unknown number messaging us for the first time → open a contact card so the
+  // conversation is captured even if the bot can't help them; a later message lands
+  // on the same card. Registered users and our own admins already have a home.
+  if (!user && !admin) await ensureContact(phone, { channel: 'whatsapp', note: msg.text ?? null, actor: { type: 'whatsapp' } });
   // A voice note from a customer is transcribed (whatsapp/stt.js) and then
   // handled exactly like the same words typed; the log keeps the transcript.
   // Unknown numbers are not transcribed (a paid call per note): text only —

@@ -24,6 +24,7 @@ import VoiceCosts from './admin/VoiceCosts.jsx';
 import Finance from './admin/Finance.jsx';
 import { SupportInbox } from './admin/Support.jsx';
 import { Crm } from './admin/Crm.jsx';
+import { ContactCard } from './admin/ContactCard.jsx';
 import { Tasks } from './admin/Tasks.jsx';
 import { WhatsappAdmin } from './admin/Whatsapp.jsx';
 import { Emails } from './admin/Emails.jsx';
@@ -428,6 +429,7 @@ export default function App() {
           <Route index element={<Monitoring />} />
           <Route path="support" element={<SupportInbox />} />
           <Route path="crm" element={<Crm />} />
+          <Route path="contact" element={<ContactCard />} />
           <Route path="tasks" element={<Tasks />} />
           <Route path="users" element={<Users />} />
           <Route path="devices" element={<Devices />} />

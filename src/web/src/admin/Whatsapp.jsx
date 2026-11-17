@@ -134,6 +134,7 @@ export function WhatsappAdmin() {
                 <span className="font-medium">{current.user_name || 'לא רשום'}</span>
                 {current.user_id && <Link className="text-xs text-accent hover:underline" to={`/admin/users?q=${encodeURIComponent(current.user_name || '')}`}>#{current.user_id}</Link>}
                 <a dir="ltr" className="text-xs text-accent hover:underline" target="_blank" rel="noreferrer" href={`https://wa.me/${waDigits(current.phone)}`}>{current.phone}</a>
+                <Link className="text-xs text-accent-dk hover:underline ms-auto" to={`/admin/contact?phone=${encodeURIComponent(current.phone)}`}>כרטיס לקוח →</Link>
               </div>
               <div className="p-3 space-y-2">
                 {[...current.messages].reverse().map((m) => {
