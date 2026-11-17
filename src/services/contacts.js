@@ -15,6 +15,11 @@ import { logAction, actorStr } from './audit.js';
 // Human label for the auto-opened contact's `source`, by the channel it arrived on.
 const SOURCE_LABEL = { phone: 'שיחה', whatsapp: 'וואטסאפ', web: 'אתר' };
 
+// Placeholder name for a brand-new auto-opened contact until an admin renames it:
+// "phone-0501234567" for a call, "whatsapp-0501234567" for a message — so the
+// channel the person first came through is visible at a glance in any list.
+const autoName = (channel, phone) => `${channel}-${phone}`;
+
 // Find-or-create the contact for `rawPhone`. Returns { id, created } or null when
 // the number is unusable. `channel` is how they reached us this time; `name`/`note`
 // seed a brand-new contact only (an existing one is never overwritten from here).
@@ -32,8 +37,8 @@ export async function ensureContact(rawPhone, { channel = 'phone', name = null, 
       await query('UPDATE crm_leads SET last_contact_at = CURRENT_TIMESTAMP WHERE id = ?', [existing.id]);
       return { id: existing.id, created: false };
     }
-    // New contact. Name defaults to the number itself until an admin renames it.
-    const label = (name && String(name).trim()) || phone;
+    // New contact. Name defaults to "<channel>-<number>" until an admin renames it.
+    const label = (name && String(name).trim()) || autoName(channel, phone);
     const r = await query(
       `INSERT INTO crm_leads (name, phone, source, first_channel, auto_created, last_contact_at, notes, created_by)
        VALUES (?,?,?,?,1,CURRENT_TIMESTAMP,?,?)`,
