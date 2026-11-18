@@ -160,11 +160,33 @@ export default function Devices() {
   // Who gets it decides validity + contents (internal: 7 days + saved Wi-Fi prefill;
   // external: 3 days, no Wi-Fi), so the download goes through a small form.
   const openInstallerForm = () => { setError(null); setInstallerForm({ audience: '', label: '' }); };
-  // Sticker for a unit (logo · MAC · model · our record): the window opens inside the
-  // click (popup blockers), the server renders the page, the label printer prints it.
+  // Sticker for a unit (logo · MAC · model · our record): the server renders the page,
+  // the label printer prints it. The auto prints (row + installer buttons) go through a
+  // hidden iframe ON THIS page, so the print dialog shows over the admin — a separate
+  // popup window opened in the background (easy to miss) and was sometimes popup-blocked
+  // outright (the red "חלון חסום" banner); see the sticker memory. The test button keeps
+  // a visible preview window with the size fields.
   const printSticker = (params) => {
-    // Row buttons print at once (auto) — the test button keeps the preview with the size fields.
-    const w = window.open('', '_blank', params.auto ? 'width=420,height=320' : 'width=560,height=560');
+    if (params.auto) {
+      run(async () => {
+        const { html } = await adminApi.get(`/shelly/sticker?${new URLSearchParams(params)}`);
+        const frame = document.createElement('iframe');
+        frame.setAttribute('aria-hidden', 'true');
+        frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;'; // rendered (printable), not display:none
+        const drop = () => { try { frame.remove(); } catch (e) {} };
+        document.body.appendChild(frame);
+        const cw = frame.contentWindow;
+        cw.document.open(); cw.document.write(html); cw.document.close();
+        // The page's inline script auto-focuses + prints its own window (this iframe) and
+        // tries to close it (a no-op for an iframe); we drop the frame once the dialog ends.
+        cw.addEventListener('afterprint', () => setTimeout(drop, 300));
+        setTimeout(drop, 60000); // safety net if afterprint never fires
+      }).catch(() => {}); // run() has shown the error
+      return;
+    }
+    // Test / preview: a visible window carrying the size controls (localStorage-remembered,
+    // then reused by the auto prints above).
+    const w = window.open('', '_blank', 'width=560,height=560');
     run(async () => {
       if (!w) throw new Error('הדפדפן חסם את חלון המדבקה — אפשרו חלונות קופצים לאתר ונסו שוב');
       try {
