@@ -172,11 +172,15 @@ export default function Devices() {
         const { html } = await adminApi.get(`/shelly/sticker?${new URLSearchParams(params)}`);
         const frame = document.createElement('iframe');
         frame.setAttribute('aria-hidden', 'true');
-        frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;'; // rendered (printable), not display:none
+        // Off-screen but 1×1 and visible-enough to take focus: a 0×0 iframe is often not
+        // focusable, and then window.focus()+print() inside it can print the admin page
+        // instead of the label. Not display:none (that is unprintable).
+        frame.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;border:0;';
         const drop = () => { try { frame.remove(); } catch (e) {} };
         document.body.appendChild(frame);
         const cw = frame.contentWindow;
         cw.document.open(); cw.document.write(html); cw.document.close();
+        cw.focus(); // focus the iframe from the parent so its print() targets the label, not the admin page
         // The page's inline script auto-focuses + prints its own window (this iframe) and
         // tries to close it (a no-op for an iframe); we drop the frame once the dialog ends.
         cw.addEventListener('afterprint', () => setTimeout(drop, 300));
