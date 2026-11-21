@@ -21,7 +21,7 @@ const cleanLanIp = (transport, ip) => {
 import { createUser, getUser, setPin, bcryptHash, setUserEmailAdmin } from '../../services/users.js';
 import { createOrder, addPayment } from '../../services/crm.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview, returnDeviceToStock } from '../../services/devices.js';
+import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview, returnDeviceToStock, replacementCandidates, replaceHardware } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
@@ -587,6 +587,26 @@ adminRouter.post('/devices/:id/transfer', requireWrite, async (req, res, next) =
     });
     await audit(req, 'transfer', 'device', Number(req.params.id), {
       after: { user_id: Number(req.body?.user_id), reassigned: result.reassigned?.length ? result.reassigned : undefined },
+    });
+    res.json(result);
+  } catch (e) { next(e); }
+});
+
+// Hardware swap: the physical unit died — replace it with a prepared stock unit of
+// the SAME channel count, keeping every channel, IVR code, schedule and plan for
+// the same owner. The config row is repointed onto the new MAC; the unit
+// provisions itself on its next hello.
+adminRouter.get('/devices/:id/replacement-stock', async (req, res, next) => {
+  try {
+    res.json(await replacementCandidates(Number(req.params.id)));
+  } catch (e) { next(e); }
+});
+
+adminRouter.post('/devices/:id/replace-hardware', requireWrite, async (req, res, next) => {
+  try {
+    const result = await replaceHardware(Number(req.params.id), { mac: req.body?.mac, actor: adminActor(req) });
+    await audit(req, 'replace_hardware', 'device', Number(req.params.id), {
+      after: { from_uid: result.from_uid, to_uid: result.to_uid, model: result.model },
     });
     res.json(result);
   } catch (e) { next(e); }

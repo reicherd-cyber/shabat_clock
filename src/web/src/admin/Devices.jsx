@@ -31,6 +31,7 @@ export default function Devices() {
   }, { replace: true });
   const [expanded, setExpanded] = useState(null); // device id with its details row open
   const [transferForm, setTransferForm] = useState(null); // {device, user_id}
+  const [replaceForm, setReplaceForm] = useState(null);   // {device, loading?, stock?, error?, mac} — hardware swap
   const [diagnosis, setDiagnosis] = useState(null);       // {device, loading} → {device, verdict, text, evidence} | {device, error}
   const [reasons, setReasons] = useState({});             // device id → diagnosis result (offline table's סיבה column)
   const [timeline, setTimeline] = useState(null);         // {device_id, loading} → {device_id, events, is_online} | {device_id, error} — the modal's connectivity history
@@ -459,6 +460,17 @@ export default function Devices() {
                             <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                               title="מדבקה למכשיר: לוגו, MAC, דגם ומזהה — למדפסת המדבקות"
                               onClick={() => printSticker({ device_id: d.id, auto: '1' })}>מדבקה</Button>
+                          )}
+                          {d.device_type === 'shelly' && d.is_enabled && (
+                            <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                              title="המכשיר התקלקל? החלפת היחידה הפיזית תוך שמירת כל הערוצים, הקודים והתזמונים"
+                              onClick={() => {
+                                setError(null);
+                                setReplaceForm({ device: d, loading: true, mac: '' });
+                                adminApi.get(`/devices/${d.id}/replacement-stock`)
+                                  .then((stock) => setReplaceForm((f) => (f?.device?.id === d.id ? { ...f, loading: false, stock } : f)))
+                                  .catch((e) => setReplaceForm((f) => (f?.device?.id === d.id ? { ...f, loading: false, error: e.message } : f)));
+                              }}>החלף חומרה</Button>
                           )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             onClick={() => setTransferForm({ device: d, user_id: '' })}>העבר ללקוח</Button>
@@ -990,6 +1002,55 @@ export default function Devices() {
                   alert(`המכשיר הועבר. קודים שהשתנו:\n${res.reassigned.map((x) => `${x.relay}: ${x.from} ← ${x.to}`).join('\n')}`);
                 }
               })}>העבר</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!replaceForm} onClose={() => setReplaceForm(null)} title={`החלפת חומרה — "${replaceForm?.device?.name || ''}"`}>
+        {replaceForm && (
+          <div className="space-y-3">
+            <p className="text-sm text-muted">
+              היחידה הפיזית התקלקלה? בחרו יחידת חלופה מהמלאי (באותו מספר ערוצים — {replaceForm.device.relay_count}).
+              כל הערוצים, קודי ה-IVR והתזמונים יישמרו; היחידה הישנה תנותק והחדשה תיקלט ותוגדר אוטומטית בהתחברותה הבאה.
+            </p>
+            {replaceForm.loading && <p className="text-sm text-muted">טוען מלאי…</p>}
+            {replaceForm.error && <ErrorNote error={new Error(replaceForm.error)} />}
+            {!replaceForm.loading && replaceForm.stock?.length === 0 && (
+              <p className="text-sm" style={{ color: '#B45309' }}>
+                אין במלאי יחידה מוכנה עם {replaceForm.device.relay_count} ערוצים — הכינו או החזירו למלאי יחידה תואמת תחילה.
+              </p>
+            )}
+            {!replaceForm.loading && replaceForm.stock?.length > 0 && (
+              <div className="border border-line rounded-xl p-2 space-y-1 max-h-64 overflow-auto">
+                {replaceForm.stock.map((s) => {
+                  const info = shellyModelInfo(s.model);
+                  const selected = replaceForm.mac === s.mac;
+                  return (
+                    <label key={s.mac} className="flex items-center gap-2 p-2 rounded-lg cursor-pointer"
+                      style={selected ? { background: 'rgba(37,99,235,0.08)' } : undefined}>
+                      <input type="radio" name="replace-mac" value={s.mac} checked={selected}
+                        onChange={() => setReplaceForm({ ...replaceForm, mac: s.mac })} />
+                      <span className="flex-1 min-w-0">
+                        <span className="font-mono text-xs" dir="ltr">{s.mac}</span>
+                        <span className="text-muted text-xs block truncate">
+                          {info?.name || s.model || 'Shelly'} · {s.channels} ערוצים · הוכן {fmtWhen(s.prepared_at)}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setReplaceForm(null)}>ביטול</Button>
+              <Button className="flex-1" disabled={busy || !replaceForm.mac} onClick={() => run(async () => {
+                const res = await adminApi.post(`/devices/${replaceForm.device.id}/replace-hardware`, { mac: replaceForm.mac });
+                setReplaceForm(null);
+                await refresh();
+                alert(`החומרה הוחלפה. היחידה החדשה (${res.to_uid}) תיקלט ותוגדר בהתחברותה הבאה לשרת.`);
+              })}>החלף חומרה</Button>
             </div>
           </div>
         )}
