@@ -671,6 +671,82 @@ export async function transferDevice(deviceId, targetUserId, { actor = null, cod
   });
 }
 
+// Prepared stock units eligible to replace this device's hardware: same channel
+// count (exact), a known model, in stock ('prepared'), and not already an active
+// device. Feeds the "החלף חומרה" modal's picker.
+export async function replacementCandidates(deviceId) {
+  const [device] = await query('SELECT id, device_uid, relay_count FROM devices WHERE id = ?', [deviceId]);
+  if (!device) throw errors.notFound('NOT_FOUND', 'Device not found');
+  const need = Number(device.relay_count);
+  const rows = await query(
+    "SELECT mac, model, fw_version, prepared_at FROM prepared_devices WHERE status = 'prepared' ORDER BY prepared_at DESC",
+  );
+  const activeRows = await query('SELECT device_uid FROM devices WHERE is_enabled = TRUE AND device_uid IS NOT NULL');
+  const active = new Set(activeRows.map((r) => r.device_uid));
+  return rows
+    .filter((r) => r.mac !== device.device_uid && !active.has(r.mac) && shellyModelChannels(r.model) === need)
+    .map((r) => ({ mac: r.mac, model: r.model, fw_version: r.fw_version, prepared_at: r.prepared_at, channels: shellyModelChannels(r.model) }));
+}
+
+// Replace a Shelly device's physical unit while keeping the whole logical config
+// (relays, IVR digits, schedules, plans, name) for the SAME owner — the broken
+// unit died in the field and the customer installed a stock replacement. The
+// config row is simply repointed onto the new MAC: relays/schedules are untouched
+// (same relay_no 1..N, same digits) because the replacement must have the same
+// channel count. No credential work — a Shelly authenticates as shelly-<mac> with
+// a password minted at prepare time (shellyOnboard.mintDeviceCreds) that persists
+// on stock units; devices.mqtt_*_hash are empty for Shelly. The new unit, flagged
+// first_contact_pending + sync pending, provisions itself on its next hello via
+// the MQTT online handler (firstContactShelly → restore_last/boot-safe, reconcile,
+// catch-up, full schedule push). The dead unit's broker creds are left in place
+// (harmless, consistent with returnDeviceToStock); its MAC is not auto-returned to
+// stock (it's faulty — a separate return-to-stock can do that if wanted).
+export async function replaceHardware(deviceId, { mac, actor = null } = {}) {
+  const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה — 12 תווים הקסדצימליים', { mac: 'invalid' });
+  return withTransaction(async (conn) => {
+    const [dRows] = await conn.query('SELECT * FROM devices WHERE id = ? FOR UPDATE', [deviceId]);
+    const device = dRows[0];
+    if (!device) throw errors.notFound('NOT_FOUND', 'Device not found');
+    if (device.device_type !== 'shelly') throw errors.validation('רק מכשיר Shelly ניתן להחליף');
+    if (!device.is_enabled) throw errors.conflict('CONFLICT', 'יש לשחזר את המכשיר המושהה לפני החלפת החומרה');
+    if (device.returned_to_stock_at) throw errors.conflict('CONFLICT', 'המכשיר הוחזר למלאי — אין מה להחליף');
+    if (!device.device_uid) throw errors.conflict('CONFLICT', 'למכשיר אין יחידה פעילה להחלפה');
+    if (uid === device.device_uid) throw errors.validation('זו אותה יחידה — בחרו יחידה אחרת');
+    const [pRows] = await conn.query('SELECT mac, model, fw_version, status FROM prepared_devices WHERE mac = ? FOR UPDATE', [uid]);
+    const prep = pRows[0];
+    if (!prep) throw errors.validation('היחידה אינה נמצאת במלאי המכשירים שהוכנו');
+    if (prep.status !== 'prepared') throw errors.conflict('CONFLICT', 'היחידה אינה פנויה במלאי (כבר משויכת)');
+    const channels = shellyModelChannels(prep.model);
+    if (!channels) throw errors.validation('מספר הערוצים של היחידה החדשה אינו ידוע (דגם חסר במלאי)');
+    if (channels !== Number(device.relay_count)) {
+      throw errors.validation(
+        `מספר הערוצים אינו תואם — למכשיר ${device.relay_count} ערוצים, ליחידה החדשה ${channels}`,
+        { mac: 'channel_mismatch' },
+      );
+    }
+    const [taken] = await conn.query('SELECT id FROM devices WHERE is_enabled = TRUE AND device_uid = ? AND id <> ?', [uid, deviceId]);
+    if (taken[0]) throw errors.conflict('CONFLICT', `היחידה ${uid} כבר רשומה כמכשיר פעיל אחר (#${taken[0].id})`);
+
+    const oldMac = device.device_uid;
+    // Repoint the config row onto the new MAC. relay_count stays (exact match), so
+    // relays/schedules/IVR map 1:1 to the new hardware with no changes.
+    await conn.query(
+      `UPDATE devices SET device_uid = ?, fw_version = COALESCE(?, fw_version), transport = 'mqtt', ip_address = NULL,
+              is_online = FALSE, first_contact_pending = TRUE, device_ack_version = 0, sync_status = 'pending',
+              sync_error = NULL, ap_secured_at = NULL, updated_by = ? WHERE id = ?`,
+      [uid, prep.fw_version || null, actor, deviceId],
+    );
+    // Activation moment for the stock unit — mirror registerShellyDevice.
+    await conn.query(
+      `UPDATE prepared_devices SET status = 'activated', returned_at = NULL, activated_at = UTC_TIMESTAMP(),
+              activated_user_id = ?, device_id = ?, model = COALESCE(model, ?) WHERE mac = ?`,
+      [device.user_id, deviceId, prep.model || null, uid],
+    );
+    return { device_id: deviceId, from_uid: oldMac, to_uid: uid, model: prep.model || null, channels };
+  });
+}
+
 export async function listAllDevices() {
   return query(
     `SELECT d.id, d.user_id, u.full_name AS owner_name, d.device_uid, d.removed_uid, d.name, d.device_type, d.fw_version, d.timezone,
