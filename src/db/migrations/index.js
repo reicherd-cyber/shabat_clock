@@ -94,6 +94,10 @@ import { migrate93 } from './migrate93.js';
 import { migrate94 } from './migrate94.js';
 import { migrate95 } from './migrate95.js';
 import { migrate96 } from './migrate96.js';
+// migrate97 (contact card) stays on dev until that feature is verified; master
+// ships migrate98 (hardware-swap broken-unit status) only. The runner applies
+// registered migrations not yet in schema_migrations, so the 97 gap is harmless.
+import { migrate98 } from './migrate98.js';
 
 export const migrations = [
   { version: 1, up: migrate1 },
@@ -192,4 +196,5 @@ export const migrations = [
   { version: 94, up: migrate94 },
   { version: 95, up: migrate95 },
   { version: 96, up: migrate96 },
+  { version: 98, up: migrate98 },
 ];

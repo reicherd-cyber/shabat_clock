@@ -699,9 +699,12 @@ export async function replacementCandidates(deviceId) {
 // first_contact_pending + sync pending, provisions itself on its next hello via
 // the MQTT online handler (firstContactShelly → restore_last/boot-safe, reconcile,
 // catch-up, full schedule push). The dead unit's broker creds are left in place
-// (harmless, consistent with returnDeviceToStock); its MAC is not auto-returned to
-// stock (it's faulty — a separate return-to-stock can do that if wanted).
-export async function replaceHardware(deviceId, { mac, actor = null } = {}) {
+// (harmless, consistent with returnDeviceToStock); its MAC is retired into the
+// prepared-devices inventory as status='broken' (broken_at = now, who-had-it kept)
+// so the office sees what came back faulty and can read its full service history.
+// A broken unit is NEVER offered as stock again (pickers select 'prepared' only);
+// a repaired one can be flipped back to 'prepared' via markPreparedReusable.
+export async function replaceHardware(deviceId, { mac, note = null, actor = null } = {}) {
   const uid = String(mac || '').toLowerCase().replace(/[^0-9a-f]/g, '');
   if (uid.length !== 12) throw errors.validation('כתובת MAC לא תקינה — 12 תווים הקסדצימליים', { mac: 'invalid' });
   return withTransaction(async (conn) => {
@@ -739,12 +742,105 @@ export async function replaceHardware(deviceId, { mac, actor = null } = {}) {
     );
     // Activation moment for the stock unit — mirror registerShellyDevice.
     await conn.query(
-      `UPDATE prepared_devices SET status = 'activated', returned_at = NULL, activated_at = UTC_TIMESTAMP(),
-              activated_user_id = ?, device_id = ?, model = COALESCE(model, ?) WHERE mac = ?`,
+      `UPDATE prepared_devices SET status = 'activated', returned_at = NULL, broken_at = NULL, broken_note = NULL,
+              activated_at = UTC_TIMESTAMP(), activated_user_id = ?, device_id = ?, model = COALESCE(model, ?) WHERE mac = ?`,
       [device.user_id, deviceId, prep.model || null, uid],
+    );
+    // Retire the dead unit into stock as 'broken'. Keep device_id + the owner it
+    // served as a who-had-it hint for the history; existing model/fw are preserved.
+    const noteStr = (note && String(note).trim().slice(0, 255)) || null;
+    await conn.query(
+      `INSERT INTO prepared_devices (mac, fw_version, status, activated_user_id, device_id, broken_at, broken_note)
+       VALUES (?, ?, 'broken', ?, ?, UTC_TIMESTAMP(), ?)
+       ON DUPLICATE KEY UPDATE status = 'broken', broken_at = UTC_TIMESTAMP(), broken_note = VALUES(broken_note),
+         activated_user_id = COALESCE(activated_user_id, VALUES(activated_user_id)),
+         device_id = COALESCE(device_id, VALUES(device_id)),
+         fw_version = COALESCE(fw_version, VALUES(fw_version))`,
+      [oldMac, device.fw_version || null, device.user_id, deviceId, noteStr],
     );
     return { device_id: deviceId, from_uid: oldMac, to_uid: uid, model: prep.model || null, channels };
   });
+}
+
+// A broken unit was repaired — flip it back to real 'prepared' stock so it can be
+// handed out again. Clears the broken stamp; keeps the previous-owner hint as a
+// "second-hand" marker (same as returnDeviceToStock leaves returned_at behind).
+export async function markPreparedReusable(preparedId, { actor = null } = {}) {
+  const [row] = await query('SELECT id, mac, status FROM prepared_devices WHERE id = ?', [preparedId]);
+  if (!row) throw errors.notFound('NOT_FOUND', 'Prepared device not found');
+  if (row.status !== 'broken') throw errors.conflict('CONFLICT', 'היחידה אינה מסומנת כתקולה');
+  // Guard: the same MAC must not already be a live device (a later prep/activation).
+  const [live] = await query('SELECT id FROM devices WHERE is_enabled = TRUE AND device_uid = ?', [row.mac]);
+  if (live) throw errors.conflict('CONFLICT', `היחידה ${row.mac} כבר רשומה כמכשיר פעיל #${live.id}`);
+  await query(
+    "UPDATE prepared_devices SET status = 'prepared', broken_at = NULL, returned_at = UTC_TIMESTAMP(), prepared_by = COALESCE(prepared_by, ?) WHERE id = ?",
+    [actor, preparedId],
+  );
+  return { id: preparedId, mac: row.mac };
+}
+
+// device_events of interest for a unit's history: problems (errors, outages,
+// resets) and the first-contact milestone, keyed by device_id in the schema.
+const HISTORY_EVENTS = ['error', 'offline', 'channel_mismatch', 'reset_suspected', 'input_reset_off', 'first_contact'];
+
+// Full service history of a logical device, broken down by PHYSICAL unit (MAC).
+// prepared_devices records each unit's activation (who, when); device_events are
+// keyed by device_id (not MAC), so each unit "owns" the events that fall in its
+// service window [activated_at, next unit's activated_at). The current live unit
+// may predate the inventory table — it's synthesized from the device row so the
+// timeline is never empty.
+export async function deviceUnitHistory(deviceId) {
+  const [device] = await query(
+    'SELECT id, user_id, device_uid, name, created_at FROM devices WHERE id = ?',
+    [deviceId],
+  );
+  if (!device) throw errors.notFound('NOT_FOUND', 'Device not found');
+  const rows = await query(
+    `SELECT p.id AS prepared_id, p.mac, p.model, p.fw_version, p.status, p.prepared_at, p.activated_at,
+            p.returned_at, p.broken_at, p.broken_note, p.activated_user_id, u.full_name AS owner_name
+       FROM prepared_devices p LEFT JOIN users u ON u.id = p.activated_user_id
+      WHERE p.device_id = ?`,
+    [deviceId],
+  );
+  const units = rows.map((r) => ({ ...r, synthetic: false }));
+  const curMac = device.device_uid;
+  if (curMac && !units.some((u) => u.mac === curMac)) {
+    units.push({
+      prepared_id: null, mac: curMac, model: null, fw_version: null, status: 'activated',
+      prepared_at: null, activated_at: device.created_at, returned_at: null, broken_at: null,
+      broken_note: null, activated_user_id: device.user_id, owner_name: null, synthetic: true,
+    });
+  }
+  const startOf = (u) => new Date(u.activated_at || u.prepared_at || 0).getTime();
+  units.sort((a, b) => startOf(a) - startOf(b));
+  // Each unit's window runs until the NEXT unit's start (chronological hand-off).
+  units.forEach((u, i) => {
+    u._from = u.activated_at || u.prepared_at || null;
+    u._to = units[i + 1] ? (units[i + 1].activated_at || units[i + 1].prepared_at || null) : null;
+  });
+  const events = await query(
+    `SELECT event, payload, created_at FROM device_events
+      WHERE device_id = ? AND event IN (${HISTORY_EVENTS.map(() => '?').join(',')})
+      ORDER BY created_at ASC`,
+    [deviceId, ...HISTORY_EVENTS],
+  );
+  for (const u of units) {
+    const from = u._from ? new Date(u._from).getTime() : -Infinity;
+    const to = u._to ? new Date(u._to).getTime() : Infinity;
+    const own = events.filter((e) => {
+      const t = new Date(e.created_at).getTime();
+      return t >= from && t < to;
+    });
+    u.events = own.slice(-60); // cap the payload; newest-biased
+    u.event_count = own.length;
+    u.error_count = own.filter((e) => e.event === 'error' || e.event === 'channel_mismatch').length;
+    u.is_current = !u._to && u.mac === curMac;
+    u.installed_at = u._from;
+    u.replaced_at = u.broken_at || u.returned_at || (u.is_current ? null : u._to);
+    delete u._from; delete u._to;
+  }
+  units.reverse(); // newest unit first for display
+  return { device: { id: device.id, name: device.name, user_id: device.user_id, current_uid: curMac }, units };
 }
 
 export async function listAllDevices() {
