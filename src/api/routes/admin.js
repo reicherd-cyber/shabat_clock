@@ -1842,7 +1842,14 @@ adminRouter.delete('/crm/payments/:id', requireWrite, async (req, res, next) => 
 adminRouter.get('/contact', async (req, res, next) => {
   try {
     const { user, lead, phone } = req.query;
-    if (phone && !user && !lead) await ensureContact(phone, { channel: 'phone', actor: { type: 'admin', id: req.auth.adminId } });
+    // Backfilling a contact row for a historical number is a WRITE — only for
+    // write-capable admins (read-only 'support' still gets the card, which the
+    // card builder assembles from the raw phone-keyed rows with no contact row).
+    // ensureContact is idempotent (atomic find-or-create), so a prefetch/retry of
+    // this GET never creates a duplicate.
+    if (phone && !user && !lead && req.auth.role === 'superadmin') {
+      await ensureContact(phone, { channel: 'phone', actor: { type: 'admin', id: req.auth.adminId } });
+    }
     const card = await contactCard({ userId: user || null, leadId: lead || null, phone: phone || null });
     if (!card) throw errors.notFound();
     res.json(card);

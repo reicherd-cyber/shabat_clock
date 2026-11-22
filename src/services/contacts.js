@@ -8,7 +8,7 @@
 // This runs on the hot inbound path (every call arrival, every WhatsApp message),
 // so it is idempotent per phone, cheap (one indexed read, one write), and never
 // throws into the caller: a contact we failed to open must not drop a real call.
-import { query } from '../db/pool.js';
+import { query, withTransaction } from '../db/pool.js';
 import { normalizePhone } from './phone.js';
 import { logAction, actorStr } from './audit.js';
 
@@ -28,24 +28,30 @@ export async function ensureContact(rawPhone, { channel = 'phone', name = null, 
   const phone = normalizePhone(rawPhone);
   if (!phone) return null;
   try {
-    // Reuse the most recent live contact for this number — second touch lands here.
-    const [existing] = await query(
-      'SELECT id FROM crm_leads WHERE phone = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1',
-      [phone],
-    );
-    if (existing) {
-      await query('UPDATE crm_leads SET last_contact_at = CURRENT_TIMESTAMP WHERE id = ?', [existing.id]);
-      return { id: existing.id, created: false };
-    }
-    // New contact. Name defaults to "<channel>-<number>" until an admin renames it.
-    const label = (name && String(name).trim()) || autoName(channel, phone);
-    const r = await query(
-      `INSERT INTO crm_leads (name, phone, source, first_channel, auto_created, last_contact_at, notes, created_by)
-       VALUES (?,?,?,?,1,CURRENT_TIMESTAMP,?,?)`,
-      [label.slice(0, 100), phone, SOURCE_LABEL[channel] || channel, channel, note || null, actorStr(actor) || 'system'],
-    );
-    await logAction(actor, 'contact_auto_create', 'crm_lead', r.insertId, { phone, channel });
-    return { id: r.insertId, created: true };
+    // Find-or-create atomically: crm_leads.phone has only a non-unique index, so a
+    // plain find-then-insert lets two simultaneous first touches from the same new
+    // number (e.g. a call and a WhatsApp) both insert → duplicate contacts. The
+    // SELECT … FOR UPDATE takes a next-key/gap lock on idx_phone for this value, so
+    // the second touch waits for the first to commit and then finds its row.
+    return await withTransaction(async (conn) => {
+      const [rows] = await conn.query(
+        'SELECT id FROM crm_leads WHERE phone = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE',
+        [phone],
+      );
+      if (rows[0]) {
+        await conn.query('UPDATE crm_leads SET last_contact_at = CURRENT_TIMESTAMP WHERE id = ?', [rows[0].id]);
+        return { id: rows[0].id, created: false };
+      }
+      // New contact. Name defaults to "<channel>-<number>" until an admin renames it.
+      const label = (name && String(name).trim()) || autoName(channel, phone);
+      const [r] = await conn.query(
+        `INSERT INTO crm_leads (name, phone, source, first_channel, auto_created, last_contact_at, notes, created_by)
+         VALUES (?,?,?,?,1,CURRENT_TIMESTAMP,?,?)`,
+        [label.slice(0, 100), phone, SOURCE_LABEL[channel] || channel, channel, note || null, actorStr(actor) || 'system'],
+      );
+      await logAction(actor, 'contact_auto_create', 'crm_lead', r.insertId, { phone, channel });
+      return { id: r.insertId, created: true };
+    });
   } catch (e) {
     // Never let contact-opening break the call/message it rode in on.
     console.error(`[contacts] ensureContact(${phone}) failed:`, e.message);

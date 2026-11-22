@@ -78,7 +78,9 @@ export async function bridgeCall({ customerPhone, agentPhone, leadId = null, use
   }
 
   try {
-    const res = await fetch(`${YEMOT_API}?${params}`);
+    // Bound the call — a hung Yemot socket must not leave the admin's request (and
+    // the callbacks row) stuck forever. On timeout fetch throws → caught below → failed.
+    const res = await fetch(`${YEMOT_API}?${params}`, { signal: AbortSignal.timeout(15000) });
     const body = await res.json().catch(() => ({}));
     const detail = JSON.stringify(body);
     const ok = res.ok && body.responseStatus === 'OK';

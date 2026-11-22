@@ -114,8 +114,10 @@ export async function contactCard(seed) {
     }
   }
 
-  // ── WhatsApp (phone-keyed) ──
-  const waKey = keyMatch(id, { phone: 'phone' });
+  // ── WhatsApp (by user_id OR phone) ──
+  // whatsapp_messages carries a user_id (migrate59); matching phone alone would
+  // drop messages a registered user sent from a number not in their verified set.
+  const waKey = keyMatch(id, { user: 'user_id', phone: 'phone' });
   if (waKey) {
     const msgs = await query(
       `SELECT id, phone, direction, kind, body, status, created_at
@@ -188,13 +190,15 @@ export async function contactCard(seed) {
     const [r] = await query(`SELECT COUNT(*) AS n FROM ${table} WHERE ${k.sql}${extra}`, k.params);
     return r.n;
   };
-  const counts = {
-    calls: await count({ user: 'user_id', phone: 'phone' }, 'call_logs'),
-    whatsapp: await count({ phone: 'phone' }, 'whatsapp_messages'),
-    support: await count({ user: 'user_id', phone: 'phone' }, 'support_messages', ' AND deleted_at IS NULL'),
-    orders: orders.length,
-    callbacks: await count({ user: 'user_id', phone: 'phone', lead: 'lead_id' }, 'callbacks'),
-  };
+  // Independent count queries — run them in parallel, not one awaited round-trip
+  // after another, so a busy contact's card is one DB wait instead of five.
+  const [calls, whatsapp, support, callbacks] = await Promise.all([
+    count({ user: 'user_id', phone: 'phone' }, 'call_logs'),
+    count({ user: 'user_id', phone: 'phone' }, 'whatsapp_messages'),
+    count({ user: 'user_id', phone: 'phone' }, 'support_messages', ' AND deleted_at IS NULL'),
+    count({ user: 'user_id', phone: 'phone', lead: 'lead_id' }, 'callbacks'),
+  ]);
+  const counts = { calls, whatsapp, support, orders: orders.length, callbacks };
 
   const billed = orders.filter((o) => o.status !== 'cancelled').reduce((s, o) => s + Number(o.amount || 0), 0);
   const paid = timeline.filter((t) => t.kind === 'payment').reduce((s, t) => s + Number(t.meta.amount || 0), 0);
