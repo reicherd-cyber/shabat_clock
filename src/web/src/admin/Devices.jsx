@@ -381,7 +381,7 @@ export default function Devices() {
             <span className="inline-flex items-center gap-2"><OnlineDot online={dot} />{title}
               <span className="text-muted text-sm font-normal">({list.length})</span></span>
           </h3>
-          <Card flush className="table-scroll">
+          <Card flush>
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
@@ -537,7 +537,7 @@ export default function Devices() {
           <p className="text-muted text-xs">
             מכשירים מדומים בחשבונות ללא מכשיר אמיתי — תמיד "מחוברים", לא נספרים בסטטיסטיקה, ונמחקים מעצמם ברגע שמשויך ללקוח מכשיר אמיתי.
           </p>
-          <Card flush className="table-scroll">
+          <Card flush>
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-right text-muted border-b border-line">
@@ -585,7 +585,7 @@ export default function Devices() {
           </Button>
         </div>
       </div>
-      <Card flush className="table-scroll">
+      <Card flush>
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
@@ -650,7 +650,7 @@ export default function Devices() {
           </label>
         </div>
       </div>
-      <Card flush className="table-scroll">
+      <Card flush>
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted border-b border-line">
