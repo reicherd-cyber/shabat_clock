@@ -1,5 +1,5 @@
 import { useEffect, useState, lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { api, adminApi, tokens, isImpersonating, registerMutationConfirm, adminRole } from './api.js';
 import Login from './user/Login.jsx';
 import Dashboard from './user/Dashboard.jsx';
@@ -224,7 +224,12 @@ const ADMIN_NAV = [
       { to: '/admin/crm', label: 'מכירות ולידים', Icon: Handshake, superadmin: true },
       { to: '/admin/tasks', label: 'משימות', Icon: ListChecks, badge: 'tasks' },
       { to: '/admin/users', label: 'משתמשים', Icon: UsersIcon },
-      { to: '/admin/devices', label: 'מכשירים', Icon: Plug },
+      { to: '/admin/devices', label: 'מכשירים', Icon: Plug, children: [
+        { to: '/admin/devices', label: 'מכשירים', end: true },
+        { to: '/admin/devices/demo', label: 'מכשירי הדגמה' },
+        { to: '/admin/devices/installers', label: 'קובצי התקנה' },
+        { to: '/admin/devices/inventory', label: 'מלאי' },
+      ] },
       { to: '/admin/schedules', label: 'תזמונים', Icon: CalendarClock },
     ],
   },
@@ -260,7 +265,9 @@ const ADMIN_NAV = [
 
 function AdminNav({ onNavigate, badges = {} }) {
   const isSuper = adminRole() === 'superadmin';
-  // Folded/unfolded state per section title, remembered across reloads (default: all open).
+  const { pathname } = useLocation();
+  // Folded/unfolded state per section title AND per nav item with children,
+  // remembered across reloads (default: all open).
   const [folded, setFolded] = useState(() => {
     try { return JSON.parse(localStorage.getItem('adminNavFolded')) || {}; } catch { return {}; }
   });
@@ -273,6 +280,50 @@ function AdminNav({ onNavigate, badges = {} }) {
   };
   const linkCls = ({ isActive }) =>
     `block px-3 py-1.5 rounded-[10px] text-sm font-medium ${isActive ? 'bg-accent text-white' : 'text-ink hover:bg-line/50'}`;
+  const subLinkCls = ({ isActive }) =>
+    `block px-3 py-1.5 rounded-[10px] text-sm ${isActive ? 'bg-accent/15 text-accent font-semibold' : 'text-muted hover:text-ink hover:bg-line/50'}`;
+  // A nav item that owns a submenu: an expander row (bold while you're inside its
+  // section) over indented child links. Fold state is keyed by the parent's path.
+  const renderItem = (it) => {
+    if (!it.children) {
+      return (
+        <NavLink key={it.to} to={it.to} end={it.end} className={linkCls} onClick={onNavigate}>
+          <span className="flex items-center gap-2">
+            {it.Icon && <it.Icon size={15} strokeWidth={1.9} className="shrink-0 opacity-80" />}
+            {it.label}
+            {it.badge && badges[it.badge] > 0 && (
+              <span className="ms-auto min-w-5 h-5 px-1.5 rounded-full bg-[#e34948] text-white text-[11px] font-bold grid place-items-center leading-none">
+                {badges[it.badge] > 99 ? '99+' : badges[it.badge]}
+              </span>
+            )}
+          </span>
+        </NavLink>
+      );
+    }
+    const inSection = pathname === it.to || pathname.startsWith(`${it.to}/`);
+    const open = !folded[it.to];
+    return (
+      <div key={it.to}>
+        <button
+          className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-[10px] text-sm font-medium cursor-pointer select-none ${inSection ? 'text-ink' : 'text-ink hover:bg-line/50'}`}
+          onClick={() => toggle(it.to)}
+        >
+          {it.Icon && <it.Icon size={15} strokeWidth={1.9} className="shrink-0 opacity-80" />}
+          <span className={inSection ? 'font-bold' : ''}>{it.label}</span>
+          <ChevronDown size={13} className={`ms-auto transition-transform duration-150 ${open ? '' : '-rotate-90'}`} />
+        </button>
+        {open && (
+          <div className="ms-6 mt-0.5 space-y-0.5 border-s border-line ps-2">
+            {it.children.map((c) => (
+              <NavLink key={c.to} to={c.to} end={c.end} className={subLinkCls} onClick={onNavigate}>
+                {c.label}
+              </NavLink>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
   return (
     <nav className="space-y-4">
       {ADMIN_NAV
@@ -291,20 +342,7 @@ function AdminNav({ onNavigate, badges = {} }) {
           )}
           {!(sec.title && folded[sec.title]) && (
             <div className="space-y-0.5">
-              {sec.items.map((it) => (
-                <NavLink key={it.to} to={it.to} end={it.end} className={linkCls} onClick={onNavigate}>
-                  <span className="flex items-center gap-2">
-                    {it.Icon && <it.Icon size={15} strokeWidth={1.9} className="shrink-0 opacity-80" />}
-                    {it.label}
-                    {/* ה"כדור" — מונה פניות חדשות */}
-                    {it.badge && badges[it.badge] > 0 && (
-                      <span className="ms-auto min-w-5 h-5 px-1.5 rounded-full bg-[#e34948] text-white text-[11px] font-bold grid place-items-center leading-none">
-                        {badges[it.badge] > 99 ? '99+' : badges[it.badge]}
-                      </span>
-                    )}
-                  </span>
-                </NavLink>
-              ))}
+              {sec.items.map((it) => renderItem(it))}
             </div>
           )}
         </div>
@@ -433,6 +471,7 @@ export default function App() {
           <Route path="tasks" element={<Tasks />} />
           <Route path="users" element={<Users />} />
           <Route path="devices" element={<Devices />} />
+          <Route path="devices/:section" element={<Devices />} />
           <Route path="schedules" element={<AdminSchedules />} />
           <Route path="call-logs" element={<CallLogs />} />
           <Route path="whatsapp" element={<WhatsappAdmin />} />
