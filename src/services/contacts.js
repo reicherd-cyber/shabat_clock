@@ -33,7 +33,7 @@ export async function ensureContact(rawPhone, { channel = 'phone', name = null, 
     // number (e.g. a call and a WhatsApp) both insert → duplicate contacts. The
     // SELECT … FOR UPDATE takes a next-key/gap lock on idx_phone for this value, so
     // the second touch waits for the first to commit and then finds its row.
-    return await withTransaction(async (conn) => {
+    const result = await withTransaction(async (conn) => {
       const [rows] = await conn.query(
         'SELECT id FROM crm_leads WHERE phone = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE',
         [phone],
@@ -49,9 +49,14 @@ export async function ensureContact(rawPhone, { channel = 'phone', name = null, 
          VALUES (?,?,?,?,1,CURRENT_TIMESTAMP,?,?)`,
         [label.slice(0, 100), phone, SOURCE_LABEL[channel] || channel, channel, note || null, actorStr(actor) || 'system'],
       );
-      await logAction(actor, 'contact_auto_create', 'crm_lead', r.insertId, { phone, channel });
       return { id: r.insertId, created: true };
     });
+    // Audit AFTER the transaction commits — logAction grabs its own pooled
+    // connection, so writing it inside the transaction would hold one connection
+    // while waiting for another and can exhaust the pool under load. It swallows
+    // its own errors, so a logging failure never affects the returned contact.
+    if (result.created) await logAction(actor, 'contact_auto_create', 'crm_lead', result.id, { phone, channel });
+    return result;
   } catch (e) {
     // Never let contact-opening break the call/message it rode in on.
     console.error(`[contacts] ensureContact(${phone}) failed:`, e.message);
