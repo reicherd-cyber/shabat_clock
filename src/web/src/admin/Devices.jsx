@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { adminApi } from '../api.js';
 import { IVR_DIGIT_MAX, IVR_DIGIT_WIDTH } from '../ivrCode.js';
 import { Download } from 'lucide-react';
@@ -21,14 +21,14 @@ export default function Devices() {
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(params.get('q') || '');
   useEffect(() => { setQ(params.get('q') || ''); }, [params]);
-  // Four tabs, ?tab= deep-linkable (a ?q= link from the action log lands on the devices tab).
-  const TAB_KEYS = ['devices', 'demo', 'installers', 'inventory'];
-  const tab = TAB_KEYS.includes(params.get('tab')) ? params.get('tab') : 'devices';
-  const setTab = (key) => setParams((prev) => {
-    const next = new URLSearchParams(prev);
-    if (key === 'devices') next.delete('tab'); else next.set('tab', key);
-    return next;
-  }, { replace: true });
+  // Four sub-pages under /admin/devices/* with a submenu (sidebar sub-links +
+  // the in-page pill bar below). The default page (מכשירים) is /admin/devices
+  // with no segment. Old ?tab= deep links are still honored as a fallback.
+  const nav = useNavigate();
+  const { section } = useParams();
+  const SUB_KEYS = ['demo', 'installers', 'inventory'];
+  const tab = SUB_KEYS.includes(section) ? section
+    : (SUB_KEYS.includes(params.get('tab')) ? params.get('tab') : 'devices');
   const [expanded, setExpanded] = useState(null); // device id with its details row open
   const [transferForm, setTransferForm] = useState(null); // {device, user_id}
   const [replaceForm, setReplaceForm] = useState(null);   // {device, loading?, stock?, error?, mac} — hardware swap
@@ -344,14 +344,14 @@ export default function Devices() {
       </div>
       <div className="flex gap-1 border-b border-line overflow-x-auto" role="tablist">
         {[
-          { key: 'devices', label: 'מכשירים', count: devices.filter((d) => d.device_type !== 'demo' && d.is_enabled).length },
-          { key: 'demo', label: 'מכשירי הדגמה', count: demoDevices.length },
-          { key: 'installers', label: 'קבצי התקנה', count: installers.filter((t) => t.is_live).length },
-          { key: 'inventory', label: 'מלאי', count: inventory.filter((x) => x.status === 'prepared').length },
+          { key: 'devices', to: '/admin/devices', label: 'מכשירים', count: devices.filter((d) => d.device_type !== 'demo' && d.is_enabled).length },
+          { key: 'demo', to: '/admin/devices/demo', label: 'מכשירי הדגמה', count: demoDevices.length },
+          { key: 'installers', to: '/admin/devices/installers', label: 'קבצי התקנה', count: installers.filter((t) => t.is_live).length },
+          { key: 'inventory', to: '/admin/devices/inventory', label: 'מלאי', count: inventory.filter((x) => x.status === 'prepared').length },
         ].map((t) => (
           <button key={t.key} type="button" role="tab" aria-selected={tab === t.key}
             className={`inline-flex items-center gap-1 px-3 py-2 text-sm -mb-px border-b-2 whitespace-nowrap ${tab === t.key ? 'border-accent font-bold' : 'border-transparent text-muted hover:text-ink'}`}
-            onClick={() => setTab(t.key)}>
+            onClick={() => nav(t.to)}>
             {t.label}<span className="text-muted text-xs font-normal">({t.count})</span>
           </button>
         ))}
