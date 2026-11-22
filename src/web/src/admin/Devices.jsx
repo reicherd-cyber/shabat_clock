@@ -49,6 +49,8 @@ export default function Devices() {
   }, [diagnosis?.device?.id]);
   const [inventory, setInventory] = useState([]);         // prepared_devices rows
   const [showActivated, setShowActivated] = useState(false);
+  const [showBroken, setShowBroken] = useState(true);     // retired/faulty units are shown by default
+  const [history, setHistory] = useState(null);           // {device, loading} → {device, units} | {device, error} — per-unit service history
   const [installers, setInstallers] = useState([]);       // issued universal installer files (installer_tokens)
   const [showDeadInstallers, setShowDeadInstallers] = useState(false);
   const [installerForm, setInstallerForm] = useState(null); // {audience:'', label:''} — audience is a deliberate choice, never preselected
@@ -56,6 +58,15 @@ export default function Devices() {
   const [onboardConfirm, setOnboardConfirm] = useState(null); // {mac, registered:{user_name, device_name}} — re-mint for a live device
   const [reinstall, setReinstall] = useState(null);       // {device, done?} — factory-reset device: re-mint + per-device installer file
   const { busy, error, run, setError } = useAsync();
+  // Open the per-unit service-history modal for a device (id + display name).
+  const openHistory = (d) => {
+    if (!d?.id) { setError(new Error('אין היסטוריה — היחידה אינה משויכת למכשיר')); return; }
+    setError(null);
+    setHistory({ device: d, loading: true });
+    adminApi.get(`/devices/${d.id}/unit-history`)
+      .then((r) => setHistory((h) => (h?.device?.id === d.id ? { device: d, ...r } : h)))
+      .catch((e) => setHistory((h) => (h?.device?.id === d.id ? { device: d, error: e.message } : h)));
+  };
   // ?reinstall=<device id> (the "ייתכן איפוס יצרן" email) opens the re-install dialog
   // for that device and drops the parameter from the address.
   useEffect(() => {
@@ -472,6 +483,11 @@ export default function Devices() {
                                   .catch((e) => setReplaceForm((f) => (f?.device?.id === d.id ? { ...f, loading: false, error: e.message } : f)));
                               }}>החלף חומרה</Button>
                           )}
+                          {d.device_type === 'shelly' && !!(d.device_uid || d.removed_uid) && (
+                            <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                              title="היסטוריית היחידות הפיזיות: בעלים, מתי הותקנה/הוחלפה, ואילו תקלות ואזהרות עלו בשטח"
+                              onClick={() => openHistory(d)}>היסטוריה</Button>
+                          )}
                           <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                             onClick={() => setTransferForm({ device: d, user_id: '' })}>העבר ללקוח</Button>
                           {d.device_type === 'shelly' && !!(d.is_enabled ? d.device_uid : d.removed_uid) && !d.returned_to_stock_at && (
@@ -623,10 +639,16 @@ export default function Devices() {
             {inventory.filter((p) => p.status === 'prepared').length} ממתינים להפעלה
           </span>
         </h3>
-        <label className="flex items-center gap-1.5 text-sm">
-          <input type="checkbox" checked={showActivated} onChange={(e) => setShowActivated(e.target.checked)} />
-          הצג גם מופעלים ({inventory.filter((p) => p.status === 'activated').length})
-        </label>
+        <div className="flex items-center gap-4 flex-wrap">
+          <label className="flex items-center gap-1.5 text-sm">
+            <input type="checkbox" checked={showActivated} onChange={(e) => setShowActivated(e.target.checked)} />
+            הצג גם מופעלים ({inventory.filter((p) => p.status === 'activated').length})
+          </label>
+          <label className="flex items-center gap-1.5 text-sm">
+            <input type="checkbox" checked={showBroken} onChange={(e) => setShowBroken(e.target.checked)} />
+            הצג תקולים ({inventory.filter((p) => p.status === 'broken').length})
+          </label>
+        </div>
       </div>
       <Card flush className="table-scroll">
         <table className="w-full text-sm">
@@ -637,10 +659,12 @@ export default function Devices() {
             </tr>
           </thead>
           <tbody>
-            {invSort.apply(inventory.filter((p) => showActivated || p.status === 'prepared'), {
+            {invSort.apply(inventory.filter((p) => p.status === 'prepared'
+              || (showActivated && p.status === 'activated')
+              || (showBroken && p.status === 'broken')), {
               mac: (p) => p.mac, model: (p) => shellyModelInfo(p.model)?.name || p.model || null, channels: (p) => shellyModelInfo(p.model)?.channels ?? null,
               fw: (p) => p.fw_version || null, prepared: (p) => ts(p.prepared_at),
-              status: (p) => (p.status === 'prepared' ? `0 ${p.returned_at || ''}` : `1 ${p.activated_user_name || ''} ${p.activated_at || ''}`),
+              status: (p) => ({ prepared: '0', broken: '1', activated: '2' }[p.status] + ` ${p.activated_user_name || ''} ${p.broken_at || p.returned_at || p.activated_at || ''}`),
             }).map((p) => {
               const info = shellyModelInfo(p.model);
               const dev = p.device_id ? devices?.find((x) => x.id === p.device_id) : null;
@@ -656,16 +680,22 @@ export default function Devices() {
                 <td className="p-3 text-xs text-muted">{p.fw_version || '—'}</td>
                 <td className="p-3 text-xs">{String(p.prepared_at).slice(0, 10)}</td>
                 <td className="p-3">
-                  {p.status === 'prepared'
-                    ? <>
-                        <Badge ok>מוכן להפעלה</Badge>
-                        {p.returned_at && (
-                          <div className="text-xs text-muted mt-1" title="יחידה שחזרה מלקוח">
-                            חזר מ{p.activated_user_name || '—'} · {String(p.returned_at).slice(0, 10)}
-                          </div>
-                        )}
-                      </>
-                    : <span className="text-xs">הופעל ל{p.activated_user_name || '—'} · {p.activated_at ? String(p.activated_at).slice(0, 10) : ''}</span>}
+                  {p.status === 'prepared' && <>
+                    <Badge ok>מוכן להפעלה</Badge>
+                    {p.returned_at && (
+                      <div className="text-xs text-muted mt-1" title="יחידה שחזרה מלקוח">
+                        חזר מ{p.activated_user_name || '—'} · {String(p.returned_at).slice(0, 10)}
+                      </div>
+                    )}
+                  </>}
+                  {p.status === 'broken' && <>
+                    <Badge ok={false}>תקול</Badge>
+                    <div className="text-xs text-muted mt-1" title="יחידה שהוחלפה בשל תקלה">
+                      הוחלף אצל {p.activated_user_name || '—'}{p.broken_at ? ` · ${String(p.broken_at).slice(0, 10)}` : ''}
+                    </div>
+                    {p.broken_note && <div className="text-xs text-off mt-0.5">{p.broken_note}</div>}
+                  </>}
+                  {p.status === 'activated' && <span className="text-xs">הופעל ל{p.activated_user_name || '—'} · {p.activated_at ? String(p.activated_at).slice(0, 10) : ''}</span>}
                 </td>
                 <td className="p-3 whitespace-nowrap space-x-1 space-x-reverse">
                   {p.status === 'activated' && dev && !dev.returned_to_stock_at && !!(dev.is_enabled ? dev.device_uid : dev.removed_uid) && (
@@ -677,6 +707,20 @@ export default function Devices() {
                       onClick={() => setShelly({ step: 1, transport: 'mqtt', ip: '', mac: p.mac, user_id: '', name: '' })}>
                       הפעל ללקוח ›
                     </Button>
+                  )}
+                  {(p.status === 'broken' || p.status === 'activated') && p.device_id && (
+                    <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                      title="היסטוריית היחידה: בעלים, מתי הותקנה/הוחלפה, ותקלות שעלו בשטח"
+                      onClick={() => openHistory({ id: p.device_id, name: devices?.find((x) => x.id === p.device_id)?.name || p.mac })}>היסטוריה</Button>
+                  )}
+                  {p.status === 'broken' && (
+                    <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
+                      title="היחידה תוקנה? החזרה למלאי הזמין להפעלה"
+                      onClick={() => run(async () => {
+                        if (!confirm(`לסמן את ${p.mac} כתקינה ולהחזירה למלאי הזמין?`)) return;
+                        await adminApi.post(`/shelly/inventory/${p.id}/reusable`, {});
+                        await refresh();
+                      })}>סמן כתקין</Button>
                   )}
                   <Button variant="ghost" className="!px-2 !py-1 text-xs" disabled={busy}
                     title="מדבקה ליחידה: לוגו, MAC ודגם — למדפסת המדבקות"
@@ -691,7 +735,9 @@ export default function Devices() {
               </tr>
               );
             })}
-            {inventory.filter((p) => showActivated || p.status === 'prepared').length === 0 && (
+            {inventory.filter((p) => p.status === 'prepared'
+              || (showActivated && p.status === 'activated')
+              || (showBroken && p.status === 'broken')).length === 0 && (
               <tr><td colSpan={7} className="p-6 text-center text-muted">אין מכשירים מוכנים במלאי — הכינו מכשיר עם "הגדרת Shelly חדש"</td></tr>
             )}
           </tbody>
@@ -938,6 +984,12 @@ export default function Devices() {
         {diagnosis && <ConnectivityTimeline timeline={timeline} />}
       </Modal>
 
+      <Modal open={!!history} onClose={() => setHistory(null)} title={`היסטוריית יחידות — "${history?.device?.name || ''}"`}>
+        {history?.loading && <p className="text-sm text-muted py-4 text-center">טוען היסטוריה…</p>}
+        {history?.error && <ErrorNote error={history.error} />}
+        {history?.units && <UnitHistory units={history.units} currentUid={history.device?.current_uid} />}
+      </Modal>
+
       <Modal open={!!transferForm} onClose={() => setTransferForm(null)} title={`העברת "${transferForm?.device?.name || ''}" ללקוח אחר`}>
         {transferForm && (
           <div className="space-y-3">
@@ -1042,14 +1094,21 @@ export default function Devices() {
                 })}
               </div>
             )}
+            {!replaceForm.loading && replaceForm.stock?.length > 0 && (
+              <label className="block text-sm">
+                <span className="text-muted">סיבת התקלה ביחידה הישנה (אופציונלי — יישמר בהיסטוריה)</span>
+                <Input value={replaceForm.note || ''} placeholder="למשל: רלה 2 לא מגיב, נשרף ממתח"
+                  onChange={(e) => setReplaceForm({ ...replaceForm, note: e.target.value })} />
+              </label>
+            )}
             <ErrorNote error={error} />
             <div className="flex gap-2">
               <Button variant="ghost" className="flex-1" onClick={() => setReplaceForm(null)}>ביטול</Button>
               <Button className="flex-1" disabled={busy || !replaceForm.mac} onClick={() => run(async () => {
-                const res = await adminApi.post(`/devices/${replaceForm.device.id}/replace-hardware`, { mac: replaceForm.mac });
+                const res = await adminApi.post(`/devices/${replaceForm.device.id}/replace-hardware`, { mac: replaceForm.mac, note: replaceForm.note || undefined });
                 setReplaceForm(null);
                 await refresh();
-                alert(`החומרה הוחלפה. היחידה החדשה (${res.to_uid}) תיקלט ותוגדר בהתחברותה הבאה לשרת.`);
+                alert(`החומרה הוחלפה. היחידה החדשה (${res.to_uid}) תיקלט ותוגדר בהתחברותה הבאה לשרת.\nהיחידה הישנה (${res.from_uid}) סומנה כתקולה במלאי.`);
               })}>החלף חומרה</Button>
             </div>
           </div>
@@ -1237,6 +1296,71 @@ const REASON_LABELS = {
 
 function DiagRow({ label, value }) {
   return <div className="flex justify-between gap-3"><span>{label}</span><span className="font-semibold text-ink">{value}</span></div>;
+}
+
+// Hebrew labels for the problem/milestone events shown in a unit's history.
+// isErr drives the red/amber dot — hard faults in red, softer warnings in amber.
+const HIST_EVENT = {
+  error: { label: 'תקלה', isErr: true },
+  channel_mismatch: { label: 'אי-התאמת ערוצים', isErr: true },
+  offline: { label: 'ניתוק', isErr: false },
+  reset_suspected: { label: 'חשד לאיפוס יצרן', isErr: false },
+  input_reset_off: { label: 'כפתור איפוס נוטרל', isErr: false },
+  first_contact: { label: 'חיבור ראשון', isErr: false },
+};
+
+// Service history of a device broken down by physical unit (newest first). Each
+// unit: who owned it, when it was installed and replaced, and the errors &
+// warnings it raised in the field (device_events windowed to its service period).
+function UnitHistory({ units, currentUid }) {
+  if (!units?.length) return <p className="text-sm text-muted py-4 text-center">אין היסטוריית יחידות למכשיר הזה.</p>;
+  const day = (v) => (v ? String(v).slice(0, 10) : '—');
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted">כל יחידה פיזית ששירתה את המכשיר, מהחדשה לישנה. התקלות והאזהרות מתוארכות לתקופת השירות של אותה יחידה.</p>
+      {units.map((u, i) => {
+        const cur = u.is_current || u.mac === currentUid;
+        return (
+          <div key={u.mac + i} className={`rounded-lg border p-3 ${cur ? 'border-green-600/40 bg-green-600/5' : u.status === 'broken' ? 'border-red-500/40 bg-red-500/5' : 'border-line'}`}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="font-mono text-xs font-bold" dir="ltr">{u.mac}</span>
+              {cur ? <Badge ok>פעילה כעת</Badge> : u.status === 'broken' ? <Badge ok={false}>תקולה</Badge>
+                : <span className="inline-block text-[12.5px] font-medium rounded-full px-2.5 py-0.5 bg-line text-muted whitespace-nowrap">יחידה קודמת</span>}
+            </div>
+            <div className="text-xs text-muted mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5">
+              <span>בעלים: <b className="text-ink">{u.owner_name || '—'}</b></span>
+              <span>הותקנה: <b className="text-ink tabular-nums">{day(u.installed_at)}</b></span>
+              <span>הוחלפה: <b className="text-ink tabular-nums">{cur ? 'עדיין בשטח' : day(u.replaced_at)}</b></span>
+              {u.model && <span dir="ltr">{u.model}</span>}
+            </div>
+            {u.broken_note && <div className="text-xs text-off mt-1">סיבת החלפה: {u.broken_note}</div>}
+            <div className="mt-2 border-t border-line pt-2">
+              {u.event_count === 0
+                ? <p className="text-xs text-muted">לא נרשמו תקלות או אזהרות בתקופה זו.</p>
+                : <>
+                    <p className="text-xs font-semibold mb-1">
+                      {u.event_count} אירועים{u.error_count ? ` · ${u.error_count} תקלות` : ''}
+                      {u.event_count > u.events.length ? ` (מוצגים ${u.events.length} האחרונים)` : ''}
+                    </p>
+                    <ul className="text-xs space-y-1 max-h-48 overflow-y-auto pe-1">
+                      {u.events.slice().reverse().map((e, j) => {
+                        const meta = HIST_EVENT[e.event] || { label: e.event, isErr: false };
+                        return (
+                          <li key={j} className="flex flex-wrap items-baseline gap-x-2">
+                            <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${meta.isErr ? 'bg-red-500' : 'bg-amber-500'}`} aria-hidden />
+                            <span className="text-ink tabular-nums" dir="ltr">{fmtWhen(e.created_at)}</span>
+                            <span className={`font-semibold ${meta.isErr ? 'text-red-600' : 'text-amber-600'}`}>{meta.label}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 // One wording for "ago" across the site (ui.jsx agoHe).

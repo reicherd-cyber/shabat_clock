@@ -24,7 +24,7 @@ import { contactCard } from '../../services/contactCard.js';
 import { ensureContact } from '../../services/contacts.js';
 import { bridgeCall, callMode } from '../../services/outboundCall.js';
 import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
-import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview, returnDeviceToStock, replacementCandidates, replaceHardware } from '../../services/devices.js';
+import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview, returnDeviceToStock, replacementCandidates, replaceHardware, markPreparedReusable, deviceUnitHistory } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
 import { listSettings, putSettings } from '../../services/settings.js';
@@ -607,10 +607,27 @@ adminRouter.get('/devices/:id/replacement-stock', async (req, res, next) => {
 
 adminRouter.post('/devices/:id/replace-hardware', requireWrite, async (req, res, next) => {
   try {
-    const result = await replaceHardware(Number(req.params.id), { mac: req.body?.mac, actor: adminActor(req) });
+    const result = await replaceHardware(Number(req.params.id), { mac: req.body?.mac, note: req.body?.note, actor: adminActor(req) });
     await audit(req, 'replace_hardware', 'device', Number(req.params.id), {
       after: { from_uid: result.from_uid, to_uid: result.to_uid, model: result.model },
     });
+    res.json(result);
+  } catch (e) { next(e); }
+});
+
+// Full service history of a device, by physical unit (owner, install/replace
+// dates, the errors & warnings each unit raised in the field).
+adminRouter.get('/devices/:id/unit-history', async (req, res, next) => {
+  try {
+    res.json(await deviceUnitHistory(Number(req.params.id)));
+  } catch (e) { next(e); }
+});
+
+// A broken unit was repaired — return it to real 'prepared' stock.
+adminRouter.post('/shelly/inventory/:id/reusable', requireWrite, async (req, res, next) => {
+  try {
+    const result = await markPreparedReusable(Number(req.params.id), { actor: adminActor(req) });
+    await audit(req, 'mark_reusable', 'prepared_device', Number(req.params.id), { after: { mac: result.mac } });
     res.json(result);
   } catch (e) { next(e); }
 });
