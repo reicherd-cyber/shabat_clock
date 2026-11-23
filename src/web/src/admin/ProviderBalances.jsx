@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { adminApi } from '../api.js';
 import { Card, Button, Input, ErrorNote, useAsync } from '../ui.jsx';
+import { FuelDial } from './Gauges.jsx';
 
 // "יתרות בזמן אמת" — the real balances at the two metered providers: Yemot
 // units (read from their API) and the Anthropic credit (admin-entered, then
@@ -50,9 +51,8 @@ export function ProviderBalances({ rate: rateProp = null }) {
         <Card className="text-center">
           {live.yemot?.ok ? (
             <>
-              <div className="text-3xl font-bold" style={live.yemot.units < 10 ? { color: C_EXPENSE } : undefined}>
-                {live.yemot.units.toFixed(2)}
-              </div>
+              <FuelDial frac={Math.min(live.yemot.units / Math.max(live.yemot.units, 100), 1)}
+                center={live.yemot.units.toFixed(0)} warn={live.yemot.units < 10} />
               <div className="text-muted text-sm">
                 יתרת יחידות בימות המשיח
                 {rate && <> <span dir="ltr">(≈ ₪{(live.yemot.units * rate.ils / rate.units).toFixed(2)})</span></>}
@@ -72,9 +72,8 @@ export function ProviderBalances({ rate: rateProp = null }) {
           {live.anthropic?.ok ? (
             <>
               {live.anthropic.balance_usd != null ? (
-                <div className="text-3xl font-bold" style={live.anthropic.balance_usd < 5 ? { color: C_EXPENSE } : undefined}>
-                  <span dir="ltr">${live.anthropic.balance_usd.toFixed(2)}</span>
-                </div>
+                <FuelDial frac={Math.min(live.anthropic.balance_usd / Math.max(live.anthropic.balance_usd, 50), 1)}
+                  center={`$${live.anthropic.balance_usd.toFixed(0)}`} warn={live.anthropic.balance_usd < 5} />
               ) : (
                 <div className="text-3xl font-bold text-muted">—</div>
               )}
