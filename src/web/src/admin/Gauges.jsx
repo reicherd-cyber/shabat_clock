@@ -32,7 +32,8 @@ const reduceMotion = typeof window !== 'undefined'
 
 // The shared instrument. `half` = 180° fuel gauge; otherwise a 270° dial.
 // `bands` (optional) draws a green/amber/red zone ring instead of a single arc.
-function NeedleDial({ frac, color, center, half = false, endLabels, bands }) {
+// `scaleLabels` = [min, mid, max] numerals printed at the dial's start/top/end.
+function NeedleDial({ frac, color, center, half = false, endLabels, bands, scaleLabels }) {
   const cx = 100, cy = 100;
   const start = half ? 180 : 135;
   const span = half ? 180 : 270;
@@ -91,6 +92,13 @@ function NeedleDial({ frac, color, center, half = false, endLabels, bands }) {
         <text x={ex} y={ey + 4} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--color-muted)">{endLabels.lo}</text>
         <text x={fx} y={fy + 4} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--color-muted)">{endLabels.hi}</text>
       </>}
+      {/* Scale numerals — min at the start, mid at the top, max at the end;
+          outside the tick ring so they never crowd the centre readout. */}
+      {!half && scaleLabels && [0, 0.5, 1].map((t, i) => {
+        const [lx, ly] = polar(cx, cy, 94, start + t * span);
+        return <text key={i} x={lx} y={ly + 3.2} textAnchor="middle" fontSize="10" fontWeight="700"
+          fill="var(--color-muted)" style={{ fontVariantNumeric: 'tabular-nums' }}>{scaleLabels[i]}</text>;
+      })}
       {/* Needle — a tapered blade + short counterweight, sweeping to the value. */}
       <g filter="url(#nsh)" style={{
         transform: `rotate(${needleDeg}deg)`, transformBox: 'view-box', transformOrigin: '100px 100px',
@@ -125,10 +133,12 @@ export function Gauge({ value, max, min = 0, label, center, status = 'neutral', 
     to: Math.min(1, (z.upTo - min) / (max - min)),
     color: STATUS[z.c],
   })) : null;
+  const fmt = (v) => { const r = Math.round(v * 10) / 10; return r % 1 === 0 ? String(r) : r.toFixed(1); };
+  const scaleLabels = [min, (min + max) / 2, max].map(fmt);
   return (
     <Card className={`!p-4 text-center ${to ? 'cursor-pointer hover:-translate-y-0.5 hover:shadow-md transition' : ''}`}
       onClick={to ? () => nav(to) : undefined} role={to ? 'button' : undefined}>
-      <NeedleDial frac={frac} color={color} bands={bands} center={center ?? String(value)} />
+      <NeedleDial frac={frac} color={color} bands={bands} scaleLabels={scaleLabels} center={center ?? String(value)} />
       <div className="text-ink text-sm font-semibold mt-1 leading-tight">{label}</div>
       {to && <div className="text-accent text-xs font-medium mt-0.5">פרטים ›</div>}
     </Card>
