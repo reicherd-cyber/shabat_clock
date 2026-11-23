@@ -278,9 +278,9 @@ function AdminNav({ onNavigate, badges = {} }) {
     });
   };
   const linkCls = ({ isActive }) =>
-    `block px-3 py-1.5 rounded-[10px] text-sm font-medium ${isActive ? 'bg-accent text-white' : 'text-ink hover:bg-line/50'}`;
+    `block px-3 py-1.5 rounded-[10px] text-sm font-medium transition-colors ${isActive ? 'bg-accent text-white shadow-sm' : 'text-white/72 hover:bg-white/10 hover:text-white'}`;
   const subLinkCls = ({ isActive }) =>
-    `block px-3 py-1.5 rounded-[10px] text-sm ${isActive ? 'bg-accent/15 text-accent font-semibold' : 'text-muted hover:text-ink hover:bg-line/50'}`;
+    `block px-3 py-1.5 rounded-[9px] text-sm transition-colors ${isActive ? 'bg-white/12 text-white font-semibold' : 'text-white/55 hover:text-white hover:bg-white/8'}`;
   // A nav item that owns a submenu: an expander row (bold while you're inside its
   // section) over indented child links. Fold state is keyed by the parent's path.
   const renderItem = (it) => {
@@ -304,7 +304,7 @@ function AdminNav({ onNavigate, badges = {} }) {
     return (
       <div key={it.to}>
         <button
-          className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-[10px] text-sm font-medium cursor-pointer select-none ${inSection ? 'text-ink' : 'text-ink hover:bg-line/50'}`}
+          className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-[10px] text-sm font-medium cursor-pointer select-none transition-colors ${inSection ? 'text-white' : 'text-white/72 hover:bg-white/10 hover:text-white'}`}
           onClick={() => toggle(it.to)}
         >
           {it.Icon && <it.Icon size={15} strokeWidth={1.9} className="shrink-0 opacity-80" />}
@@ -312,7 +312,7 @@ function AdminNav({ onNavigate, badges = {} }) {
           <ChevronDown size={13} className={`ms-auto transition-transform duration-150 ${open ? '' : '-rotate-90'}`} />
         </button>
         {open && (
-          <div className="ms-6 mt-0.5 space-y-0.5 border-s border-line ps-2">
+          <div className="ms-6 mt-0.5 space-y-0.5 border-s border-white/12 ps-2">
             {it.children.map((c) => (
               <NavLink key={c.to} to={c.to} end={c.end} className={subLinkCls} onClick={onNavigate}>
                 {c.label}
@@ -332,7 +332,7 @@ function AdminNav({ onNavigate, badges = {} }) {
         <div key={i}>
           {sec.title && (
             <button
-              className="w-full flex items-center justify-between text-muted hover:text-ink text-[11px] font-bold tracking-wide px-3 mb-1 cursor-pointer select-none"
+              className="w-full flex items-center justify-between text-white/40 hover:text-white/80 text-[11px] font-bold tracking-wide px-3 mb-1 cursor-pointer select-none transition-colors"
               onClick={() => toggle(sec.title)}
             >
               <span>{sec.title}</span>
@@ -389,51 +389,51 @@ function AdminLayout() {
   if (!tokens.admin) return <Navigate to="/admin/login" replace />;
 
   const brand = (
-    <div className="font-bold text-[19px] flex items-center gap-2 cursor-pointer select-none"
+    <div className="brand-dark text-white font-bold text-[19px] flex items-center gap-2 cursor-pointer select-none"
       onClick={() => { setMenuOpen(false); nav('/admin'); }} role="button" title="לדף הבית">
-      <span className="text-accent shrink-0"><Logo size={30} /></span>
+      <span className="shrink-0"><Logo size={30} /></span>
       <span className="flex items-center gap-1.5">ניהול · <Wordmark size={19} /></span>
     </div>
   );
   const logout = () => { tokens.admin = null; nav('/admin/login'); };
 
   return (
-    <div className="min-h-screen md:flex">
+    <div className="admin-shell min-h-screen md:flex">
       {/* Desktop sidebar (RTL: first flex child = right side); collapses to a slim rail */}
-      <aside className={`hidden md:flex flex-col shrink-0 border-l border-line bg-surface sticky top-0 h-screen overflow-y-auto py-4 gap-5 transition-all duration-200 ${collapsed ? 'w-14 px-2 items-center' : 'w-56 px-3'}`}>
+      <aside className={`admin-sidebar hidden md:flex flex-col shrink-0 border-l border-white/10 sticky top-0 h-screen overflow-y-auto py-4 gap-5 transition-all duration-200 ${collapsed ? 'w-14 px-2 items-center' : 'w-56 px-3'}`}>
         {collapsed ? (
-          <span className="text-accent cursor-pointer select-none"
+          <span className="brand-dark text-white cursor-pointer select-none"
             onClick={() => nav('/admin')} role="button" title="ניהול — TelTech"><Logo size={30} /></span>
         ) : brand}
         <button
-          className="text-muted hover:text-ink cursor-pointer text-lg leading-none self-start px-1"
+          className="text-white/45 hover:text-white cursor-pointer text-lg leading-none self-start px-1"
           title={collapsed ? 'הרחב תפריט' : 'צמצם תפריט'}
           onClick={toggleCollapsed}
         >{collapsed ? '«' : '»'}</button>
         {!collapsed && <AdminNav badges={{ support: supportCount, tasks: taskCount }} />}
         {!collapsed && (
           <div className="mt-auto space-y-2">
-            <button className="block w-full text-right px-3 py-1.5 text-sm text-muted cursor-pointer hover:text-ink" onClick={logout}>יציאה</button>
+            <button className="block w-full text-right px-3 py-1.5 text-sm text-white/60 cursor-pointer hover:text-white hover:bg-white/10 rounded-[10px]" onClick={logout}>יציאה</button>
             {ver?.version && (
-              <div className="px-3 text-muted text-xs" dir="ltr">v {ver.version}{ver.version_date ? ` · ${ver.version_date}` : ''}</div>
+              <div className="px-3 text-white/35 text-xs" dir="ltr">v {ver.version}{ver.version_date ? ` · ${ver.version_date}` : ''}</div>
             )}
           </div>
         )}
       </aside>
 
       {/* Mobile: top bar + drawer */}
-      <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-line bg-bg sticky top-0 z-20">
+      <header className="admin-sidebar md:hidden flex items-center justify-between px-4 py-3 border-b border-white/10 sticky top-0 z-20">
         {brand}
-        <button className="text-2xl px-2 cursor-pointer" aria-label="תפריט" onClick={() => setMenuOpen(true)}>☰</button>
+        <button className="text-2xl px-2 cursor-pointer text-white/90" aria-label="תפריט" onClick={() => setMenuOpen(true)}>☰</button>
       </header>
       {menuOpen && (
         <div className="md:hidden fixed inset-0 z-30" onClick={() => setMenuOpen(false)}>
-          <div className="absolute inset-0 bg-black/30" />
-          <div className="absolute top-0 bottom-0 right-0 w-64 bg-surface shadow-xl px-3 py-4 flex flex-col gap-5 overflow-y-auto"
+          <div className="absolute inset-0 bg-black/40" />
+          <div className="admin-sidebar absolute top-0 bottom-0 right-0 w-64 shadow-xl px-3 py-4 flex flex-col gap-5 overflow-y-auto"
             onClick={(e) => e.stopPropagation()}>
             {brand}
             <AdminNav onNavigate={() => setMenuOpen(false)} badges={{ support: supportCount, tasks: taskCount }} />
-            <button className="mt-auto block w-full text-right px-3 py-1.5 text-sm text-muted cursor-pointer" onClick={logout}>יציאה</button>
+            <button className="mt-auto block w-full text-right px-3 py-1.5 text-sm text-white/60 cursor-pointer hover:text-white" onClick={logout}>יציאה</button>
           </div>
         </div>
       )}
