@@ -25,18 +25,28 @@ function HealthSection({ h }) {
   if (!h) return null;
   const monitored = h.devices.filter((d) => !d.prod_only);
   const reachable = monitored.filter((d) => d.reachable).length;
+  const n = monitored.length;
+  const memMB = Math.round(h.server.heap_used / 1048576);
+  const loopMs = h.server.loop_delay_ms;
+  // Zone thresholds come from the limits the system already uses: memory red at
+  // 512MB, loop-delay red at 100ms (see the old ok= checks); DB + reachability
+  // zoned on sensible ops bands. Each last upTo = the gauge max.
   return (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-      <Stat label="מסד נתונים" value={h.db.ok ? `${h.db.latency_ms}ms` : 'לא מגיב'} ok={h.db.ok} />
+      <Gauge label="מסד נתונים" value={h.db.ok ? h.db.latency_ms : 100} max={100}
+        center={h.db.ok ? `${h.db.latency_ms}ms` : 'לא מגיב'}
+        zones={[{ upTo: 20, c: 'good' }, { upTo: 60, c: 'warn' }, { upTo: 100, c: 'bad' }]} />
       <Stat label="שרת פעיל" value={fmtUptime(h.server.uptime_s)} ok />
-      <Stat label="זיכרון שרת" value={`${Math.round(h.server.heap_used / 1048576)}MB`} ok={h.server.heap_used < 512 * 1048576} />
-      <Stat label="השהיית לולאה" value={`${h.server.loop_delay_ms}ms`} ok={h.server.loop_delay_ms < 100} />
-      <Stat
-        label="מכשירים מגיבים"
-        value={monitored.length ? `${reachable}/${monitored.length}` : '—'}
-        ok={monitored.length ? reachable === monitored.length : undefined}
-        to="/admin/health"
-      />
+      <Gauge label="זיכרון שרת" value={memMB} max={600} center={`${memMB}MB`}
+        zones={[{ upTo: 256, c: 'good' }, { upTo: 512, c: 'warn' }, { upTo: 600, c: 'bad' }]} />
+      <Gauge label="השהיית לולאה" value={loopMs} max={150} center={`${loopMs}ms`}
+        zones={[{ upTo: 50, c: 'good' }, { upTo: 100, c: 'warn' }, { upTo: 150, c: 'bad' }]} />
+      {n > 0 ? (
+        <Gauge label="מכשירים מגיבים" value={reachable} max={n} center={`${reachable}/${n}`}
+          zones={[{ upTo: n * 0.5, c: 'bad' }, { upTo: n * 0.9, c: 'warn' }, { upTo: n, c: 'good' }]} to="/admin/health" />
+      ) : (
+        <Stat label="מכשירים מגיבים" value="—" to="/admin/health" />
+      )}
     </div>
   );
 }
@@ -163,14 +173,19 @@ export function Monitoring() {
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Gauge label="מכשירים מחוברים" value={m.devices_online} max={Math.max(m.devices_total, 1)}
           center={`${m.devices_online}/${m.devices_total}`}
-          status={m.devices_total === 0 ? 'neutral' : m.devices_online === m.devices_total ? 'good' : m.devices_online >= m.devices_total * 0.75 ? 'warn' : 'bad'}
-          ticks={Math.min(Math.max(m.devices_total, 1), 8)} to="/admin/devices" />
+          zones={m.devices_total > 0
+            ? [{ upTo: m.devices_total * 0.5, c: 'bad' }, { upTo: m.devices_total * 0.9, c: 'warn' }, { upTo: m.devices_total, c: 'good' }]
+            : null}
+          to="/admin/devices" />
         <Gauge label="פקודות ממתינות" value={m.commands_pending} max={niceMax(m.commands_pending, 10)}
-          status={m.commands_pending > 20 ? 'warn' : 'neutral'} to="/admin/commands?status=pending" />
+          zones={(() => { const x = niceMax(m.commands_pending, 10); return [{ upTo: x * 0.5, c: 'good' }, { upTo: x * 0.8, c: 'warn' }, { upTo: x, c: 'bad' }]; })()}
+          to="/admin/commands?status=pending" />
         <Gauge label="פקודות שנכשלו (24ש)" value={m.commands_failed_24h} max={niceMax(m.commands_failed_24h, 5)}
-          status={m.commands_failed_24h === 0 ? 'good' : m.commands_failed_24h < 3 ? 'warn' : 'bad'} to="/admin/commands?status=failed" />
+          zones={[{ upTo: 0.5, c: 'good' }, { upTo: 2, c: 'warn' }, { upTo: niceMax(m.commands_failed_24h, 5), c: 'bad' }]}
+          to="/admin/commands?status=failed" />
         <Gauge label="כשלי זיהוי (24ש)" value={m.auth_failures_24h} max={niceMax(m.auth_failures_24h, 10)}
-          status={m.auth_failures_24h < 5 ? 'good' : m.auth_failures_24h < 10 ? 'warn' : 'bad'} to="/admin/call-logs" />
+          zones={[{ upTo: 4, c: 'good' }, { upTo: 9, c: 'warn' }, { upTo: niceMax(m.auth_failures_24h, 10), c: 'bad' }]}
+          to="/admin/call-logs" />
         <WarningLamp on={m.broker_ok} label="ברוקר MQTT" />
       </div>
       {/* provider balances (Yemot units, Anthropic credit) — moved here from עלויות קול */}

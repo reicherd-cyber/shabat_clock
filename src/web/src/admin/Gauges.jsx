@@ -31,7 +31,8 @@ const reduceMotion = typeof window !== 'undefined'
   && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // The shared instrument. `half` = 180° fuel gauge; otherwise a 270° dial.
-function NeedleDial({ frac, color, center, half = false, endLabels }) {
+// `bands` (optional) draws a green/amber/red zone ring instead of a single arc.
+function NeedleDial({ frac, color, center, half = false, endLabels, bands }) {
   const cx = 100, cy = 100;
   const start = half ? 180 : 135;
   const span = half ? 180 : 270;
@@ -73,10 +74,19 @@ function NeedleDial({ frac, color, center, half = false, endLabels }) {
         </filter>
       </defs>
       {ticks}
-      <path d={arc(cx, cy, 70, start, start + span)} fill="none" stroke={TRACK} strokeWidth="6" strokeLinecap="round" />
-      {target > 0.001 && (
-        <path d={arc(cx, cy, 70, start, valAngle)} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" />
-      )}
+      {bands ? (
+        // Green / amber / red zone ring — 2.6° gaps between segments.
+        bands.map((b, i) => {
+          const a0 = start + b.from * span + (b.from > 0 ? 2.6 : 0);
+          const a1 = start + b.to * span - (b.to < 1 ? 2.6 : 0);
+          return a1 > a0 ? <path key={i} d={arc(cx, cy, 70, a0, a1)} fill="none" stroke={b.color} strokeWidth="7" strokeLinecap="round" /> : null;
+        })
+      ) : <>
+        <path d={arc(cx, cy, 70, start, start + span)} fill="none" stroke={TRACK} strokeWidth="6" strokeLinecap="round" />
+        {target > 0.001 && (
+          <path d={arc(cx, cy, 70, start, valAngle)} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" />
+        )}
+      </>}
       {endLabels && <>
         <text x={ex} y={ey + 4} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--color-muted)">{endLabels.lo}</text>
         <text x={fx} y={fy + 4} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--color-muted)">{endLabels.hi}</text>
@@ -101,14 +111,24 @@ function NeedleDial({ frac, color, center, half = false, endLabels }) {
 }
 
 // 270° dial for a count or ratio. `center` is the readout; `to` deep-links the card.
-export function Gauge({ value, max, min = 0, label, center, status = 'neutral', to }) {
+// `zones` = [{ upTo, c }] (ascending, c ∈ good|warn|bad) paints a green/amber/red
+// ring and colours the needle by the band the value sits in — thresholds come
+// from the caller (the real limits the system uses), not from this component.
+export function Gauge({ value, max, min = 0, label, center, status = 'neutral', zones = null, to }) {
   const nav = useNavigate();
-  const color = STATUS[status] || STATUS.neutral;
   const frac = max > min ? (value - min) / (max - min) : 0;
+  const color = zones
+    ? STATUS[(zones.find((z) => value <= z.upTo) || zones[zones.length - 1]).c]
+    : (STATUS[status] || STATUS.neutral);
+  const bands = zones ? zones.map((z, i) => ({
+    from: Math.max(0, ((i === 0 ? min : zones[i - 1].upTo) - min) / (max - min)),
+    to: Math.min(1, (z.upTo - min) / (max - min)),
+    color: STATUS[z.c],
+  })) : null;
   return (
     <Card className={`!p-4 text-center ${to ? 'cursor-pointer hover:-translate-y-0.5 hover:shadow-md transition' : ''}`}
       onClick={to ? () => nav(to) : undefined} role={to ? 'button' : undefined}>
-      <NeedleDial frac={frac} color={color} center={center ?? String(value)} />
+      <NeedleDial frac={frac} color={color} bands={bands} center={center ?? String(value)} />
       <div className="text-ink text-sm font-semibold mt-1 leading-tight">{label}</div>
       {to && <div className="text-accent text-xs font-medium mt-0.5">פרטים ›</div>}
     </Card>
