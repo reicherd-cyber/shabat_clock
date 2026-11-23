@@ -6,6 +6,7 @@ import { Card, Button, Input, SearchSelect, Badge, Modal, ErrorNote, useAsync, u
 import { UserRound, House, Fingerprint } from 'lucide-react';
 import { startRegistration, browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import { ProviderBalances } from './ProviderBalances.jsx';
+import { Gauge, WarningLamp, niceMax } from './Gauges.jsx';
 
 
 const INCIDENT_LABELS = {
@@ -160,11 +161,17 @@ export function Monitoring() {
       <h2 className="font-bold text-xl">ניטור</h2>
       <ErrorNote error={error} />
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Stat label="מכשירים מחוברים" value={`${m.devices_online}/${m.devices_total}`} ok={m.devices_online === m.devices_total} to="/admin/devices" />
-        <Stat label="פקודות ממתינות" value={m.commands_pending} to="/admin/commands?status=pending" />
-        <Stat label="פקודות שנכשלו (24ש)" value={m.commands_failed_24h} ok={m.commands_failed_24h === 0} to="/admin/commands?status=failed" />
-        <Stat label="כשלי זיהוי (24ש)" value={m.auth_failures_24h} ok={m.auth_failures_24h < 5} to="/admin/call-logs" />
-        <Stat label="ברוקר MQTT" value={m.broker_ok ? 'תקין' : 'מנותק'} ok={m.broker_ok} />
+        <Gauge label="מכשירים מחוברים" value={m.devices_online} max={Math.max(m.devices_total, 1)}
+          center={`${m.devices_online}/${m.devices_total}`}
+          status={m.devices_total === 0 ? 'neutral' : m.devices_online === m.devices_total ? 'good' : m.devices_online >= m.devices_total * 0.75 ? 'warn' : 'bad'}
+          ticks={Math.min(Math.max(m.devices_total, 1), 8)} to="/admin/devices" />
+        <Gauge label="פקודות ממתינות" value={m.commands_pending} max={niceMax(m.commands_pending, 10)}
+          status={m.commands_pending > 20 ? 'warn' : 'neutral'} to="/admin/commands?status=pending" />
+        <Gauge label="פקודות שנכשלו (24ש)" value={m.commands_failed_24h} max={niceMax(m.commands_failed_24h, 5)}
+          status={m.commands_failed_24h === 0 ? 'good' : m.commands_failed_24h < 3 ? 'warn' : 'bad'} to="/admin/commands?status=failed" />
+        <Gauge label="כשלי זיהוי (24ש)" value={m.auth_failures_24h} max={niceMax(m.auth_failures_24h, 10)}
+          status={m.auth_failures_24h < 5 ? 'good' : m.auth_failures_24h < 10 ? 'warn' : 'bad'} to="/admin/call-logs" />
+        <WarningLamp on={m.broker_ok} label="ברוקר MQTT" />
       </div>
       {/* provider balances (Yemot units, Anthropic credit) — moved here from עלויות קול */}
       {adminRole() === 'superadmin' && <ProviderBalances />}
