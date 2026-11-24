@@ -82,7 +82,7 @@ const FLOW_KNOWN = {
       }],
     },
     {
-      label: 'תפריט ראשי', keys: ['main_menu_voice'],
+      label: 'תפריט ראשי', keys: ['main_menu_voice'], greeting: true,
       note: 'נקראת ברכה אישית ואז האפשרויות',
       children: [
         {
@@ -491,6 +491,21 @@ export function Recordings() {
           <span className={`${depth === 0 ? 'font-bold' : 'font-semibold'} text-[14px]`}>{node.label}</span>
         </div>
         {node.note && <p className="text-muted text-[12px] mt-0.5">{node.note}</p>}
+        {node.greeting && data.greeting && (
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            <span className="inline-flex items-center rounded-full border border-line bg-surface text-[12px] overflow-hidden">
+              <span className="inline-flex items-center gap-1 ps-2 pe-1.5 py-1 text-muted"><UserCheck size={12} />ברכה אישית</span>
+              <span className="px-1 text-ink/80 truncate max-w-[150px]" dir="rtl" title={(data.greeting.dev || data.greeting.text)}>
+                {(data.greeting.dev || data.greeting.text).replaceAll('{name}', '‹שם›')}
+              </span>
+              {data.greeting.dev && <span className="px-1" style={{ color: '#4338CA' }} title="קיימת גרסת דמו"><FlaskConical size={11} /></span>}
+              <button className="px-1.5 py-1 text-muted hover:text-ink border-s border-line cursor-pointer" title="עריכת נוסח הברכה"
+                onClick={() => { setGreetPublishArm(false); setGreetEdit({ text: data.greeting.dev || data.greeting.text }); }}>
+                <Pencil size={12} />
+              </button>
+            </span>
+          </div>
+        )}
         {node.keys?.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-1.5">
             {node.keys.map((k) => <RecPill key={k} k={k} />)}
