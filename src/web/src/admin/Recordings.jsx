@@ -247,6 +247,15 @@ export function Recordings() {
     } catch (e) { setError(e); }
   };
 
+  // Save the text alone — no new audio. Updates the display + generation source;
+  // what a caller hears is unchanged until a recording is (re)generated.
+  const saveText = () => run(async () => {
+    const out = await adminApi.post(`/recordings/${edit.key}/text`, { text: edit.text });
+    setData((d) => ({ ...d, rows: d.rows.map((r) => (r.key === out.key ? { ...r, text: out.text } : r)) }));
+    setEdit(null);
+    setGen(null);
+  });
+
   // Step 1: create the pending recording and play it back for review.
   const generate = () => run(async () => {
     const out = await adminApi.post(`/recordings/${edit.key}/generate`, { text: edit.text, voice: edit.voice });
@@ -769,6 +778,14 @@ export function Recordings() {
                   <Button variant="ghost" className="w-full" disabled={busy} onClick={startRec}>
                     <span className="inline-flex items-center gap-1.5"><Mic size={16} />הקלט בעצמך במיקרופון</span>
                   </Button>
+                  <div className="border-t border-line pt-2 mt-1">
+                    <button
+                      className="w-full flex items-center justify-center gap-1.5 text-sm text-muted hover:text-ink cursor-pointer py-1.5 disabled:opacity-50"
+                      disabled={busy || !edit.text.trim()} onClick={saveText}>
+                      <Pencil size={14} />שמור טקסט בלבד (ללא הקלטה)
+                    </button>
+                    <p className="text-muted text-[11.5px] text-center">שומר את הטקסט לתצוגה ולהקלטה הבאה; לא משנה את מה שנשמע בקו עד ליצירת הקלטה.</p>
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-2">

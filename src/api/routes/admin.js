@@ -31,7 +31,7 @@ import { listSettings, putSettings } from '../../services/settings.js';
 import {
   listRecordings, generateRecording, savePendingFromUpload, fetchPendingAudio,
   uploadPendingRecording, uploadAllPending, discardPending, discardAllPending, undoLastUpload, fetchRecordingAudio,
-  setRecordingHidden, publishDevToProd, discardDevOverride,
+  setRecordingHidden, publishDevToProd, discardDevOverride, saveRecordingText,
 } from '../../services/ivrAudio.js';
 import { getAdminHistory } from '../../services/history.js';
 import { getVoiceCosts, addRate, RATE_KINDS } from '../../services/voiceCosts.js';
@@ -1087,6 +1087,15 @@ adminRouter.post('/recordings/:key/undo', requireSuperadmin, async (req, res, ne
   try {
     const out = await undoLastUpload(req.params.key);
     await audit(req, 'undo', 'ivr_recording', null, { key: out.key });
+    res.json(out);
+  } catch (e) { next(e); }
+});
+
+// Save just the prompt's text (no new audio) — the generation source + display.
+adminRouter.post('/recordings/:key/text', requireSuperadmin, async (req, res, next) => {
+  try {
+    const out = await saveRecordingText(req.params.key, req.body?.text);
+    await audit(req, 'edit_text', 'ivr_recording', null, { key: out.key, text: out.text });
     res.json(out);
   } catch (e) { next(e); }
 });

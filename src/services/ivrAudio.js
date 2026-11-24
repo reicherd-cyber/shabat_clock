@@ -374,6 +374,19 @@ export async function publishDevToProd(key) {
   return { key, file, text: devText, voice: devVoice, active: true, scope: 'prod', has_backup: hasBackup, dev: null };
 }
 
+// Save just the prompt's text — no new audio. ivr.audio_text.<key> is the
+// display + the source the neural voice is generated from; the router never
+// reads it at call time (the spoken fallback is ivr.<key>), so this is
+// audio-neutral and safe on production: what a caller hears changes only when a
+// recording is (re)generated. Not dev-scoped for that reason.
+export async function saveRecordingText(key, text) {
+  assertKey(key);
+  const t = String(text || '').trim();
+  if (!t || t.length > 500) throw errors.validation('נדרש טקסט (עד 500 תווים)');
+  await putSettings([{ setting_key: `ivr.audio_text.${key}`, setting_value: t }]);
+  return { key, text: t };
+}
+
 // Throw the dev-only override away — the dev line falls back to the prod recording.
 export async function discardDevOverride(key) {
   assertKey(key);
