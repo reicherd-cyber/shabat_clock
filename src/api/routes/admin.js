@@ -31,6 +31,7 @@ import { listSettings, putSettings } from '../../services/settings.js';
 import {
   listRecordings, generateRecording, savePendingFromUpload, fetchPendingAudio,
   uploadPendingRecording, uploadAllPending, discardPending, discardAllPending, undoLastUpload, fetchRecordingAudio,
+  setRecordingHidden,
 } from '../../services/ivrAudio.js';
 import { getAdminHistory } from '../../services/history.js';
 import { getVoiceCosts, addRate, RATE_KINDS } from '../../services/voiceCosts.js';
@@ -1086,6 +1087,18 @@ adminRouter.post('/recordings/:key/undo', requireSuperadmin, async (req, res, ne
   try {
     const out = await undoLastUpload(req.params.key);
     await audit(req, 'undo', 'ivr_recording', null, { key: out.key });
+    res.json(out);
+  } catch (e) { next(e); }
+});
+
+// Soft "delete" a recording out of the library (and restore it). A retired prompt
+// no call flow plays can be tucked into the hidden section; the audio and settings
+// are untouched, so unhiding brings it straight back.
+adminRouter.post('/recordings/:key/hide', requireSuperadmin, async (req, res, next) => {
+  try {
+    const hidden = req.body?.hidden !== false; // default: hide
+    const out = await setRecordingHidden(req.params.key, hidden);
+    await audit(req, hidden ? 'hide' : 'unhide', 'ivr_recording', null, { key: out.key });
     res.json(out);
   } catch (e) { next(e); }
 });

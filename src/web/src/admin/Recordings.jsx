@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, FilterSelect } from '../ui.jsx';
-import { Play, Pencil, Mic, Volume2, LoaderCircle, Upload, RotateCcw, Square, CircleDot, History, Download, Trash2, CloudUpload } from 'lucide-react';
+import { Play, Pencil, Mic, Volume2, LoaderCircle, Upload, RotateCcw, Square, CircleDot, History, Download, Trash2, CloudUpload, EyeOff, Eye, Ban, ChevronDown, ChevronLeft } from 'lucide-react';
 
 // Every IVR prompt recording on Yemot: what it says, which voice, and whether the
 // call actually plays the recording (vs falling back to robot TTS of the text).
@@ -9,31 +9,58 @@ import { Play, Pencil, Mic, Volume2, LoaderCircle, Upload, RotateCcw, Square, Ci
 // key's fixed Yemot file) — live calls pick it up within ~30s.
 
 const KEY_HE = {
+  // תפריט ושיחה
   main_menu: 'תפריט ראשי', main_menu_voice: 'תפריט ראשי (עם פקודה קולית)',
+  main_menu_service: 'תפריט ראשי — אפשרות שירות לקוחות',
+  invalid_input: 'בחירה שגויה', goodbye: 'סיום שיחה',
+  // זיהוי ואבטחה
   pin_prompt: 'בקשת קוד סודי', user_code_prompt: 'בקשת מספר משתמש',
-  auth_fail: 'זיהוי נכשל', locked_out: 'חשבון נחסם זמנית', no_relays: 'אין מכשירים בחשבון',
-  cmd_ok: 'פקודה בוצעה', cmd_offline: 'מכשיר לא מחובר',
+  auth_fail: 'זיהוי נכשל', locked_out: 'חשבון נחסם זמנית', unknown_caller: 'מתקשר לא מזוהה',
+  // פקודות ומצב
+  cmd_ok: 'פקודה בוצעה', cmd_verified: 'פקודה בוצעה ואומתה',
+  cmd_no_flow: 'פקודה בוצעה — לא נמדדת צריכה', cmd_closed: 'פקודה בוצעה — צריכה זניחה',
+  cmd_stuck_on: 'אזהרה — המכשיר לא כבה בפועל', cmd_not_switched: 'שגיאה — המכשיר לא ביצע',
+  cmd_offline: 'מכשיר לא מחובר', no_relays: 'אין מכשירים בחשבון',
+  state_on: 'קטע מצב: דולק', state_off: 'קטע מצב: כבוי', state_unknown: 'מצב לא ידוע',
+  // תזמון בטלפון
+  sched_type: 'תזמון — סוג התזמון', sched_sides: 'תזמון — הדלקה / כיבוי',
+  sched_once_day: 'תזמון — היום או מחר',
   sched_on_day: 'תזמון — יום הדלקה', sched_on_time: 'תזמון — שעת הדלקה',
   sched_off_day: 'תזמון — יום כיבוי', sched_off_time: 'תזמון — שעת כיבוי',
-  sched_saved: 'תזמון נשמר', sched_invalid: 'תזמון שגוי',
-  state_on: 'קטע מצב: דולק', state_off: 'קטע מצב: כבוי', state_unknown: 'מצב לא ידוע',
-  invalid_input: 'בחירה שגויה', goodbye: 'סיום שיחה', unknown_caller: 'מתקשר לא מזוהה',
-  nlu_listen: 'האזנה לבקשה קולית', nlu_confirm: 'אישור בקשה קולית',
+  sched_saved: 'תזמון נשמר', sched_invalid: 'תזמון שגוי', sched_none: 'תזמון — אין תזמונים',
+  sched_browse_next: 'תזמון — התזמון הבא', sched_browse_prev: 'תזמון — התזמון הקודם',
+  sched_browse_ops: 'תזמון — פעולות על תזמון', sched_browse_empty: 'תזמון — עיון, רשימה ריקה',
+  sched_del_confirm: 'תזמון — אישור מחיקה', sched_deleted: 'תזמון — נמחק',
+  // פקודה קולית
+  nlu_listen: 'האזנה לבקשה קולית', nlu_listen_short: 'האזנה לבקשה קולית (מקוצר)',
+  nlu_thinking: 'פקודה קולית — מעבד בקשה', nlu_confirm: 'אישור בקשה קולית',
   nlu_on_now: 'קטע: הדלקה מיידית של', nlu_off_now: 'קטע: כיבוי מיידי של',
   nlu_on_at: 'קטע: הדלקה של', nlu_off_at: 'קטע: כיבוי של',
   nlu_today_at: 'קטע: היום בשעה', nlu_tomorrow_at: 'קטע: מחר בשעה',
-  nlu_done: 'בקשה קולית בוצעה', nlu_parse_error: 'שגיאת הבנת בקשה', nlu_exec_error: 'שגיאת ביצוע בקשה',
+  nlu_done: 'בקשה קולית בוצעה', nlu_giveup: 'פקודה קולית — לא זוהה דיבור',
+  nlu_parse_error: 'שגיאת הבנת בקשה', nlu_exec_error: 'שגיאת ביצוע בקשה',
+  // מכירות ושירות
+  sales_menu: 'מכירות — תפריט', sales_info: 'מכירות — מידע והזמנה',
+  sales_record: 'מכירות — השארת הודעה', sales_thanks: 'מכירות — תודה',
+  agent_transfer: 'נציג — מעבירים לנציג', agent_record: 'נציג — השארת הודעה',
+  agent_return: 'נציג — חזרה מהשיחה', agent_done: 'נציג — סיום',
+  // ניהול בטלפון
+  main_menu_admin: 'תפריט ראשי — אפשרות מנהל', admin_listen: 'מנהל — האזנה לפעולה',
 };
 const VOICE_HE = { 'he-IL-AvriNeural': 'אברי (גבר)', 'he-IL-HilaNeural': 'הילה (אישה)', self: 'הקלטה עצמית' };
 const MAX_REC_SECS = 90;
 
 // The library is ordered like a call: what the caller hears first comes first.
+// Every manifest key belongs to exactly one group so nothing lands in the generic
+// catch-all below (that stays only as a safety net for a freshly added key).
 const GROUPS = [
-  { title: 'תפריט ושיחה', keys: ['main_menu', 'main_menu_voice', 'invalid_input', 'goodbye'] },
-  { title: 'זיהוי ואבטחה', keys: ['user_code_prompt', 'pin_prompt', 'auth_fail', 'locked_out', 'unknown_caller'] },
-  { title: 'פקודות ומצב', keys: ['cmd_ok', 'cmd_offline', 'no_relays', 'state_on', 'state_off', 'state_unknown'] },
-  { title: 'תזמון בטלפון', keys: ['sched_on_day', 'sched_on_time', 'sched_off_day', 'sched_off_time', 'sched_saved', 'sched_invalid'] },
-  { title: 'פקודה קולית', keys: ['nlu_listen', 'nlu_confirm', 'nlu_on_now', 'nlu_off_now', 'nlu_on_at', 'nlu_off_at', 'nlu_today_at', 'nlu_tomorrow_at', 'nlu_done', 'nlu_parse_error', 'nlu_exec_error'] },
+  { title: 'תפריט ושיחה', keys: ['main_menu', 'main_menu_voice', 'main_menu_service', 'invalid_input', 'goodbye'] },
+  { title: 'זיהוי ואבטחה', keys: ['pin_prompt', 'auth_fail', 'locked_out', 'user_code_prompt', 'unknown_caller'] },
+  { title: 'פקודות ומצב', keys: ['cmd_ok', 'cmd_verified', 'cmd_no_flow', 'cmd_closed', 'cmd_stuck_on', 'cmd_not_switched', 'cmd_offline', 'no_relays', 'state_on', 'state_off', 'state_unknown'] },
+  { title: 'תזמון בטלפון', keys: ['sched_type', 'sched_sides', 'sched_once_day', 'sched_on_day', 'sched_on_time', 'sched_off_day', 'sched_off_time', 'sched_saved', 'sched_invalid', 'sched_none', 'sched_browse_next', 'sched_browse_prev', 'sched_browse_ops', 'sched_browse_empty', 'sched_del_confirm', 'sched_deleted'] },
+  { title: 'פקודה קולית', keys: ['nlu_listen', 'nlu_listen_short', 'nlu_thinking', 'nlu_confirm', 'nlu_on_now', 'nlu_off_now', 'nlu_on_at', 'nlu_off_at', 'nlu_today_at', 'nlu_tomorrow_at', 'nlu_done', 'nlu_giveup', 'nlu_parse_error', 'nlu_exec_error'] },
+  { title: 'מכירות ושירות', keys: ['sales_menu', 'sales_info', 'sales_record', 'sales_thanks', 'agent_transfer', 'agent_record', 'agent_return', 'agent_done'] },
+  { title: 'ניהול בטלפון', keys: ['main_menu_admin', 'admin_listen'] },
 ];
 
 export function Recordings() {
@@ -50,6 +77,8 @@ export function Recordings() {
   const [armDismissAll, setArmDismissAll] = useState(false); // two-step "discard all" inside the dialog
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [undoKey, setUndoKey] = useState(null); // key awaiting undo confirmation
+  const [hideKey, setHideKey] = useState(null); // row awaiting hide (soft-delete) confirmation
+  const [showHidden, setShowHidden] = useState(false); // the hidden-section fold
   const recRef = useRef(null); // { mr, stream, timer }
   const { busy, error, run, setError } = useAsync();
 
@@ -186,17 +215,31 @@ export function Recordings() {
     setUndoKey(null);
   });
 
+  // Soft-delete a recording out of the library (and the one-click restore). Only a
+  // visibility flag flips — the live line and the audio are untouched.
+  const setHidden = (key, hidden) => run(async () => {
+    const out = await adminApi.post(`/recordings/${key}/hide`, { hidden });
+    setData((d) => ({ ...d, rows: d.rows.map((r) => (r.key === out.key ? { ...r, hidden: out.hidden } : r)) }));
+    setHideKey(null);
+  });
+
   if (!data) return <p className="text-muted">טוען…</p>;
 
   const needle = q.trim();
+  const statusOk = (r) => !fStatus
+    || (fStatus === 'active' ? r.active : fStatus === 'retired' ? r.retired : !r.active);
   const rows = data.rows.filter((r) =>
     (!needle || r.key.includes(needle) || (KEY_HE[r.key] || '').includes(needle) || r.text.includes(needle))
     && (!fVoice || r.voice === fVoice)
-    && (!fStatus || (fStatus === 'active' ? r.active : !r.active)));
+    && statusOk(r));
   const filtering = needle || fVoice || fStatus;
-  const byKey = new Map(rows.map((r) => [r.key, r]));
+  // Hidden ("deleted") recordings live in their own fold at the bottom; everything
+  // else is grouped by call stage.
+  const visible = rows.filter((r) => !r.hidden);
+  const hiddenRows = rows.filter((r) => r.hidden);
+  const byKey = new Map(visible.map((r) => [r.key, r]));
   const grouped = GROUPS.map((g) => ({ ...g, rows: g.keys.map((k) => byKey.get(k)).filter(Boolean) }));
-  const leftovers = rows.filter((r) => !GROUPS.some((g) => g.keys.includes(r.key)));
+  const leftovers = visible.filter((r) => !GROUPS.some((g) => g.keys.includes(r.key)));
   if (leftovers.length) grouped.push({ title: 'קטעים נוספים', rows: leftovers });
 
   const PromptCard = ({ r }) => (
@@ -229,6 +272,12 @@ export function Recordings() {
               <History size={16} />
             </button>
           )}
+          {r.retired && (
+            <button className="text-muted hover:text-off cursor-pointer p-1" title="הסתרה מהספרייה (ניתן לשחזר)"
+              onClick={() => setHideKey(r)}>
+              <EyeOff size={16} />
+            </button>
+          )}
           <button className="text-muted hover:text-ink cursor-pointer p-1" title="עריכה והקלטה מחדש"
             onClick={() => {
               // A waiting draft opens ready for review — listen / upload / discard.
@@ -247,6 +296,12 @@ export function Recordings() {
           <Mic size={12} />{VOICE_HE[r.voice] || r.voice}
         </span>
         <span className="inline-flex items-center gap-1.5">
+          {r.retired && (
+            <span className="text-[12px] font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1"
+              style={{ background: '#F1F0EE', color: '#6B7280' }} title={r.retired_reason || 'אין קריאה אליו בשום מסלול שיחה'}>
+              <Ban size={11} />לא בשימוש
+            </span>
+          )}
           {r.pending && (
             <span className="text-[12px] font-medium px-2 py-0.5 rounded-full"
               style={{ background: '#FDF1DC', color: '#B45309' }}>
@@ -265,9 +320,10 @@ export function Recordings() {
         <div>
           <h2 className="font-bold text-xl flex items-center gap-2"><Mic size={20} className="text-accent" />הקלטות מענה</h2>
           <p className="text-muted text-sm mt-0.5">
-            הקול של הקו בימות המשיח — {rows.length} קטעים,
-            <span className="text-on font-medium"> {rows.filter((r) => r.active).length} בהקלטה</span>
-            {rows.some((r) => !r.active) && <>, {rows.filter((r) => !r.active).length} בהקראת טקסט</>}
+            הקול של הקו בימות המשיח — {data.rows.length} קטעים,
+            <span className="text-on font-medium"> {data.rows.filter((r) => r.active).length} בהקלטה</span>
+            {data.rows.some((r) => !r.active) && <>, {data.rows.filter((r) => !r.active).length} בהקראת טקסט</>}
+            {data.rows.some((r) => r.retired) && <>, {data.rows.filter((r) => r.retired).length} לא בשימוש</>}
           </p>
         </div>
         <div className="flex gap-2 items-center flex-wrap">
@@ -287,6 +343,7 @@ export function Recordings() {
             <option value="">כל הסטטוסים</option>
             <option value="active">הקלטה פעילה</option>
             <option value="fallback">הקראת טקסט (TTS)</option>
+            <option value="retired">לא בשימוש</option>
           </FilterSelect>
           {filtering && (
             <Button variant="ghost" onClick={() => { setQ(''); setFVoice(''); setFStatus(''); }}>נקה סינון</Button>
@@ -307,6 +364,72 @@ export function Recordings() {
         </section>
       ))}
       {rows.length === 0 && <Card className="text-center text-muted py-10">לא נמצאו הקלטות לסינון הזה.</Card>}
+
+      {hiddenRows.length > 0 && (() => { const hiddenOpen = showHidden || !!filtering; return (
+        <section>
+          <button className="flex items-center gap-2 w-full text-start mb-2 cursor-pointer group"
+            onClick={() => setShowHidden((v) => !v)}>
+            {hiddenOpen ? <ChevronDown size={16} className="text-muted" /> : <ChevronLeft size={16} className="text-muted" />}
+            <h3 className="font-bold text-[15px] text-muted group-hover:text-ink inline-flex items-center gap-1.5">
+              <EyeOff size={15} />הוסתרו מהספרייה
+            </h3>
+            <span className="text-muted text-xs">{hiddenRows.length} קטעים</span>
+            <span className="flex-1 border-t border-line self-center" />
+          </button>
+          {hiddenOpen && (
+            <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+              {hiddenRows.map((r) => (
+                <div key={r.key} className="bg-surface2/60 rounded-[14px] border border-dashed border-line p-3.5 flex flex-col gap-2.5">
+                  <div className="flex items-start gap-3">
+                    <button
+                      className="w-11 h-11 shrink-0 rounded-full grid place-items-center cursor-pointer bg-surface text-accent hover:bg-accent hover:text-white transition-colors disabled:opacity-50"
+                      title={playing === r.key ? 'מנגן…' : 'השמע את ההקלטה'}
+                      disabled={playing === r.key} onClick={() => play(r.key)}>
+                      {playing === r.key
+                        ? <span className="eq"><span /><span /><span /><span /></span>
+                        : <Play size={18} className="-ms-0.5" />}
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold leading-tight text-ink/70">{KEY_HE[r.key] || r.key}</div>
+                      <small className="text-muted text-[11.5px]" dir="ltr">{r.key} · {r.file}</small>
+                    </div>
+                  </div>
+                  <p className="text-[13px] leading-relaxed text-muted border-s-2 border-line ps-2.5 line-clamp-2" title={r.text}>
+                    {r.text}
+                  </p>
+                  {r.retired && r.retired_reason && (
+                    <p className="text-[12px] text-muted inline-flex items-start gap-1"><Ban size={12} className="mt-0.5 shrink-0" />{r.retired_reason}</p>
+                  )}
+                  <Button variant="ghost" className="w-full !py-1.5" disabled={busy} onClick={() => setHidden(r.key, false)}>
+                    <span className="inline-flex items-center gap-1.5"><Eye size={15} />שחזר לספרייה</span>
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ); })()}
+
+      {/* confirm soft-delete (hide) — a retired recording tucked into the hidden fold */}
+      <Modal open={!!hideKey} onClose={() => setHideKey(null)} title={`הסתרה מהספרייה — ${KEY_HE[hideKey?.key] || hideKey?.key || ''}`}>
+        <div className="space-y-3">
+          <p>ההקלטה תעבור למדור ״הוסתרו מהספרייה״ ותוסר מהרשימה הראשית.</p>
+          <p className="text-muted text-sm">
+            זו הסתרה בלבד — הקובץ בימות והטקסט נשמרים, והמענה החי אינו מושפע. אפשר לשחזר בלחיצה אחת בכל רגע.
+            {hideKey?.retired_reason && <> <br />הסיבה שהקטע סומן ״לא בשימוש״: {hideKey.retired_reason}</>}
+          </p>
+          <ErrorNote error={error} />
+          <div className="grid grid-cols-2 gap-2">
+            <Button disabled={busy} onClick={() => setHidden(hideKey.key, true)}>
+              <span className="inline-flex items-center gap-1.5">
+                {busy ? <LoaderCircle size={16} className="animate-spin" /> : <EyeOff size={16} />}
+                {busy ? 'מסתיר…' : 'כן, הסתר'}
+              </span>
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={() => setHideKey(null)}>ביטול</Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={!!edit} onClose={closeModal} title={`עריכת הקלטה — ${KEY_HE[edit?.key] || edit?.key || ''}`}>
         {edit && (() => {

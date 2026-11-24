@@ -33,7 +33,7 @@ const yemotToken = () => {
 };
 
 export async function listRecordings() {
-  const { voice, texts, files } = manifest();
+  const { voice, texts, files, retired = {} } = manifest();
   const rows = [];
   for (const [key, file] of Object.entries(files)) {
     rows.push({
@@ -43,12 +43,30 @@ export async function listRecordings() {
       voice: (await getSetting(`ivr.audio_voice.${key}`)) || voice,
       active: !!(await getSetting(`ivr.audio.${key}`)),
       has_backup: existsSync(backupWav(key)),
+      // A prompt no call flow plays any more (declared in the manifest). The audio
+      // still lives on Yemot; the badge just tells the admin it is safe to hide.
+      retired: Object.hasOwn(retired, key),
+      retired_reason: Object.hasOwn(retired, key) ? retired[key] : null,
+      // Soft "delete": an admin tucked it away into the library's hidden section.
+      // Purely cosmetic — it never changes what a live call hears — so restoring is
+      // a one-click flip. Survives deploys (settings row, not the tracked manifest).
+      hidden: !!(await getSetting(`ivr.audio_hidden.${key}`)),
       pending: existsSync(pendingWav(key))
         ? (({ kind, voice: pv, saved_at }) => ({ kind: kind || 'tts', voice: pv, saved_at }))(readPendingMeta(key) || {})
         : null,
     });
   }
   return { voices: VOICES, default_voice: voice, rows };
+}
+
+// Soft delete / restore for the library view. We only toggle a visibility flag and
+// never touch ivr.audio.<key>, so a prompt that is somehow still referenced keeps
+// playing even while hidden — hiding declutters the admin page, it does not disable
+// a live prompt. Fully restorable (see [[feedback-remove-disable-confirm]]).
+export async function setRecordingHidden(key, hidden) {
+  assertKey(key);
+  await putSettings([{ setting_key: `ivr.audio_hidden.${key}`, setting_value: hidden ? '1' : '' }]);
+  return { key, hidden: !!hidden };
 }
 
 // Approve-everything: upload every pending draft, per-key isolation — one bad
