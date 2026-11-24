@@ -214,12 +214,19 @@ async function speak(key, vars = {}, fallback = null) {
 async function mainMenu(session, message = null) {
   session.state = 'MAIN';
   session.invalidCount = 0;
-  // The recording excludes the personal greeting — prepend it as TTS when known.
-  // Editable on the recordings page (setting ivr.greeting, {name} = caller's name);
-  // the dev line prefers ivr.greeting_dev so wording can be tried before publish.
-  const greetTpl = (env.nodeEnv !== 'production' && await getSetting('ivr.greeting_dev'))
-    || await getSetting('ivr.greeting') || 'שלום {name},';
-  const greeting = session.userName ? [{ t: greetTpl.replaceAll('{name}', session.userName) }] : [];
+  // Personal greeting (recordings key 'greeting'): play the recording if one was
+  // made — it is static, so it plays for every recognised caller — else speak the
+  // editable text with {name} filled in. The dev line prefers the dev override
+  // either way, so new wording/voice can be tried before publishing.
+  const devLine = env.nodeEnv !== 'production';
+  const greetAudio = (devLine && await getSetting('ivr.audio_dev.greeting')) || await getSetting('ivr.audio.greeting');
+  let greeting = [];
+  if (greetAudio) {
+    greeting = [{ f: greetAudio }];
+  } else if (session.userName) {
+    const tpl = (devLine && await getSetting('ivr.audio_text_dev.greeting')) || await getSetting('ivr.audio_text.greeting') || 'שלום {name},';
+    greeting = [{ t: tpl.replaceAll('{name}', session.userName) }];
+  }
   let items;
   if (env.anthropic.apiKey) {
     // Voice command is option 1; on/off/schedule/status shift to 2-5 — the digit map
