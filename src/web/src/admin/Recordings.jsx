@@ -40,8 +40,8 @@ const KEY_HE = {
   nlu_done: 'בקשה קולית בוצעה', nlu_giveup: 'פקודה קולית — לא זוהה דיבור',
   nlu_parse_error: 'שגיאת הבנת בקשה', nlu_exec_error: 'שגיאת ביצוע בקשה',
   // מכירות ושירות
-  sales_menu: 'מכירות — תפריט', sales_info: 'מכירות — מידע והזמנה',
-  sales_record: 'מכירות — השארת הודעה', sales_thanks: 'מכירות — תודה',
+  sales_menu: 'מכירות — תפריט', sales_info: 'מכירות — מידע על זימנא',
+  sales_record: 'מכירות — השארת הודעה (הזמנות)', sales_thanks: 'מכירות — תודה',
   agent_transfer: 'נציג — מעבירים לנציג', agent_record: 'נציג — השארת הודעה',
   agent_return: 'נציג — חזרה מהשיחה', agent_done: 'נציג — סיום',
   // ניהול בטלפון
@@ -167,14 +167,12 @@ const FLOW_UNKNOWN = {
       label: 'תפריט מכירות', keys: ['sales_menu'],
       children: [
         {
-          press: '1', label: 'מידע והזמנה', keys: ['sales_info'],
-          children: [{
-            press: '1', label: 'השארת פרטים', keys: ['sales_record'],
-            children: [{ label: 'תודה וסיום', keys: ['sales_thanks'] }],
-          }],
+          press: '1', label: 'מידע על זימנא → השארת הודעה', keys: ['sales_info'],
+          note: 'המידע מסתיים בהזמנה להשאיר הודעה; לאחריו מתבצעת הקלטה',
+          children: [{ label: 'תודה וסיום', keys: ['sales_thanks'] }],
         },
         {
-          press: '2', label: 'בירור על הזמנה — השארת הודעה', keys: ['sales_record'],
+          press: '2', label: 'הזמנות → השארת הודעה', keys: ['sales_record'],
           children: [{ label: 'תודה וסיום', keys: ['sales_thanks'] }],
         },
         {

@@ -249,12 +249,12 @@ async function salesMenu(session, message = null) {
   session.state = 'SALES_MENU';
   session.invalidCount = 0;
   return ask(await speak('ivr.sales_menu', {},
-    'שלום, הגעתם לטלטק, למידע על הזמנת המערכת הקישו 1, לבירור על הזמנה בתהליך הקישו 2'), { message });
+    'שלום, הגעתם לזימנא, למידע על זימנא הקישו 1, להזמנות הקישו 2'), { message });
 }
 
-async function salesRecord(session, topic) {
+async function salesRecord(session, topic, { promptKey = 'ivr.sales_record', fallback = 'אנא השאירו הודעה לאחר הצליל, בסיום הקישו סולמית' } = {}) {
   return recordMessage(session, topic, { state: 'SALES_RECORD',
-    prompt: await speak('ivr.sales_record', {}, 'אנא השאירו הודעה לאחר הצליל, בסיום הקישו סולמית') });
+    prompt: await speak(promptKey, {}, fallback) });
 }
 // One recording step for the sales menu and for an unanswered נציג transfer.
 async function recordMessage(session, topic, { state, prompt }) {
@@ -691,20 +691,19 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
     switch (session.state) {
       // ── unregistered caller: sales menu → ordering info / voice message ──
       case 'SALES_MENU': {
+        // 1 = מידע על זימנא → play the info prompt and then take a voice message
+        // (the info itself invites the caller to leave one); 2 = הזמנות → a message.
         if (input === '1') {
           await appendPath(session.callLogId, 'sales_info');
-          session.data.salesInfo = true; // hangup after this = outcome 'info'
-          session.state = 'SALES_INFO';
-          session.invalidCount = 0;
-          return res.send(ask(await speak('ivr.sales_info', {},
-            'להזמנה ולפרטים נוספים בקרו באתר שלנו, להשארת פרטים ונחזור אליכם הקישו 1, לחזרה לתפריט הקישו 2')));
+          return res.send(await salesRecord(session, 'info', {
+            promptKey: 'ivr.sales_info',
+            fallback: 'זימנא מציעה שעון שבת חכם הנשלט מהאתר ומהטלפון. לפרטים נוספים בקרו באתר שלנו בכתובת זימנא נקודה קו נקודה איי אל, או השאירו הודעה בקול ברור לאחר הצליל, בסיום הקישו סולמית, ונחזור אליכם בהקדם, תודה',
+          }));
         }
-        if (input === '2') return res.send(await salesRecord(session, 'order_status'));
-        return res.send(await invalidInput(session));
-      }
-      case 'SALES_INFO': {
-        if (input === '1') return res.send(await salesRecord(session, 'order'));
-        if (input === '2' || input === '0' || input === '*') return res.send(await salesMenu(session));
+        if (input === '2') return res.send(await salesRecord(session, 'order_status', {
+          promptKey: 'ivr.sales_record',
+          fallback: 'להזמנות, אנא השאירו הודעה עם שמכם ומספר הטלפון לאחר הצליל, בסיום הקישו סולמית, ונחזור אליכם בהקדם',
+        }));
         return res.send(await invalidInput(session));
       }
       case 'SALES_RECORD':
