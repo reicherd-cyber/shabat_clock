@@ -215,7 +215,11 @@ async function mainMenu(session, message = null) {
   session.state = 'MAIN';
   session.invalidCount = 0;
   // The recording excludes the personal greeting — prepend it as TTS when known.
-  const greeting = session.userName ? [{ t: `שלום ${session.userName},` }] : [];
+  // Editable on the recordings page (setting ivr.greeting, {name} = caller's name);
+  // the dev line prefers ivr.greeting_dev so wording can be tried before publish.
+  const greetTpl = (env.nodeEnv !== 'production' && await getSetting('ivr.greeting_dev'))
+    || await getSetting('ivr.greeting') || 'שלום {name},';
+  const greeting = session.userName ? [{ t: greetTpl.replaceAll('{name}', session.userName) }] : [];
   let items;
   if (env.anthropic.apiKey) {
     // Voice command is option 1; on/off/schedule/status shift to 2-5 — the digit map

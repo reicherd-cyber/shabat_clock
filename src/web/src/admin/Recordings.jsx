@@ -206,6 +206,8 @@ export function Recordings() {
   const [showHidden, setShowHidden] = useState(false); // the hidden-section fold
   const [publishKey, setPublishKey] = useState(null); // row awaiting publish-to-prod confirmation
   const [discardDevKey, setDiscardDevKey] = useState(null); // row awaiting dev-version discard
+  const [greetEdit, setGreetEdit] = useState(null); // { text } — personal-greeting editor, null = closed
+  const [greetPublishArm, setGreetPublishArm] = useState(false); // two-step publish-to-prod inside the greeting editor
   const recRef = useRef(null); // { mr, stream, timer }
   const audioRef = useRef(null); // { audio, blobUrl } of the currently playing recording
   const { busy, error, run, setError } = useAsync();
@@ -356,6 +358,27 @@ export function Recordings() {
     const out = await adminApi.del(`/recordings/${discardDevKey.key}/dev`);
     setData((d) => ({ ...d, rows: d.rows.map((r) => (r.key === out.key ? { ...r, dev: null } : r)) }));
     setDiscardDevKey(null);
+  });
+
+  // ── Personal greeting (TTS before the main menu) — edit / publish / discard dev ──
+  const saveGreeting = () => run(async () => {
+    const out = await adminApi.post('/recordings/greeting', { text: greetEdit.text });
+    setData((d) => ({ ...d, greeting: out.scope === 'dev'
+      ? { ...d.greeting, dev: out.text }
+      : { ...d.greeting, text: out.text, custom: true } }));
+    setGreetEdit(null);
+  });
+  const publishGreeting = () => run(async () => {
+    const out = await adminApi.post('/recordings/greeting/publish');
+    setData((d) => ({ ...d, greeting: { ...d.greeting, text: out.text, custom: true, dev: null } }));
+    setGreetPublishArm(false);
+    setGreetEdit(null);
+  });
+  const discardGreetingDev = () => run(async () => {
+    await adminApi.del('/recordings/greeting/dev');
+    setData((d) => ({ ...d, greeting: { ...d.greeting, dev: null } }));
+    setGreetPublishArm(false);
+    setGreetEdit(null);
   });
 
   // Approve every waiting draft in one go (after its own confirm dialog).
@@ -666,6 +689,30 @@ export function Recordings() {
       )}
 
       {view === 'library' && (<>
+      {data.greeting && (
+        <Card className="p-3.5 flex items-start gap-3">
+          <div className="w-11 h-11 rounded-full bg-surface2 text-accent grid place-items-center shrink-0"><UserCheck size={18} /></div>
+          <div className="min-w-0 flex-1">
+            <div className="font-bold flex items-center gap-2 flex-wrap">
+              ברכה אישית
+              {data.greeting.dev && (
+                <span className="text-[12px] font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1"
+                  style={{ background: '#E0E7FF', color: '#4338CA' }} title="קיימת גרסת דמו שטרם פורסמה לפרודקשן">
+                  <FlaskConical size={11} />גרסת דמו
+                </span>
+              )}
+            </div>
+            <small className="text-muted text-[11.5px]">נקראת לפני התפריט הראשי ללקוח מזוהה — הקראת טקסט, שם הלקוח מוכנס אוטומטית.</small>
+            <p className="text-[13.5px] text-ink/85 border-s-2 border-line ps-2.5 mt-1.5">
+              {(data.greeting.dev || data.greeting.text).replaceAll('{name}', '‹שם הלקוח›')}
+            </p>
+          </div>
+          <button className="text-muted hover:text-ink cursor-pointer p-1 shrink-0" title="עריכת נוסח הברכה"
+            onClick={() => { setGreetPublishArm(false); setGreetEdit({ text: data.greeting.dev || data.greeting.text }); }}>
+            <Pencil size={16} />
+          </button>
+        </Card>
+      )}
       {grouped.filter((g) => g.rows.length).map((g) => (
         <section key={g.title}>
           <div className="flex items-baseline gap-2 mb-2">
@@ -901,6 +948,53 @@ export function Recordings() {
             <Button variant="ghost" disabled={busy} onClick={() => setPublishKey(null)}>ביטול</Button>
           </div>
         </div>
+      </Modal>
+
+      {/* edit the personal greeting wording */}
+      <Modal open={!!greetEdit} onClose={() => { setGreetEdit(null); setGreetPublishArm(false); }} title="עריכת הברכה האישית">
+        {greetEdit && (
+          <div className="space-y-3">
+            <label className="block">
+              <span className="text-sm text-muted">נוסח הברכה</span>
+              <textarea
+                className="w-full border border-line rounded-xl px-3 py-2 min-h-20 focus:outline-accent"
+                value={greetEdit.text}
+                onChange={(e) => setGreetEdit({ ...greetEdit, text: e.target.value })}
+              />
+            </label>
+            <p className="text-muted text-xs">כתבו {'{name}'} במקום שבו ייקרא שם הלקוח (בהקראת טקסט). לדוגמה: שלום {'{name}'},</p>
+            {devScope && <p className="text-muted text-xs">שמירה משנה רק את קו הדמו; לפרסום לפרודקשן השתמשו בכפתור שבהמשך.</p>}
+            <ErrorNote error={error} />
+            <Button className="w-full" disabled={busy || !greetEdit.text.trim()} onClick={saveGreeting}>
+              <span className="inline-flex items-center gap-1.5">
+                {busy ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
+                {busy ? 'שומר…' : devScope ? 'שמור לדמו' : 'שמור'}
+              </span>
+            </Button>
+            {data.greeting?.dev && (
+              <div className="border-t border-line pt-3 space-y-2">
+                <p className="text-muted text-xs">קיימת גרסת דמו שטרם פורסמה לפרודקשן.</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {!greetPublishArm ? (
+                    <Button variant="ghost" disabled={busy} onClick={() => setGreetPublishArm(true)}>
+                      <span className="inline-flex items-center gap-1.5"><Rocket size={15} />פרסם לפרודקשן</span>
+                    </Button>
+                  ) : (
+                    <Button disabled={busy} onClick={publishGreeting}>
+                      <span className="inline-flex items-center gap-1.5">
+                        {busy ? <LoaderCircle size={16} className="animate-spin" /> : <Rocket size={15} />}
+                        בטוחים? פרסם
+                      </span>
+                    </Button>
+                  )}
+                  <Button variant="ghost" disabled={busy} onClick={discardGreetingDev}>
+                    <span className="inline-flex items-center gap-1.5"><Undo2 size={15} />בטל גרסת דמו</span>
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
 
       {/* confirm discard dev override */}

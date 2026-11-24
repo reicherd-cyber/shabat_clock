@@ -32,6 +32,7 @@ import {
   listRecordings, generateRecording, savePendingFromUpload, fetchPendingAudio,
   uploadPendingRecording, uploadAllPending, discardPending, discardAllPending, undoLastUpload, fetchRecordingAudio,
   setRecordingHidden, publishDevToProd, discardDevOverride, saveRecordingText,
+  saveGreeting, publishGreeting, discardGreetingDev,
 } from '../../services/ivrAudio.js';
 import { getAdminHistory } from '../../services/history.js';
 import { getVoiceCosts, addRate, RATE_KINDS } from '../../services/voiceCosts.js';
@@ -1087,6 +1088,29 @@ adminRouter.post('/recordings/:key/undo', requireSuperadmin, async (req, res, ne
   try {
     const out = await undoLastUpload(req.params.key);
     await audit(req, 'undo', 'ivr_recording', null, { key: out.key });
+    res.json(out);
+  } catch (e) { next(e); }
+});
+
+// Personal greeting (TTS, read before the main menu): edit wording, publish, discard dev.
+adminRouter.post('/recordings/greeting', requireSuperadmin, async (req, res, next) => {
+  try {
+    const out = await saveGreeting(req.body?.text);
+    await audit(req, 'edit_greeting', 'ivr_recording', null, { text: out.text, scope: out.scope });
+    res.json(out);
+  } catch (e) { next(e); }
+});
+adminRouter.post('/recordings/greeting/publish', requireSuperadmin, async (req, res, next) => {
+  try {
+    const out = await publishGreeting();
+    await audit(req, 'publish_greeting', 'ivr_recording', null, { text: out.text });
+    res.json(out);
+  } catch (e) { next(e); }
+});
+adminRouter.delete('/recordings/greeting/dev', requireSuperadmin, async (req, res, next) => {
+  try {
+    const out = await discardGreetingDev();
+    await audit(req, 'discard_greeting_dev', 'ivr_recording', null, {});
     res.json(out);
   } catch (e) { next(e); }
 });

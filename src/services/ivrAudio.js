@@ -78,7 +78,7 @@ export async function listRecordings() {
         : null,
     });
   }
-  return { voices: VOICES, default_voice: voice, env: env.nodeEnv, dev_scope: DEV_SCOPE, rows };
+  return { voices: VOICES, default_voice: voice, env: env.nodeEnv, dev_scope: DEV_SCOPE, greeting: await getGreeting(), rows };
 }
 
 // Soft delete / restore for the library view. We only toggle a visibility flag and
@@ -385,6 +385,39 @@ export async function saveRecordingText(key, text) {
   if (!t || t.length > 500) throw errors.validation('נדרש טקסט (עד 500 תווים)');
   await putSettings([{ setting_key: `ivr.audio_text.${key}`, setting_value: t }]);
   return { key, text: t };
+}
+
+// ── Personal greeting ──
+// The line reads this before the main menu to a recognised caller. It is always
+// TTS (the caller's name is inserted live, so it can't be a fixed recording);
+// {name} marks where the name goes. Dev-scoped like the recordings: editing on
+// the dev line writes ivr.greeting_dev (staging prefers it), and publish promotes
+// it to the live ivr.greeting (see router.js mainMenu).
+export const GREETING_DEFAULT = 'שלום {name},';
+export async function getGreeting() {
+  const prod = (await getSetting('ivr.greeting')) || '';
+  const dev = (await getSetting('ivr.greeting_dev')) || '';
+  return { text: prod || GREETING_DEFAULT, custom: !!prod, dev: dev || null, default: GREETING_DEFAULT };
+}
+export async function saveGreeting(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 200) throw errors.validation('נדרש טקסט (עד 200 תווים)');
+  const key = DEV_SCOPE ? 'ivr.greeting_dev' : 'ivr.greeting';
+  await putSettings([{ setting_key: key, setting_value: t }]);
+  return { text: t, scope: DEV_SCOPE ? 'dev' : 'prod' };
+}
+export async function publishGreeting() {
+  const dev = await getSetting('ivr.greeting_dev');
+  if (!dev) throw errors.validation('אין גרסת דמו לפרסום');
+  await putSettings([
+    { setting_key: 'ivr.greeting', setting_value: dev },
+    { setting_key: 'ivr.greeting_dev', setting_value: '' },
+  ]);
+  return { text: dev, scope: 'prod' };
+}
+export async function discardGreetingDev() {
+  await putSettings([{ setting_key: 'ivr.greeting_dev', setting_value: '' }]);
+  return { ok: true };
 }
 
 // Throw the dev-only override away — the dev line falls back to the prod recording.
