@@ -21,6 +21,7 @@ import { spokenText, spokenOption, speech } from './speech.js';
 import { voicemailFolder, voicemailFileName, createPhoneTicket, fetchVoicemailInBackground } from '../services/voicemail.js';
 import { DAY_NAMES_HE } from '../config/constants.js';
 import { interpretCommand } from '../services/nlu.js';
+import { answerSupportQuestion } from '../services/support.js';
 import { runNluActions, ymdForDay } from '../services/nluExec.js';
 import { shiftDate } from '../services/time.js';
 import { step as menuStep, choiceOptions } from '../services/serviceMenu.js';
@@ -308,6 +309,26 @@ async function agentTransfer(session) {
 async function agentRecord(session) {
   return recordMessage(session, 'agent', { state: 'AGENT_RECORD',
     prompt: await speak('ivr.agent_record', {}, 'הנציג אינו זמין כרגע, אנא השאירו הודעה לאחר הצליל, בסיום הקישו סולמית, ונחזור אליכם בהקדם') });
+}
+
+// ── שירות לקוחות (option 6), rebuilt 2026-11-24 ──
+// Two choices: 1 = the digital assistant tries to solve it (ask → AI answer →
+// "did it help?"); 2 = leave a voice message for a callback. If the assistant
+// can't answer, the caller is taken straight to the message. No live human
+// transfer. Every prompt is an editable recording (ivr.svc_*), so the wording
+// and voice are managed from the admin recordings page.
+async function serviceMenu(session, message = null) {
+  session.state = 'SVC_ROOT';
+  session.invalidCount = 0;
+  return ask(await speak('ivr.svc_menu', {},
+    'לקבלת עזרה מהעוזר הדיגיטלי הקישו 1, להשארת הודעה ונחזור אליכם בהקדם הקישו 2'), { message });
+}
+// Record a service voicemail → support ticket (reuses the SALES_RECORD completion
+// path: # / hangup both file the ticket, then sales_thanks plays).
+async function serviceLeaveMessage(session, preamble = null) {
+  const leave = await speak('ivr.svc_leave', {},
+    'אנא השאירו הודעה והסבירו את פנייתכם לאחר הצליל, בסיום הקישו סולמית, ונחזור אליכם בהקדם');
+  return recordMessage(session, 'service', { state: 'SALES_RECORD', prompt: preamble ? [...preamble, ...leave] : leave });
 }
 
 // Recording ended — # pressed / max length, or a hangup mid-message (Yemot keeps
@@ -784,10 +805,8 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           }
           if (input === '5') return res.send(await runStatus(session));
           if (input === '6' && await phoneAllowed('ivr.service_phones', session.phone)) {
-            // 7 (מה קורה בשבת הקרובה) left the menu 2026-10-27 with the shared tree's 6/8.
             await appendPath(session.callLogId, 'svc');
-            const r = await menuStep(svcCtx(session), { node: 'service', data: {}, _render: true }, null);
-            return res.send(await svcDeliver(session, r));
+            return res.send(await serviceMenu(session));
           }
         } else {
           // Legacy build (no key): 1=on, 2=off, 3=schedule, 4=status.
@@ -848,6 +867,63 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         return res.send(await mainMenu(session, feedback));
       }
 
+      // ── שירות לקוחות: 1 = digital assistant, 2 = leave a message ──
+      case 'SVC_ROOT': {
+        if (input === '*' || input === '0') return res.send(await mainMenu(session));
+        if (input === '1') {
+          session.state = 'SVC_ASK';
+          session.data.svcRetries = 0;
+          await appendPath(session.callLogId, 'svc_assist');
+          return res.send(askVoice(await speak('ivr.svc_ask', {}, 'אמרו את שאלתכם או את הבעיה לאחר הצפצוף, בסיום לחץ סולמית'), { maxSilence: 3 }));
+        }
+        if (input === '2') {
+          await appendPath(session.callLogId, 'svc_msg');
+          return res.send(await serviceLeaveMessage(session));
+        }
+        return res.send(await invalidInput(session));
+      }
+      case 'SVC_ASK': {
+        const raw = req.query.nlu;
+        const spoken = String(Array.isArray(raw) ? raw[raw.length - 1] : (raw ?? '')).trim();
+        if (!spoken) {
+          session.data.svcRetries = (session.data.svcRetries || 0) + 1;
+          if (session.data.svcRetries <= 2) {
+            return res.send(askVoice(await speak('ivr.svc_ask', {}, 'אמרו את שאלתכם או את הבעיה לאחר הצפצוף, בסיום לחץ סולמית'), { maxSilence: 3 }));
+          }
+          return res.send(await serviceLeaveMessage(session, [{ t: 'לא שמעתי בקשה.' }]));
+        }
+        let a;
+        try {
+          a = await answerSupportQuestion({ userId: session.userId, text: spoken, source: 'web', phone: session.phone });
+        } catch (e) {
+          console.error('IVR service assist error:', e.message);
+          a = null;
+        }
+        // The assistant couldn't help → straight to a message for a callback.
+        if (!a?.can_answer || !a.answer) {
+          await appendPath(session.callLogId, 'svc_assist_miss');
+          return res.send(await serviceLeaveMessage(session, [{ t: 'לא הצלחתי לפתור את זה הפעם.' }]));
+        }
+        await appendPath(session.callLogId, 'svc_assist_hit');
+        session.state = 'SVC_HELPED';
+        return res.send(ask([
+          { t: `${String(a.answer).slice(0, 900)},` },
+          ...await speak('ivr.svc_helped', {}, 'האם זה עזר? אם כן הקישו 1, להשארת הודעה ונחזור אליכם הקישו 2'),
+        ]));
+      }
+      case 'SVC_HELPED': {
+        if (input === '1') {
+          await appendPath(session.callLogId, 'svc_done');
+          await finishCall(session.callLogId, 'service');
+          endSession(callId);
+          return res.send(sayAndHangup(await speak('ivr.svc_done', {}, 'שמחים לעזור, להתראות')));
+        }
+        if (input === '2') {
+          await appendPath(session.callLogId, 'svc_msg');
+          return res.send(await serviceLeaveMessage(session));
+        }
+        return res.send(await invalidInput(session));
+      }
       // ── מוקד שירות: digits into the shared tree ──
       case 'SVC_MENU': {
         if (input === '*') return res.send(await mainMenu(session));

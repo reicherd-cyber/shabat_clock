@@ -42,6 +42,8 @@ const KEY_HE = {
   // מכירות ושירות
   sales_menu: 'מכירות — תפריט', sales_info: 'מכירות — מידע על זימנא',
   sales_record: 'מכירות — השארת הודעה (הזמנות)', sales_thanks: 'מכירות — תודה',
+  svc_menu: 'שירות — תפריט (עוזר / הודעה)', svc_ask: 'שירות — בקשת שאלה לעוזר',
+  svc_helped: 'שירות — האם זה עזר?', svc_leave: 'שירות — השארת הודעה', svc_done: 'שירות — סיום (נעזר)',
   agent_transfer: 'נציג — מעבירים לנציג', agent_record: 'נציג — השארת הודעה',
   agent_return: 'נציג — חזרה מהשיחה', agent_done: 'נציג — סיום',
   // ניהול בטלפון
@@ -59,7 +61,7 @@ const GROUPS = [
   { title: 'פקודות ומצב', keys: ['cmd_ok', 'cmd_verified', 'cmd_no_flow', 'cmd_closed', 'cmd_stuck_on', 'cmd_not_switched', 'cmd_offline', 'no_relays', 'state_on', 'state_off', 'state_unknown'] },
   { title: 'תזמון בטלפון', keys: ['sched_type', 'sched_sides', 'sched_once_day', 'sched_on_day', 'sched_on_time', 'sched_off_day', 'sched_off_time', 'sched_saved', 'sched_invalid', 'sched_none', 'sched_browse_next', 'sched_browse_prev', 'sched_browse_ops', 'sched_browse_empty', 'sched_del_confirm', 'sched_deleted'] },
   { title: 'פקודה קולית', keys: ['nlu_listen', 'nlu_listen_short', 'nlu_thinking', 'nlu_confirm', 'nlu_on_now', 'nlu_off_now', 'nlu_on_at', 'nlu_off_at', 'nlu_today_at', 'nlu_tomorrow_at', 'nlu_done', 'nlu_giveup', 'nlu_parse_error', 'nlu_exec_error'] },
-  { title: 'מכירות ושירות', keys: ['sales_menu', 'sales_info', 'sales_record', 'sales_thanks', 'agent_transfer', 'agent_record', 'agent_return', 'agent_done'] },
+  { title: 'מכירות ושירות', keys: ['sales_menu', 'sales_info', 'sales_record', 'sales_thanks', 'svc_menu', 'svc_ask', 'svc_helped', 'svc_leave', 'svc_done', 'agent_transfer', 'agent_record', 'agent_return', 'agent_done'] },
   { title: 'ניהול בטלפון', keys: ['main_menu_admin', 'admin_listen'] },
 ];
 
@@ -135,49 +137,27 @@ const FLOW_KNOWN = {
         },
         { press: '5', label: 'מצב המכשירים', keys: ['state_on', 'state_off', 'state_unknown'], note: 'שם כל מכשיר ואז מצבו' },
         {
-          press: '6', label: 'שירות לקוחות — מה הבעיה?', keys: ['main_menu_service'],
-          note: 'רק אם מופעל למספר. המשפטים של תפריט השירות מושמעים ממאגר המשפטים (recordings נפרדים שאינם מנוהלים בעמוד זה)',
+          press: '6', label: 'שירות לקוחות', keys: ['svc_menu'],
+          note: 'רק אם מופעל למספר',
           children: [
             {
-              press: '1', label: 'המכשיר לא מגיב / מנותק',
+              press: '1', label: 'עוזר דיגיטלי', keys: ['svc_ask'],
+              note: 'הלקוח אומר את הבעיה, העוזר הדיגיטלי עונה',
               children: [
-                { label: 'בחירת מכשיר, ובדיקה אוטומטית אם מחובר' },
-                { label: 'מחובר → ״זה עזר?״ (1 כן / 2 לא)' },
-                { label: 'מנותק → 3 צעדי בדיקה (1 בדקו שוב / 0 נציג)' },
-                { label: 'לא נפתר → פתיחת פנייה, נציג יחזור' },
-              ],
-            },
-            {
-              press: '2', label: 'תזמון לא פעל',
-              children: [
-                { label: 'מה קרה: לא נדלק / לא כבה / שעה לא נכונה' },
-                { label: 'באיזה ערוץ → פתיחת פנייה' },
-              ],
-            },
-            {
-              press: '3', label: 'איפה ההזמנה שלי',
-              children: [{ label: 'הצגת ההזמנות; אם אין — תיאור חופשי → פנייה' }],
-            },
-            {
-              press: '4', label: 'משהו אחר',
-              children: [
-                { label: 'עוזר דיגיטלי (אם זמין): 1 לשאול שאלה / 2 נציג' },
-                { label: 'אחרת — תיאור חופשי → פנייה' },
-              ],
-            },
-            { press: '5', label: 'בקשה או הצעה לשיפור', children: [{ label: 'כתיבת ההצעה → נרשמת פנייה' }] },
-            {
-              press: '0 / נציג', label: 'מעבר לנציג', keys: ['agent_transfer'],
-              note: 'העברה חיה רק אם המספר ברשימת ההעברה; אחרת נרשמת פנייה לחזרה',
-              children: [
-                { label: 'הנציג לא זמין — השארת הודעה', keys: ['agent_record'] },
                 {
-                  label: 'חזרה מהשיחה עם הנציג', keys: ['agent_return'],
-                  children: [{ press: '1', label: 'סיום', keys: ['agent_done'] }],
+                  label: 'העוזר ענה → ״האם זה עזר?״', keys: ['svc_helped'],
+                  children: [
+                    { press: '1', label: 'כן → סיום', keys: ['svc_done'] },
+                    { press: '2', label: 'לא → השארת הודעה', keys: ['svc_leave'] },
+                  ],
                 },
+                { label: 'העוזר לא הצליח → השארת הודעה', keys: ['svc_leave'] },
               ],
             },
-            { press: '9', label: 'חזרה לתפריט הראשי' },
+            {
+              press: '2', label: 'השארת הודעה ונחזור אליכם', keys: ['svc_leave'],
+              children: [{ label: 'תודה וסיום', keys: ['sales_thanks'] }],
+            },
           ],
         },
         {
