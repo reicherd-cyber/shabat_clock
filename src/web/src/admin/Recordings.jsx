@@ -207,28 +207,47 @@ export function Recordings() {
   const [publishKey, setPublishKey] = useState(null); // row awaiting publish-to-prod confirmation
   const [discardDevKey, setDiscardDevKey] = useState(null); // row awaiting dev-version discard
   const recRef = useRef(null); // { mr, stream, timer }
+  const audioRef = useRef(null); // { audio, blobUrl } of the currently playing recording
   const { busy, error, run, setError } = useAsync();
 
   useEffect(() => { adminApi.get('/recordings').then(setData).catch(setError); }, []);
 
   // Playback goes through our server (the Yemot URL embeds the API token), so the
   // blob is fetched with the admin Authorization header rather than an <audio src>.
+  // The live <audio> is kept in a ref so playback can be stopped mid-recording.
+  const stopPlay = () => {
+    const cur = audioRef.current;
+    if (cur) {
+      try { cur.audio.pause(); } catch { /* already gone */ }
+      URL.revokeObjectURL(cur.blobUrl);
+      audioRef.current = null;
+    }
+    setPlaying(null);
+  };
   const playUrl = async (url, marker) => {
+    stopPlay(); // one thing plays at a time; a second click elsewhere replaces it
     setPlaying(marker);
     try {
       const res = await fetch(url, { headers: { Authorization: `Bearer ${tokens.admin}` } });
       if (!res.ok) throw new Error('טעינת ההקלטה נכשלה');
       const blobUrl = URL.createObjectURL(await res.blob());
       const audio = new Audio(blobUrl);
-      audio.onended = () => { URL.revokeObjectURL(blobUrl); setPlaying(null); };
-      audio.onerror = () => { URL.revokeObjectURL(blobUrl); setPlaying(null); };
+      audioRef.current = { audio, blobUrl };
+      const done = () => {
+        if (audioRef.current?.audio === audio) { URL.revokeObjectURL(blobUrl); audioRef.current = null; }
+        setPlaying((p) => (p === marker ? null : p));
+      };
+      audio.onended = done;
+      audio.onerror = done;
       await audio.play();
     } catch (e) {
       setError(e);
-      setPlaying(null);
+      stopPlay();
     }
   };
   const play = (key) => playUrl(`/api/v1/admin/recordings/${key}/audio`, key);
+  // Click a playing control again to stop it.
+  const togglePlay = (key) => (playing === key ? stopPlay() : play(key));
   const playPreview = () => playUrl(`/api/v1/admin/recordings/${edit.key}/preview-audio`, 'preview');
 
   // Save a WAV to the admin's computer (authorized fetch → browser download).
@@ -304,6 +323,7 @@ export function Recordings() {
   };
   const closeModal = () => {
     stopRec();
+    stopPlay();
     setEdit(null);
     setGen(null);
   };
@@ -420,8 +440,8 @@ export function Recordings() {
         <button
           className={`inline-flex items-center gap-1 ps-2 pe-1.5 py-1 cursor-pointer transition-colors
             ${isPlaying ? 'text-accent' : 'hover:bg-surface2'}`}
-          title={`השמעת ההקלטה — ${KEY_HE[k] || k}`} disabled={isPlaying} onClick={() => play(k)}>
-          {isPlaying ? <span className="eq"><span /><span /><span /><span /></span> : <Play size={12} />}
+          title={isPlaying ? 'עצור' : `השמעת ההקלטה — ${KEY_HE[k] || k}`} onClick={() => togglePlay(k)}>
+          {isPlaying ? <Square size={11} className="fill-current" /> : <Play size={12} />}
           <span className="font-medium">{KEY_HE[k] || k}</span>
         </button>
         {r.retired
@@ -469,10 +489,10 @@ export function Recordings() {
         <button
           className={`w-11 h-11 shrink-0 rounded-full grid place-items-center cursor-pointer transition-colors
             ${playing === r.key ? 'bg-accent text-white' : 'bg-surface2 text-accent hover:bg-accent hover:text-white'}`}
-          title={playing === r.key ? 'מנגן…' : 'השמע את ההקלטה'}
-          disabled={playing === r.key} onClick={() => play(r.key)}>
+          title={playing === r.key ? 'עצור' : 'השמע את ההקלטה'}
+          onClick={() => togglePlay(r.key)}>
           {playing === r.key
-            ? <span className="eq"><span /><span /><span /><span /></span>
+            ? <Square size={16} className="fill-current" />
             : <Play size={18} className="-ms-0.5" />}
         </button>
         <div className="min-w-0 flex-1">
@@ -677,11 +697,11 @@ export function Recordings() {
                 <div key={r.key} className="bg-surface2/60 rounded-[14px] border border-dashed border-line p-3.5 flex flex-col gap-2.5">
                   <div className="flex items-start gap-3">
                     <button
-                      className="w-11 h-11 shrink-0 rounded-full grid place-items-center cursor-pointer bg-surface text-accent hover:bg-accent hover:text-white transition-colors disabled:opacity-50"
-                      title={playing === r.key ? 'מנגן…' : 'השמע את ההקלטה'}
-                      disabled={playing === r.key} onClick={() => play(r.key)}>
+                      className="w-11 h-11 shrink-0 rounded-full grid place-items-center cursor-pointer bg-surface text-accent hover:bg-accent hover:text-white transition-colors"
+                      title={playing === r.key ? 'עצור' : 'השמע את ההקלטה'}
+                      onClick={() => togglePlay(r.key)}>
                       {playing === r.key
-                        ? <span className="eq"><span /><span /><span /><span /></span>
+                        ? <Square size={16} className="fill-current" />
                         : <Play size={18} className="-ms-0.5" />}
                     </button>
                     <div className="min-w-0 flex-1">
@@ -734,8 +754,20 @@ export function Recordings() {
           // audio isn't derived from the textarea).
           const fresh = gen && (gen.kind !== 'tts' || (gen.text === edit.text.trim() && gen.voice === edit.voice));
           const recording = recSecs >= 0;
+          const row = rowByKey.get(edit.key);
+          const hasCurrent = row && (row.active || row.dev); // a recording exists to listen to
           return (
             <div className="space-y-3">
+              {hasCurrent && (
+                <button
+                  className="w-full flex items-center justify-center gap-1.5 text-sm border border-line rounded-xl py-2 cursor-pointer hover:bg-surface2"
+                  title={playing === edit.key ? 'עצור' : 'השמעת ההקלטה הנוכחית'}
+                  onClick={() => togglePlay(edit.key)}>
+                  {playing === edit.key
+                    ? <><Square size={14} className="text-accent fill-current" />עצור</>
+                    : <><Play size={15} />{`השמע את ההקלטה הנוכחית${devScope && row.dev ? ' (גרסת דמו)' : ''}`}</>}
+                </button>
+              )}
               <label className="block">
                 <span className="text-sm text-muted">הטקסט שיוקרא</span>
                 <textarea
@@ -788,10 +820,10 @@ export function Recordings() {
               ) : (
                 <div className="space-y-2">
                   <button
-                    className="w-full flex items-center justify-center gap-1.5 text-sm border border-line rounded-xl py-2 cursor-pointer hover:bg-surface2 disabled:opacity-50"
-                    disabled={playing === 'preview'} onClick={playPreview}>
-                    {playing === 'preview' ? <Volume2 size={15} className="text-accent" /> : <Play size={15} />}
-                    השמעת ההקלטה הממתינה {gen.kind === 'self' ? '(הקלטה עצמית)' : gen.kind === 'draft' ? '(טיוטה שמורה)' : ''}
+                    className="w-full flex items-center justify-center gap-1.5 text-sm border border-line rounded-xl py-2 cursor-pointer hover:bg-surface2"
+                    onClick={() => (playing === 'preview' ? stopPlay() : playPreview())}>
+                    {playing === 'preview' ? <Square size={14} className="text-accent fill-current" /> : <Play size={15} />}
+                    {playing === 'preview' ? 'עצור' : `השמעת ההקלטה הממתינה ${gen.kind === 'self' ? '(הקלטה עצמית)' : gen.kind === 'draft' ? '(טיוטה שמורה)' : ''}`}
                   </button>
                   <div className="grid grid-cols-2 gap-2">
                     <Button disabled={busy} onClick={() => setConfirmUpload(true)}>
