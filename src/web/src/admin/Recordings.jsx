@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, FilterSelect } from '../ui.jsx';
-import { Play, Pencil, Mic, Volume2, LoaderCircle, Upload, RotateCcw, Square, CircleDot, History, Download, Trash2, CloudUpload, EyeOff, Eye, Ban, ChevronDown, ChevronLeft } from 'lucide-react';
+import { Play, Pencil, Mic, Volume2, LoaderCircle, Upload, RotateCcw, Square, CircleDot, History, Download, Trash2, CloudUpload, EyeOff, Eye, Ban, ChevronDown, ChevronLeft, GitFork, Phone, UserCheck, UserX } from 'lucide-react';
 
 // Every IVR prompt recording on Yemot: what it says, which voice, and whether the
 // call actually plays the recording (vs falling back to robot TTS of the text).
@@ -63,8 +63,135 @@ const GROUPS = [
   { title: 'ניהול בטלפון', keys: ['main_menu_admin', 'admin_listen'] },
 ];
 
+// ── Call map (מפת שיחה) — the actual IVR flow from src/ivr/router.js, drawn as a
+// tree so an admin sees WHERE each recording is heard, as a caller would walk it.
+// node: { press?, label, note?, keys?: string[], children?: node[] }. `press` is
+// the digit / condition that reaches the node; `keys` are the recordings it plays
+// (TTS-only steps like the device picker carry a note instead). Keep in sync with
+// the router if the menu changes.
+const FLOW_KNOWN = {
+  label: 'שיחה ממספר מזוהה (לקוח רשום ופעיל)',
+  note: 'הזיהוי הוא לפי מספר המתקשר — ללא הקלדת מספר משתמש',
+  children: [
+    {
+      press: 'דורש קוד', label: 'בקשת קוד סודי', keys: ['pin_prompt'],
+      note: 'רק אם לחשבון מוגדר קוד; אחרת ישר לתפריט',
+      children: [{
+        press: 'קוד שגוי', label: 'זיהוי נכשל', keys: ['auth_fail'],
+        children: [{ press: 'אחרי כמה ניסיונות', label: 'חשבון נחסם זמנית', keys: ['locked_out'] }],
+      }],
+    },
+    {
+      label: 'תפריט ראשי', keys: ['main_menu_voice'],
+      note: 'נקראת ברכה אישית ואז האפשרויות',
+      children: [
+        {
+          press: '1', label: 'פקודה קולית — האזנה לבקשה', keys: ['nlu_listen', 'nlu_listen_short'],
+          children: [
+            { label: 'בהמתנה ארוכה — מעבד בקשה', keys: ['nlu_thinking'] },
+            {
+              label: 'קריאת הבקשה ואישור', keys: ['nlu_confirm'],
+              note: 'הפעולה נקראת ממקטעים: הדלקה/כיבוי + היום/מחר בשעה',
+              children: [
+                { label: 'מקטעי קריאה', keys: ['nlu_on_now', 'nlu_off_now', 'nlu_on_at', 'nlu_off_at', 'nlu_today_at', 'nlu_tomorrow_at'] },
+                { press: '1 אישור', label: 'הבקשה בוצעה', keys: ['nlu_done'] },
+                { press: 'שגיאה', label: 'שגיאת ביצוע', keys: ['nlu_exec_error'] },
+              ],
+            },
+            { press: 'לא הובן', label: 'שגיאת הבנה', keys: ['nlu_parse_error'] },
+            { press: 'אין דיבור', label: 'לא זוהה דיבור → חזרה לתפריט', keys: ['nlu_giveup'] },
+          ],
+        },
+        {
+          press: '2 / 3', label: 'הדלקה / כיבוי מיידי', note: 'בחירת מכשיר לפי שם וקוד (נקראת אוטומטית)',
+          children: [
+            { label: 'אין מכשירים בחשבון', keys: ['no_relays'] },
+            { label: 'תוצאת הפקודה (נקראת המתאימה)', keys: ['cmd_ok', 'cmd_verified', 'cmd_no_flow', 'cmd_closed', 'cmd_stuck_on', 'cmd_not_switched', 'cmd_offline'] },
+          ],
+        },
+        {
+          press: '4', label: 'תזמונים — עיון', keys: ['sched_none', 'sched_browse_empty', 'sched_browse_next', 'sched_browse_prev', 'sched_browse_ops'],
+          children: [
+            {
+              press: '3', label: 'מחיקת תזמון', keys: ['sched_del_confirm'],
+              children: [{ press: '1 אישור', label: 'התזמון נמחק', keys: ['sched_deleted'] }],
+            },
+            {
+              press: '4', label: 'הוספת תזמון', note: 'קודם בחירת מכשיר',
+              children: [
+                { label: 'סוג התזמון', keys: ['sched_type'] },
+                { label: 'הדלקה / כיבוי / שניהם', keys: ['sched_sides'] },
+                { label: 'יום ושעה', keys: ['sched_once_day', 'sched_on_day', 'sched_off_day', 'sched_on_time', 'sched_off_time'] },
+                {
+                  label: 'אישור התזמון', keys: ['nlu_confirm'],
+                  children: [
+                    { press: '1 אישור', label: 'התזמון נשמר', keys: ['sched_saved'] },
+                    { press: 'לא תקין', label: 'תזמון שגוי → התחלה מחדש', keys: ['sched_invalid'] },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        { press: '5', label: 'מצב המכשירים', keys: ['state_on', 'state_off', 'state_unknown'], note: 'שם כל מכשיר ואז מצבו' },
+        {
+          press: '6', label: 'שירות לקוחות', keys: ['main_menu_service'],
+          note: 'רק אם מופעל למספר; התפריט עצמו ממאגר המשפטים (לא בעמוד זה)',
+          children: [
+            {
+              label: 'מעבר לנציג', keys: ['agent_transfer'],
+              children: [
+                { label: 'הנציג לא זמין — השארת הודעה', keys: ['agent_record'] },
+                {
+                  label: 'חזרה מהשיחה עם הנציג', keys: ['agent_return'],
+                  children: [{ press: '1', label: 'סיום', keys: ['agent_done'] }],
+                },
+              ],
+            },
+            { label: 'פקודה חופשית → זיהוי קולי', keys: ['nlu_listen'] },
+          ],
+        },
+        {
+          press: 'בחירה שגויה', label: 'בחירה לא תקינה', keys: ['invalid_input'],
+          children: [{ press: 'אחרי 3 פעמים', label: 'סיום שיחה', keys: ['goodbye'] }],
+        },
+      ],
+    },
+  ],
+};
+const FLOW_UNKNOWN = {
+  label: 'שיחה ממספר לא מזוהה (לקוח חדש / מספר לא רשום)',
+  note: 'מספר שאינו משויך לחשבון פעיל מגיע לתפריט המכירות',
+  children: [
+    {
+      label: 'תפריט מכירות', keys: ['sales_menu'],
+      children: [
+        {
+          press: '1', label: 'מידע והזמנה', keys: ['sales_info'],
+          children: [{
+            press: '1', label: 'השארת פרטים', keys: ['sales_record'],
+            children: [{ label: 'תודה וסיום', keys: ['sales_thanks'] }],
+          }],
+        },
+        {
+          press: '2', label: 'בירור על הזמנה — השארת הודעה', keys: ['sales_record'],
+          children: [{ label: 'תודה וסיום', keys: ['sales_thanks'] }],
+        },
+        {
+          press: 'בחירה שגויה', label: 'בחירה לא תקינה', keys: ['invalid_input'],
+          children: [{ press: 'אחרי 3 פעמים', label: 'סיום שיחה', keys: ['goodbye'] }],
+        },
+      ],
+    },
+    { press: 'מספר חסום', label: 'חשבון נחסם זמנית', keys: ['locked_out'], note: 'אם המספר ננעל עקב ניסיונות קוד כושלים' },
+  ],
+};
+const FLOWS = { known: FLOW_KNOWN, unknown: FLOW_UNKNOWN };
+
 export function Recordings() {
   const [data, setData] = useState(null);
+  const [view, setView] = useState('library'); // 'library' | 'map' (מפת שיחה)
+  const [flowTab, setFlowTab] = useState('known'); // 'known' | 'unknown'
   const [q, setQ] = useState('');
   const [fVoice, setFVoice] = useState('');
   const [fStatus, setFStatus] = useState('');
@@ -225,6 +352,7 @@ export function Recordings() {
 
   if (!data) return <p className="text-muted">טוען…</p>;
 
+  const rowByKey = new Map(data.rows.map((r) => [r.key, r])); // every recording, for the call map
   const needle = q.trim();
   const statusOk = (r) => !fStatus
     || (fStatus === 'active' ? r.active : fStatus === 'retired' ? r.retired : !r.active);
@@ -241,6 +369,67 @@ export function Recordings() {
   const grouped = GROUPS.map((g) => ({ ...g, rows: g.keys.map((k) => byKey.get(k)).filter(Boolean) }));
   const leftovers = visible.filter((r) => !GROUPS.some((g) => g.keys.includes(r.key)));
   if (leftovers.length) grouped.push({ title: 'קטעים נוספים', rows: leftovers });
+
+  // Open the edit/record modal for a row (shared by the library card and the map).
+  const openEdit = (r) => {
+    if (!r) return;
+    setGen(r.pending ? { kind: r.pending.kind === 'self' ? 'self' : 'draft' } : null);
+    setEdit({ key: r.key, text: r.text, voice: r.voice });
+  };
+
+  // One recording inside a call-map node: play it, see at a glance whether it is a
+  // real recording or TTS fallback / unused, and jump to edit.
+  const RecPill = ({ k }) => {
+    const r = rowByKey.get(k);
+    if (!r) return null;
+    const isPlaying = playing === k;
+    return (
+      <span className={`inline-flex items-center rounded-full border text-[12px] overflow-hidden
+        ${isPlaying ? 'border-accent ring-1 ring-accent/40' : 'border-line'} bg-surface`}>
+        <button
+          className={`inline-flex items-center gap-1 ps-2 pe-1.5 py-1 cursor-pointer transition-colors
+            ${isPlaying ? 'text-accent' : 'hover:bg-surface2'}`}
+          title={`השמעת ההקלטה — ${KEY_HE[k] || k}`} disabled={isPlaying} onClick={() => play(k)}>
+          {isPlaying ? <span className="eq"><span /><span /><span /><span /></span> : <Play size={12} />}
+          <span className="font-medium">{KEY_HE[k] || k}</span>
+        </button>
+        {r.retired
+          ? <span className="px-1 text-muted" title={r.retired_reason || 'לא בשימוש'}><Ban size={11} /></span>
+          : !r.active && <span className="px-1 text-muted" title="מושמע כהקראת טקסט (אין הקלטה פעילה)"><Volume2 size={11} /></span>}
+        <button className="px-1.5 py-1 text-muted hover:text-ink border-s border-line cursor-pointer"
+          title="עריכה והקלטה מחדש" onClick={() => openEdit(r)}>
+          <Pencil size={12} />
+        </button>
+      </span>
+    );
+  };
+
+  const FlowNode = ({ node, depth = 0 }) => (
+    <div className={depth > 0 ? 'relative ps-3 ms-1.5 border-s-2 border-line' : ''}>
+      {depth > 0 && <span className="absolute top-3 -start-[2px] w-2 h-[2px] bg-line" />}
+      <div className="py-1.5">
+        <div className="flex items-center gap-2 flex-wrap">
+          {node.press && (
+            <span className="shrink-0 inline-flex items-center justify-center min-w-6 h-6 px-1.5 rounded-md bg-accent/10 text-accent text-[12px] font-bold">
+              {node.press}
+            </span>
+          )}
+          <span className={`${depth === 0 ? 'font-bold' : 'font-semibold'} text-[14px]`}>{node.label}</span>
+        </div>
+        {node.note && <p className="text-muted text-[12px] mt-0.5">{node.note}</p>}
+        {node.keys?.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            {node.keys.map((k) => <RecPill key={k} k={k} />)}
+          </div>
+        )}
+      </div>
+      {node.children?.length > 0 && (
+        <div className="space-y-0.5">
+          {node.children.map((c, i) => <FlowNode key={i} node={c} depth={depth + 1} />)}
+        </div>
+      )}
+    </div>
+  );
 
   const PromptCard = ({ r }) => (
     <div className={`bg-surface rounded-[14px] border p-3.5 flex flex-col gap-2.5 transition-shadow
@@ -327,30 +516,76 @@ export function Recordings() {
           </p>
         </div>
         <div className="flex gap-2 items-center flex-wrap">
-          {data.rows.some((r) => r.pending) && (
-            <Button disabled={busy} onClick={() => setConfirmAll(true)}>
-              <span className="inline-flex items-center gap-1.5">
-                <CloudUpload size={16} />העלה הכל לימות ({data.rows.filter((r) => r.pending).length})
-              </span>
-            </Button>
-          )}
-          <Input className="w-44 py-2 text-sm" placeholder="חיפוש בשם / טקסט" value={q} onChange={(e) => setQ(e.target.value)} />
-          <FilterSelect className="py-2 text-sm" value={fVoice} onChange={(e) => setFVoice(e.target.value)}>
-            <option value="">כל הקולות</option>
-            {data.voices.map((v) => <option key={v} value={v}>{VOICE_HE[v] || v}</option>)}
-          </FilterSelect>
-          <FilterSelect className="py-2 text-sm" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
-            <option value="">כל הסטטוסים</option>
-            <option value="active">הקלטה פעילה</option>
-            <option value="fallback">הקראת טקסט (TTS)</option>
-            <option value="retired">לא בשימוש</option>
-          </FilterSelect>
-          {filtering && (
-            <Button variant="ghost" onClick={() => { setQ(''); setFVoice(''); setFStatus(''); }}>נקה סינון</Button>
-          )}
+          {/* ספרייה (רשת קלפים) ⇆ מפת שיחה (עץ הזרימה) */}
+          <div className="inline-flex rounded-xl border border-line bg-surface2 p-0.5 text-sm">
+            <button className={`px-3 py-1.5 rounded-lg cursor-pointer inline-flex items-center gap-1.5 transition-colors
+              ${view === 'library' ? 'bg-surface shadow-sm font-medium text-ink' : 'text-muted hover:text-ink'}`}
+              onClick={() => setView('library')}>
+              <Mic size={14} />ספרייה
+            </button>
+            <button className={`px-3 py-1.5 rounded-lg cursor-pointer inline-flex items-center gap-1.5 transition-colors
+              ${view === 'map' ? 'bg-surface shadow-sm font-medium text-ink' : 'text-muted hover:text-ink'}`}
+              onClick={() => setView('map')}>
+              <GitFork size={14} className="rotate-180" />מפת שיחה
+            </button>
+          </div>
+          {view === 'library' && (<>
+            {data.rows.some((r) => r.pending) && (
+              <Button disabled={busy} onClick={() => setConfirmAll(true)}>
+                <span className="inline-flex items-center gap-1.5">
+                  <CloudUpload size={16} />העלה הכל לימות ({data.rows.filter((r) => r.pending).length})
+                </span>
+              </Button>
+            )}
+            <Input className="w-44 py-2 text-sm" placeholder="חיפוש בשם / טקסט" value={q} onChange={(e) => setQ(e.target.value)} />
+            <FilterSelect className="py-2 text-sm" value={fVoice} onChange={(e) => setFVoice(e.target.value)}>
+              <option value="">כל הקולות</option>
+              {data.voices.map((v) => <option key={v} value={v}>{VOICE_HE[v] || v}</option>)}
+            </FilterSelect>
+            <FilterSelect className="py-2 text-sm" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+              <option value="">כל הסטטוסים</option>
+              <option value="active">הקלטה פעילה</option>
+              <option value="fallback">הקראת טקסט (TTS)</option>
+              <option value="retired">לא בשימוש</option>
+            </FilterSelect>
+            {filtering && (
+              <Button variant="ghost" onClick={() => { setQ(''); setFVoice(''); setFStatus(''); }}>נקה סינון</Button>
+            )}
+          </>)}
         </div>
       </div>
       <ErrorNote error={error} />
+
+      {view === 'map' && (
+        <div className="space-y-4">
+          <div className="inline-flex rounded-xl border border-line bg-surface2 p-0.5 text-sm">
+            <button className={`px-3 py-1.5 rounded-lg cursor-pointer inline-flex items-center gap-1.5 transition-colors
+              ${flowTab === 'known' ? 'bg-surface shadow-sm font-medium text-ink' : 'text-muted hover:text-ink'}`}
+              onClick={() => setFlowTab('known')}>
+              <UserCheck size={14} />מתקשר מזוהה
+            </button>
+            <button className={`px-3 py-1.5 rounded-lg cursor-pointer inline-flex items-center gap-1.5 transition-colors
+              ${flowTab === 'unknown' ? 'bg-surface shadow-sm font-medium text-ink' : 'text-muted hover:text-ink'}`}
+              onClick={() => setFlowTab('unknown')}>
+              <UserX size={14} />מתקשר לא מזוהה
+            </button>
+          </div>
+          <p className="text-muted text-[12.5px] flex items-center gap-1.5">
+            <Phone size={13} />לחיצה על קטע משמיעה אותו; <Pencil size={11} className="inline" /> פותח עריכה.
+            <Volume2 size={11} className="inline" /> = מושמע כהקראת טקסט, <Ban size={11} className="inline" /> = לא בשימוש.
+          </p>
+          <Card className="p-4 overflow-x-auto">
+            <FlowNode node={FLOWS[flowTab]} />
+          </Card>
+          {flowTab === 'unknown' && (
+            <p className="text-muted text-[12px] flex items-start gap-1.5">
+              <Ban size={12} className="mt-0.5 shrink-0" />ההקלטה ״מתקשר לא מזוהה״ כבר אינה בשימוש — מתקשר לא מזוהה מגיע לתפריט המכירות במקום לניתוק.
+            </p>
+          )}
+        </div>
+      )}
+
+      {view === 'library' && (<>
       {grouped.filter((g) => g.rows.length).map((g) => (
         <section key={g.title}>
           <div className="flex items-baseline gap-2 mb-2">
@@ -409,6 +644,7 @@ export function Recordings() {
           )}
         </section>
       ); })()}
+      </>)}
 
       {/* confirm soft-delete (hide) — a retired recording tucked into the hidden fold */}
       <Modal open={!!hideKey} onClose={() => setHideKey(null)} title={`הסתרה מהספרייה — ${KEY_HE[hideKey?.key] || hideKey?.key || ''}`}>
