@@ -26,6 +26,20 @@ function assertKey(key, files = manifest().files) {
   return files[key];
 }
 
+// ── Dev-only recordings ──
+// Staging (and local) edit a PARALLEL copy that only the dev line hears, so
+// production is never touched until an admin presses "publish". The dev audio
+// sits in its own Yemot folder (98/<n>, beside the live 99/<n>), and its
+// text/voice/active live in parallel *_dev settings the staging server prefers
+// (see router.js speak()). Only NODE_ENV=production writes and serves the live
+// files; everywhere else, a save is a dev save. The DB is shared, so prod simply
+// ignores the *_dev rows.
+export const DEV_SCOPE = env.nodeEnv !== 'production';
+const devFileRef = (file) => String(file).replace(/^\d+\//, '98/');
+const scopeKeys = (scope, key) => (scope === 'dev'
+  ? { audio: `ivr.audio_dev.${key}`, text: `ivr.audio_text_dev.${key}`, voice: `ivr.audio_voice_dev.${key}` }
+  : { audio: `ivr.audio.${key}`, text: `ivr.audio_text.${key}`, voice: `ivr.audio_voice.${key}` });
+
 const yemotToken = () => {
   const token = env.otpYemot.token;
   if (!token) throw errors.validation('OTP_YEMOT_TOKEN אינו מוגדר בשרת');
@@ -36,12 +50,20 @@ export async function listRecordings() {
   const { voice, texts, files, retired = {} } = manifest();
   const rows = [];
   for (const [key, file] of Object.entries(files)) {
+    const devAudio = await getSetting(`ivr.audio_dev.${key}`);
     rows.push({
       key,
       file,
+      // Prod values — what production callers hear (shared, unchanged by a dev save).
       text: (await getSetting(`ivr.audio_text.${key}`)) || texts[key] || '',
       voice: (await getSetting(`ivr.audio_voice.${key}`)) || voice,
       active: !!(await getSetting(`ivr.audio.${key}`)),
+      // The dev-only override the staging line hears; null when it matches prod.
+      dev: devAudio ? {
+        file: devAudio,
+        text: (await getSetting(`ivr.audio_text_dev.${key}`)) || '',
+        voice: (await getSetting(`ivr.audio_voice_dev.${key}`)) || voice,
+      } : null,
       has_backup: existsSync(backupWav(key)),
       // A prompt no call flow plays any more (declared in the manifest). The audio
       // still lives on Yemot; the badge just tells the admin it is safe to hide.
@@ -56,7 +78,7 @@ export async function listRecordings() {
         : null,
     });
   }
-  return { voices: VOICES, default_voice: voice, rows };
+  return { voices: VOICES, default_voice: voice, env: env.nodeEnv, dev_scope: DEV_SCOPE, rows };
 }
 
 // Soft delete / restore for the library view. We only toggle a visibility flag and
@@ -96,7 +118,7 @@ const backupMetaF = (key) => path.join(backupDir, `${key}.json`);
 // Best-effort: a key that was never uploaded has nothing to snapshot.
 async function snapshotCurrent(key) {
   try {
-    const buf = await fetchRecordingAudio(key);
+    const buf = await downloadYemotWav(assertKey(key)); // the live prod file, regardless of dev scope
     mkdirSync(backupDir, { recursive: true });
     writeFileSync(backupWav(key), buf);
     writeFileSync(backupMetaF(key), JSON.stringify({
@@ -297,10 +319,25 @@ export async function uploadPendingRecording(key, { text } = {}) {
   // the freshest edit wins.
   if (String(text || '').trim()) meta.text = String(text).trim();
 
-  // Keep the outgoing live version for one-step undo, then replace it.
+  // Dev save (staging/local): write the parallel dev copy only — production is
+  // untouched until a "publish". No prod backup is taken (nothing live changed).
+  if (DEV_SCOPE) {
+    const devFile = devFileRef(file);
+    await uploadWavToYemot(devFile, wavBuf);
+    const k = scopeKeys('dev', key);
+    await putSettings([
+      { setting_key: k.audio, setting_value: devFile },
+      ...(meta.text ? [{ setting_key: k.text, setting_value: meta.text }] : []),
+      { setting_key: k.voice, setting_value: meta.voice },
+    ]);
+    rmSync(pendingWav(key), { force: true });
+    rmSync(pendingMeta(key), { force: true });
+    return { key, file: devFile, text: meta.text, voice: meta.voice, active: true, scope: 'dev', dev: { file: devFile, text: meta.text, voice: meta.voice } };
+  }
+
+  // Prod save: keep the outgoing live version for one-step undo, then replace it.
   const hasBackup = await snapshotCurrent(key);
   await uploadWavToYemot(file, wavBuf);
-
   await putSettings([
     { setting_key: `ivr.audio.${key}`, setting_value: file },
     ...(meta.text ? [{ setting_key: `ivr.audio_text.${key}`, setting_value: meta.text }] : []),
@@ -308,14 +345,49 @@ export async function uploadPendingRecording(key, { text } = {}) {
   ]);
   rmSync(pendingWav(key), { force: true });
   rmSync(pendingMeta(key), { force: true });
-  return { key, file, text: meta.text, voice: meta.voice, active: true, has_backup: hasBackup };
+  return { key, file, text: meta.text, voice: meta.voice, active: true, scope: 'prod', has_backup: hasBackup };
 }
 
-// The recording as stored on Yemot, for in-page playback (proxied because the
-// Yemot URL embeds the API token).
-export async function fetchRecordingAudio(key) {
+// Promote the dev-only recording to production: copy its audio onto the live
+// Yemot file and the dev text/voice into the live settings, snapshot the
+// replaced version for undo, then clear the dev override (dev now matches prod).
+export async function publishDevToProd(key) {
   const { files } = manifest();
   const file = assertKey(key, files);
+  const devAudio = await getSetting(`ivr.audio_dev.${key}`);
+  if (!devAudio) throw errors.validation('אין גרסת דמו לפרסום');
+  const devText = (await getSetting(`ivr.audio_text_dev.${key}`)) || '';
+  const devVoice = (await getSetting(`ivr.audio_voice_dev.${key}`)) || manifest().voice;
+
+  const wavBuf = await downloadYemotWav(devAudio);
+  const hasBackup = await snapshotCurrent(key);
+  await uploadWavToYemot(file, wavBuf);
+  await putSettings([
+    { setting_key: `ivr.audio.${key}`, setting_value: file },
+    ...(devText ? [{ setting_key: `ivr.audio_text.${key}`, setting_value: devText }] : []),
+    { setting_key: `ivr.audio_voice.${key}`, setting_value: devVoice },
+    // dev now equals prod — drop the override
+    { setting_key: `ivr.audio_dev.${key}`, setting_value: '' },
+    { setting_key: `ivr.audio_text_dev.${key}`, setting_value: '' },
+    { setting_key: `ivr.audio_voice_dev.${key}`, setting_value: '' },
+  ]);
+  return { key, file, text: devText, voice: devVoice, active: true, scope: 'prod', has_backup: hasBackup, dev: null };
+}
+
+// Throw the dev-only override away — the dev line falls back to the prod recording.
+export async function discardDevOverride(key) {
+  assertKey(key);
+  if (!(await getSetting(`ivr.audio_dev.${key}`))) throw errors.validation('אין גרסת דמו');
+  await putSettings([
+    { setting_key: `ivr.audio_dev.${key}`, setting_value: '' },
+    { setting_key: `ivr.audio_text_dev.${key}`, setting_value: '' },
+    { setting_key: `ivr.audio_voice_dev.${key}`, setting_value: '' },
+  ]);
+  return { key, dev: null };
+}
+
+// Download one Yemot file (any ref, e.g. '99/100' live or '98/100' dev).
+async function downloadYemotWav(file) {
   if (!file) throw errors.validation('הקלטה לא מוכרת');
   const url = 'https://www.call2all.co.il/ym/api/DownloadFile'
     + `?token=${encodeURIComponent(yemotToken())}&path=${encodeURIComponent(`ivr2:/${file}.wav`)}`;
@@ -327,4 +399,18 @@ export async function fetchRecordingAudio(key) {
     throw errors.validation(`ימות: ${j.message || j.responseStatus || 'שגיאה'}`);
   }
   return buf;
+}
+
+// The recording as stored on Yemot, for in-page playback (proxied because the
+// Yemot URL embeds the API token). On the dev line a dev override, if present,
+// is what the admin should hear — so playback follows the same scope as calls.
+export async function fetchRecordingAudio(key) {
+  const { files } = manifest();
+  const prodFile = assertKey(key, files);
+  let file = prodFile;
+  if (DEV_SCOPE) {
+    const devAudio = await getSetting(`ivr.audio_dev.${key}`);
+    if (devAudio) file = devAudio;
+  }
+  return downloadYemotWav(file);
 }

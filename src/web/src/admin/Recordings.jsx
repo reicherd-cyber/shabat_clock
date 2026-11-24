@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, Select, Badge, Modal, ErrorNote, useAsync, FilterSelect } from '../ui.jsx';
-import { Play, Pencil, Mic, Volume2, LoaderCircle, Upload, RotateCcw, Square, CircleDot, History, Download, Trash2, CloudUpload, EyeOff, Eye, Ban, ChevronDown, ChevronLeft, GitFork, Phone, UserCheck, UserX } from 'lucide-react';
+import { Play, Pencil, Mic, Volume2, LoaderCircle, Upload, RotateCcw, Square, CircleDot, History, Download, Trash2, CloudUpload, EyeOff, Eye, Ban, ChevronDown, ChevronLeft, GitFork, Phone, UserCheck, UserX, Rocket, Undo2, FlaskConical } from 'lucide-react';
 
 // Every IVR prompt recording on Yemot: what it says, which voice, and whether the
 // call actually plays the recording (vs falling back to robot TTS of the text).
@@ -206,6 +206,8 @@ export function Recordings() {
   const [undoKey, setUndoKey] = useState(null); // key awaiting undo confirmation
   const [hideKey, setHideKey] = useState(null); // row awaiting hide (soft-delete) confirmation
   const [showHidden, setShowHidden] = useState(false); // the hidden-section fold
+  const [publishKey, setPublishKey] = useState(null); // row awaiting publish-to-prod confirmation
+  const [discardDevKey, setDiscardDevKey] = useState(null); // row awaiting dev-version discard
   const recRef = useRef(null); // { mr, stream, timer }
   const { busy, error, run, setError } = useAsync();
 
@@ -300,12 +302,33 @@ export function Recordings() {
   };
 
   // Step 2: approved (via the confirm dialog) — upload the pending take to Yemot.
+  // On the dev line this writes a dev-only override (prod untouched); on prod it
+  // replaces the live file. The merge keeps the row's prod file/text accurate.
   const upload = () => run(async () => {
     const out = await adminApi.post(`/recordings/${edit.key}/upload`, { text: edit.text });
-    setData((d) => ({ ...d, rows: d.rows.map((r) => (r.key === out.key ? { ...r, ...out, pending: null } : r)) }));
+    setData((d) => ({ ...d, rows: d.rows.map((r) => {
+      if (r.key !== out.key) return r;
+      if (out.scope === 'dev') return { ...r, dev: out.dev, pending: null };
+      return { ...r, text: out.text, voice: out.voice, active: out.active, has_backup: out.has_backup, pending: null };
+    }) }));
     setConfirmUpload(false);
     setEdit(null);
     setGen(null);
+  });
+
+  // Promote a dev-only recording to production (replaces the live file).
+  const publish = () => run(async () => {
+    const out = await adminApi.post(`/recordings/${publishKey.key}/publish`);
+    setData((d) => ({ ...d, rows: d.rows.map((r) => (r.key === out.key
+      ? { ...r, text: out.text, voice: out.voice, active: out.active, has_backup: out.has_backup, dev: null } : r)) }));
+    setPublishKey(null);
+  });
+
+  // Drop the dev-only override — the dev line falls back to the live recording.
+  const discardDev = () => run(async () => {
+    const out = await adminApi.del(`/recordings/${discardDevKey.key}/dev`);
+    setData((d) => ({ ...d, rows: d.rows.map((r) => (r.key === out.key ? { ...r, dev: null } : r)) }));
+    setDiscardDevKey(null);
   });
 
   // Approve every waiting draft in one go (after its own confirm dialog).
@@ -352,6 +375,7 @@ export function Recordings() {
 
   if (!data) return <p className="text-muted">טוען…</p>;
 
+  const devScope = !!data.dev_scope; // this admin edits a dev-only copy (staging/local), not the live line
   const rowByKey = new Map(data.rows.map((r) => [r.key, r])); // every recording, for the call map
   const needle = q.trim();
   const statusOk = (r) => !fStatus
@@ -461,6 +485,18 @@ export function Recordings() {
               <History size={16} />
             </button>
           )}
+          {r.dev && (
+            <button className="cursor-pointer p-1" style={{ color: '#4f46e5' }} title="פרסום גרסת הדמו לפרודקשן"
+              onClick={() => setPublishKey(r)}>
+              <Rocket size={16} />
+            </button>
+          )}
+          {r.dev && (
+            <button className="text-muted hover:text-off cursor-pointer p-1" title="ביטול גרסת הדמו (חזרה לגרסה החיה)"
+              onClick={() => setDiscardDevKey(r)}>
+              <Undo2 size={16} />
+            </button>
+          )}
           {r.retired && (
             <button className="text-muted hover:text-off cursor-pointer p-1" title="הסתרה מהספרייה (ניתן לשחזר)"
               onClick={() => setHideKey(r)}>
@@ -485,6 +521,12 @@ export function Recordings() {
           <Mic size={12} />{VOICE_HE[r.voice] || r.voice}
         </span>
         <span className="inline-flex items-center gap-1.5">
+          {r.dev && (
+            <span className="text-[12px] font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1"
+              style={{ background: '#E0E7FF', color: '#4338CA' }} title="קיימת גרסת דמו שטרם פורסמה לפרודקשן">
+              <FlaskConical size={11} />גרסת דמו
+            </span>
+          )}
           {r.retired && (
             <span className="text-[12px] font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1"
               style={{ background: '#F1F0EE', color: '#6B7280' }} title={r.retired_reason || 'אין קריאה אליו בשום מסלול שיחה'}>
@@ -533,7 +575,7 @@ export function Recordings() {
             {data.rows.some((r) => r.pending) && (
               <Button disabled={busy} onClick={() => setConfirmAll(true)}>
                 <span className="inline-flex items-center gap-1.5">
-                  <CloudUpload size={16} />העלה הכל לימות ({data.rows.filter((r) => r.pending).length})
+                  <CloudUpload size={16} />{devScope ? 'שמור הכל לדמו' : 'העלה הכל לימות'} ({data.rows.filter((r) => r.pending).length})
                 </span>
               </Button>
             )}
@@ -555,6 +597,17 @@ export function Recordings() {
         </div>
       </div>
       <ErrorNote error={error} />
+
+      {devScope && (
+        <div className="rounded-xl border px-3 py-2.5 text-sm flex items-start gap-2"
+          style={{ background: '#EEF2FF', borderColor: '#C7D2FE', color: '#3730A3' }}>
+          <FlaskConical size={16} className="mt-0.5 shrink-0" />
+          <span>
+            <b>סביבת דמו (dev).</b> שמירת הקלטה כאן נשמעת רק בקו הדמו — הפרודקשן אינו מושפע.
+            כשתהיו מרוצים, לחצו <b>״פרסם לפרודקשן״</b> על הקטע כדי להעלות אותו לקו החי.
+          </span>
+        </div>
+      )}
 
       {view === 'map' && (
         <div className="space-y-4">
@@ -727,7 +780,7 @@ export function Recordings() {
                   </button>
                   <div className="grid grid-cols-2 gap-2">
                     <Button disabled={busy} onClick={() => setConfirmUpload(true)}>
-                      <span className="inline-flex items-center gap-1.5"><Upload size={16} />העלה לימות</span>
+                      <span className="inline-flex items-center gap-1.5"><Upload size={16} />{devScope ? 'שמור לדמו' : 'העלה לימות'}</span>
                     </Button>
                     <Button variant="ghost" disabled={busy} onClick={gen.kind === 'self' ? startRec : generate}>
                       <span className="inline-flex items-center gap-1.5"><RotateCcw size={15} />הקלט מחדש</span>
@@ -750,25 +803,34 @@ export function Recordings() {
               )}
               <p className="text-muted text-xs">
                 {recording ? `עד ${MAX_REC_SECS} שניות; ההקלטה תעבור להאזנה כשתעצרו.`
-                  : fresh ? 'ההקלטה עדיין לא הועלתה — האזינו, ואשרו עם ״העלה לימות״ או צרו גרסה חדשה.'
-                    : 'שלב 1: יצירת הקלטה להאזנה — בקול נוירוני מהטקסט, או בקול שלכם מהמיקרופון. שום דבר לא מוחלף בימות עד לאישור.'}
+                  : fresh ? `ההקלטה עדיין לא נשמרה — האזינו, ואשרו עם ״${devScope ? 'שמור לדמו' : 'העלה לימות'}״ או צרו גרסה חדשה.`
+                    : `שלב 1: יצירת הקלטה להאזנה — בקול נוירוני מהטקסט, או בקול שלכם מהמיקרופון. ${devScope ? 'שמירה תשפיע על קו הדמו בלבד.' : 'שום דבר לא מוחלף בימות עד לאישור.'}`}
               </p>
             </div>
           );
         })()}
       </Modal>
 
-      {/* confirm before replacing the live prompt on Yemot */}
-      <Modal open={confirmUpload} onClose={() => setConfirmUpload(false)} title="להעלות לימות?">
+      {/* confirm before replacing the live prompt on Yemot (dev save vs prod save) */}
+      <Modal open={confirmUpload} onClose={() => setConfirmUpload(false)} title={devScope ? 'לשמור לקו הדמו?' : 'להעלות לימות?'}>
         <div className="space-y-3">
-          <p>ההקלטה החדשה תחליף את המענה החי בימות תוך כחצי דקה.</p>
-          <p className="text-muted text-sm">הגרסה הנוכחית נשמרת בצד — אפשר לשחזר אותה בלחיצה אחת (סמל ה־<History size={13} className="inline" />) גם אחרי ההעלאה.</p>
+          {devScope ? (
+            <>
+              <p>ההקלטה תישמע בקו הדמו (dev) תוך כחצי דקה. <b>הפרודקשן לא יושפע.</b></p>
+              <p className="text-muted text-sm">כדי להעלות אותה לקו החי, לחצו אחר כך על ״פרסם לפרודקשן״ (סמל ה־<Rocket size={13} className="inline" />) בכרטיס הקטע.</p>
+            </>
+          ) : (
+            <>
+              <p>ההקלטה החדשה תחליף את המענה החי בימות תוך כחצי דקה.</p>
+              <p className="text-muted text-sm">הגרסה הנוכחית נשמרת בצד — אפשר לשחזר אותה בלחיצה אחת (סמל ה־<History size={13} className="inline" />) גם אחרי ההעלאה.</p>
+            </>
+          )}
           <ErrorNote error={error} />
           <div className="grid grid-cols-2 gap-2">
             <Button disabled={busy} onClick={upload}>
               <span className="inline-flex items-center gap-1.5">
                 {busy ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
-                {busy ? 'מעלה…' : 'כן, העלה'}
+                {busy ? 'שומר…' : devScope ? 'כן, שמור לדמו' : 'כן, העלה'}
               </span>
             </Button>
             <Button variant="ghost" disabled={busy} onClick={() => setConfirmUpload(false)}>ביטול</Button>
@@ -776,10 +838,42 @@ export function Recordings() {
         </div>
       </Modal>
 
-      {/* confirm approve-all drafts (or throw them all away) */}
-      <Modal open={confirmAll} onClose={() => { setConfirmAll(false); setArmDismissAll(false); }} title="להעלות את כל הטיוטות לימות?">
+      {/* confirm publish dev → production */}
+      <Modal open={!!publishKey} onClose={() => setPublishKey(null)} title={`פרסום לפרודקשן — ${KEY_HE[publishKey?.key] || publishKey?.key || ''}`}>
         <div className="space-y-3">
-          <p>{data.rows.filter((r) => r.pending).length} טיוטות ממתינות יחליפו את המענה החי בימות תוך כחצי דקה:</p>
+          <p>גרסת הדמו תועלה לקו החי (פרודקשן) ותחליף את המענה הנוכחי תוך כחצי דקה.</p>
+          <p className="text-muted text-sm">הגרסה החיה הנוכחית נשמרת בצד — אפשר לשחזר אותה בלחיצה אחת (<History size={13} className="inline" />) גם אחרי הפרסום.</p>
+          <ErrorNote error={error} />
+          <div className="grid grid-cols-2 gap-2">
+            <Button disabled={busy} onClick={publish}>
+              <span className="inline-flex items-center gap-1.5">
+                {busy ? <LoaderCircle size={16} className="animate-spin" /> : <Rocket size={16} />}
+                {busy ? 'מפרסם…' : 'כן, פרסם לפרודקשן'}
+              </span>
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={() => setPublishKey(null)}>ביטול</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* confirm discard dev override */}
+      <Modal open={!!discardDevKey} onClose={() => setDiscardDevKey(null)} title={`ביטול גרסת דמו — ${KEY_HE[discardDevKey?.key] || discardDevKey?.key || ''}`}>
+        <div className="space-y-3">
+          <p>גרסת הדמו תימחק וקו הדמו יחזור להשמיע את הגרסה החיה (פרודקשן). הפרודקשן לא מושפע.</p>
+          <ErrorNote error={error} />
+          <div className="grid grid-cols-2 gap-2">
+            <Button disabled={busy} onClick={discardDev}>
+              <span className="inline-flex items-center gap-1.5"><Undo2 size={15} />בטל גרסת דמו</span>
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={() => setDiscardDevKey(null)}>ביטול</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* confirm approve-all drafts (or throw them all away) */}
+      <Modal open={confirmAll} onClose={() => { setConfirmAll(false); setArmDismissAll(false); }} title={devScope ? 'לשמור את כל הטיוטות לדמו?' : 'להעלות את כל הטיוטות לימות?'}>
+        <div className="space-y-3">
+          <p>{data.rows.filter((r) => r.pending).length} טיוטות ממתינות {devScope ? 'יישמעו בקו הדמו (הפרודקשן לא יושפע)' : 'יחליפו את המענה החי בימות'} תוך כחצי דקה:</p>
           <ul className="text-sm space-y-1 max-h-48 overflow-y-auto border border-line rounded-xl p-3">
             {data.rows.filter((r) => r.pending).map((r) => (
               <li key={r.key} className="flex items-center justify-between gap-2">
@@ -788,13 +882,16 @@ export function Recordings() {
               </li>
             ))}
           </ul>
-          <p className="text-muted text-sm">כל גרסה חיה נשמרת בצד לשחזור (<History size={13} className="inline" />).</p>
+          <p className="text-muted text-sm">
+            {devScope ? 'השמירה משפיעה על קו הדמו בלבד; לפרסום לפרודקשן השתמשו ב״פרסם לפרודקשן״ בכל קטע.'
+              : <>כל גרסה חיה נשמרת בצד לשחזור (<History size={13} className="inline" />).</>}
+          </p>
           <ErrorNote error={error} />
           <div className="grid grid-cols-2 gap-2">
             <Button disabled={busy} onClick={uploadAll}>
               <span className="inline-flex items-center gap-1.5">
                 {busy ? <LoaderCircle size={16} className="animate-spin" /> : <CloudUpload size={16} />}
-                {busy ? 'מעלה הכל…' : 'כן, העלה הכל'}
+                {busy ? 'שומר הכל…' : devScope ? 'כן, שמור הכל לדמו' : 'כן, העלה הכל'}
               </span>
             </Button>
             <Button variant="ghost" disabled={busy} onClick={() => { setConfirmAll(false); setArmDismissAll(false); }}>ביטול</Button>

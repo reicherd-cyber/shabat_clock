@@ -31,7 +31,7 @@ import { listSettings, putSettings } from '../../services/settings.js';
 import {
   listRecordings, generateRecording, savePendingFromUpload, fetchPendingAudio,
   uploadPendingRecording, uploadAllPending, discardPending, discardAllPending, undoLastUpload, fetchRecordingAudio,
-  setRecordingHidden,
+  setRecordingHidden, publishDevToProd, discardDevOverride,
 } from '../../services/ivrAudio.js';
 import { getAdminHistory } from '../../services/history.js';
 import { getVoiceCosts, addRate, RATE_KINDS } from '../../services/voiceCosts.js';
@@ -1087,6 +1087,24 @@ adminRouter.post('/recordings/:key/undo', requireSuperadmin, async (req, res, ne
   try {
     const out = await undoLastUpload(req.params.key);
     await audit(req, 'undo', 'ivr_recording', null, { key: out.key });
+    res.json(out);
+  } catch (e) { next(e); }
+});
+
+// Promote a dev-only recording to production (replaces the live Yemot file).
+adminRouter.post('/recordings/:key/publish', requireSuperadmin, async (req, res, next) => {
+  try {
+    const out = await publishDevToProd(req.params.key);
+    await audit(req, 'publish_to_prod', 'ivr_recording', null, { key: out.key, text: out.text, voice: out.voice });
+    res.json(out);
+  } catch (e) { next(e); }
+});
+
+// Drop the dev-only override — the dev line falls back to the live recording.
+adminRouter.delete('/recordings/:key/dev', requireSuperadmin, async (req, res, next) => {
+  try {
+    const out = await discardDevOverride(req.params.key);
+    await audit(req, 'discard_dev', 'ivr_recording', null, { key: out.key });
     res.json(out);
   } catch (e) { next(e); }
 });

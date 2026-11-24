@@ -198,7 +198,12 @@ async function nluListenSpec(session) {
 }
 
 async function speak(key, vars = {}, fallback = null) {
-  const audio = await getSetting(key.replace(/^ivr\./, 'ivr.audio.'));
+  const base = key.replace(/^ivr\./, '');
+  // Dev line (NODE_ENV!=production) prefers a dev-only recording when one exists,
+  // so admins can test a new take without touching the live file; production
+  // always serves ivr.audio.<key> (see services/ivrAudio.js DEV_SCOPE).
+  const audio = (env.nodeEnv !== 'production' && await getSetting(`ivr.audio_dev.${base}`))
+    || await getSetting(`ivr.audio.${base}`);
   if (audio) return [{ f: audio }];
   const text = await getText(key, vars);
   // getText echoes the key when no settings row exists — newer prompts ship only
