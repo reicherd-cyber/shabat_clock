@@ -208,6 +208,7 @@ export function Recordings() {
   const [recSecs, setRecSecs] = useState(-1); // -1 = not recording
   const [confirmUpload, setConfirmUpload] = useState(false);
   const [confirmAll, setConfirmAll] = useState(false);
+  const [confirmPublishAll, setConfirmPublishAll] = useState(false); // publish all dev overrides to prod
   const [armDismissAll, setArmDismissAll] = useState(false); // two-step "discard all" inside the dialog
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [undoKey, setUndoKey] = useState(null); // key awaiting undo confirmation
@@ -358,6 +359,17 @@ export function Recordings() {
     setData((d) => ({ ...d, rows: d.rows.map((r) => (r.key === out.key
       ? { ...r, text: out.text, voice: out.voice, active: out.active, has_backup: out.has_backup, dev: null } : r)) }));
     setPublishKey(null);
+  });
+
+  // Publish every dev override to production at once.
+  const publishAll = () => run(async () => {
+    const { results } = await adminApi.post('/recordings/publish-all');
+    setConfirmPublishAll(false);
+    setData(await adminApi.get('/recordings'));
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length) {
+      throw new Error(`פורסמו ${results.length - failed.length}; נכשלו: ${failed.map((f) => KEY_HE[f.key] || f.key).join(', ')}`);
+    }
   });
 
   // Drop the dev-only override — the dev line falls back to the live recording.
@@ -608,8 +620,15 @@ export function Recordings() {
             </button>
           </div>
           {view === 'library' && (<>
+            {data.rows.some((r) => r.dev) && (
+              <Button disabled={busy} onClick={() => setConfirmPublishAll(true)}>
+                <span className="inline-flex items-center gap-1.5">
+                  <Rocket size={16} />פרסם הכל לפרודקשן ({data.rows.filter((r) => r.dev).length})
+                </span>
+              </Button>
+            )}
             {data.rows.some((r) => r.pending) && (
-              <Button disabled={busy} onClick={() => setConfirmAll(true)}>
+              <Button variant="ghost" disabled={busy} onClick={() => setConfirmAll(true)}>
                 <span className="inline-flex items-center gap-1.5">
                   <CloudUpload size={16} />{devScope ? 'שמור הכל לדמו' : 'העלה הכל לימות'} ({data.rows.filter((r) => r.pending).length})
                 </span>
@@ -908,6 +927,32 @@ export function Recordings() {
               </span>
             </Button>
             <Button variant="ghost" disabled={busy} onClick={() => setPublishKey(null)}>ביטול</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* confirm publish ALL dev overrides to production */}
+      <Modal open={confirmPublishAll} onClose={() => setConfirmPublishAll(false)} title="לפרסם את כל גרסאות הדמו לפרודקשן?">
+        <div className="space-y-3">
+          <p>{data.rows.filter((r) => r.dev).length} הקלטות עם גרסת דמו יעלו לקו החי (פרודקשן) ויחליפו את המענה הנוכחי תוך כחצי דקה:</p>
+          <ul className="text-sm space-y-1 max-h-48 overflow-y-auto border border-line rounded-xl p-3">
+            {data.rows.filter((r) => r.dev).map((r) => (
+              <li key={r.key} className="flex items-center justify-between gap-2">
+                <span>{KEY_HE[r.key] || r.key}</span>
+                <span className="text-muted text-xs">{VOICE_HE[r.dev.voice] || r.dev.voice}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-muted text-sm">כל גרסה חיה נשמרת בצד לשחזור (<History size={13} className="inline" />).</p>
+          <ErrorNote error={error} />
+          <div className="grid grid-cols-2 gap-2">
+            <Button disabled={busy} onClick={publishAll}>
+              <span className="inline-flex items-center gap-1.5">
+                {busy ? <LoaderCircle size={16} className="animate-spin" /> : <Rocket size={16} />}
+                {busy ? 'מפרסם…' : 'כן, פרסם הכל'}
+              </span>
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={() => setConfirmPublishAll(false)}>ביטול</Button>
           </div>
         </div>
       </Modal>

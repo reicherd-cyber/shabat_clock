@@ -31,7 +31,7 @@ import { listSettings, putSettings } from '../../services/settings.js';
 import {
   listRecordings, generateRecording, savePendingFromUpload, fetchPendingAudio,
   uploadPendingRecording, uploadAllPending, discardPending, discardAllPending, undoLastUpload, fetchRecordingAudio,
-  setRecordingHidden, publishDevToProd, discardDevOverride, saveRecordingText,
+  setRecordingHidden, publishDevToProd, publishAllDevToProd, discardDevOverride, saveRecordingText,
 } from '../../services/ivrAudio.js';
 import { getAdminHistory } from '../../services/history.js';
 import { getVoiceCosts, addRate, RATE_KINDS } from '../../services/voiceCosts.js';
@@ -1106,6 +1106,18 @@ adminRouter.post('/recordings/:key/publish', requireSuperadmin, async (req, res,
     const out = await publishDevToProd(req.params.key);
     await audit(req, 'publish_to_prod', 'ivr_recording', null, { key: out.key, text: out.text, voice: out.voice });
     res.json(out);
+  } catch (e) { next(e); }
+});
+
+// Promote every dev override to production at once (the UI confirms first).
+adminRouter.post('/recordings/publish-all', requireSuperadmin, async (req, res, next) => {
+  try {
+    const results = await publishAllDevToProd();
+    await audit(req, 'publish_all', 'ivr_recording', null, {
+      published: results.filter((r) => r.ok).map((r) => r.key),
+      failed: results.filter((r) => !r.ok).map((r) => r.key),
+    });
+    res.json({ results });
   } catch (e) { next(e); }
 });
 

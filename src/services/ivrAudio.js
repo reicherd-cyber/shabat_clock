@@ -387,6 +387,23 @@ export async function saveRecordingText(key, text) {
   return { key, text: t };
 }
 
+// Publish every dev override to production in one go. Per-key isolation so one
+// failure doesn't block the rest; returns what happened to each.
+export async function publishAllDevToProd() {
+  const { files } = manifest();
+  const results = [];
+  for (const key of Object.keys(files)) {
+    if (!(await getSetting(`ivr.audio_dev.${key}`))) continue;
+    try {
+      results.push({ ...(await publishDevToProd(key)), ok: true });
+    } catch (e) {
+      results.push({ key, ok: false, error: e.message });
+    }
+  }
+  if (!results.length) throw errors.validation('אין גרסאות דמו לפרסום');
+  return results;
+}
+
 // Throw the dev-only override away — the dev line falls back to the prod recording.
 export async function discardDevOverride(key) {
   assertKey(key);
