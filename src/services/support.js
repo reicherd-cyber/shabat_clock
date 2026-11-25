@@ -20,6 +20,7 @@ import { env } from '../config/env.js';
 import { costUsd, totalInputTokens, quickAnswerParams } from './aiPricing.js';
 import { aiAllowed } from './aiBudget.js';
 import { smallTalkAnswer, normalizeQuestion } from './supportRules.js';
+import { explainChannelState } from './channelStatus.js';
 
 const SCHEMA = {
   type: 'object',
@@ -103,6 +104,20 @@ export async function answerSupportQuestion({ userId, text, source = 'web', phon
   if (rule) {
     log({ answer: rule.answer, answered: true, model: 'rules' });
     return { can_answer: true, answer: rule.answer };
+  }
+
+  // 1b. "למה הערוץ כבוי/דלוק?" — answered from the caller's OWN channel history
+  // (scoped to their userId), not the model. Only for a signed-in caller; a guest
+  // (no userId) has no data to read, so it falls through to the knowledge base.
+  if (userId) {
+    const why = await explainChannelState({ userId, text: clean }).catch((e) => {
+      console.error('channel explain failed:', e.message);
+      return null;
+    });
+    if (why) {
+      log({ answer: why, answered: true, model: 'rules' });
+      return { can_answer: true, answer: why };
+    }
   }
 
   if (!env.anthropic.apiKey) return { can_answer: false, answer: null };
