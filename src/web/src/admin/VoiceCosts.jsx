@@ -18,7 +18,7 @@ const SOURCES = {
   web: { label: 'אתר', Icon: Globe, color: '#64748b' },
   unknown: { label: 'לא ידוע', Icon: HelpCircle, color: '#94a3b8' },
 };
-const KINDS = { command: 'פקודה', support: 'שאלת תמיכה', router: 'ניתוב בתפריט' };
+const KINDS = { command: 'פקודה', support: 'שאלת תמיכה', router: 'ניתוב בתפריט', tts: 'הקראה קולית', admin: 'מזכירה (ניהול)', secretary: 'מזכירה אישית' };
 
 function SourceCell({ source, kind }) {
   const s = SOURCES[source] || SOURCES.unknown;
