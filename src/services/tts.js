@@ -100,7 +100,9 @@ export async function ttsToYemot(text, { userId = null, phone = null, source = '
   if (String(await getSetting('ivr.tts_provider', '')).trim() !== 'elevenlabs') return null;
   const voiceId = (String(await getSetting('ivr.tts_voice_id', '')).trim()) || env.elevenLabs.voiceId;
   if (!voiceId) return null;
-  const model = String(await getSetting('ivr.tts_model', '')).trim() || 'eleven_flash_v2_5';
+  // eleven_v3 is the only model that renders Hebrew cleanly — multilingual_v2 and
+  // the flash/turbo models garble it (verified by transcribing their output).
+  const model = String(await getSetting('ivr.tts_model', '')).trim() || 'eleven_v3';
 
   const ref = `${TTS_FOLDER}/t${hash(`${voiceId}:${model}:${clean}`)}`;
   if (cache.has(ref)) return ref;
