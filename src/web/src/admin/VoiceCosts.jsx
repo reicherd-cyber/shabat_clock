@@ -40,7 +40,7 @@ function TextCell({ text, source }) {
   const long = text.length > 160;
   return (
     <span
-      className={`block max-w-md min-w-[14rem] ${long && !open ? 'line-clamp-3 cursor-pointer' : ''}`}
+      className={`block max-w-md min-w-[6rem] ${long && !open ? 'line-clamp-3 cursor-pointer' : ''}`}
       style={{ overflowWrap: 'anywhere' }}
       title={long && !open ? 'לחצו להצגת הטקסט המלא' : undefined}
       onClick={long ? () => setOpen((v) => !v) : undefined}
