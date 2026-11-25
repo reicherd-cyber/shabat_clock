@@ -67,6 +67,8 @@ export async function bridgeCall({ customerPhone, agentPhone, leadId = null, use
   // CreateBridgeCall: Phones = the agent leg, BridgePhones = the customer; both see `callerId`.
   const params = new URLSearchParams({ token, BridgePhones: customer });
   if (callerId) params.set('callerId', callerId);
+  // Record every call so it can be attached to the card/ticket/customer (user, 2026-11-25).
+  params.set('RecordCall', '1');
   if (sip) {
     // Ring a SIP extension (the softphone) as the agent leg.
     params.set('DialSipExtension', '1');
