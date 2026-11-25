@@ -43,7 +43,7 @@ import { listPasskeys, registrationOptions, registerPasskey, deletePasskey, rpId
 import { listReplies, markRepliesSeen, insertReply, cleanReplyBody, notifyUserOfReply } from '../../services/supportThread.js';
 import { notifyWhatsappReply } from '../../whatsapp/bot.js';
 import { readVoicemail, fetchVoicemail } from '../../services/voicemail.js';
-import { fetchCallRecording } from '../../services/callRecording.js';
+import { fetchCallRecording, readCallRecording, archiveCallRecordingInBackground } from '../../services/callRecording.js';
 import { brokerConnected } from '../../mqtt/client.js';
 import { healthSnapshot } from '../../monitor/health.js';
 import { generateSecret, otpauthUri } from '../../services/totp.js';
@@ -1987,6 +1987,8 @@ adminRouter.post('/contact/callback', requireWrite, async (req, res, next) => {
       actor: adminActor(req),
     });
     audit(req, 'contact_callback', 'callback', r.id, { phone: r.phone, agent_phone: r.agentPhone });
+    // Archive the recording once the call ends (polls Yemot's BridgeCall log).
+    if (r.status === 'ok') archiveCallRecordingInBackground({ id: r.id, phone: r.phone, at: new Date() });
     res.status(201).json(r);
   } catch (e) { next(e); }
 });
@@ -2019,14 +2021,18 @@ adminRouter.get('/contact/callbacks', async (req, res, next) => {
 // 404 when the call wasn't answered / isn't in the BridgeCall log yet.
 adminRouter.get('/contact/callbacks/:id/recording', async (req, res, next) => {
   try {
-    const [cb] = await query('SELECT id, phone, created_at FROM callbacks WHERE id = ?', [Number(req.params.id)]);
+    const [cb] = await query('SELECT id, phone, created_at, recording_path FROM callbacks WHERE id = ?', [Number(req.params.id)]);
     if (!cb) throw errors.notFound();
+    const sendWav = (buf) => { res.set('Content-Type', 'audio/wav'); res.set('Cache-Control', 'no-store'); res.send(buf); };
+    const disk = readCallRecording(cb.id); // archived copy (permanent)
+    if (disk) return sendWav(disk);
+    if (cb.recording_path === 'none') throw errors.notFound('NO_RECORDING', 'אין הקלטה לשיחה זו (השיחה לא נענתה)');
+    // Not archived yet → fetch live from Yemot, and kick off archiving for next time.
     const wav = await fetchCallRecording({ phone: cb.phone, at: cb.created_at })
       .catch((e) => { console.warn(`call recording ${cb.id}:`, e.message); return null; });
     if (!wav) throw errors.notFound('NO_RECORDING', 'אין הקלטה לשיחה זו (ייתכן שהשיחה לא נענתה)');
-    res.set('Content-Type', 'audio/wav');
-    res.set('Cache-Control', 'no-store');
-    res.send(wav);
+    archiveCallRecordingInBackground({ id: cb.id, phone: cb.phone, at: cb.created_at });
+    sendWav(wav);
   } catch (e) { next(e); }
 });
 

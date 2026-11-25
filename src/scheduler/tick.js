@@ -688,6 +688,11 @@ export function startScheduler() {
         }
       } catch (e) { console.error('alert digest:', e); }
       try {
+        // Archive recent outbound-call recordings off Yemot's Trash to our disk.
+        const { sweepCallRecordings } = await import('../services/callRecording.js');
+        await sweepCallRecordings();
+      } catch (e) { console.error('call recording sweep:', e); }
+      try {
         if (Date.now() - lastCatchUpAt >= CATCH_UP_EVERY_MIN * 60000) {
           lastCatchUpAt = Date.now();
           await catchUpAll('periodic');
