@@ -31,14 +31,15 @@ export function CallButton({ phones, lead = null, user = null, onDone, variant, 
     return configCache;
   };
 
-  // Dialer: copy the number, open the Zimna web-softphone. No backend call, no ring.
+  // Dialer: just COPY the number — the admin keeps the Zimna web-softphone open and
+  // pastes into it, so we must NOT reopen/reload it (that would drop their session).
+  // No backend call, no ring.
   const openDialer = (num) => {
     const digits = String(num).replace(/\D/g, '');
     try { navigator.clipboard?.writeText(digits); } catch { /* clipboard may be blocked — the number is still shown */ }
-    if (configCache?.softphone_url) window.open(configCache.softphone_url, 'zimna-softphone');
     setForm(null);
     setCopied(digits);
-    setTimeout(() => setCopied((c) => (c === digits ? null : c)), 6000);
+    setTimeout(() => setCopied((c) => (c === digits ? null : c)), 8000);
     onDone?.({ status: 'dialer', phone: digits });
   };
 
@@ -75,13 +76,16 @@ export function CallButton({ phones, lead = null, user = null, onDone, variant, 
       {copied && (
         <span className="text-xs" style={{ color: '#006e00' }}>
           ✓ המספר <span dir="ltr">{copied}</span> הועתק — הדביקו בחייגן והתקשרו
+          {configCache?.softphone_url && (
+            <> · <a className="underline" href={configCache.softphone_url} target="zimna-softphone" rel="noreferrer">פתח חייגן</a></>
+          )}
         </span>
       )}
 
       <Modal open={!!form} onClose={() => setForm(null)} title={dialer ? 'חיוג ללקוח בחייגן זמנא' : 'חיוג ללקוח מהמערכת'}>
         {form && dialer && (
           <div className="space-y-3">
-            <p className="text-sm text-muted">בחרו את המספר. הוא יועתק וייפתח חייגן זמנא — הדביקו בשדה "מספר לחיוג" והתקשרו. הלקוח יראה את מספר זמנא.</p>
+            <p className="text-sm text-muted">בחרו את המספר. הוא יועתק — הדביקו בשדה "מספר לחיוג" בחייגן זמנא והתקשרו. הלקוח יראה את מספר זמנא.</p>
             <label className="block text-sm">
               <span className="text-muted">הלקוח:</span>
               <Select className="w-full mt-1" dir="ltr" value={form.customer} onChange={(e) => setForm({ ...form, customer: e.target.value })}>
@@ -90,7 +94,7 @@ export function CallButton({ phones, lead = null, user = null, onDone, variant, 
             </label>
             <div className="flex gap-2">
               <Button onClick={() => openDialer(form.customer)}>
-                <span className="inline-flex items-center gap-1.5"><PhoneOutgoing size={15} />העתק ופתח חייגן</span>
+                <span className="inline-flex items-center gap-1.5"><PhoneOutgoing size={15} />העתק מספר</span>
               </Button>
               <Button variant="ghost" onClick={() => setForm(null)}>ביטול</Button>
             </div>
