@@ -28,6 +28,7 @@ import { step as menuStep, choiceOptions } from '../services/serviceMenu.js';
 import { phoneAllowed } from '../services/rollout.js';
 import { currentOnCall } from '../services/emergencyOnCall.js';
 import { writeEmergencyRouting, EMERGENCY_EXT_KEY } from '../services/yemotRouting.js';
+import { ttsToYemot } from '../services/tts.js';
 import { sendEmail } from '../services/email.js';
 
 function nextYmd(ymd) {
@@ -1006,8 +1007,13 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         }
         await appendPath(session.callLogId, 'svc_assist_hit');
         session.state = 'SVC_HELPED';
+        // Render the assistant's answer with the premium TTS when enabled
+        // (ivr.tts_provider), else let Yemot's own TTS read the text. A clip ref
+        // plays as { f }, the fallback as { t }.
+        const answerText = String(a.answer).slice(0, 900);
+        const clip = await ttsToYemot(answerText, { userId: session.userId, phone: session.phone, source: 'phone' });
         return res.send(ask([
-          { t: `${String(a.answer).slice(0, 900)},` },
+          clip ? { f: clip } : { t: `${answerText},` },
           ...await speak('ivr.svc_helped', {}, 'האם זה עזר? אם כן הקישו 1, להשארת הודעה ונחזור אליכם הקישו 2'),
         ]));
       }

@@ -116,6 +116,14 @@ export const env = {
     adminKey: process.env.ANTHROPIC_ADMIN_KEY || '',
   },
 
+  // ElevenLabs TTS for the phone assistant's spoken answers (services/tts.js).
+  // Empty key = off (the IVR falls back to Yemot's own TTS). Voice/model/price are
+  // editable settings (ivr.tts_*), the secret key stays in the env.
+  elevenLabs: {
+    apiKey: process.env.ELEVENLABS_API_KEY || '',
+    voiceId: process.env.ELEVENLABS_VOICE_ID || '', // a settings override (ivr.tts_voice_id) wins
+  },
+
   // WhatsApp bot on the business number (Meta Cloud API). Empty token = outbound
   // messages are logged to the console instead of sent (dev). appSecret signs
   // every webhook body; verifyToken is the string pasted into the Meta app's
