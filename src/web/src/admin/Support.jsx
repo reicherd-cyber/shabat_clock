@@ -299,7 +299,7 @@ export function SupportInbox() {
                 {open.phone && (
                   <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-line">
                     <CallButton phones={open.phone} className="text-sm !py-1.5" label="חזור אליו מהמערכת" />
-                    <span className="text-xs text-muted">מצלצל אצלך ואצל הלקוח ומחבר ביניכם</span>
+                    <span className="text-xs text-muted">מחייג ללקוח מהמערכת — הלקוח רואה את מספר זמנא</span>
                   </div>
                 )}
               </div>
