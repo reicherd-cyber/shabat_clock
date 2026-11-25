@@ -27,7 +27,7 @@ import { normalizePhone, isValidIsraeliPhone } from '../../services/phone.js';
 import { provisionDevice, rotateSecret, patchDevice, listAllDevices, probeShelly, registerShellyDevice, transferDevice, transferPreview, returnDeviceToStock, replacementCandidates, replaceHardware, markPreparedReusable, deviceUnitHistory } from '../../services/devices.js';
 import { adminCreateRelay, adminDeleteRelay, patchRelay } from '../../services/relays.js';
 import { createSchedule, updateSchedule, deleteSchedule, listSchedules } from '../../services/schedules.js';
-import { listSettings, putSettings } from '../../services/settings.js';
+import { listSettings, putSettings, getSetting } from '../../services/settings.js';
 import {
   listRecordings, generateRecording, savePendingFromUpload, fetchPendingAudio,
   uploadPendingRecording, uploadAllPending, discardPending, discardAllPending, undoLastUpload, fetchRecordingAudio,
@@ -1167,6 +1167,58 @@ adminRouter.put('/settings', requireSuperadmin, async (req, res, next) => {
 adminRouter.get('/admins', async (req, res, next) => {
   try {
     res.json(await query('SELECT id, name, email, phone, role, is_active, last_login_at, created_at FROM admins ORDER BY id'));
+  } catch (e) { next(e); }
+});
+
+// ── תורנות חירום: the on-call roster for the phone service menu's חירום transfer
+// (services/emergencyOnCall.js). The default admin handles emergencies unless a
+// day/time window reassigns them. Numbers come from the admins list (their saved
+// phone), so there is nothing to mistype here. ──
+adminRouter.get('/emergency-oncall', requireSuperadmin, async (req, res, next) => {
+  try {
+    let windows = [];
+    try { const w = JSON.parse((await getSetting('ivr.emergency_windows')) || '[]'); windows = Array.isArray(w) ? w : []; } catch { windows = []; }
+    res.json({
+      default_admin: Number(await getSetting('ivr.emergency_default_admin')) || null,
+      ring_seconds: Math.min(120, Math.max(5, Number(await getSetting('ivr.emergency_ring_seconds', '25')) || 25)),
+      windows,
+      // Active admins that can be put on call — only those with a phone can be rung.
+      admins: await query('SELECT id, name, phone, email FROM admins WHERE is_active = TRUE ORDER BY name'),
+    });
+  } catch (e) { next(e); }
+});
+adminRouter.put('/emergency-oncall', requireSuperadmin, async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const activeIds = new Set((await query('SELECT id FROM admins WHERE is_active = TRUE')).map((r) => Number(r.id)));
+    const defAdmin = Number(b.default_admin) || null;
+    if (defAdmin && !activeIds.has(defAdmin)) throw errors.validation('מנהל ברירת המחדל אינו תקין');
+    const ring = Math.min(120, Math.max(5, Number(b.ring_seconds) || 25));
+    const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+    const windows = Array.isArray(b.windows) ? b.windows : [];
+    const clean = windows.map((w) => {
+      const adminId = Number(w.admin_id) || null;
+      if (!adminId || !activeIds.has(adminId)) throw errors.validation('מנהל לא תקין בחלון תורנות');
+      if (!HHMM.test(String(w.start)) || !HHMM.test(String(w.end))) throw errors.validation('שעה לא תקינה בחלון תורנות (HH:MM)');
+      const type = w.type === 'once' ? 'once' : 'weekly';
+      const row = { admin_id: adminId, start: String(w.start), end: String(w.end), type };
+      if (type === 'once') {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(w.date))) throw errors.validation('תאריך לא תקין בחלון תורנות');
+        row.date = String(w.date);
+      } else {
+        const dow = Number(w.dow);
+        if (!(dow >= 1 && dow <= 7)) throw errors.validation('יום לא תקין בחלון תורנות');
+        row.dow = dow;
+      }
+      return row;
+    });
+    await putSettings([
+      { setting_key: 'ivr.emergency_default_admin', setting_value: defAdmin ? String(defAdmin) : '' },
+      { setting_key: 'ivr.emergency_ring_seconds', setting_value: String(ring) },
+      { setting_key: 'ivr.emergency_windows', setting_value: JSON.stringify(clean) },
+    ]);
+    await audit(req, 'update', 'emergency_oncall', null, { after: { default_admin: defAdmin, ring_seconds: ring, windows: clean } });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

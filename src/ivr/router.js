@@ -26,6 +26,8 @@ import { runNluActions, ymdForDay } from '../services/nluExec.js';
 import { shiftDate } from '../services/time.js';
 import { step as menuStep, choiceOptions } from '../services/serviceMenu.js';
 import { phoneAllowed } from '../services/rollout.js';
+import { currentOnCall } from '../services/emergencyOnCall.js';
+import { sendEmail } from '../services/email.js';
 
 function nextYmd(ymd) {
   const [y, mo, d] = ymd.split('-').map(Number);
@@ -321,7 +323,7 @@ async function serviceMenu(session, message = null) {
   session.state = 'SVC_ROOT';
   session.invalidCount = 0;
   return ask(await speak('ivr.svc_menu', {},
-    'לקבלת עזרה מהעוזר הדיגיטלי הקישו 1, להשארת הודעה ונחזור אליכם בהקדם הקישו 2'), { message });
+    'לקבלת עזרה מהעוזר הדיגיטלי הקישו 1, להשארת הודעה ונחזור אליכם בהקדם הקישו 2, לחירום בלבד הקישו 3'), { message });
 }
 // Record a service voicemail → support ticket (reuses the SALES_RECORD completion
 // path: # / hangup both file the ticket, then sales_thanks plays).
@@ -329,6 +331,68 @@ async function serviceLeaveMessage(session, preamble = null) {
   const leave = await speak('ivr.svc_leave', {},
     'אנא השאירו הודעה והסבירו את פנייתכם לאחר הצליל, בסיום הקישו סולמית, ונחזור אליכם בהקדם');
   return recordMessage(session, 'service', { state: 'SALES_RECORD', prompt: preamble ? [...preamble, ...leave] : leave });
+}
+
+// ── שירות → 3: חירום בלבד (2026-11-25) ──
+// A guarded live transfer to whoever is on call now (emergencyOnCall: a day/time
+// window, else the default admin). The confirm step keeps the line for real
+// emergencies; no answer → a voice message, and that message fires an immediate
+// email to the on-call admin + superadmins (an emergency is not a routine ticket,
+// see salesVoicemailDone). Reuses the same Yemot transfer + return-folder path as
+// נציג (agentTransfer) — the no-answer return is verified on real calls.
+async function emergencyConfirm(session) {
+  session.state = 'SVC_EMERGENCY_CONFIRM';
+  session.invalidCount = 0;
+  await appendPath(session.callLogId, 'svc_emergency');
+  return ask(await speak('ivr.svc_emergency', {},
+    'קו זה מיועד למקרי חירום בלבד, להעברת השיחה לתורן הקישו 1, לחזרה הקישו כוכבית'));
+}
+async function emergencyTransfer(session) {
+  const { admin, phone, dialable, ringSeconds } = await currentOnCall();
+  const returnFolder = String(await getSetting('ivr.agent_return_folder', '')).trim();
+  // Remember who we tried so the missed-call alert reaches the right person.
+  session.data.emergencyAdmin = admin ? { id: admin.id, name: admin.name, email: admin.email } : null;
+  if (!dialable || !returnFolder) {
+    // No reachable on-call number, or no return path configured → take a message
+    // straight away (and still alert, since an emergency went unanswered).
+    if (!returnFolder) console.warn('[ivr] ivr.agent_return_folder empty — emergency goes to voicemail without ringing');
+    return emergencyLeaveMessage(session, [{ t: 'כרגע אין תורן זמין בקו.' }]);
+  }
+  session.state = 'SVC_EMERGENCY_RETURN';
+  session.data.transferRing = ringSeconds;
+  session.invalidCount = 0;
+  await appendPath(session.callLogId, `emergency:${admin?.id ?? '?'}`);
+  return transfer(await speak('ivr.svc_emergency_transfer', {}, 'מעבירים את שיחתכם לתורן, אנא המתינו'), {
+    phone, ringSeconds, goto: returnFolder,
+  });
+}
+// The emergency voice message = a ticket flagged 'emergency'; its completion
+// triggers the alert (salesVoicemailDone). Same record step as the service message.
+async function emergencyLeaveMessage(session, preamble = null) {
+  const leave = await speak('ivr.svc_leave', {},
+    'אנא השאירו הודעה והסבירו את פנייתכם לאחר הצליל, בסיום הקישו סולמית, ונחזור אליכם בהקדם');
+  return recordMessage(session, 'emergency', { state: 'SALES_RECORD', prompt: preamble ? [...preamble, ...leave] : leave });
+}
+// An unanswered emergency: email the on-call admin we tried plus every active
+// superadmin (so the owner always hears of it) right away. Best-effort — a mail
+// failure must never break the call.
+async function notifyMissedEmergency(session, ticketId, { hungUp }) {
+  try {
+    const recips = new Set();
+    if (session.data.emergencyAdmin?.email) recips.add(session.data.emergencyAdmin.email);
+    for (const r of await query("SELECT email FROM admins WHERE is_active = TRUE AND role = 'superadmin'")) {
+      if (r.email) recips.add(r.email);
+    }
+    if (!recips.size) return;
+    const who = session.data.emergencyAdmin?.name ? `התורן (${session.data.emergencyAdmin.name})` : 'התורן';
+    const left = hungUp ? 'המתקשר ניתק מבלי להשאיר הודעה' : 'המתקשר השאיר הודעה';
+    const body = `שיחת חירום הועברה ל${who} ולא נענתה.\n${left}.\nמספר המתקשר: ${session.phone || 'לא ידוע'}\nפנייה מס׳ ${ticketId}.\nיש לחזור למתקשר בהקדם.`;
+    await Promise.allSettled([...recips].map((email) => sendEmail({
+      to: email, subject: 'שעון שבת — שיחת חירום שלא נענתה', text: body, kind: 'health_alert', ref: `emergency:${ticketId}`,
+    })));
+  } catch (e) {
+    console.error('emergency alert failed:', e.message);
+  }
 }
 
 // Recording ended — # pressed / max length, or a hangup mid-message (Yemot keeps
@@ -345,6 +409,9 @@ async function salesVoicemailDone(session, { hungUp = false } = {}) {
     { after: { source: 'phone', topic: session.data.vmTopic, phone: session.phone, hung_up: hungUp } });
   await appendPath(session.callLogId, hungUp ? 'vm_hangup' : 'vm_saved');
   await finishCall(session.callLogId, 'voicemail');
+  // An emergency that reached a voicemail went unanswered — alert immediately
+  // (fire-and-forget; the caller is being hung up and must not wait on email).
+  if (session.data.vmTopic === 'emergency') notifyMissedEmergency(session, ticketId, { hungUp });
   endSession(session.callId);
   fetchVoicemailInBackground(ticketId);
 }
@@ -652,6 +719,11 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           // Hung up while ringing the agent, after talking to them, or at the return question.
           await finishCall(session.callLogId, 'agent');
           endSession(callId);
+        } else if (session.state === 'SVC_EMERGENCY_RETURN') {
+          // Hung up while ringing the on-call, or after speaking with them. We never
+          // got to a voicemail, so there is nothing to alert on — just close it.
+          await finishCall(session.callLogId, 'service');
+          endSession(callId);
         } else {
           await finishCall(session.callLogId, session.data.salesInfo ? 'info' : 'abandoned');
           endSession(callId);
@@ -880,7 +952,21 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
           await appendPath(session.callLogId, 'svc_msg');
           return res.send(await serviceLeaveMessage(session));
         }
+        if (input === '3') return res.send(await emergencyConfirm(session));
         return res.send(await invalidInput(session));
+      }
+      // ── שירות → 3 חירום: confirm, then a live transfer to the on-call admin ──
+      case 'SVC_EMERGENCY_CONFIRM': {
+        if (input === '1') return res.send(await emergencyTransfer(session));
+        if (input === '*' || input === '0') return res.send(await serviceMenu(session));
+        return res.send(await invalidInput(session));
+      }
+      // The call is back from the emergency transfer. Yemot can't tell us whether
+      // the on-call answered, so (per the owner's decision) we go straight to a
+      // message: a caller who was helped just hangs up, one who wasn't leaves it.
+      case 'SVC_EMERGENCY_RETURN': {
+        return res.send(await emergencyLeaveMessage(session,
+          [{ t: 'אם פנייתכם לא טופלה, השאירו הודעה לאחר הצליל, אחרת ניתן לנתק.' }]));
       }
       case 'SVC_ASK': {
         const raw = req.query.nlu;

@@ -2,8 +2,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { adminApi, adminRole } from '../api.js';
-import { Card, Button, Input, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, Stat, fmtUptime, FilterSelect } from '../ui.jsx';
-import { UserRound, House, Fingerprint } from 'lucide-react';
+import { Card, Button, Input, Select, SearchSelect, Badge, Modal, ErrorNote, useAsync, useInterval, DAY_NAMES, channelColorOf, ChannelDot, VERIFY_HE, VERIFY_WARN, FAIL_HE, RangeFilter, rangeStamps, RANGE_LOG, Stat, fmtUptime, FilterSelect } from '../ui.jsx';
+import { UserRound, House, Fingerprint, Plus, Trash2, Siren } from 'lucide-react';
 import { startRegistration, browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import { ProviderBalances } from './ProviderBalances.jsx';
 import { Gauge, WarningLamp, niceMax } from './Gauges.jsx';
@@ -528,7 +528,8 @@ export function SystemSettings() {
   });
   if (!settings) return <p className="text-muted">טוען…</p>;
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      <EmergencyOnCall />
       <div className="flex justify-between items-center">
         <h2 className="font-bold text-xl">הגדרות מערכת (טקסטים של המענה)</h2>
         <Button disabled={busy || !Object.keys(dirty).length} onClick={save}>שמור ({Object.keys(dirty).length})</Button>
@@ -544,6 +545,147 @@ export function SystemSettings() {
         ))}
       </Card>
     </div>
+  );
+}
+
+// תורנות חירום — who the phone service menu's "חירום" (option 3) live-transfers to.
+// The default admin handles emergencies; day/time windows reassign them (e.g. every
+// Sunday 08:00–13:00 → someone else). Numbers are the admins' saved phones, so an
+// admin without a phone can't be rung (flagged here). Saving is an admin change →
+// confirm popup. A missed emergency emails the on-call admin + superadmins.
+function EmergencyOnCall() {
+  const [cfg, setCfg] = useState(null); // { default_admin, ring_seconds, windows, admins }
+  const [confirm, setConfirm] = useState(false);
+  const { busy, error, run, setError } = useAsync();
+  const load = () => adminApi.get('/emergency-oncall').then(setCfg).catch(setError);
+  useEffect(() => { load(); }, []);
+  if (!cfg) return null;
+
+  const admins = cfg.admins || [];
+  const adminById = (id) => admins.find((a) => Number(a.id) === Number(id));
+  const phoneless = (id) => { const a = adminById(id); return a && !a.phone; };
+  const set = (patch) => setCfg((c) => ({ ...c, ...patch }));
+  const setWin = (i, patch) => set({ windows: cfg.windows.map((w, j) => (j === i ? { ...w, ...patch } : w)) });
+  const addWin = () => set({ windows: [...cfg.windows, { admin_id: '', type: 'weekly', dow: '', start: '', end: '' }] });
+  const delWin = (i) => set({ windows: cfg.windows.filter((_, j) => j !== i) });
+
+  // What the server will reject — surfaced before the confirm so nothing half-saves.
+  const problems = [];
+  if (!cfg.default_admin) problems.push('לא נבחר מנהל ברירת מחדל (תורן קבוע).');
+  else if (phoneless(cfg.default_admin)) problems.push('למנהל ברירת המחדל אין מספר טלפון — לא ניתן יהיה לחייג אליו.');
+  cfg.windows.forEach((w, i) => {
+    const n = i + 1;
+    if (!w.admin_id) problems.push(`חלון ${n}: לא נבחר מנהל.`);
+    else if (phoneless(w.admin_id)) problems.push(`חלון ${n}: למנהל אין מספר טלפון.`);
+    if (!w.start || !w.end) problems.push(`חלון ${n}: חסרה שעת התחלה או סיום.`);
+    if (w.type === 'once' ? !w.date : !w.dow) problems.push(`חלון ${n}: ${w.type === 'once' ? 'חסר תאריך' : 'לא נבחר יום'}.`);
+  });
+
+  const doSave = () => run(async () => {
+    await adminApi.put('/emergency-oncall', {
+      default_admin: cfg.default_admin || null,
+      ring_seconds: Number(cfg.ring_seconds) || 25,
+      windows: cfg.windows.map((w) => ({
+        admin_id: Number(w.admin_id), start: w.start, end: w.end, type: w.type === 'once' ? 'once' : 'weekly',
+        ...(w.type === 'once' ? { date: w.date } : { dow: Number(w.dow) }),
+      })),
+    });
+    setConfirm(false);
+    await load();
+  });
+  const onSave = () => { if (problems.length) { setError(new Error(problems[0])); return; } setConfirm(true); };
+
+  const adminLabel = (a) => `${a.name}${a.phone ? ` · ${a.phone}` : ' · ללא טלפון'}`;
+
+  return (
+    <Card className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <h2 className="font-bold text-xl flex items-center gap-2"><Siren size={18} /> תורנות חירום (העברת שיחת חירום בטלפון)</h2>
+        <Button disabled={busy} onClick={onSave}>שמירה</Button>
+      </div>
+      <p className="text-sm text-muted">
+        במוקד הטלפוני, בתפריט שירות לקוחות, לחיצה על 3 מעבירה שיחת חירום לתורן. כברירת מחדל התורן הוא המנהל שנבחר כאן;
+        אפשר להוסיף חלונות של יום ושעה שבהם התורן יהיה מישהו אחר. אם אין מענה — המתקשר משאיר הודעה ונשלחת התראה מיידית במייל לתורן ולמנהלי העל.
+        הטלפון נלקח מרשומת המנהל ב״מנהלים״.
+      </p>
+      <ErrorNote error={error} />
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block">
+          <span className="text-sm text-muted">תורן ברירת מחדל</span>
+          <Select value={cfg.default_admin || ''} onChange={(e) => set({ default_admin: e.target.value ? Number(e.target.value) : null })}>
+            <option value="">— בחרו מנהל —</option>
+            {admins.map((a) => <option key={a.id} value={a.id}>{adminLabel(a)}</option>)}
+          </Select>
+          {cfg.default_admin && phoneless(cfg.default_admin) && <span className="text-xs text-red-600">למנהל זה אין מספר טלפון שמור.</span>}
+        </label>
+        <label className="block">
+          <span className="text-sm text-muted">משך צלצול לפני ״אין מענה״ (שניות)</span>
+          <Input type="number" min={5} max={120} value={cfg.ring_seconds ?? 25}
+            onChange={(e) => set({ ring_seconds: e.target.value })} />
+        </label>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-sm">חלונות תורנות ({cfg.windows.length})</h3>
+          <Button variant="ghost" className="text-sm" onClick={addWin}><Plus size={14} /> הוספת חלון</Button>
+        </div>
+        {!cfg.windows.length && <p className="text-sm text-muted">אין חלונות — כל שיחות החירום מגיעות לתורן ברירת המחדל.</p>}
+        {cfg.windows.map((w, i) => (
+          <div key={i} className="rounded-lg border border-line p-3 space-y-2">
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="block grow min-w-[10rem]">
+                <span className="text-xs text-muted">תורן</span>
+                <Select value={w.admin_id || ''} onChange={(e) => setWin(i, { admin_id: e.target.value ? Number(e.target.value) : '' })}>
+                  <option value="">— מנהל —</option>
+                  {admins.map((a) => <option key={a.id} value={a.id}>{adminLabel(a)}</option>)}
+                </Select>
+              </label>
+              <label className="block">
+                <span className="text-xs text-muted">סוג</span>
+                <Select value={w.type} onChange={(e) => setWin(i, { type: e.target.value })}>
+                  <option value="weekly">כל שבוע ביום…</option>
+                  <option value="once">תאריך חד־פעמי</option>
+                </Select>
+              </label>
+              {w.type === 'once' ? (
+                <label className="block">
+                  <span className="text-xs text-muted">תאריך</span>
+                  <Input type="date" value={w.date || ''} onChange={(e) => setWin(i, { date: e.target.value })} />
+                </label>
+              ) : (
+                <label className="block">
+                  <span className="text-xs text-muted">יום</span>
+                  <Select value={w.dow || ''} onChange={(e) => setWin(i, { dow: e.target.value ? Number(e.target.value) : '' })}>
+                    <option value="">— יום —</option>
+                    {Object.entries(DAY_NAMES).map(([n, he]) => <option key={n} value={n}>{he}</option>)}
+                  </Select>
+                </label>
+              )}
+              <label className="block">
+                <span className="text-xs text-muted">משעה</span>
+                <Input type="time" value={w.start || ''} onChange={(e) => setWin(i, { start: e.target.value })} />
+              </label>
+              <label className="block">
+                <span className="text-xs text-muted">עד שעה</span>
+                <Input type="time" value={w.end || ''} onChange={(e) => setWin(i, { end: e.target.value })} />
+              </label>
+              <Button variant="ghost" className="text-red-600" onClick={() => delWin(i)} aria-label="הסרת חלון"><Trash2 size={16} /></Button>
+            </div>
+            {w.admin_id && phoneless(w.admin_id) && <span className="text-xs text-red-600">למנהל זה אין מספר טלפון שמור.</span>}
+          </div>
+        ))}
+      </div>
+
+      <Modal open={confirm} title="שמירת תורנות חירום" onClose={() => setConfirm(false)}>
+        <p className="text-sm">לשמור את הגדרות תורנות החירום? ההעברה בשיחות חירום תפעל לפיהן מיד.</p>
+        <div className="flex gap-2 justify-end mt-4">
+          <Button variant="ghost" onClick={() => setConfirm(false)}>ביטול</Button>
+          <Button disabled={busy} onClick={doSave}>שמירה</Button>
+        </div>
+      </Modal>
+    </Card>
   );
 }
 
