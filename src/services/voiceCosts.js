@@ -229,13 +229,15 @@ export async function getVoiceCosts({ from, to, userId, phone, q, source, kind }
       acc.orders += 1;
       acc.yemot_units += r.yemot_units;
       acc.yemot_ils += r.yemot_ils;
-      acc.anthropic_usd += r.anthropic_usd;
-      acc.anthropic_ils += r.anthropic_ils;
+      // TTS (voice synthesis, ElevenLabs) is kept apart from the Anthropic (Claude)
+      // spend so each shows as its own total.
+      if (r.kind === 'tts') { acc.tts_usd += r.anthropic_usd; acc.tts_ils += r.anthropic_ils; }
+      else { acc.anthropic_usd += r.anthropic_usd; acc.anthropic_ils += r.anthropic_ils; }
       acc.by_source[r.source] = (acc.by_source[r.source] || 0) + 1;
       acc.by_kind[r.kind] = (acc.by_kind[r.kind] || 0) + 1;
       return acc;
     },
-    { orders: 0, yemot_units: 0, yemot_ils: 0, anthropic_usd: 0, anthropic_ils: 0, by_source: {}, by_kind: {} },
+    { orders: 0, yemot_units: 0, yemot_ils: 0, anthropic_usd: 0, anthropic_ils: 0, tts_usd: 0, tts_ils: 0, by_source: {}, by_kind: {} },
   );
   const curY = rates.yemot_units[rates.yemot_units.length - 1];
   const curU = rates.usd[rates.usd.length - 1];

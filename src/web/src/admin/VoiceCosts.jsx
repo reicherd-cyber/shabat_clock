@@ -179,7 +179,11 @@ export default function VoiceCosts() {
           </Card>
           <Card className="text-center">
             <div className="text-3xl font-bold" style={{ color: C_EXPENSE }}>₪{t.anthropic_ils.toFixed(2)}</div>
-            <div className="text-muted text-sm">Anthropic בש״ח <span dir="ltr">(${t.anthropic_usd.toFixed(4)})</span></div>
+            <div className="text-muted text-sm">בינה מלאכותית (Anthropic) בש״ח <span dir="ltr">(${t.anthropic_usd.toFixed(4)})</span></div>
+          </Card>
+          <Card className="text-center">
+            <div className="text-3xl font-bold" style={{ color: C_EXPENSE }}>₪{(t.tts_ils || 0).toFixed(2)}</div>
+            <div className="text-muted text-sm">הקראה קולית (ElevenLabs) בש״ח <span dir="ltr">(${(t.tts_usd || 0).toFixed(4)})</span></div>
           </Card>
         </div>
       )}

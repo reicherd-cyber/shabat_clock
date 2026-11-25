@@ -98,6 +98,37 @@ async function anthropicStatus() {
   }
 }
 
+// ElevenLabs (TTS): the monthly credit quota and how much is used, straight from
+// the account (GET /v1/user/subscription — character_count used of character_limit,
+// next_character_count_reset_unix). Needs the key with User:Read; an unset key is
+// just "not configured", not an error.
+async function elevenLabsStatus() {
+  const key = env.elevenLabs.apiKey;
+  if (!key) return { ok: false, configured: false };
+  try {
+    const res = await fetch('https://api.elevenlabs.io/v1/user/subscription', {
+      headers: { 'xi-api-key': key }, signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return { ok: false, configured: true, error: `ElevenLabs ${res.status}: ${body.slice(0, 120)}` };
+    }
+    const d = await res.json();
+    const used = Number(d.character_count || 0);
+    const limit = Number(d.character_limit || 0);
+    return {
+      ok: true,
+      used,
+      limit,
+      remaining: Math.max(0, limit - used),
+      tier: d.tier || null,
+      resets_at: d.next_character_count_reset_unix ? new Date(d.next_character_count_reset_unix * 1000).toISOString() : null,
+    };
+  } catch (e) {
+    return { ok: false, configured: true, error: `ElevenLabs לא זמין: ${e.message}` };
+  }
+}
+
 // The admin read the current credit balance off the console billing page and
 // typed it in — store it with its moment; spend after it is subtracted live.
 export async function setAnthropicBalance(usd) {
@@ -107,8 +138,8 @@ export async function setAnthropicBalance(usd) {
 
 export async function getLiveBalances({ force = false } = {}) {
   if (!force && cache && Date.now() - cache.at < CACHE_MS) return cache.data;
-  const [yemot, anthropic] = await Promise.all([yemotBalance(), anthropicStatus()]);
-  const data = { yemot, anthropic, fetched_at: new Date().toISOString() };
+  const [yemot, anthropic, elevenlabs] = await Promise.all([yemotBalance(), anthropicStatus(), elevenLabsStatus()]);
+  const data = { yemot, anthropic, elevenlabs, fetched_at: new Date().toISOString() };
   cache = { at: Date.now(), data };
   return data;
 }

@@ -47,7 +47,7 @@ export function ProviderBalances({ rate: rateProp = null }) {
         <span className="text-muted text-xs">עודכן {new Date(live.fetched_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}</span>
       </div>
       <ErrorNote error={error} />
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <Card className="text-center">
           {live.yemot?.ok ? (
             <>
@@ -118,6 +118,31 @@ export function ProviderBalances({ rate: rateProp = null }) {
               {live.anthropic?.configured === false
                 ? 'להצגת היתרה יש להגדיר ANTHROPIC_ADMIN_KEY בשרת (מפתח Admin מהקונסולה של Anthropic)'
                 : (live.anthropic?.error || 'לא זמין')}
+            </div>
+          )}
+        </Card>
+        <Card className="text-center">
+          {live.elevenlabs?.ok ? (
+            <>
+              <FuelDial frac={live.elevenlabs.limit ? Math.min(live.elevenlabs.remaining / live.elevenlabs.limit, 1) : 0}
+                center={Number(live.elevenlabs.remaining).toLocaleString('en-US')}
+                warn={live.elevenlabs.limit > 0 && live.elevenlabs.remaining / live.elevenlabs.limit < 0.1} />
+              <div className="text-muted text-sm">
+                קרדיטים שנותרו ב-ElevenLabs (הקראה קולית){live.elevenlabs.tier && <> · מסלול {live.elevenlabs.tier}</>}
+              </div>
+              <div className="text-muted text-xs">
+                נוצלו {Number(live.elevenlabs.used).toLocaleString('en-US')} מתוך {Number(live.elevenlabs.limit).toLocaleString('en-US')}
+                {live.elevenlabs.resets_at && <> · מתאפס ב-{new Date(live.elevenlabs.resets_at).toLocaleDateString('he-IL')}</>}
+              </div>
+              {live.elevenlabs.limit > 0 && live.elevenlabs.remaining / live.elevenlabs.limit < 0.1 && (
+                <div className="text-sm font-semibold mt-1" style={{ color: C_EXPENSE }}>⚠ הקרדיטים אוזלים — כדאי לשדרג מסלול</div>
+              )}
+            </>
+          ) : (
+            <div className="text-sm text-muted py-2">
+              {live.elevenlabs?.configured === false
+                ? 'הקראה קולית כבויה (ELEVENLABS_API_KEY לא מוגדר בשרת)'
+                : (live.elevenlabs?.error || 'לא זמין')}
             </div>
           )}
         </Card>
