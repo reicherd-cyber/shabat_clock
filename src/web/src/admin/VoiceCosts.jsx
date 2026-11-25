@@ -102,7 +102,8 @@ export default function VoiceCosts() {
     seconds: (r) => (r.seconds == null ? null : Number(r.seconds)),
     units: (r) => Number(r.yemot_units),
     yemot: (r) => Number(r.yemot_ils),
-    anthropic: (r) => Number(r.anthropic_ils),
+    anthropic: (r) => (r.kind === 'tts' ? 0 : Number(r.anthropic_ils)),
+    tts: (r) => (r.kind === 'tts' ? Number(r.anthropic_ils) : 0),
   });
   const t = data?.totals;
   const hasEstimates = rows.some((r) => r.anthropic_estimated);
@@ -236,6 +237,7 @@ export default function VoiceCosts() {
               <SortTh k="source" sort={sort} className="p-2!">מקור</SortTh><SortTh k="text" sort={sort} className="p-2!">הטקסט</SortTh>
               <SortTh k="seconds" sort={sort} className="p-2!">אורך (שנ׳)</SortTh><SortTh k="units" sort={sort} className="p-2!">ימות (יחידות)</SortTh>
               <SortTh k="yemot" sort={sort} className="p-2!">ימות (₪)</SortTh><SortTh k="anthropic" sort={sort} className="p-2!">Anthropic (₪)</SortTh>
+              <SortTh k="tts" sort={sort} className="p-2!">הקראה קולית (₪)</SortTh>
             </tr>
           </thead>
           <tbody>
@@ -248,13 +250,18 @@ export default function VoiceCosts() {
                 <td className="p-2" dir="ltr">{r.seconds != null ? r.seconds.toFixed(1) : '—'}</td>
                 <td className="p-2" dir="ltr">{r.yemot_units.toFixed(3)}</td>
                 <td className="p-2" dir="ltr" style={{ color: C_EXPENSE }}>₪{r.yemot_ils.toFixed(2)}</td>
-                <td className="p-2" dir="ltr" style={{ color: C_EXPENSE }} title={`$${r.anthropic_usd.toFixed(4)}`}>
-                  ₪{r.anthropic_ils.toFixed(3)}{r.anthropic_estimated && <span className="text-muted" title="הערכה — פקודה מלפני רישום השימוש">*</span>}
+                <td className="p-2" dir="ltr" style={{ color: C_EXPENSE }} title={r.kind === 'tts' ? undefined : `$${r.anthropic_usd.toFixed(4)}`}>
+                  {r.kind === 'tts'
+                    ? <span className="text-muted">—</span>
+                    : <>₪{r.anthropic_ils.toFixed(3)}{r.anthropic_estimated && <span className="text-muted" title="הערכה — פקודה מלפני רישום השימוש">*</span>}</>}
+                </td>
+                <td className="p-2" dir="ltr" style={{ color: C_EXPENSE }} title={r.kind === 'tts' ? `$${r.anthropic_usd.toFixed(4)}` : undefined}>
+                  {r.kind === 'tts' ? `₪${r.anthropic_ils.toFixed(3)}` : <span className="text-muted">—</span>}
                 </td>
               </tr>
             ))}
             {data && rows.length === 0 && (
-              <tr><td colSpan={8} className="p-6 text-center text-muted">אין פניות בתקופה שנבחרה</td></tr>
+              <tr><td colSpan={9} className="p-6 text-center text-muted">אין פניות בתקופה שנבחרה</td></tr>
             )}
           </tbody>
         </table>
