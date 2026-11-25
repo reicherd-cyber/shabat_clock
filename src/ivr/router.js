@@ -27,6 +27,7 @@ import { shiftDate } from '../services/time.js';
 import { step as menuStep, choiceOptions } from '../services/serviceMenu.js';
 import { phoneAllowed } from '../services/rollout.js';
 import { currentOnCall } from '../services/emergencyOnCall.js';
+import { writeEmergencyRouting, EMERGENCY_EXT_KEY } from '../services/yemotRouting.js';
 import { sendEmail } from '../services/email.js';
 
 function nextYmd(ymd) {
@@ -362,9 +363,22 @@ async function emergencyTransfer(session) {
   session.data.transferRing = ringSeconds;
   session.invalidCount = 0;
   await appendPath(session.callLogId, `emergency:${admin?.id ?? '?'}`);
-  return transfer(await speak('ivr.svc_emergency_transfer', {}, 'מעבירים את שיחתכם לתורן, אנא המתינו'), {
-    phone, ringSeconds, goto: returnFolder,
-  });
+  const transferMsg = await speak('ivr.svc_emergency_transfer', {}, 'מעבירים את שיחתכם לתורן, אנא המתינו');
+  // Preferred: a Yemot routing extension that whispers to the on-call ("emergency,
+  // press 1 to accept") before bridging — also keeps the call out of their personal
+  // voicemail. We set its number per call, then hand the caller into it; on
+  // no-answer / reject the extension's routing_end_goto returns here (SVC_EMERGENCY_RETURN).
+  const routingExt = String(await getSetting(EMERGENCY_EXT_KEY, '')).trim();
+  if (routingExt) {
+    try {
+      const folder = await writeEmergencyRouting({ ext: routingExt, phone, ring: ringSeconds });
+      return say(transferMsg, { goto: folder });
+    } catch (e) {
+      console.error('[ivr] emergency routing-ext failed, falling back to direct transfer:', e.message);
+    }
+  }
+  // Fallback: a direct inline transfer (no whisper) — the emergency still rings.
+  return transfer(transferMsg, { phone, ringSeconds, goto: returnFolder });
 }
 // The emergency voice message = a ticket flagged 'emergency'; its completion
 // triggers the alert (salesVoicemailDone). Same record step as the service message.
