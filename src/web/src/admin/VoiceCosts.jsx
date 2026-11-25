@@ -229,7 +229,7 @@ export default function VoiceCosts() {
         </div>
       )}
 
-      <Card flush className="table-scroll">
+      <Card flush className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted">
