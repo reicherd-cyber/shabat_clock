@@ -45,6 +45,7 @@ const KEY_HE = {
   svc_menu: 'שירות — תפריט (עוזר / הודעה)', svc_ask: 'שירות — בקשת שאלה לעוזר',
   svc_helped: 'שירות — האם זה עזר?', svc_leave: 'שירות — השארת הודעה', svc_done: 'שירות — סיום (נעזר)',
   svc_emergency: 'שירות — חירום, אישור העברה', svc_emergency_transfer: 'שירות — חירום, מעבירים לתורן',
+  svc_emergency_whisper: 'שירות — חירום, מה שהתורן שומע (הקשה 1 לחיבור)',
   agent_transfer: 'נציג — מעבירים לנציג', agent_record: 'נציג — השארת הודעה',
   agent_return: 'נציג — חזרה מהשיחה', agent_done: 'נציג — סיום',
   // ניהול בטלפון
@@ -62,7 +63,7 @@ const GROUPS = [
   { title: 'פקודות ומצב', keys: ['cmd_ok', 'cmd_verified', 'cmd_no_flow', 'cmd_closed', 'cmd_stuck_on', 'cmd_not_switched', 'cmd_offline', 'no_relays', 'state_on', 'state_off', 'state_unknown'] },
   { title: 'תזמון בטלפון', keys: ['sched_type', 'sched_sides', 'sched_once_day', 'sched_on_day', 'sched_on_time', 'sched_off_day', 'sched_off_time', 'sched_saved', 'sched_invalid', 'sched_none', 'sched_browse_next', 'sched_browse_prev', 'sched_browse_ops', 'sched_browse_empty', 'sched_del_confirm', 'sched_deleted'] },
   { title: 'פקודה קולית', keys: ['nlu_listen', 'nlu_listen_short', 'nlu_thinking', 'nlu_confirm', 'nlu_on_now', 'nlu_off_now', 'nlu_on_at', 'nlu_off_at', 'nlu_today_at', 'nlu_tomorrow_at', 'nlu_done', 'nlu_giveup', 'nlu_parse_error', 'nlu_exec_error'] },
-  { title: 'מכירות ושירות', keys: ['sales_menu', 'sales_info', 'sales_record', 'sales_thanks', 'svc_menu', 'svc_ask', 'svc_helped', 'svc_leave', 'svc_done', 'svc_emergency', 'svc_emergency_transfer', 'agent_transfer', 'agent_record', 'agent_return', 'agent_done'] },
+  { title: 'מכירות ושירות', keys: ['sales_menu', 'sales_info', 'sales_record', 'sales_thanks', 'svc_menu', 'svc_ask', 'svc_helped', 'svc_leave', 'svc_done', 'svc_emergency', 'svc_emergency_transfer', 'svc_emergency_whisper', 'agent_transfer', 'agent_record', 'agent_return', 'agent_done'] },
   { title: 'ניהול בטלפון', keys: ['main_menu_admin', 'admin_listen'] },
 ];
 
@@ -166,7 +167,10 @@ const FLOW_KNOWN = {
                 {
                   press: '1', label: 'מעבירים לתורן', keys: ['svc_emergency_transfer'],
                   note: 'מצלצל אצל התורן; אם אין מענה — השארת הודעה והתראה מיידית במייל',
-                  children: [{ label: 'אין מענה → השארת הודעה', keys: ['svc_leave'] }],
+                  children: [
+                    { label: 'מה שהתורן שומע לפני החיבור (ומקיש 1 לחיבור)', keys: ['svc_emergency_whisper'] },
+                    { label: 'אין מענה / דחייה → השארת הודעה', keys: ['svc_leave'] },
+                  ],
                 },
               ],
             },
