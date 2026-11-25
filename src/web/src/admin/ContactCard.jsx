@@ -7,6 +7,7 @@ import {
   Phone, ExternalLink, User as UserIcon, Clock,
 } from 'lucide-react';
 import { CallButton } from './CallButton.jsx';
+import { CallRecordings } from './CallRecordings.jsx';
 
 // כרטיס לקוח — הכול על אדם אחד במקום אחד: כל השיחות, הוואטסאפ, הפניות וההזמנות
 // שלו על ציר-זמן אחד, גם אם מעולם לא נפתח לו חשבון. נפתח לפי משתמש רשום (?user=),
@@ -108,6 +109,9 @@ export function ContactCard() {
           <CallButton phones={identity.phones} lead={identity.lead?.id || null} user={identity.user?.id || null} onDone={refresh} />
         </div>
       </Card>
+
+      {/* הקלטות של שיחות שהמערכת חייגה ללקוח — מוסתר כשאין (CallRecordings) */}
+      <CallRecordings user={identity.user?.id || null} lead={identity.lead?.id || null} phones={identity.phones} card />
 
       {/* מונים — לחיצה מסננת את ציר הזמן */}
       <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">

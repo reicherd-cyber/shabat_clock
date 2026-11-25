@@ -86,7 +86,7 @@ export async function bridgeCall({ customerPhone, agentPhone, leadId = null, use
     const body = await res.json().catch(() => ({}));
     const detail = JSON.stringify(body);
     const ok = res.ok && body.responseStatus === 'OK';
-    const campaignId = String(body.callId || body.CallId || body.campaignId || body.id || '') || null;
+    const campaignId = String(body.CampaignId || body.callId || body.CallId || body.campaignId || body.id || '') || null;
     console.log(`[yemot] bridge ${sip ? `sip:${sip}` : agent} ↔ ${customer}: ${ok ? 'OK' : 'FAILED'} ${detail.slice(0, 200)}`);
     return done(ok ? 'ok' : 'failed', detail, ok ? campaignId : null);
   } catch (e) {

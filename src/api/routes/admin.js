@@ -43,6 +43,7 @@ import { listPasskeys, registrationOptions, registerPasskey, deletePasskey, rpId
 import { listReplies, markRepliesSeen, insertReply, cleanReplyBody, notifyUserOfReply } from '../../services/supportThread.js';
 import { notifyWhatsappReply } from '../../whatsapp/bot.js';
 import { readVoicemail, fetchVoicemail } from '../../services/voicemail.js';
+import { fetchCallRecording } from '../../services/callRecording.js';
 import { brokerConnected } from '../../mqtt/client.js';
 import { healthSnapshot } from '../../monitor/health.js';
 import { generateSecret, otpauthUri } from '../../services/totp.js';
@@ -1987,6 +1988,45 @@ adminRouter.post('/contact/callback', requireWrite, async (req, res, next) => {
     });
     audit(req, 'contact_callback', 'callback', r.id, { phone: r.phone, agent_phone: r.agentPhone });
     res.status(201).json(r);
+  } catch (e) { next(e); }
+});
+
+// The outbound calls placed for a contact (by user/lead/phone), newest first — each
+// row can be played via /contact/callbacks/:id/recording below.
+adminRouter.get('/contact/callbacks', async (req, res, next) => {
+  try {
+    const where = [];
+    const args = [];
+    if (req.query.user) { where.push('user_id = ?'); args.push(Number(req.query.user)); }
+    if (req.query.lead) { where.push('lead_id = ?'); args.push(Number(req.query.lead)); }
+    const phones = String(req.query.phone || '').split(',').map((p) => p.replace(/\D/g, '')).filter(Boolean);
+    if (phones.length) {
+      where.push(`REPLACE(REPLACE(phone, '-', ''), ' ', '') IN (${phones.map(() => '?').join(',')})`);
+      args.push(...phones);
+    }
+    if (!where.length) return res.json({ callbacks: [] });
+    const rows = await query(
+      `SELECT id, phone, status, created_at FROM callbacks
+         WHERE (${where.join(' OR ')}) AND status = 'ok'
+         ORDER BY id DESC LIMIT 20`,
+      args,
+    );
+    res.json({ callbacks: rows });
+  } catch (e) { next(e); }
+});
+
+// Stream one call's recording, fetched live from Yemot (nothing stored our side).
+// 404 when the call wasn't answered / isn't in the BridgeCall log yet.
+adminRouter.get('/contact/callbacks/:id/recording', async (req, res, next) => {
+  try {
+    const [cb] = await query('SELECT id, phone, created_at FROM callbacks WHERE id = ?', [Number(req.params.id)]);
+    if (!cb) throw errors.notFound();
+    const wav = await fetchCallRecording({ phone: cb.phone, at: cb.created_at })
+      .catch((e) => { console.warn(`call recording ${cb.id}:`, e.message); return null; });
+    if (!wav) throw errors.notFound('NO_RECORDING', 'אין הקלטה לשיחה זו (ייתכן שהשיחה לא נענתה)');
+    res.set('Content-Type', 'audio/wav');
+    res.set('Cache-Control', 'no-store');
+    res.send(wav);
   } catch (e) { next(e); }
 });
 

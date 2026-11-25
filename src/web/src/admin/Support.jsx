@@ -5,6 +5,7 @@ import { MessageSquare, MessageCircle, Send, Phone, PhoneOff, Inbox, Bot, BarCha
 import HelpChats from './HelpChats.jsx';
 import DeskStats from './DeskStats.jsx';
 import { CallButton } from './CallButton.jsx';
+import { CallRecordings } from './CallRecordings.jsx';
 
 // פניות תמיכה: תיבת ההודעות שמשתמשים שולחים ממרכז העזרה. סטטוסים רכים והפיכים
 // (חדשה ↔ נקראה ↔ טופלה) — לעולם לא מחיקה. פתיחת פנייה חדשה מסמנת אותה כנקראה
@@ -302,6 +303,7 @@ export function SupportInbox() {
                     <span className="text-xs text-muted">מחייג ללקוח מהמערכת — הלקוח רואה את מספר זמנא</span>
                   </div>
                 )}
+                {open.phone && <CallRecordings phones={open.phone} />}
               </div>
             )}
 
