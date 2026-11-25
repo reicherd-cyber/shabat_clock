@@ -1962,7 +1962,15 @@ adminRouter.get('/contact', async (req, res, next) => {
 
 // How the call-back connects the agent: 'sip' (rings a softphone — no number
 // needed) or 'phone' (rings a mobile the UI must collect). Lets the button adapt.
-adminRouter.get('/contact/call-config', (req, res) => res.json({ mode: callMode() }));
+// When callback.softphone_url is set, the "call the customer" button becomes a
+// DIALER: it copies the number and opens the Zimna web-softphone (the admin dials
+// out, no ring/bridge). Otherwise it falls back to the bridge/SIP callback.
+adminRouter.get('/contact/call-config', async (req, res, next) => {
+  try {
+    const softphoneUrl = String(await getSetting('callback.softphone_url', '')).trim();
+    res.json({ mode: softphoneUrl ? 'dialer' : callMode(), softphone_url: softphoneUrl || null });
+  } catch (e) { next(e); }
+});
 
 // Call this contact back from the system: a Yemot BRIDGE campaign rings the agent
 // (req.body.agent_phone, default the admin's own number) and the customer, then
