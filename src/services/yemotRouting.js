@@ -18,16 +18,18 @@ export const EMERGENCY_EXT_KEY = 'ivr.emergency_routing_ext';
 // "/11" | "11" → "11"
 export const extDigits = (ext) => String(ext ?? '').replace(/[^\d]/g, '');
 
-// The fixed routing-extension config; routing1 (the dialled number) is filled per
-// call. No routing_your_id → the original caller's number passes through to the
-// answerer, so the on-call sees who is calling (the whisper carries the "emergency"
-// signal). routing_answer_tfr plays the whisper (M1693, overridden per extension)
-// and collects 1 = accept / 2 = reject; a reject or no-answer returns to our IVR.
+// The fixed routing-extension config; the dialled number is filled per call.
+// `routing_to_phone` is a SINGLE auto-dialled number — a `routing1`-style entry
+// makes Yemot prompt the caller to pick a number instead of dialling. No
+// routing_your_id → the original caller's number passes through to the answerer,
+// so the on-call sees who is calling (the whisper carries the "emergency" signal).
+// routing_answer_tfr plays the whisper (M1693, overridden per extension) and
+// collects 1 = accept / 2 = reject; a reject or no-answer returns to our IVR.
 export function emergencyExtIni(phone, { ring = 25 } = {}) {
   const r = Math.min(120, Math.max(5, Number(ring) || 25));
   return [
     'type=routing',
-    `routing1=${phone}`,
+    `routing_to_phone=${phone}`,
     'routing_answer_tfr=yes',
     'routing_answer_tfr_hangup_goto=/',
     'call_no_answer=yes',
