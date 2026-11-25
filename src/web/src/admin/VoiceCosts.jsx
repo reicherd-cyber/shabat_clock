@@ -23,7 +23,7 @@ const KINDS = { command: 'פקודה', support: 'שאלת תמיכה', router: '
 function SourceCell({ source, kind }) {
   const s = SOURCES[source] || SOURCES.unknown;
   return (
-    <span className="inline-flex items-center gap-1 whitespace-nowrap" title={`${s.label} · ${KINDS[kind] || kind}`}>
+    <span className="inline-flex items-center gap-1" title={`${s.label} · ${KINDS[kind] || kind}`}>
       <s.Icon size={14} style={{ color: s.color }} aria-hidden />
       <span>{s.label}</span>
       <span className="text-muted text-xs">· {KINDS[kind] || kind}</span>
@@ -40,7 +40,7 @@ function TextCell({ text, source }) {
   const long = text.length > 160;
   return (
     <span
-      className={`block max-w-md min-w-[6rem] ${long && !open ? 'line-clamp-3 cursor-pointer' : ''}`}
+      className={`block max-w-md min-w-0 ${long && !open ? 'line-clamp-3 cursor-pointer' : ''}`}
       style={{ overflowWrap: 'anywhere' }}
       title={long && !open ? 'לחצו להצגת הטקסט המלא' : undefined}
       onClick={long ? () => setOpen((v) => !v) : undefined}
@@ -243,8 +243,11 @@ export default function VoiceCosts() {
           <tbody>
             {rows.map((r, i) => (
               <tr key={i} className="border-b border-line last:border-0">
-                <td className="p-2 whitespace-nowrap">{new Date(r.when).toLocaleString('he-IL')}</td>
-                <td className="p-2 whitespace-nowrap">{r.user_name || (r.phone ? <span dir="ltr">{r.phone}</span> : <span className="text-muted">—</span>)}</td>
+                <td className="p-2 whitespace-nowrap">
+                  <div>{new Date(r.when).toLocaleDateString('he-IL')}</div>
+                  <div className="text-muted text-xs" dir="ltr">{new Date(r.when).toLocaleTimeString('he-IL')}</div>
+                </td>
+                <td className="p-2">{r.user_name || (r.phone ? <span dir="ltr">{r.phone}</span> : <span className="text-muted">—</span>)}</td>
                 <td className="p-2"><SourceCell source={r.source} kind={r.kind} /></td>
                 <td className="p-2 align-top"><TextCell text={r.text} source={r.source} /></td>
                 <td className="p-2" dir="ltr">{r.seconds != null ? r.seconds.toFixed(1) : '—'}</td>
