@@ -29,7 +29,8 @@ test('ask: dots become commas, protocol chars stripped', () => {
 test('askRecord: emits the documented record read', async () => {
   const { askRecord } = await import('../src/ivr/responses.js');
   const out = askRecord('דברו אחרי הצליל', { folder: '99', fileName: 'vm_42', maxSeconds: 120 });
-  assert.equal(out, 'read=t-דברו אחרי הצליל=rec,no,record,/99,vm_42,no,yes,,1,120');
+  // field 6 = 'yes': play back + approve/re-record menu, so nothing is filed before the caller confirms.
+  assert.equal(out, 'read=t-דברו אחרי הצליל=rec,no,record,/99,vm_42,yes,yes,,1,120');
 });
 
 test('askRecord: folder and file name are sanitized to safe path chars', async () => {

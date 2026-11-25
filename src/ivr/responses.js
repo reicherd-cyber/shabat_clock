@@ -57,19 +57,22 @@ export function askVoice(spec, { varName = 'nlu', lang = 'he-IL', message = null
 // Record the caller into a Yemot folder (voice message). Positional params after
 // the var name follow the API docs' numbered list (mirrored by yemot-router2's
 // makeRecordModeRead): 2=re-enter-if-exists, 3=type, 4=folder ("/99"), 5=file
-// name without extension, 6='no' = skip the confirm/re-record menu so # ends
-// AND approves at once, 7='yes' = keep the file when the caller hangs up
-// mid-message (a voicemail that ends in a hangup is still a voicemail),
-// 8=append-to-existing, 9=min seconds, 10=max seconds. The file lands at
-// ivr2:/<folder>/<fileName>.wav; the value echoed back in <varName> is unused —
-// the path is deterministic so a hangup (no callback value) can still fetch it.
+// name without extension, 6='yes' = AFTER recording, play it back and offer the
+// caller to approve (#) or re-record — the message is only finalized (and our
+// webhook called to file it) once they approve, so nothing reaches the system
+// before the caller has heard and confirmed it (owner's decision 2026-11-25),
+// 7='yes' = keep the file when the caller hangs up mid-message (a voicemail that
+// ends in a hangup is still a voicemail), 8=append-to-existing, 9=min seconds,
+// 10=max seconds. The file lands at ivr2:/<folder>/<fileName>.wav; the value
+// echoed back in <varName> is unused — the path is deterministic so a hangup (no
+// callback value) can still fetch it.
 export function askRecord(spec, { varName = 'rec', folder, fileName, minSeconds = 1, maxSeconds = 120, message = null } = {}) {
   const parts = [];
   if (message) parts.push(`id_list_message=${data(message)}`);
   const safeFolder = String(folder ?? '').replace(/\D/g, '');
   const safeName = String(fileName ?? '').replace(/[^\w-]/g, '');
   if (!safeFolder || !safeName) throw new Error('askRecord: folder and fileName are required');
-  parts.push(`read=${data(spec)}=${varName},no,record,/${safeFolder},${safeName},no,yes,,${minSeconds},${maxSeconds}`);
+  parts.push(`read=${data(spec)}=${varName},no,record,/${safeFolder},${safeName},yes,yes,,${minSeconds},${maxSeconds}`);
   return parts.join('&');
 }
 
