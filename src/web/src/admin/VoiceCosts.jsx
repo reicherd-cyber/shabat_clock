@@ -233,11 +233,11 @@ export default function VoiceCosts() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-right text-muted">
-              <SortTh k="when" sort={sort} className="p-2!">מתי</SortTh><SortTh k="user" sort={sort} className="p-2!">משתמש</SortTh>
-              <SortTh k="source" sort={sort} className="p-2!">מקור</SortTh><SortTh k="text" sort={sort} className="p-2!">הטקסט</SortTh>
-              <SortTh k="seconds" sort={sort} className="p-2!">אורך (שנ׳)</SortTh><SortTh k="units" sort={sort} className="p-2!">ימות (יחידות)</SortTh>
-              <SortTh k="yemot" sort={sort} className="p-2!">ימות (₪)</SortTh><SortTh k="anthropic" sort={sort} className="p-2!">Anthropic (₪)</SortTh>
-              <SortTh k="tts" sort={sort} className="p-2!">הקראה קולית (₪)</SortTh>
+              <SortTh k="when" sort={sort} className="p-2! whitespace-normal!">מתי</SortTh><SortTh k="user" sort={sort} className="p-2! whitespace-normal!">משתמש</SortTh>
+              <SortTh k="source" sort={sort} className="p-2! whitespace-normal!">מקור</SortTh><SortTh k="text" sort={sort} className="p-2! whitespace-normal!">הטקסט</SortTh>
+              <SortTh k="seconds" sort={sort} className="p-2! whitespace-normal!">אורך (שנ׳)</SortTh><SortTh k="units" sort={sort} className="p-2! whitespace-normal!">ימות (יחידות)</SortTh>
+              <SortTh k="yemot" sort={sort} className="p-2! whitespace-normal!">ימות (₪)</SortTh><SortTh k="anthropic" sort={sort} className="p-2! whitespace-normal!">Anthropic (₪)</SortTh>
+              <SortTh k="tts" sort={sort} className="p-2! whitespace-normal!">הקראה קולית (₪)</SortTh>
             </tr>
           </thead>
           <tbody>
