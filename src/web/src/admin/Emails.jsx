@@ -201,7 +201,7 @@ export function Emails() {
   const [attaching, setAttaching] = useState(false);
   const openCompose = () => {
     setError(null); setSendResult(null);
-    setCompose({ mode: 'all', userId: '', subject: '', html: '', attachments: [] });
+    setCompose({ mode: 'one', userId: '', subject: '', html: '', attachments: [] });
     adminApi.get('/emails/broadcast-count').then((r) => setBcCount(r.count)).catch(() => setBcCount(users.length));
   };
   const addAttachments = async (e) => {
