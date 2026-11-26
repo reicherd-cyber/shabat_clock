@@ -14,7 +14,7 @@ server console, which is how you test locally.
 ## 1. Meta side (one time, ~30 min + verification wait)
 
 1. **Meta Business account** — business.facebook.com → create (or use) the
-   TelTech business. Business verification (documents) is needed before the
+   Zimna business. Business verification (documents) is needed before the
    number can message real customers beyond the test allowance.
 2. **Meta app** — developers.facebook.com → Create app → type *Business* →
    add the **WhatsApp** product.

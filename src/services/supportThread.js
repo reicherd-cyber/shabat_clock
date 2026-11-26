@@ -54,8 +54,8 @@ export async function notifyUserOfReply({ userId, messageId, body }) {
     if (!row?.email) return;
     await sendEmail({
       to: row.email,
-      subject: `TelTech — תשובה לפנייה #${messageId}`,
-      text: `שלום ${row.full_name || ''},\n\nצוות התמיכה השיב לפנייה שלכם:\n\n${body}\n\nכדי להמשיך את השיחה היכנסו לאתר ולחצו על כפתור העזרה (?) — "הפניות שלי".\n\nTelTech`,
+      subject: `זימנא — תשובה לפנייה #${messageId}`,
+      text: `שלום ${row.full_name || ''},\n\nצוות התמיכה השיב לפנייה שלכם:\n\n${body}\n\nכדי להמשיך את השיחה היכנסו לאתר ולחצו על כפתור העזרה (?) — "הפניות שלי".\n\nזימנא`,
       kind: 'support_reply', userId: Number(userId), ref: `ticket:${messageId}`,
     });
   } catch (e) {

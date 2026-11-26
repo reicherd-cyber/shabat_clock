@@ -188,7 +188,7 @@ export const Badge = ({ ok, children }) => (
 
 export const CodeChip = ({ children }) => <span className="code-chip">{children}</span>;
 
-// The TelTech brand (2026-09): the official artwork itself, extracted with
+// The זימנא brand (2026-09): the official artwork itself, extracted with
 // transparency into public/brand/ — mark.png (power-button ring whose gap holds a
 // flame-donut), word.png (custom type, droplet inside each e), tagline.png. Images
 // rather than SVG/text so the app matches the designer's file exactly.
@@ -197,11 +197,11 @@ export const Logo = ({ size = 20 }) => (
     style={{ height: size, width: 'auto' }} />
 );
 
-// size = the TelTech word height in px; the tagline scales with it at the
+// size = the זימנא word height in px; the tagline scales with it at the
 // lockup's original ratio so the pair keeps the designed proportions.
 export const Wordmark = ({ size = 21, tagline = false }) => (
   <span className="inline-flex flex-col items-center">
-    <img src="/brand/word.png" alt="TelTech" draggable={false} style={{ height: size, width: 'auto' }} />
+    <img src="/brand/word.png" alt="זימנא" draggable={false} style={{ height: size, width: 'auto' }} />
     {tagline && <img src="/brand/tagline.png" alt="בית כשר חכם" draggable={false}
       style={{ height: size * 0.374, width: 'auto', marginTop: size * 0.18 }} />}
   </span>

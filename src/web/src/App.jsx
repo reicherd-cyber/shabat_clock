@@ -404,7 +404,7 @@ function AdminLayout() {
       <aside className={`admin-sidebar hidden md:flex flex-col shrink-0 border-l border-white/10 sticky top-0 h-screen overflow-y-auto py-4 gap-5 transition-all duration-200 ${collapsed ? 'w-14 px-2 items-center' : 'w-56 px-3'}`}>
         {collapsed ? (
           <span className="brand-dark text-white cursor-pointer select-none"
-            onClick={() => nav('/admin')} role="button" title="ניהול — TelTech"><Logo size={30} /></span>
+            onClick={() => nav('/admin')} role="button" title="ניהול — זימנא"><Logo size={30} /></span>
         ) : brand}
         <button
           className="text-white/45 hover:text-white cursor-pointer text-lg leading-none self-start px-1"

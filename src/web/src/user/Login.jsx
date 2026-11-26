@@ -72,7 +72,7 @@ export default function Login() {
                 <a className="underline text-accent" href="/terms.html" target="_blank" rel="noreferrer">תנאי השימוש</a>
                 {' '}ול
                 <a className="underline text-accent" href="/privacy.html" target="_blank" rel="noreferrer">מדיניות הפרטיות</a>
-                {' '}של TelTech.
+                {' '}של זימנא.
               </span>
             </label>
             <Button className="w-full" disabled={busy || !agreed} onClick={signUp}>

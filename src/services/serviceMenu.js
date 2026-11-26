@@ -252,7 +252,7 @@ function mainMenu(ctx) {
   // 0 נציג left the main menu too (user, 2026-10-27): a person is offered inside
   // the service branches (and by the free-text router), not as a first choice.
   const hello = ctx.user ? `שלום ${firstName(ctx.user)}, ` : 'שלום, ';
-  return { text: `${hello}כאן מוקד השירות של TelTech. במה נוכל לעזור?`, options };
+  return { text: `${hello}כאן מוקד השירות של זימנא. במה נוכל לעזור?`, options };
 }
 
 export function menuStart(ctx) {

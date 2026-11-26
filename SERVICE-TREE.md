@@ -21,7 +21,7 @@ Navigation everywhere: `9` = main menu. `0` = a person where a node offers it (t
 ## A. The shared menu (site "פניות" ✅ · WhatsApp ✅ · phone follows)
 
 ```
-ראשי  "שלום {שם}, כאן מוקד השירות של TelTech. במה נוכל לעזור?"
+ראשי  "שלום {שם}, כאן מוקד השירות של זימנא. במה נוכל לעזור?"
 │
 ├─ 1  הזמנה / מכירה                                              ✅
 │   ├─ כמה ערוצים?  1 אחד · 2 שניים · 3 שלושה · 4 ארבעה ויותר

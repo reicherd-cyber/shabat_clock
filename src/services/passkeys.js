@@ -14,7 +14,7 @@ import { env } from '../config/env.js';
 import { errors } from '../config/errors.js';
 import { getSetting } from './settings.js';
 
-export const RP_NAME = 'שעון שבת — TelTech';
+export const RP_NAME = 'שעון שבת — זימנא';
 // The relying party is the panel's own host: a passkey made on
 // kosher-teltech.com never answers for another site, and vice versa.
 export const rpId = () => new URL(env.publicUrl).hostname;

@@ -44,9 +44,9 @@ export async function migrate59(conn) {
 
   // Editable bot texts (הגדרות). {name} = the customer's first name.
   const rows = [
-    ['whatsapp.greeting', 'שלום {name}, כאן טלטק – בית כשר חכם. אפשר לכתוב לי פקודה חופשית, למשל "כבה את הסלון" או "הדלק את הפלטה מחר ב-7:00", לשאול שאלה על המערכת, או לכתוב "מצב" כדי לראות את מצב הערוצים.',
+    ['whatsapp.greeting', 'שלום {name}, כאן זימנא – בית כשר חכם. אפשר לכתוב לי פקודה חופשית, למשל "כבה את הסלון" או "הדלק את הפלטה מחר ב-7:00", לשאול שאלה על המערכת, או לכתוב "מצב" כדי לראות את מצב הערוצים.',
       'WhatsApp: greeting / help for a registered customer'],
-    ['whatsapp.unknown_number', 'שלום, כאן טלטק – בית כשר חכם. המספר הזה אינו רשום במערכת, לכן איני יכול להפעיל מכשירים מכאן. אפשר לשאול אותי שאלות על המערכת, או להשאיר הודעה ונציג יחזור אליכם. להרשמה: kosher-teltech.com',
+    ['whatsapp.unknown_number', 'שלום, כאן זימנא – בית כשר חכם. המספר הזה אינו רשום במערכת, לכן איני יכול להפעיל מכשירים מכאן. אפשר לשאול אותי שאלות על המערכת, או להשאיר הודעה ונציג יחזור אליכם. להרשמה: zimna.co.il',
       'WhatsApp: first reply to a number that is not a verified user phone'],
     ['whatsapp.confirm', 'הבנתי את הבקשה כך:\n{summary}\n\nלאשר?',
       'WhatsApp: confirm prompt before executing ({summary} = the interpreted actions, one per line)'],

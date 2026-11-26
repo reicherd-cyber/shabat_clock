@@ -21,9 +21,9 @@ export async function migrate53(conn) {
   // quotes (see src/ivr/responses.js). voicemail_folder = the Yemot extension
   // the recordings are written to (must exist; 99 already holds the prompts).
   const rows = [
-    ['ivr.sales_menu', 'שלום, הגעתם לטלטק, בית כשר חכם, למידע על הזמנת המערכת הקישו 1, לבירור על הזמנה בתהליך הקישו 2',
+    ['ivr.sales_menu', 'שלום, הגעתם לזימנא, בית כשר חכם, למידע על הזמנת המערכת הקישו 1, לבירור על הזמנה בתהליך הקישו 2',
       'Unregistered caller: sales menu (1 = ordering info, 2 = order in progress)'],
-    ['ivr.sales_info', 'טלטק מציעה שעון שבת חכם המופעל מהאתר ומהטלפון, להזמנה ולפרטים נוספים בקרו באתר שלנו, להשארת פרטים ונחזור אליכם הקישו 1, לחזרה לתפריט הקישו 2',
+    ['ivr.sales_info', 'זימנא מציעה שעון שבת חכם המופעל מהאתר ומהטלפון, להזמנה ולפרטים נוספים בקרו באתר שלנו, להשארת פרטים ונחזור אליכם הקישו 1, לחזרה לתפריט הקישו 2',
       'Sales menu option 1: ordering information, then 1 = leave details, 2 = back'],
     ['ivr.sales_record', 'אנא השאירו הודעה עם שמכם ופרטי הפנייה לאחר הצליל, בסיום הקישו סולמית',
       'Voice message prompt (before the recording beep)'],

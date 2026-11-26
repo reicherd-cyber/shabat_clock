@@ -47,7 +47,7 @@ export const TOOLS = [
   { name: 'upcoming', description: 'מה יקרה בימים הקרובים: כל ההדלקות והכיבויים המתוזמנים לפי יום ושעה (כולל שבת וחגים לפי לוח הזמנים).', input_schema: { type: 'object', properties: { days: I('כמה ימים קדימה, 1–14 (ברירת מחדל 7)') } } },
   { name: 'my_history', description: 'מה קרה לאחרונה: הדלקות וכיבויים שבוצעו (מתי, מאיפה, האם המכשיר אישר) ושיחות טלפון למערכת.', input_schema: { type: 'object', properties: { limit: I('כמה רשומות, עד 40 (ברירת מחדל 20)') } } },
   { name: 'my_tickets', description: 'הפניות של הלקוח לתמיכה והתשובות שקיבל.', input_schema: { type: 'object', properties: {} } },
-  { name: 'knowledge_base', description: 'שאלה על המוצר, האתר, האפליקציה, ההתקנה או המענה הקולי — תשובה ממאגר הידע של TelTech. לשאלות שאינן על חשבון הלקוח עצמו.', input_schema: { type: 'object', properties: { question: S('השאלה כפי שנשאלה') }, required: ['question'] } },
+  { name: 'knowledge_base', description: 'שאלה על המוצר, האתר, האפליקציה, ההתקנה או המענה הקולי — תשובה ממאגר הידע של זימנא. לשאלות שאינן על חשבון הלקוח עצמו.', input_schema: { type: 'object', properties: { question: S('השאלה כפי שנשאלה') }, required: ['question'] } },
   { name: 'switch_command', description: 'הדלקה או כיבוי של ערוץ — עכשיו ("כבה את הדוד") או פעם אחת בשעה היום/מחר ("הדלק את הפלטה מחר בשש"), או עצירה/הפעלה של תוכנית ("עצור את תוכנית השבת"). מועבר למפרש הפקודות ומתבצע רק אחרי שהלקוח מאשר בכפתור. לא לתזמון קבוע (כל שבוע) ולא למחיקת תזמונים.', input_schema: { type: 'object', properties: { text: S('הפקודה במילים, כפי שהלקוח אמר') }, required: ['text'] } },
   { name: 'order_request', description: 'בקשת הזמנה / רכישה: מערכת חדשה או מכשירים נוספים. לאסוף קודם כמה ערוצים (1–4, 4 = ארבעה ויותר), יישוב ההתקנה ומתי נוח שנתקשר, ואז לקרוא. המערכת מציגה ללקוח את הבקשה לאישור; נציג מכירות חוזר אליו.', input_schema: { type: 'object', properties: { channels: I('כמה ערוצים: 1–4 (4 = ארבעה ויותר)'), when: S('מתי נוח שנתקשר: בוקר / צהריים / ערב, או מועד שנאמר'), city: S('יישוב ההתקנה'), notes: S('פרטים נוספים שנאמרו (אופציונלי)') }, required: ['channels', 'when', 'city'] } },
   { name: 'open_ticket', description: 'הצעת פנייה לנציג אנושי, כשהלקוח מבקש או כשאין תשובה. הנוסח מוצג ללקוח עם כפתורי אישור ונשלח רק אם אישר.', input_schema: { type: 'object', properties: { text: S('מה לכתוב לנציג — הבקשה של הלקוח במילותיו') }, required: ['text'] } },
@@ -107,7 +107,7 @@ async function runTool(name, input, ctx) {
       const interp = await interpretCommand({ userId, text: String(input.text || '').slice(0, 1000), phone, source: 'whatsapp' });
       if (!interp.understood) return { proposed: false, clarification: interp.clarification };
       const refused = interp.actions.filter((a) => !ALLOWED_ACTION_KINDS.has(a.kind));
-      if (refused.length) return { proposed: false, refused: refused.map((a) => a.summary), note: 'תזמון קבוע (כל שבוע) ומחיקת תזמונים נעשים באפליקציה (kosher-teltech.com) — לא כאן. אמרו זאת ללקוח.' };
+      if (refused.length) return { proposed: false, refused: refused.map((a) => a.summary), note: 'תזמון קבוע (כל שבוע) ומחיקת תזמונים נעשים באפליקציה (zimna.co.il) — לא כאן. אמרו זאת ללקוח.' };
       propose(ctx, { actions: interp.actions, tz: interp.tz, text: String(input.text || ''), clarification: interp.clarification || null });
       return { proposed: true, awaiting_confirmation: true, actions: interp.actions.map((a) => a.summary), partial_note: interp.clarification || null, note: 'הפעולות ייקראו ללקוח עם כפתורי אישור על ידי המערכת — אל תפרטו אותן ואל תשאלו "לאשר?"; כתבו רק משפט קצר או כלום. partial_note = הערת המפרש על חלק שלא הובן; היא תוצג ללקוח מעל האישור.' };
     }
@@ -133,7 +133,7 @@ async function runTool(name, input, ctx) {
   }
 }
 
-const RULES = `את/ה המזכיר/ה האישי/ת של לקוח TelTech (שעון שבת חכם: בקרים שמדליקים ומכבים דוד, פלטה, תאורה ועוד לפי תזמונים, כולל שבת וחג). הלקוח כותב בוואטסאפ בעברית חופשית, לפעמים הודעה קולית שתומללה (עם שגיאות תמלול).
+const RULES = `את/ה המזכיר/ה האישי/ת של לקוח זימנא (שעון שבת חכם: בקרים שמדליקים ומכבים דוד, פלטה, תאורה ועוד לפי תזמונים, כולל שבת וחג). הלקוח כותב בוואטסאפ בעברית חופשית, לפעמים הודעה קולית שתומללה (עם שגיאות תמלול).
 
 הלקוח הגיע אליך מהתפריט הממוספר (פקודה חופשית, שירות לקוחות, או הזמנה/מכירה); "0" מחזיר אותו לתפריט — המערכת מטפלת בזה.
 
