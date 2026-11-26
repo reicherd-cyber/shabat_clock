@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBridgeLog, pickRecordPath } from '../src/services/callRecording.js';
+import { parseBridgeLog, pickRecordPath, pickEntry } from '../src/services/callRecording.js';
 
 // A real-shaped BridgeCall log: one un-recorded call, one recorded call.
 const LOG = [
@@ -58,4 +58,39 @@ test('pickRecordPath picks the closest when several match', () => {
     ].join('\r\n'),
   );
   assert.equal(pickRecordPath(rows, '0527694796', callLocalMs), 'ivr2:/a.wav');
+});
+
+// pickEntry powers the ARCHIVER: it returns the closest matching call whether or
+// not it was recorded, so archiveCallRecording can tell "finished, no recording"
+// (→ stamp 'none') apart from "not logged yet" (→ 'pending'). base = call placed
+// 26/11 10:00:00 local.
+const base = Date.UTC(2026, 10, 26, 10, 0, 0);
+const logAt = (time, tail = 'RecordPath#ivr2:/x.wav') =>
+  parseBridgeLog(`Date#26/11/26%Time#${time}%BridgeCallBridgeTo#0527694796%${tail}`);
+
+test('pickEntry returns a finished-but-unrecorded call (archiver → "none"), while pickRecordPath finds nothing', () => {
+  const unrec = logAt('10:00:03', 'BridgeCallDailStatus#NO_ANSWER'); // no RecordPath
+  const e = pickEntry(unrec, '0527694796', base);
+  assert.ok(e, 'the finished call is found');
+  assert.equal(e.RecordPath, undefined, 'but it has no recording');
+  assert.equal(pickRecordPath(unrec, '0527694796', base), null, 'so playback has nothing to play');
+});
+
+test('pickEntry returns null for a different number (archiver stays "pending")', () => {
+  assert.equal(pickEntry(logAt('10:00:03'), '0500000000', base), null);
+});
+
+test('pickEntry honours the match window bounds [-60s, +600s]', () => {
+  assert.ok(pickEntry(logAt('10:10:00'), '0527694796', base), '+600s is inside');
+  assert.equal(pickEntry(logAt('10:10:01'), '0527694796', base), null, '+601s is outside');
+  assert.ok(pickEntry(logAt('09:59:00'), '0527694796', base), '-60s is inside');
+  assert.equal(pickEntry(logAt('09:58:59'), '0527694796', base), null, '-61s is outside');
+});
+
+test('pickEntry picks the closest of several matching calls', () => {
+  const rows = parseBridgeLog([
+    'Date#26/11/26%Time#10:00:05%BridgeCallBridgeTo#0527694796%RecordPath#ivr2:/a.wav',
+    'Date#26/11/26%Time#10:02:00%BridgeCallBridgeTo#0527694796%RecordPath#ivr2:/b.wav',
+  ].join('\r\n'));
+  assert.equal(pickEntry(rows, '0527694796', base).RecordPath, 'ivr2:/a.wav');
 });
