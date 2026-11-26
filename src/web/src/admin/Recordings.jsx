@@ -234,6 +234,7 @@ export function Recordings() {
   const [discardDevKey, setDiscardDevKey] = useState(null); // row awaiting dev-version discard
   const recRef = useRef(null); // { mr, stream, timer }
   const audioRef = useRef(null); // { audio, blobUrl } of the currently playing recording
+  const fileInputRef = useRef(null); // hidden <input type=file> for "upload an audio file"
   const { busy, error, run, setError } = useAsync();
 
   useEffect(() => { adminApi.get('/recordings').then(setData).catch(setError); }, []);
@@ -346,6 +347,26 @@ export function Recordings() {
       return s + 1;
     }), 1000);
     recRef.current = { mr, stream, timer };
+  };
+
+  // Upload an existing audio file (WAV/MP3/M4A/…) as the pending take. The server
+  // ffmpeg-converts it to 8kHz mono — same as a mic recording — then it flows
+  // through the normal preview → "העלה לימות"/publish steps.
+  const uploadFile = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // let the same file be picked again later
+    if (!file || !edit) return;
+    run(async () => {
+      const res = await fetch(`/api/v1/admin/recordings/${edit.key}/pending-from-upload?text=${encodeURIComponent(edit.text)}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokens.admin}`, 'Content-Type': file.type || 'audio/wav' },
+        body: file,
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error?.message || `HTTP ${res.status}`);
+      setGen({ kind: 'self' });
+      playPreview();
+    });
   };
   const closeModal = () => {
     stopRec();
@@ -852,6 +873,10 @@ export function Recordings() {
                   <Button variant="ghost" className="w-full" disabled={busy} onClick={startRec}>
                     <span className="inline-flex items-center gap-1.5"><Mic size={16} />הקלט בעצמך במיקרופון</span>
                   </Button>
+                  <Button variant="ghost" className="w-full" disabled={busy} onClick={() => fileInputRef.current?.click()}>
+                    <span className="inline-flex items-center gap-1.5"><Upload size={16} />העלה קובץ אודיו מהמחשב</span>
+                  </Button>
+                  <input ref={fileInputRef} type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg" className="hidden" onChange={uploadFile} />
                   <div className="border-t border-line pt-2 mt-1">
                     <button
                       className="w-full flex items-center justify-center gap-1.5 text-sm text-muted hover:text-ink cursor-pointer py-1.5 disabled:opacity-50"
