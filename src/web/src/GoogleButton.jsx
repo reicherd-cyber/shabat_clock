@@ -42,7 +42,7 @@ export default function GoogleButton({ onCredential, onError, hint = true, pill 
   // way GIS issues the ID token the server verifies).
   if (pill) {
     return (
-      <div className="relative w-full max-w-[320px] h-11 mx-auto">
+      <div className="relative w-full max-w-[320px] h-10 mx-auto">{/* 40px = Google's button height, so the whole pill is clickable */}
         <div aria-hidden="true" className={`absolute inset-0 rounded-full flex items-center justify-center text-[15px] font-semibold ${pill === 'solid'
           ? 'bg-white text-accent shadow-[0_2px_10px_rgba(0,0,0,.12)]' : 'border-[1.5px] border-white/85 text-white'}`}>
           {label}
