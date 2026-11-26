@@ -3,10 +3,10 @@
 // event, user and free text, with tiles, an expandable row per message (body
 // as sent, provider id, error, delivery event) and a per-day sent/failed
 // chart at the bottom.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Mail, AlertTriangle, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
-import { adminApi } from '../api.js';
+import { Mail, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, Bold, Italic, Underline, List, ListOrdered, Link2, Image as ImageIcon, Heading } from 'lucide-react';
+import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, SearchSelect, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect, Stat, Badge, StackedDayChart, Modal } from '../ui.jsx';
 
 const KIND_HE = { user_otp: 'קוד כניסה למשתמש', admin_otp: 'קוד כניסה למנהל', support_reply: 'תשובה לפנייה', health_alert: 'התראת ניטור', broadcast: 'דיוור', other: 'אחר' };
@@ -23,6 +23,60 @@ const fmtTs = (ts) => new Date(ts).toLocaleString('he-IL', { dateStyle: 'short',
 // Sent vs failed: two fixed hues validated with the dataviz palette checker
 // (ΔE 22.5 protan / 33.8 normal); legend + tooltip, never colour alone.
 const SERIES = [{ key: 'sent', label: 'נשלחו', color: '#2a78d6' }, { key: 'failed', label: 'נכשלו', color: '#e11d48' }];
+
+// Lightweight rich-text editor for composing an email: a formatting toolbar over a
+// contentEditable area; its HTML is the email body. Pictures upload to the server
+// (/emails/image) and insert by public URL so recipients' clients can load them.
+function RichTextEditor({ value, onChange, onError }) {
+  const ref = useRef(null);
+  const fileRef = useRef(null);
+  // Set the DOM content only when it genuinely differs and the editor isn't focused,
+  // so parent re-renders during typing never move the caret.
+  useEffect(() => {
+    const el = ref.current;
+    if (el && document.activeElement !== el && el.innerHTML !== (value || '')) el.innerHTML = value || '';
+  }, [value]);
+  const emit = () => onChange(ref.current?.innerHTML || '');
+  const cmd = (c, v = null) => { ref.current?.focus(); document.execCommand(c, false, v); emit(); };
+  const addLink = () => { const url = prompt('קישור (URL):'); if (url) cmd('createLink', url.trim()); };
+  const uploadImage = async (e) => {
+    const f = e.target.files?.[0]; e.target.value = '';
+    if (!f) return;
+    try {
+      const res = await fetch('/api/v1/admin/emails/image', {
+        method: 'POST', headers: { Authorization: `Bearer ${tokens.admin}`, 'Content-Type': f.type || 'application/octet-stream' }, body: f,
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error?.message || 'העלאת התמונה נכשלה');
+      ref.current?.focus();
+      document.execCommand('insertHTML', false, `<img src="${j.url}" alt="" style="max-width:100%;height:auto" /><br/>`);
+      emit();
+    } catch (err) { onError?.(err); }
+  };
+  const Btn = ({ onClick, title, children }) => (
+    <button type="button" title={title} onMouseDown={(e) => e.preventDefault()} onClick={onClick}
+      className="p-1.5 rounded-lg hover:bg-surface2 text-muted hover:text-ink cursor-pointer">{children}</button>
+  );
+  return (
+    <div className="border border-line rounded-xl overflow-hidden">
+      <div className="flex flex-wrap items-center gap-0.5 border-b border-line bg-surface2/40 px-1.5 py-1">
+        <Btn title="מודגש" onClick={() => cmd('bold')}><Bold size={15} /></Btn>
+        <Btn title="נטוי" onClick={() => cmd('italic')}><Italic size={15} /></Btn>
+        <Btn title="קו תחתון" onClick={() => cmd('underline')}><Underline size={15} /></Btn>
+        <span className="w-px h-5 bg-line mx-1" />
+        <Btn title="כותרת" onClick={() => cmd('formatBlock', 'H3')}><Heading size={15} /></Btn>
+        <Btn title="רשימה" onClick={() => cmd('insertUnorderedList')}><List size={15} /></Btn>
+        <Btn title="רשימה ממוספרת" onClick={() => cmd('insertOrderedList')}><ListOrdered size={15} /></Btn>
+        <span className="w-px h-5 bg-line mx-1" />
+        <Btn title="קישור" onClick={addLink}><Link2 size={15} /></Btn>
+        <Btn title="הוספת תמונה" onClick={() => fileRef.current?.click()}><ImageIcon size={15} /></Btn>
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={uploadImage} />
+      </div>
+      <div ref={ref} contentEditable dir="rtl" onInput={emit} suppressContentEditableWarning
+        className="min-h-48 max-h-96 overflow-y-auto px-3 py-2 text-sm leading-relaxed focus:outline-none [&_img]:max-w-full [&_h3]:text-lg [&_h3]:font-bold [&_h3]:my-1 [&_ul]:list-disc [&_ul]:pr-5 [&_ol]:list-decimal [&_ol]:pr-5 [&_a]:text-accent [&_a]:underline" />
+    </div>
+  );
+}
 
 export function Emails() {
   const [sp, setSp] = useSearchParams();
@@ -75,19 +129,20 @@ export function Emails() {
   };
 
   // Compose + send an email (one user / everyone, from the Zimna sender).
-  const [compose, setCompose] = useState(null); // { mode:'all'|'one', userId, subject, text }
+  const [compose, setCompose] = useState(null); // { mode:'all'|'one', userId, subject, html }
   const [bcCount, setBcCount] = useState(null); // how many a broadcast reaches
   const [confirmSend, setConfirmSend] = useState(false);
   const [sendResult, setSendResult] = useState(null);
   const openCompose = () => {
     setError(null); setSendResult(null);
-    setCompose({ mode: 'all', userId: '', subject: '', text: '' });
+    setCompose({ mode: 'all', userId: '', subject: '', html: '' });
     adminApi.get('/emails/broadcast-count').then((r) => setBcCount(r.count)).catch(() => setBcCount(users.length));
   };
-  const canSend = compose && compose.subject.trim() && compose.text.trim() && (compose.mode === 'all' || compose.userId);
+  const bodyHasText = compose && compose.html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim().length > 0;
+  const canSend = compose && compose.subject.trim() && bodyHasText && (compose.mode === 'all' || compose.userId);
   const doSend = () => run(async () => {
     const to = compose.mode === 'all' ? 'all' : compose.userId;
-    const r = await adminApi.post('/emails/send', { to, subject: compose.subject.trim(), text: compose.text.trim() });
+    const r = await adminApi.post('/emails/send', { to, subject: compose.subject.trim(), html: compose.html });
     setConfirmSend(false);
     const result = compose.mode === 'all' ? { kind: 'all', total: r.total } : { kind: 'one', to: r.to };
     setCompose(null);
@@ -283,9 +338,8 @@ export function Emails() {
                 options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: `#${u.id}`, search: u.ivr_code }))} />
             )}
             <Input placeholder="נושא" value={compose.subject} onChange={(e) => setCompose({ ...compose, subject: e.target.value })} />
-            <textarea className="w-full border border-line rounded-xl px-3 py-2 min-h-40 focus:outline-accent" placeholder="תוכן ההודעה"
-              value={compose.text} onChange={(e) => setCompose({ ...compose, text: e.target.value })} />
-            <p className="text-xs text-muted">נשלח מ: <span dir="ltr">noreply@zimna.co.il</span> · יש לוודא שהדומיין zimna.co.il מאומת ב-Resend, אחרת השליחה תיכשל.</p>
+            <RichTextEditor value={compose.html} onChange={(html) => setCompose((c) => ({ ...c, html }))} onError={setError} />
+            <p className="text-xs text-muted">נשלח מ: <span dir="ltr">noreply@zimna.co.il</span> · לוגו + פרטי זימנא מתווספים כחתימה בתחתית כל אימייל.</p>
             <ErrorNote error={error} />
             <div className="flex gap-2">
               <Button disabled={!canSend || busy} onClick={() => setConfirmSend(true)}>

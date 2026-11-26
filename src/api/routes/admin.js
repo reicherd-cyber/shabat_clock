@@ -44,7 +44,8 @@ import { listReplies, markRepliesSeen, insertReply, cleanReplyBody, notifyUserOf
 import { notifyWhatsappReply } from '../../whatsapp/bot.js';
 import { readVoicemail, fetchVoicemail } from '../../services/voicemail.js';
 import { fetchCallRecording, readCallRecording, archiveCallRecordingInBackground } from '../../services/callRecording.js';
-import { sendEmail, sendBroadcast, broadcastRecipientCount } from '../../services/email.js';
+import { sendEmail, sendBroadcast, broadcastRecipientCount, htmlToText, buildEmailHtml } from '../../services/email.js';
+import { saveEmailImage } from '../../services/emailImages.js';
 import { brokerConnected } from '../../mqtt/client.js';
 import { healthSnapshot } from '../../monitor/health.js';
 import { generateSecret, otpauthUri } from '../../services/totp.js';
@@ -958,22 +959,36 @@ adminRouter.get('/emails/broadcast-count', requireSuperadmin, async (req, res, n
 adminRouter.post('/emails/send', requireSuperadmin, async (req, res, next) => {
   try {
     const subject = String(req.body?.subject || '').trim();
-    const text = String(req.body?.text || '').trim();
+    const bodyHtml = String(req.body?.html || '').trim();
+    const text = htmlToText(bodyHtml); // plain-text fallback + what the log stores
     const to = req.body?.to; // 'all' | <userId>
     if (!subject || !text) throw errors.validation('נושא ותוכן נדרשים');
     const from = String(await getSetting('email.broadcast_from', 'זימנא <noreply@zimna.co.il>')).trim();
+    // Absolute origin the recipient can reach, so the logo/images load. Default to
+    // the host that served this request (prod → kosher-teltech.com, dev → dev.…).
+    const assetBase = String(await getSetting('email.asset_base', '')).trim() || `${req.protocol}://${req.get('host')}`;
+    const html = buildEmailHtml(bodyHtml, { assetBase });
     const adminId = req.auth?.adminId ?? null;
     if (to === 'all') {
       const count = await broadcastRecipientCount();
       audit(req, 'email_broadcast', 'email', null, { subject, count });
-      sendBroadcast({ subject, text, from, adminId }).catch((e) => console.error('broadcast:', e.message));
+      sendBroadcast({ subject, text, html, from, adminId }).catch((e) => console.error('broadcast:', e.message));
       return res.status(202).json({ started: true, total: count });
     }
     const [u] = await query('SELECT id, email FROM users WHERE id = ?', [Number(to)]);
     if (!u?.email) throw errors.validation('למשתמש זה אין כתובת אימייל');
-    await sendEmail({ to: u.email, subject, text, kind: 'broadcast', userId: u.id, adminId, from });
+    await sendEmail({ to: u.email, subject, text, html, kind: 'broadcast', userId: u.id, adminId, from });
     audit(req, 'email_user', 'email', u.id, { subject, email: u.email });
     res.status(201).json({ sent: 1, to: u.email });
+  } catch (e) { next(e); }
+});
+
+// Upload a picture to embed in a composed email → returns its public URL.
+adminRouter.post('/emails/image', requireSuperadmin, raw({ type: () => true, limit: '5mb' }), async (req, res, next) => {
+  try {
+    const name = saveEmailImage(req.body);
+    const base = String(await getSetting('email.asset_base', '')).trim() || `${req.protocol}://${req.get('host')}`;
+    res.status(201).json({ url: `${base}/email-images/${name}` });
   } catch (e) { next(e); }
 });
 

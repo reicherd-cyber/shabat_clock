@@ -16,14 +16,55 @@ import { query } from '../db/pool.js';
 
 export const EMAIL_KINDS = ['user_otp', 'admin_otp', 'health_alert', 'support_reply', 'broadcast', 'other'];
 
-async function sendViaResendApi({ to, subject, text, from }) {
+// ── HTML emails: a clean RTL template + the Zimna signature (logo + name + phone) ──
+const COMPANY = { name: 'זימנא', tagline: 'פיקוד חשמל חכם למהדרין', phone: '04-3131481', phoneTel: '043131481' };
+
+// A plain-text fallback from the rich HTML body (also what the email log stores).
+export function htmlToText(html) {
+  return String(html || '')
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/\s*(p|div|h[1-6]|li|tr)\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+export function emailSignatureHtml(assetBase) {
+  const logo = `${assetBase}/brand/zimna-logo.png`;
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:28px;border-top:1px solid #e5e7eb;padding-top:16px">
+    <tr><td style="padding-bottom:8px"><img src="${logo}" alt="${COMPANY.name}" width="160" style="display:block;width:160px;height:auto;border:0" /></td></tr>
+    <tr><td style="color:#334155;font-size:13px;line-height:1.7;font-family:Arial,Helvetica,sans-serif">
+      <strong style="color:#2d4a52">${COMPANY.name}</strong> · ${COMPANY.tagline}<br/>
+      טלפון: <a href="tel:${COMPANY.phoneTel}" dir="ltr" style="color:#2d4a52;text-decoration:none">${COMPANY.phone}</a>
+    </td></tr>
+  </table>`;
+}
+
+// Wrap a rich-text body (the admin's HTML) in an email-client-safe RTL shell and
+// append the signature. `assetBase` is an absolute origin the recipient can reach
+// (e.g. https://kosher-teltech.com) so the logo/images load.
+export function buildEmailHtml(bodyHtml, { assetBase }) {
+  return `<!doctype html><html dir="rtl" lang="he"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;background:#f5f6f8;padding:24px 12px">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
+    <table role="presentation" cellpadding="0" cellspacing="0" style="width:600px;max-width:100%;background:#ffffff;border-radius:12px;padding:28px 32px;font-family:Arial,Helvetica,sans-serif;color:#1f2937;font-size:15px;line-height:1.7;text-align:right;direction:rtl">
+      <tr><td>${bodyHtml}${emailSignatureHtml(assetBase)}</td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+}
+
+async function sendViaResendApi({ to, subject, text, html, from }) {
+  const payload = { from, to: [to], subject };
+  if (html) payload.html = html;
+  if (text) payload.text = text;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${env.smtp.pass}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ from, to: [to], subject, text }),
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(15_000), // a stalled edge must not hang the login request
   });
   if (!res.ok) {
@@ -54,7 +95,7 @@ const providerName = () => (!env.smtp.host ? 'dev' : env.smtp.host === 'smtp.res
 // Mask every secret in the stored copy (subject and body alike).
 const mask = (s, redact) => redact.reduce((acc, r) => (r ? acc.split(String(r)).join('••••••') : acc), String(s ?? ''));
 
-export async function sendEmail({ to, subject, text, kind = 'other', userId = null, adminId = null, ref = null, redact = [], from = null }) {
+export async function sendEmail({ to, subject, text, html = null, kind = 'other', userId = null, adminId = null, ref = null, redact = [], from = null }) {
   const provider = providerName();
   const fromAddr = from || env.smtp.from; // a per-send override (e.g. the Zimna broadcast sender), else the default
   const t0 = Date.now();
@@ -66,10 +107,10 @@ export async function sendEmail({ to, subject, text, kind = 'other', userId = nu
       console.log(`[dev] EMAIL to ${to} | ${subject} | ${text}`);
       status = 'dev';
     } else if (provider === 'resend') {
-      providerId = await sendViaResendApi({ to, subject, text, from: fromAddr });
+      providerId = await sendViaResendApi({ to, subject, text, html, from: fromAddr });
     } else {
       const transporter = await getTransporter();
-      const info = await transporter.sendMail({ from: fromAddr, to, subject, text });
+      const info = await transporter.sendMail({ from: fromAddr, to, subject, text, html: html || undefined });
       providerId = info?.messageId ? String(info.messageId).slice(0, 120) : null;
     }
   } catch (e) {
@@ -99,7 +140,7 @@ export async function broadcastRecipientCount() {
 // a small gap to stay under Resend's rate limit; every send is logged to email_log
 // so progress shows on the admin אימיילים page. Meant to be fire-and-forget — the
 // caller returns to the admin immediately. One recipient per person (de-duped email).
-export async function sendBroadcast({ subject, text, from = null, adminId = null }) {
+export async function sendBroadcast({ subject, text, html = null, from = null, adminId = null }) {
   const rows = await query("SELECT id, email FROM users WHERE email IS NOT NULL AND email <> ''");
   const seen = new Map();
   for (const r of rows) {
@@ -110,7 +151,7 @@ export async function sendBroadcast({ subject, text, from = null, adminId = null
   let sent = 0; let failed = 0;
   for (const r of recipients) {
     try {
-      await sendEmail({ to: r.email, subject, text, kind: 'broadcast', userId: r.id, adminId, from });
+      await sendEmail({ to: r.email, subject, text, html, kind: 'broadcast', userId: r.id, adminId, from });
       sent += 1;
     } catch (e) {
       failed += 1;

@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STICKER_SCRIPT_CSP } from './services/stickerScript.js';
+import { readEmailImage } from './services/emailImages.js';
 import { errorHandler } from './config/errors.js';
 import { ivrRouter } from './ivr/router.js';
 import { ivrLimiter, whatsappLimiter } from './api/middleware.js';
@@ -119,6 +120,16 @@ export function createApp() {
     res.set('Cross-Origin-Resource-Policy', 'cross-origin');
     res.set('Cache-Control', 'no-cache'); // the page names it with a content hash; revalidate, never serve a stale copy
     res.type('application/javascript; charset=utf-8').sendFile(path.join(dist, 'sticker.js'));
+  });
+  // Pictures embedded in composed emails (services/emailImages.js). Public + no
+  // auth — email clients fetch images anonymously — with a strict hex filename and
+  // a long cache (the name is random, so content never changes under it).
+  app.get('/email-images/:name', (req, res) => {
+    const img = readEmailImage(req.params.name);
+    if (!img) return res.status(404).send('not found');
+    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    return res.type(img.contentType).send(img.buf);
   });
   app.use(express.static(dist));
   app.get(/^\/(?!api|ivr|whatsapp).*/, (req, res) => {
