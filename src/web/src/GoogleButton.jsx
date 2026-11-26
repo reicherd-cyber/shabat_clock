@@ -4,7 +4,7 @@ import { publicApi } from './api.js';
 // "Sign in with Google" (GIS) button, shared by the user and admin login pages.
 // Hidden entirely when the server has no GOOGLE_CLIENT_ID configured.
 // onCredential receives the raw GIS credential (a Google-signed ID token).
-export default function GoogleButton({ onCredential, onError }) {
+export default function GoogleButton({ onCredential, onError, hint = true }) {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -40,10 +40,12 @@ export default function GoogleButton({ onCredential, onError }) {
   return (
     <div className="space-y-2">
       <div className="flex justify-center" ref={ref} />
-      <p className="text-muted text-xs text-center">
-        אם החלון של Google נתקע ריק — ודאו ש"חסימת עוגיות צד שלישי" כבויה בדפדפן
-        (chrome://settings/cookies), או נסו חלון גלישה בסתר ללא תוספים.
-      </p>
+      {hint && (
+        <p className="text-muted text-xs text-center">
+          אם החלון של Google נתקע ריק — ודאו ש"חסימת עוגיות צד שלישי" כבויה בדפדפן
+          (chrome://settings/cookies), או נסו חלון גלישה בסתר ללא תוספים.
+        </p>
+      )}
     </div>
   );
 }

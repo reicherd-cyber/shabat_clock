@@ -70,7 +70,7 @@ export default function Login() {
             </p>
             {error && <div className="w-full bg-white/90 text-off rounded-xl px-3 py-2 text-sm">{String(error.message || error)}</div>}
             <div className={`w-full flex justify-center ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
-              <GoogleButton onCredential={onGoogle} onError={setError} />
+              <GoogleButton onCredential={onGoogle} onError={setError} hint={false} />
             </div>
             {reviewLogin && (
               <button className="text-white/55 text-xs cursor-pointer hover:text-white/90 transition-colors" onClick={() => setStage('review')}>
