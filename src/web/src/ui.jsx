@@ -207,10 +207,22 @@ export const Logo = ({ size = 20 }) => (
 // The full זימנא lockup — the designer's artwork (mark + wordmark). `tagline` swaps
 // in the variant that also carries the slogan. `size` = the rendered lockup height.
 // On a dark surface, wrap in `.brand-dark` to render it as a white silhouette.
-export const Wordmark = ({ size = 40, tagline = false }) => (
-  <img src={tagline ? '/brand/lockup-full.png' : '/brand/lockup.png'}
-    alt="זימנא" draggable={false} style={{ height: size, width: 'auto' }} />
-);
+// The time-dots are lifted out of the artwork (scripts/split-logo-dots.mjs measured
+// them in lockup.png) and redrawn as SVG circles on top of lockup-nodots.png, so they
+// can fill in one after another, clockwise, on a loop — as in the brand's login film.
+const LOGO_DOTS = [[2468.7, 315.3], [2655.4, 283.4], [2830.6, 355.8], [2940.4, 510.1], [2951.2, 699.3]];
+export const Wordmark = ({ size = 40, tagline = false }) => (tagline ? (
+  <img src="/brand/lockup-full.png" alt="זימנא" draggable={false} style={{ height: size, width: 'auto' }} />
+) : (
+  <span className="relative inline-block align-middle" style={{ height: size }}>
+    <img src="/brand/lockup-nodots.png" alt="זימנא" draggable={false} style={{ height: size, width: 'auto', display: 'block' }} />
+    <svg className="absolute inset-0 w-full h-full" viewBox="0 0 3226 1226" aria-hidden="true">
+      {LOGO_DOTS.map(([cx, cy], i) => (
+        <circle key={i} className="logo-dot" cx={cx} cy={cy} r="25.5" fill="#2F4D56" style={{ animationDelay: `${i * 0.32}s` }} />
+      ))}
+    </svg>
+  </span>
+));
 
 export const OnlineDot = ({ online }) => (
   <span className={`inline-block w-2.5 h-2.5 rounded-full ${online ? 'bg-on' : 'bg-off'}`} title={online ? 'מחובר' : 'מנותק'} />

@@ -53,7 +53,18 @@ body {
 }
 .admin-sidebar ::selection { background: rgba(255, 255, 255, .22); }
 /* Dark-nav brand: render the navy/azure PNG wordmark as a clean white silhouette. */
-.brand-dark img { filter: brightness(0) invert(1); opacity: .96; }
+.brand-dark img, .brand-dark svg { filter: brightness(0) invert(1); opacity: .96; }
+
+/* Logo time-dots: each pops in on its own delay (clockwise), holds, then clears —
+   the stagger persists across loops because the delay shifts each dot's phase. */
+.logo-dot { transform-box: fill-box; transform-origin: center; animation: logodot 4.2s ease-in-out infinite both; }
+@keyframes logodot {
+  0% { opacity: 0; transform: scale(.2); }
+  7% { opacity: 1; transform: scale(1.25); }
+  11%, 78% { opacity: 1; transform: scale(1); }
+  88%, 100% { opacity: 0; transform: scale(.2); }
+}
+@media (prefers-reduced-motion: reduce) { .logo-dot { animation: none; } }
 
 /* Dark card head: any icon-button inside (e.g. the superadmin eye) reads on teal. */
 .card-head-dark button { color: rgba(255, 255, 255, .8); }
