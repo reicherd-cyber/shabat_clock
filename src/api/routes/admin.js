@@ -44,6 +44,7 @@ import { listReplies, markRepliesSeen, insertReply, cleanReplyBody, notifyUserOf
 import { notifyWhatsappReply } from '../../whatsapp/bot.js';
 import { readVoicemail, fetchVoicemail } from '../../services/voicemail.js';
 import { fetchCallRecording, readCallRecording, archiveCallRecordingInBackground } from '../../services/callRecording.js';
+import { sendEmail, sendBroadcast, broadcastRecipientCount } from '../../services/email.js';
 import { brokerConnected } from '../../mqtt/client.js';
 import { healthSnapshot } from '../../monitor/health.js';
 import { generateSecret, otpauthUri } from '../../services/totp.js';
@@ -941,6 +942,38 @@ adminRouter.get('/emails', async (req, res, next) => {
       byKind: byKind.map((r) => ({ kind: r.kind, n: Number(r.n), failed: Number(r.failed || 0) })),
       byDay: byDay.map((r) => ({ d: dayKey(r.d), status: r.status, n: Number(r.n) })),
     });
+  } catch (e) { next(e); }
+});
+
+// How many users a broadcast would reach (distinct emails) — for the confirm dialog.
+adminRouter.get('/emails/broadcast-count', requireSuperadmin, async (req, res, next) => {
+  try { res.json({ count: await broadcastRecipientCount() }); } catch (e) { next(e); }
+});
+
+// Compose + send an email to one user or to EVERY user, from the Zimna sender
+// (setting email.broadcast_from, default "זימנא <noreply@zimna.co.il>"). Superadmin
+// only; audited. A broadcast runs in the BACKGROUND — the response returns at once
+// and each send lands in the email log. ⚠️ the sender domain must be verified in
+// Resend or every send fails.
+adminRouter.post('/emails/send', requireSuperadmin, async (req, res, next) => {
+  try {
+    const subject = String(req.body?.subject || '').trim();
+    const text = String(req.body?.text || '').trim();
+    const to = req.body?.to; // 'all' | <userId>
+    if (!subject || !text) throw errors.validation('נושא ותוכן נדרשים');
+    const from = String(await getSetting('email.broadcast_from', 'זימנא <noreply@zimna.co.il>')).trim();
+    const adminId = req.auth?.adminId ?? null;
+    if (to === 'all') {
+      const count = await broadcastRecipientCount();
+      audit(req, 'email_broadcast', 'email', null, { subject, count });
+      sendBroadcast({ subject, text, from, adminId }).catch((e) => console.error('broadcast:', e.message));
+      return res.status(202).json({ started: true, total: count });
+    }
+    const [u] = await query('SELECT id, email FROM users WHERE id = ?', [Number(to)]);
+    if (!u?.email) throw errors.validation('למשתמש זה אין כתובת אימייל');
+    await sendEmail({ to: u.email, subject, text, kind: 'broadcast', userId: u.id, adminId, from });
+    audit(req, 'email_user', 'email', u.id, { subject, email: u.email });
+    res.status(201).json({ sent: 1, to: u.email });
   } catch (e) { next(e); }
 });
 

@@ -14,16 +14,16 @@
 import { env } from '../config/env.js';
 import { query } from '../db/pool.js';
 
-export const EMAIL_KINDS = ['user_otp', 'admin_otp', 'health_alert', 'support_reply', 'other'];
+export const EMAIL_KINDS = ['user_otp', 'admin_otp', 'health_alert', 'support_reply', 'broadcast', 'other'];
 
-async function sendViaResendApi({ to, subject, text }) {
+async function sendViaResendApi({ to, subject, text, from }) {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${env.smtp.pass}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ from: env.smtp.from, to: [to], subject, text }),
+    body: JSON.stringify({ from, to: [to], subject, text }),
     signal: AbortSignal.timeout(15_000), // a stalled edge must not hang the login request
   });
   if (!res.ok) {
@@ -54,8 +54,9 @@ const providerName = () => (!env.smtp.host ? 'dev' : env.smtp.host === 'smtp.res
 // Mask every secret in the stored copy (subject and body alike).
 const mask = (s, redact) => redact.reduce((acc, r) => (r ? acc.split(String(r)).join('••••••') : acc), String(s ?? ''));
 
-export async function sendEmail({ to, subject, text, kind = 'other', userId = null, adminId = null, ref = null, redact = [] }) {
+export async function sendEmail({ to, subject, text, kind = 'other', userId = null, adminId = null, ref = null, redact = [], from = null }) {
   const provider = providerName();
+  const fromAddr = from || env.smtp.from; // a per-send override (e.g. the Zimna broadcast sender), else the default
   const t0 = Date.now();
   let status = 'sent';
   let providerId = null;
@@ -65,10 +66,10 @@ export async function sendEmail({ to, subject, text, kind = 'other', userId = nu
       console.log(`[dev] EMAIL to ${to} | ${subject} | ${text}`);
       status = 'dev';
     } else if (provider === 'resend') {
-      providerId = await sendViaResendApi({ to, subject, text });
+      providerId = await sendViaResendApi({ to, subject, text, from: fromAddr });
     } else {
       const transporter = await getTransporter();
-      const info = await transporter.sendMail({ from: env.smtp.from, to, subject, text });
+      const info = await transporter.sendMail({ from: fromAddr, to, subject, text });
       providerId = info?.messageId ? String(info.messageId).slice(0, 120) : null;
     }
   } catch (e) {
@@ -80,12 +81,45 @@ export async function sendEmail({ to, subject, text, kind = 'other', userId = nu
   if (provider !== 'dev') await query(
     `INSERT INTO email_log (kind, to_email, from_email, subject, body, user_id, admin_id, ref, provider, provider_id, status, error, duration_ms)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [EMAIL_KINDS.includes(kind) ? kind : 'other', String(to).slice(0, 255), env.smtp.from || null,
+    [EMAIL_KINDS.includes(kind) ? kind : 'other', String(to).slice(0, 255), fromAddr || null,
       mask(subject, redact).slice(0, 255), mask(text, redact), userId, adminId, ref == null ? null : String(ref).slice(0, 100),
       provider, providerId, status, error, Date.now() - t0],
   ).catch((e) => console.error('email_log insert:', e.message));
   if (error) throw new Error(error);
   return { status, providerId };
+}
+
+// Count the distinct user emails a broadcast would reach (for the confirm dialog).
+export async function broadcastRecipientCount() {
+  const [row] = await query("SELECT COUNT(DISTINCT LOWER(email)) AS n FROM users WHERE email IS NOT NULL AND email <> ''");
+  return Number(row?.n || 0);
+}
+
+// Send a one-off message to EVERY user (admin "שלח לכל המשתמשים"). Sequential with
+// a small gap to stay under Resend's rate limit; every send is logged to email_log
+// so progress shows on the admin אימיילים page. Meant to be fire-and-forget — the
+// caller returns to the admin immediately. One recipient per person (de-duped email).
+export async function sendBroadcast({ subject, text, from = null, adminId = null }) {
+  const rows = await query("SELECT id, email FROM users WHERE email IS NOT NULL AND email <> ''");
+  const seen = new Map();
+  for (const r of rows) {
+    const e = String(r.email).trim().toLowerCase();
+    if (e && !seen.has(e)) seen.set(e, r);
+  }
+  const recipients = [...seen.values()];
+  let sent = 0; let failed = 0;
+  for (const r of recipients) {
+    try {
+      await sendEmail({ to: r.email, subject, text, kind: 'broadcast', userId: r.id, adminId, from });
+      sent += 1;
+    } catch (e) {
+      failed += 1;
+      console.warn(`[broadcast] ${r.email}: ${e.message}`);
+    }
+    await new Promise((res) => setTimeout(res, 600)); // ≈1.6/s — under Resend's rate limit
+  }
+  console.log(`[broadcast] done: ${sent} sent, ${failed} failed of ${recipients.length}`);
+  return { total: recipients.length, sent, failed };
 }
 
 // Resend keeps the delivery outcome per message (last_event: delivered,

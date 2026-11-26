@@ -7,9 +7,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Mail, AlertTriangle, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import { adminApi } from '../api.js';
-import { Card, Button, Input, SearchSelect, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect, Stat, Badge, StackedDayChart } from '../ui.jsx';
+import { Card, Button, Input, SearchSelect, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect, Stat, Badge, StackedDayChart, Modal } from '../ui.jsx';
 
-const KIND_HE = { user_otp: 'קוד כניסה למשתמש', admin_otp: 'קוד כניסה למנהל', support_reply: 'תשובה לפנייה', health_alert: 'התראת ניטור', other: 'אחר' };
+const KIND_HE = { user_otp: 'קוד כניסה למשתמש', admin_otp: 'קוד כניסה למנהל', support_reply: 'תשובה לפנייה', health_alert: 'התראת ניטור', broadcast: 'דיוור', other: 'אחר' };
 const STATUS_HE = { sent: 'נשלח', failed: 'נכשל' };
 const PROVIDER_HE = { resend: 'Resend', smtp: 'SMTP', dev: 'פיתוח' };
 const EVENT_HE = {
@@ -74,6 +74,27 @@ export function Emails() {
     }).catch(() => {}).finally(() => setRefreshing(null));
   };
 
+  // Compose + send an email (one user / everyone, from the Zimna sender).
+  const [compose, setCompose] = useState(null); // { mode:'all'|'one', userId, subject, text }
+  const [bcCount, setBcCount] = useState(null); // how many a broadcast reaches
+  const [confirmSend, setConfirmSend] = useState(false);
+  const [sendResult, setSendResult] = useState(null);
+  const openCompose = () => {
+    setError(null); setSendResult(null);
+    setCompose({ mode: 'all', userId: '', subject: '', text: '' });
+    adminApi.get('/emails/broadcast-count').then((r) => setBcCount(r.count)).catch(() => setBcCount(users.length));
+  };
+  const canSend = compose && compose.subject.trim() && compose.text.trim() && (compose.mode === 'all' || compose.userId);
+  const doSend = () => run(async () => {
+    const to = compose.mode === 'all' ? 'all' : compose.userId;
+    const r = await adminApi.post('/emails/send', { to, subject: compose.subject.trim(), text: compose.text.trim() });
+    setConfirmSend(false);
+    const result = compose.mode === 'all' ? { kind: 'all', total: r.total } : { kind: 'one', to: r.to };
+    setCompose(null);
+    setSendResult(result);
+    load();
+  });
+
   const filtering = Object.keys(EMPTY).some((k) => f[k] !== EMPTY[k]);
   const c = data?.counts;
   const eventsSeen = useMemo(() => [...new Set((data?.rows || []).map((r) => r.last_event).filter(Boolean))], [data]);
@@ -132,7 +153,20 @@ export function Emails() {
         </div>
       )}
 
-      {data && <p className="text-muted text-sm">{data.rows.length} הודעות{data.rows.length >= 1000 ? '+' : ''}{filtering ? ' (מסונן)' : ''}</p>}
+      {sendResult && (
+        <Card className="border-accent text-sm">
+          {sendResult.kind === 'all'
+            ? `הדיוור יצא לדרך — נשלח ל-${sendResult.total} משתמשים ברקע. עקבו אחר ההתקדמות ברשימה למטה (סוג "דיוור").`
+            : <>ההודעה נשלחה אל <span dir="ltr">{sendResult.to}</span>.</>}
+        </Card>
+      )}
+
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        {data
+          ? <p className="text-muted text-sm">{data.rows.length} הודעות{data.rows.length >= 1000 ? '+' : ''}{filtering ? ' (מסונן)' : ''}</p>
+          : <span />}
+        <Button onClick={openCompose}><span className="inline-flex items-center gap-1.5"><Mail size={15} />שלח אימייל</span></Button>
+      </div>
 
       <Card flush className="table-scroll">
         <table className="w-full text-sm">
@@ -231,6 +265,54 @@ export function Emails() {
         </Card>
       )}
       {busy && <p className="text-muted text-sm">טוען…</p>}
+
+      <Modal open={!!compose} onClose={() => setCompose(null)} title="שליחת אימייל">
+        {compose && (
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              {[['all', `כל המשתמשים${bcCount != null ? ` (${bcCount})` : ''}`], ['one', 'משתמש יחיד']].map(([m, label]) => (
+                <button key={m} type="button" onClick={() => setCompose({ ...compose, mode: m })}
+                  className={`rounded-full border px-3 py-1.5 text-sm cursor-pointer ${compose.mode === m ? 'border-accent bg-surface2' : 'border-line hover:bg-surface2'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {compose.mode === 'one' && (
+              <SearchSelect className="w-full" value={compose.userId} onChange={(v) => setCompose({ ...compose, userId: v })}
+                allLabel="בחרו משתמש…" placeholder="חיפוש משתמש…"
+                options={users.map((u) => ({ value: String(u.id), label: u.full_name, hint: `#${u.id}`, search: u.ivr_code }))} />
+            )}
+            <Input placeholder="נושא" value={compose.subject} onChange={(e) => setCompose({ ...compose, subject: e.target.value })} />
+            <textarea className="w-full border border-line rounded-xl px-3 py-2 min-h-40 focus:outline-accent" placeholder="תוכן ההודעה"
+              value={compose.text} onChange={(e) => setCompose({ ...compose, text: e.target.value })} />
+            <p className="text-xs text-muted">נשלח מ: <span dir="ltr">noreply@zimna.co.il</span> · יש לוודא שהדומיין zimna.co.il מאומת ב-Resend, אחרת השליחה תיכשל.</p>
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button disabled={!canSend || busy} onClick={() => setConfirmSend(true)}>
+                <span className="inline-flex items-center gap-1.5"><Mail size={15} />שלח</span>
+              </Button>
+              <Button variant="ghost" onClick={() => setCompose(null)}>ביטול</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={confirmSend} onClose={() => setConfirmSend(false)} title="אישור שליחה">
+        {compose && (
+          <div className="space-y-3">
+            {compose.mode === 'all'
+              ? <p>לשלוח את ההודעה <b>״{compose.subject}״</b> ל-<b>{bcCount}</b> משתמשים? הפעולה תתבצע ברקע ואינה ניתנת לביטול.</p>
+              : <p>לשלוח את ההודעה <b>״{compose.subject}״</b> למשתמש הנבחר?</p>}
+            <ErrorNote error={error} />
+            <div className="flex gap-2">
+              <Button disabled={busy} onClick={doSend}>
+                {compose.mode === 'all' ? `שלח ל-${bcCount} משתמשים` : 'שלח'}
+              </Button>
+              <Button variant="ghost" onClick={() => setConfirmSend(false)}>ביטול</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
