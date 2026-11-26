@@ -36,6 +36,20 @@ test('pickRecordPath rejects a call far from the log time', () => {
   assert.equal(pickRecordPath(parseBridgeLog(LOG), '0527694796', Date.UTC(2026, 10, 25, 12, 0, 0)), null);
 });
 
+test('across a month boundary, the closest wins (not the first month seen)', () => {
+  // Call placed 30/11 23:59:58; the previous call to the same number is logged at
+  // 23:59:20 (this month), its own recording at 00:00:02 (next month). Combined,
+  // pickEntry must choose the +4s next-month entry over the -38s one.
+  const rows = parseBridgeLog(
+    [
+      'Date#30/11/26%Time#23:59:20%BridgeCallBridgeTo#0527694796%RecordPath#ivr2:/prev.wav',
+      'Date#01/12/26%Time#00:00:02%BridgeCallBridgeTo#0527694796%RecordPath#ivr2:/mine.wav',
+    ].join('\r\n'),
+  );
+  const placedMs = Date.UTC(2026, 10, 30, 23, 59, 58);
+  assert.equal(pickRecordPath(rows, '0527694796', placedMs), 'ivr2:/mine.wav');
+});
+
 test('pickRecordPath picks the closest when several match', () => {
   const rows = parseBridgeLog(
     [

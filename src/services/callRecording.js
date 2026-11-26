@@ -105,14 +105,16 @@ function callKey({ phone, at }) {
   };
 }
 
-// The best matching log entry across the call's candidate month file(s).
+// The best matching log entry across the call's candidate month file(s). Entries
+// from ALL candidate months are combined before matching, so the globally closest
+// wins — a call placed at 23:59:5x must not grab the previous call's entry in this
+// month over its own entry logged at 00:00:0x in the next month's file.
 async function findEntry(k, recordedOnly) {
+  const all = [];
   for (const month of k.months) {
-    const all = parseBridgeLog(await getText(`ivr2:/Log/BridgeCall/LogBridgeCall.${month}.ymgr`));
-    const e = pickEntry(recordedOnly ? all.filter((x) => x.RecordPath) : all, k.digits, k.callLocalMs);
-    if (e) return e;
+    all.push(...parseBridgeLog(await getText(`ivr2:/Log/BridgeCall/LogBridgeCall.${month}.ymgr`)));
   }
-  return null;
+  return pickEntry(recordedOnly ? all.filter((x) => x.RecordPath) : all, k.digits, k.callLocalMs);
 }
 
 export async function recordPathFor({ phone, at }) {
