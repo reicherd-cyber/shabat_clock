@@ -55,6 +55,10 @@ body {
 /* Dark-nav brand: render the navy/azure PNG wordmark as a clean white silhouette. */
 .brand-dark img { filter: brightness(0) invert(1); opacity: .96; }
 
+/* Dark card head: any icon-button inside (e.g. the superadmin eye) reads on teal. */
+.card-head-dark button { color: rgba(255, 255, 255, .8); }
+.card-head-dark button:hover { color: #fff; }
+
 /* toggle — mockup .toggle: 46×26, terracotta track when on */
 .toggle { position: relative; width: 46px; height: 26px; flex-shrink: 0; cursor: pointer; display: inline-block; }
 .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }

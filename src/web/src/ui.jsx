@@ -54,9 +54,9 @@ export const Card = ({ children, className = '', flush = false, ...props }) => (
   <div {...props} className={`bg-surface border border-line rounded-card shadow-card overflow-hidden ${flush ? '' : 'p-4'} ${className}`}>{children}</div>
 );
 
-// mockup .card-head: surface-2 strip with serif name
+// Card head: a dark brand-teal strip with the name in white (same teal as the toggles).
 export const CardHead = ({ children }) => (
-  <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-surface2">{children}</div>
+  <div className="card-head-dark flex items-center justify-between px-5 py-3.5 bg-accent text-white">{children}</div>
 );
 
 // mockup .btn / .btn.primary

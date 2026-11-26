@@ -284,7 +284,7 @@ export default function Dashboard() {
 
       {view === 'list' && visibleDevices.length > 0 && (
         <Card flush className={dragId ? 'select-none' : ''}>
-          <div className="hidden sm:flex items-center gap-3.5 px-4 py-2.5 text-[12px] font-bold text-accent border-b border-line bg-surface2">
+          <div className="hidden sm:flex items-center gap-3.5 px-4 py-2.5 text-[12px] font-semibold text-white bg-accent">
             <span className="w-5 shrink-0" />
             <span className="min-w-12 text-center">קוד</span>
             <span className="flex-1">ערוץ</span>
@@ -341,7 +341,7 @@ export default function Dashboard() {
             <Card key={d.id} flush>
               <CardHead>
                 <span className="font-serif font-bold text-[17px] flex items-center gap-2">
-                  <House size={17} className="text-accent shrink-0" />{d.name}
+                  <House size={17} className="text-white/80 shrink-0" />{d.name}
                 </span>
                 <InspectEye device={d} size={17} />
               </CardHead>
