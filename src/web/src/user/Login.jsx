@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { publicApi, tokens } from '../api.js';
-import { Card, Button, Input, ErrorNote, useAsync, Logo, Wordmark } from '../ui.jsx';
+import { Card, Button, Input, ErrorNote, useAsync, Wordmark } from '../ui.jsx';
 import GoogleButton from '../GoogleButton.jsx';
 
 // Google-only sign-in (phone-number login removed 2026-10-19): an existing
@@ -43,19 +43,49 @@ export default function Login() {
     finishLogin(r);
   });
 
+  const onGradient = stage === 'google'; // the splash look; other stages use a card
+
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
-      <Card className="max-w-sm w-full">
-        <h1 className="mb-1 flex items-center gap-2.5">
-          <span className="text-accent"><Logo size={34} /></span>
-          <Wordmark size={26} tagline />
-        </h1>
-        <p className="text-muted mb-4 mt-2">
-          {stage === 'consent' ? 'פתיחת חשבון חדש' : stage === 'welcome' ? 'ברוכים הבאים!' : 'כניסה לאזור האישי'}
-        </p>
-        <ErrorNote error={error} />
-        {stage === 'consent' && pending ? (
-          <div className="space-y-3">
+    <div className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden px-6 py-12"
+      style={{ background: 'linear-gradient(176deg,#2E4D56 0%,#2E4D56 34%,#3C5A63 56%,#6E858D 82%,#A6B0B4 100%)' }}>
+      {/* floating brand dots — static, for depth (matches the brand boards) */}
+      <span aria-hidden className="pointer-events-none absolute -top-10 -right-8 w-56 h-56 rounded-full" style={{ background: 'radial-gradient(circle,rgba(255,255,255,.07),transparent 70%)' }} />
+      <span aria-hidden className="pointer-events-none absolute top-1/3 left-6 w-3 h-3 rounded-full bg-white/10" />
+      <span aria-hidden className="pointer-events-none absolute top-24 right-16 w-2 h-2 rounded-full bg-white/15" />
+      <span aria-hidden className="pointer-events-none absolute bottom-28 left-1/4 w-2.5 h-2.5 rounded-full bg-white/10" />
+
+      <div className="relative w-full max-w-sm flex flex-col items-center text-center">
+        {/* White זימנא lockup on the teal gradient */}
+        <div className="brand-dark mb-7">
+          <Wordmark size={72} />
+        </div>
+
+        {onGradient ? (
+          <div className="w-full flex flex-col items-center gap-5">
+            <span aria-hidden className="flex items-center gap-1.5 text-white/55">
+              <i className="w-1.5 h-1.5 rounded-full bg-current" /><i className="w-1.5 h-1.5 rounded-full bg-current" /><i className="w-1.5 h-1.5 rounded-full bg-current" />
+            </span>
+            <p className="text-white/85 text-sm leading-relaxed max-w-xs">
+              הכניסה לאזור האישי היא עם חשבון Google.<br />הכניסה הראשונה פותחת חשבון חדש.
+            </p>
+            {error && <div className="w-full bg-white/90 text-off rounded-xl px-3 py-2 text-sm">{String(error.message || error)}</div>}
+            <div className={`w-full flex justify-center ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+              <GoogleButton onCredential={onGoogle} onError={setError} />
+            </div>
+            {reviewLogin && (
+              <button className="text-white/55 text-xs cursor-pointer hover:text-white/90 transition-colors" onClick={() => setStage('review')}>
+                כניסה עם קוד גישה
+              </button>
+            )}
+          </div>
+        ) : (
+          <Card className="w-full text-start shadow-card">
+            <p className="text-ink font-semibold mb-3">
+              {stage === 'consent' ? 'פתיחת חשבון חדש' : stage === 'welcome' ? 'ברוכים הבאים!' : 'כניסה עם קוד גישה'}
+            </p>
+            <ErrorNote error={error} />
+            {stage === 'consent' && pending ? (
+              <div className="space-y-3">
             <p className="text-sm">
               שלום <b>{pending.name}</b> — אין עדיין חשבון לכתובת <b dir="ltr">{pending.email}</b>.
               נפתח לך חשבון חדש עם הפרטים האלה מחשבון Google שלך.
@@ -103,20 +133,16 @@ export default function Login() {
             <Button className="w-full" disabled={busy || !review.email.trim() || !review.code.trim()} onClick={reviewSignIn}>כניסה</Button>
             <button className="text-muted text-sm w-full" onClick={() => { setError(null); setStage('google'); }}>חזרה</button>
           </div>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-sm text-muted">הכניסה לאזור האישי היא עם חשבון Google. אין עדיין חשבון? הכניסה הראשונה פותחת אחד.</p>
-            <div className={busy ? 'opacity-50 pointer-events-none' : ''}>
-              <GoogleButton onCredential={onGoogle} onError={setError} />
-            </div>
-            {reviewLogin && (
-              <button className="text-muted text-xs w-full cursor-pointer hover:text-ink" onClick={() => setStage('review')}>
-                כניסה עם קוד גישה
-              </button>
-            )}
-          </div>
+            ) : null}
+          </Card>
         )}
-      </Card>
+      </div>
+
+      <p className="absolute bottom-6 inset-x-0 text-white/55 text-[11px] text-center leading-relaxed px-6">
+        <a className="underline hover:text-white/85" href="/terms.html" target="_blank" rel="noreferrer">תנאי השימוש</a>
+        {' · '}
+        <a className="underline hover:text-white/85" href="/privacy.html" target="_blank" rel="noreferrer">מדיניות הפרטיות</a>
+      </p>
     </div>
   );
 }

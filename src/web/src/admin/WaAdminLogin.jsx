@@ -21,7 +21,7 @@ export default function WaAdminLogin() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <Card className="max-w-sm w-full space-y-3">
-        <h1 className="text-2xl font-bold flex items-center gap-2">מצב מנהל · <Wordmark size={24} /></h1>
+        <h1 className="text-2xl font-bold flex items-center gap-2">מצב מנהל · <Wordmark size={34} /></h1>
         {done ? (
           <p className="text-lg">✅ מצב מנהל נפתח בוואטסאפ. אפשר לחזור לשיחה.</p>
         ) : (

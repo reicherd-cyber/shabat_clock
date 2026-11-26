@@ -40,7 +40,7 @@ export default function AdminLogin() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <Card className="max-w-sm w-full">
-        <h1 className="text-2xl font-bold mb-1 flex items-center gap-2">ניהול · <Wordmark size={24} /></h1>
+        <h1 className="text-2xl font-bold mb-1 flex items-center gap-2">ניהול · <Wordmark size={34} /></h1>
         <p className="text-muted mb-4">כניסה עם חשבון Google מורשה, או עם מפתח גישה (טביעת אצבע / Face ID) שנרשם בעמוד המנהלים</p>
         <ErrorNote error={error} />
         {half ? (

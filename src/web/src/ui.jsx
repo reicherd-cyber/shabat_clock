@@ -188,23 +188,28 @@ export const Badge = ({ ok, children }) => (
 
 export const CodeChip = ({ children }) => <span className="code-chip">{children}</span>;
 
-// The זימנא brand (2026-09): the official artwork itself, extracted with
-// transparency into public/brand/ — mark.png (power-button ring whose gap holds a
-// flame-donut), word.png (custom type, droplet inside each e), tagline.png. Images
-// rather than SVG/text so the app matches the designer's file exactly.
+// The זימנא brand mark (2026-11): a clock arc with time-dots spiralling inward.
+// Inline SVG so it inherits the current text color — accent teal on light, white on
+// the dark nav and the login gradient — and stays crisp at every size (incl. the
+// favicon and the calendar switch knob).
 export const Logo = ({ size = 20 }) => (
-  <img src="/brand/mark.png" alt="" aria-hidden="true" draggable={false}
-    style={{ height: size, width: 'auto' }} />
+  <svg width={size} height={size} viewBox="0 0 64 64" fill="none" aria-hidden="true"
+    style={{ display: 'inline-block', verticalAlign: 'middle' }}>
+    <path d="M40.2 54.6 A24 24 0 1 1 50.4 16.6" fill="none" stroke="currentColor" strokeWidth="5.5" strokeLinecap="round" />
+    <g fill="currentColor">
+      <circle cx="46" cy="21" r="2.6" /><circle cx="40" cy="25" r="2.2" />
+      <circle cx="35" cy="29.5" r="1.8" /><circle cx="31" cy="34.5" r="1.5" />
+      <circle cx="28" cy="40" r="1.2" /><circle cx="26" cy="45" r="0.95" />
+    </g>
+  </svg>
 );
 
-// size = the זימנא word height in px; the tagline scales with it at the
-// lockup's original ratio so the pair keeps the designed proportions.
-export const Wordmark = ({ size = 21, tagline = false }) => (
-  <span className="inline-flex flex-col items-center">
-    <img src="/brand/word.png" alt="זימנא" draggable={false} style={{ height: size, width: 'auto' }} />
-    {tagline && <img src="/brand/tagline.png" alt="בית כשר חכם" draggable={false}
-      style={{ height: size * 0.374, width: 'auto', marginTop: size * 0.18 }} />}
-  </span>
+// The full זימנא lockup — the designer's artwork (mark + wordmark). `tagline` swaps
+// in the variant that also carries the slogan. `size` = the rendered lockup height.
+// On a dark surface, wrap in `.brand-dark` to render it as a white silhouette.
+export const Wordmark = ({ size = 40, tagline = false }) => (
+  <img src={tagline ? '/brand/lockup-full.png' : '/brand/lockup.png'}
+    alt="זימנא" draggable={false} style={{ height: size, width: 'auto' }} />
 );
 
 export const OnlineDot = ({ online }) => (

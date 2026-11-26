@@ -162,10 +162,9 @@ function UserLayout() {
       )}
       {!impersonating && <ReadOnlyBanner readOnly={readOnly} accounts={accounts} onHome={switchAccount} />}
       <header className="flex items-center justify-between px-6 py-3.5 border-b border-line bg-bg sticky top-0 z-10">
-        <div className="flex items-center gap-2 cursor-pointer select-none"
+        <div className="flex items-center cursor-pointer select-none"
           onClick={() => nav('/')} role="button" title="לדף הבית">
-          <span className="text-accent shrink-0"><Logo size={34} /></span>
-          <Wordmark size={21} tagline />
+          <Wordmark size={40} />
         </div>
         <nav className="hidden md:flex gap-1 items-center">
           {tabs.map((t) => (
@@ -393,7 +392,7 @@ function AdminLayout() {
     <div className="brand-dark text-white font-bold text-[19px] flex items-center gap-2 cursor-pointer select-none"
       onClick={() => { setMenuOpen(false); nav('/admin'); }} role="button" title="לדף הבית">
       <span className="shrink-0"><Logo size={30} /></span>
-      <span className="flex items-center gap-1.5">ניהול · <Wordmark size={19} /></span>
+      <span className="flex items-center gap-1.5">ניהול · <Wordmark size={30} /></span>
     </div>
   );
   const logout = () => { tokens.admin = null; nav('/admin/login'); };
