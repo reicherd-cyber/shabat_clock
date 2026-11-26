@@ -31,9 +31,10 @@ export function htmlToText(html) {
 
 export function emailSignatureHtml(assetBase) {
   const logo = `${assetBase}/brand/zimna-logo.png`;
-  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:28px;border-top:1px solid #e5e7eb;padding-top:16px">
-    <tr><td style="padding-bottom:8px"><img src="${logo}" alt="${COMPANY.name}" width="160" style="display:block;width:160px;height:auto;border:0" /></td></tr>
-    <tr><td style="color:#334155;font-size:13px;line-height:1.7;font-family:Arial,Helvetica,sans-serif">
+  // Left-aligned signature (the body above stays RTL/right-aligned).
+  return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;margin-top:28px;border-top:1px solid #e5e7eb;padding-top:16px">
+    <tr><td align="left" style="text-align:left;padding-bottom:8px"><img src="${logo}" alt="${COMPANY.name}" width="160" style="display:inline-block;width:160px;height:auto;border:0" /></td></tr>
+    <tr><td align="left" style="text-align:left;color:#334155;font-size:13px;line-height:1.7;font-family:Arial,Helvetica,sans-serif">
       <strong style="color:#2d4a52">${COMPANY.name}</strong> · ${COMPANY.tagline}<br/>
       טלפון: <a href="tel:${COMPANY.phoneTel}" dir="ltr" style="color:#2d4a52;text-decoration:none">${COMPANY.phone}</a>
     </td></tr>
