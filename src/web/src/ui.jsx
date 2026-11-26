@@ -218,7 +218,7 @@ export const Wordmark = ({ size = 40, tagline = false }) => (tagline ? (
     <img src="/brand/lockup-nodots.png" alt="זימנא" draggable={false} style={{ height: size, width: 'auto', display: 'block' }} />
     <svg className="absolute inset-0 w-full h-full" viewBox="0 0 3226 1226" aria-hidden="true">
       {LOGO_DOTS.map(([cx, cy], i) => (
-        <circle key={i} className="logo-dot" cx={cx} cy={cy} r="25.5" fill="#2F4D56" style={{ animationDelay: `${i * 0.32}s` }} />
+        <circle key={i} className="logo-dot" cx={cx} cy={cy} r="25.5" fill="#2F4D56" />
       ))}
     </svg>
   </span>
