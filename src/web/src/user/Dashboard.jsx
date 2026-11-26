@@ -284,7 +284,7 @@ export default function Dashboard() {
 
       {view === 'list' && visibleDevices.length > 0 && (
         <Card flush className={dragId ? 'select-none' : ''}>
-          <div className="hidden sm:flex items-center gap-3.5 px-4 py-2.5 text-[12px] font-medium text-muted border-b border-line bg-surface2">
+          <div className="hidden sm:flex items-center gap-3.5 px-4 py-2.5 text-[12px] font-semibold text-ink border-b border-line bg-surface2">
             <span className="w-5 shrink-0" />
             <span className="min-w-12 text-center">קוד</span>
             <span className="flex-1">ערוץ</span>
