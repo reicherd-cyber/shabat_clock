@@ -55,10 +55,17 @@ export function buildEmailHtml(bodyHtml, { assetBase }) {
 </body></html>`;
 }
 
-async function sendViaResendApi({ to, subject, text, html, from }) {
+async function sendViaResendApi({ to, subject, text, html, from, attachments }) {
   const payload = { from, to: [to], subject };
   if (html) payload.html = html;
   if (text) payload.text = text;
+  // Resend wants each attachment's bytes base64-encoded under `content`.
+  if (attachments?.length) {
+    payload.attachments = attachments.map((a) => ({
+      filename: a.filename,
+      content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : String(a.content),
+    }));
+  }
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -96,7 +103,7 @@ const providerName = () => (!env.smtp.host ? 'dev' : env.smtp.host === 'smtp.res
 // Mask every secret in the stored copy (subject and body alike).
 const mask = (s, redact) => redact.reduce((acc, r) => (r ? acc.split(String(r)).join('••••••') : acc), String(s ?? ''));
 
-export async function sendEmail({ to, subject, text, html = null, kind = 'other', userId = null, adminId = null, ref = null, redact = [], from = null }) {
+export async function sendEmail({ to, subject, text, html = null, kind = 'other', userId = null, adminId = null, ref = null, redact = [], from = null, attachments = [] }) {
   const provider = providerName();
   const fromAddr = from || env.smtp.from; // a per-send override (e.g. the Zimna broadcast sender), else the default
   const t0 = Date.now();
@@ -105,13 +112,14 @@ export async function sendEmail({ to, subject, text, html = null, kind = 'other'
   let error = null;
   try {
     if (provider === 'dev') {
-      console.log(`[dev] EMAIL to ${to} | ${subject} | ${text}`);
+      console.log(`[dev] EMAIL to ${to} | ${subject} | ${text}${attachments?.length ? ` | +${attachments.length} attachment(s)` : ''}`);
       status = 'dev';
     } else if (provider === 'resend') {
-      providerId = await sendViaResendApi({ to, subject, text, html, from: fromAddr });
+      providerId = await sendViaResendApi({ to, subject, text, html, from: fromAddr, attachments });
     } else {
       const transporter = await getTransporter();
-      const info = await transporter.sendMail({ from: fromAddr, to, subject, text, html: html || undefined });
+      const info = await transporter.sendMail({ from: fromAddr, to, subject, text, html: html || undefined,
+        attachments: attachments?.length ? attachments.map((a) => ({ filename: a.filename, content: a.content })) : undefined });
       providerId = info?.messageId ? String(info.messageId).slice(0, 120) : null;
     }
   } catch (e) {
@@ -141,7 +149,7 @@ export async function broadcastRecipientCount() {
 // a small gap to stay under Resend's rate limit; every send is logged to email_log
 // so progress shows on the admin אימיילים page. Meant to be fire-and-forget — the
 // caller returns to the admin immediately. One recipient per person (de-duped email).
-export async function sendBroadcast({ subject, text, html = null, from = null, adminId = null }) {
+export async function sendBroadcast({ subject, text, html = null, from = null, adminId = null, attachments = [] }) {
   const rows = await query("SELECT id, email FROM users WHERE email IS NOT NULL AND email <> ''");
   const seen = new Map();
   for (const r of rows) {
@@ -152,7 +160,7 @@ export async function sendBroadcast({ subject, text, html = null, from = null, a
   let sent = 0; let failed = 0;
   for (const r of recipients) {
     try {
-      await sendEmail({ to: r.email, subject, text, html, kind: 'broadcast', userId: r.id, adminId, from });
+      await sendEmail({ to: r.email, subject, text, html, kind: 'broadcast', userId: r.id, adminId, from, attachments });
       sent += 1;
     } catch (e) {
       failed += 1;

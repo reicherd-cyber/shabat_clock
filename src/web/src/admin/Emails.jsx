@@ -5,7 +5,7 @@
 // chart at the bottom.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Mail, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, Bold, Italic, Underline, List, ListOrdered, Link2, Image as ImageIcon, Heading } from 'lucide-react';
+import { Mail, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, Bold, Italic, Underline, List, ListOrdered, Link2, Image as ImageIcon, Heading, Paperclip, X, FileText } from 'lucide-react';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, SearchSelect, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect, Stat, Badge, StackedDayChart, Modal } from '../ui.jsx';
 
@@ -20,6 +20,7 @@ const BAD_EVENTS = new Set(['bounced', 'complained', 'failed', 'canceled']);
 const URL_KEYS = ['status', 'kind', 'event']; // filters the tiles deep-link through the URL
 const EMPTY = { kind: '', status: '', event: '', user_id: '', q: '', range: '30d', fromDate: '', fromHour: '', toDate: '', toHour: '' };
 const fmtTs = (ts) => new Date(ts).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
+const fmtSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
 // Sent vs failed: two fixed hues validated with the dataviz palette checker
 // (ΔE 22.5 protan / 33.8 normal); legend + tooltip, never colour alone.
 const SERIES = [{ key: 'sent', label: 'נשלחו', color: '#2a78d6' }, { key: 'failed', label: 'נכשלו', color: '#e11d48' }];
@@ -27,24 +28,72 @@ const SERIES = [{ key: 'sent', label: 'נשלחו', color: '#2a78d6' }, { key: '
 // Lightweight rich-text editor for composing an email: a formatting toolbar over a
 // contentEditable area; its HTML is the email body. Pictures upload to the server
 // (/emails/image) and insert by public URL so recipients' clients can load them.
+// Downscale a raster image in the browser before upload so emails stay light —
+// caps the longest side at 1000px (GIFs pass through to keep animation).
+async function downscaleImage(file) {
+  if (!/^image\/(png|jpe?g|webp)$/.test(file.type)) return file;
+  try {
+    const url = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+    const MAX = 1000;
+    if (img.width <= MAX && img.height <= MAX) return file;
+    const s = MAX / Math.max(img.width, img.height);
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+    const blob = await new Promise((res) => cv.toBlob(res, type, 0.85));
+    return blob || file;
+  } catch { return file; }
+}
+
+// Lightweight rich-text editor for composing an email: a formatting toolbar over a
+// contentEditable area; its HTML is the email body. Pictures upload to the server
+// (/emails/image) and insert by public URL so recipients' clients can load them;
+// the uploaded bytes are downscaled first, and an inserted image can be clicked to
+// set its display width (קטן/בינוני/גדול/מלא).
 function RichTextEditor({ value, onChange, onError }) {
   const ref = useRef(null);
   const fileRef = useRef(null);
+  const selRef = useRef(null);     // the currently-selected <img>, if any
+  const [imgSel, setImgSel] = useState(false);
   // Set the DOM content only when it genuinely differs and the editor isn't focused,
   // so parent re-renders during typing never move the caret.
   useEffect(() => {
     const el = ref.current;
     if (el && document.activeElement !== el && el.innerHTML !== (value || '')) el.innerHTML = value || '';
   }, [value]);
-  const emit = () => onChange(ref.current?.innerHTML || '');
+  // Emit a CLEAN copy — the blue selection outline is a UI affordance and must never
+  // ride along into the sent email.
+  const emit = () => {
+    const el = ref.current; if (!el) return;
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('img').forEach((im) => { im.style.outline = ''; im.style.outlineOffset = ''; });
+    onChange(clone.innerHTML);
+  };
   const cmd = (c, v = null) => { ref.current?.focus(); document.execCommand(c, false, v); emit(); };
   const addLink = () => { const url = prompt('קישור (URL):'); if (url) cmd('createLink', url.trim()); };
+
+  const selectImg = (img) => {
+    if (selRef.current && selRef.current !== img) { selRef.current.style.outline = ''; selRef.current.style.outlineOffset = ''; }
+    selRef.current = img || null;
+    if (img) { img.style.outline = '2px solid #2a78d6'; img.style.outlineOffset = '1px'; }
+    setImgSel(!!img);
+  };
+  const onEditorClick = (e) => { selectImg(e.target?.tagName === 'IMG' ? e.target : null); };
+  const setImgWidth = (w) => {
+    const img = selRef.current; if (!img) return;
+    img.style.width = w || ''; img.style.maxWidth = '100%'; img.style.height = 'auto';
+    emit();
+  };
+
   const uploadImage = async (e) => {
     const f = e.target.files?.[0]; e.target.value = '';
     if (!f) return;
     try {
+      const blob = await downscaleImage(f);
       const res = await fetch('/api/v1/admin/emails/image', {
-        method: 'POST', headers: { Authorization: `Bearer ${tokens.admin}`, 'Content-Type': f.type || 'application/octet-stream' }, body: f,
+        method: 'POST', headers: { Authorization: `Bearer ${tokens.admin}`, 'Content-Type': blob.type || f.type || 'application/octet-stream' }, body: blob,
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j?.error?.message || 'העלאת התמונה נכשלה');
@@ -56,6 +105,10 @@ function RichTextEditor({ value, onChange, onError }) {
   const Btn = ({ onClick, title, children }) => (
     <button type="button" title={title} onMouseDown={(e) => e.preventDefault()} onClick={onClick}
       className="p-1.5 rounded-lg hover:bg-surface2 text-muted hover:text-ink cursor-pointer">{children}</button>
+  );
+  const SizeBtn = ({ w, children }) => (
+    <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => setImgWidth(w)}
+      className="px-2 py-1 rounded-lg text-xs hover:bg-surface2 text-muted hover:text-ink cursor-pointer">{children}</button>
   );
   return (
     <div className="border border-line rounded-xl overflow-hidden">
@@ -71,9 +124,20 @@ function RichTextEditor({ value, onChange, onError }) {
         <Btn title="קישור" onClick={addLink}><Link2 size={15} /></Btn>
         <Btn title="הוספת תמונה" onClick={() => fileRef.current?.click()}><ImageIcon size={15} /></Btn>
         <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={uploadImage} />
+        {imgSel && (
+          <>
+            <span className="w-px h-5 bg-line mx-1" />
+            <span className="text-xs text-muted px-1">גודל תמונה:</span>
+            <SizeBtn w="160px">קטן</SizeBtn>
+            <SizeBtn w="320px">בינוני</SizeBtn>
+            <SizeBtn w="480px">גדול</SizeBtn>
+            <SizeBtn w="">מלא</SizeBtn>
+          </>
+        )}
       </div>
-      <div ref={ref} contentEditable dir="rtl" onInput={emit} suppressContentEditableWarning
-        className="min-h-48 max-h-96 overflow-y-auto px-3 py-2 text-sm leading-relaxed focus:outline-none [&_img]:max-w-full [&_h3]:text-lg [&_h3]:font-bold [&_h3]:my-1 [&_ul]:list-disc [&_ul]:pr-5 [&_ol]:list-decimal [&_ol]:pr-5 [&_a]:text-accent [&_a]:underline" />
+      <div ref={ref} contentEditable dir="rtl" onInput={emit} onClick={onEditorClick} suppressContentEditableWarning
+        className="min-h-48 max-h-96 overflow-y-auto px-3 py-2 text-sm leading-relaxed focus:outline-none [&_img]:max-w-full [&_img]:cursor-pointer [&_h3]:text-lg [&_h3]:font-bold [&_h3]:my-1 [&_ul]:list-disc [&_ul]:pr-5 [&_ol]:list-decimal [&_ol]:pr-5 [&_a]:text-accent [&_a]:underline" />
+      {imgSel && <p className="px-3 py-1 text-xs text-muted border-t border-line bg-surface2/30">תמונה נבחרה — בחרו גודל למעלה, או לחצו במקום אחר לביטול הבחירה.</p>}
     </div>
   );
 }
@@ -133,16 +197,34 @@ export function Emails() {
   const [bcCount, setBcCount] = useState(null); // how many a broadcast reaches
   const [confirmSend, setConfirmSend] = useState(false);
   const [sendResult, setSendResult] = useState(null);
+  const attachRef = useRef(null);
+  const [attaching, setAttaching] = useState(false);
   const openCompose = () => {
     setError(null); setSendResult(null);
-    setCompose({ mode: 'all', userId: '', subject: '', html: '' });
+    setCompose({ mode: 'all', userId: '', subject: '', html: '', attachments: [] });
     adminApi.get('/emails/broadcast-count').then((r) => setBcCount(r.count)).catch(() => setBcCount(users.length));
   };
+  const addAttachments = async (e) => {
+    const files = [...(e.target.files || [])]; e.target.value = '';
+    if (!files.length) return;
+    setAttaching(true); setError(null);
+    try {
+      for (const file of files) {
+        const res = await fetch(`/api/v1/admin/emails/attachment?name=${encodeURIComponent(file.name)}`, {
+          method: 'POST', headers: { Authorization: `Bearer ${tokens.admin}`, 'Content-Type': file.type || 'application/octet-stream' }, body: file,
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j?.error?.message || `העלאת ${file.name} נכשלה`);
+        setCompose((c) => (c ? { ...c, attachments: [...c.attachments, j] } : c));
+      }
+    } catch (err) { setError(err); } finally { setAttaching(false); }
+  };
+  const removeAttachment = (id) => setCompose((c) => (c ? { ...c, attachments: c.attachments.filter((a) => a.id !== id) } : c));
   const bodyHasText = compose && compose.html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim().length > 0;
-  const canSend = compose && compose.subject.trim() && bodyHasText && (compose.mode === 'all' || compose.userId);
+  const canSend = compose && compose.subject.trim() && bodyHasText && (compose.mode === 'all' || compose.userId) && !attaching;
   const doSend = () => run(async () => {
     const to = compose.mode === 'all' ? 'all' : compose.userId;
-    const r = await adminApi.post('/emails/send', { to, subject: compose.subject.trim(), html: compose.html });
+    const r = await adminApi.post('/emails/send', { to, subject: compose.subject.trim(), html: compose.html, attachments: compose.attachments.map((a) => a.id) });
     setConfirmSend(false);
     const result = compose.mode === 'all' ? { kind: 'all', total: r.total } : { kind: 'one', to: r.to };
     setCompose(null);
@@ -339,6 +421,30 @@ export function Emails() {
             )}
             <Input placeholder="נושא" value={compose.subject} onChange={(e) => setCompose({ ...compose, subject: e.target.value })} />
             <RichTextEditor value={compose.html} onChange={(html) => setCompose((c) => ({ ...c, html }))} onError={setError} />
+
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button variant="ghost" disabled={attaching} onClick={() => attachRef.current?.click()}>
+                  <span className="inline-flex items-center gap-1.5"><Paperclip size={15} />{attaching ? 'מעלה…' : 'צרף קובץ'}</span>
+                </Button>
+                <span className="text-xs text-muted">עד 10MB לקובץ</span>
+                <input ref={attachRef} type="file" multiple className="hidden" onChange={addAttachments} />
+              </div>
+              {compose.attachments.length > 0 && (
+                <ul className="space-y-1">
+                  {compose.attachments.map((a) => (
+                    <li key={a.id} className="flex items-center gap-2 text-sm bg-surface2/50 border border-line rounded-lg px-2.5 py-1.5">
+                      <FileText size={15} className="text-muted shrink-0" />
+                      <span dir="ltr" className="truncate flex-1 min-w-0">{a.filename}</span>
+                      <span className="text-xs text-muted whitespace-nowrap">{fmtSize(a.size)}</span>
+                      <button type="button" title="הסר" onClick={() => removeAttachment(a.id)}
+                        className="p-1 rounded-lg hover:bg-surface2 text-muted hover:text-off cursor-pointer shrink-0"><X size={14} /></button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
             <p className="text-xs text-muted">נשלח מ: <span dir="ltr">noreply@zimna.co.il</span> · לוגו + פרטי זימנא מתווספים כחתימה בתחתית כל אימייל.</p>
             <ErrorNote error={error} />
             <div className="flex gap-2">
@@ -355,8 +461,16 @@ export function Emails() {
         {compose && (
           <div className="space-y-3">
             {compose.mode === 'all'
-              ? <p>לשלוח את ההודעה <b>״{compose.subject}״</b> ל-<b>{bcCount}</b> משתמשים? הפעולה תתבצע ברקע ואינה ניתנת לביטול.</p>
-              : <p>לשלוח את ההודעה <b>״{compose.subject}״</b> למשתמש הנבחר?</p>}
+              ? (
+                <div className="flex items-start gap-2.5 rounded-xl border border-off/40 bg-off/10 px-3 py-2.5">
+                  <AlertTriangle size={20} className="text-off shrink-0 mt-0.5" />
+                  <div className="text-sm space-y-1">
+                    <p className="font-semibold text-off">שימו לב — שליחה לכל המשתמשים</p>
+                    <p>ההודעה <b>״{compose.subject}״</b> תישלח ל<b>כל {bcCount} המשתמשים</b> במערכת{compose.attachments.length ? <> (כולל {compose.attachments.length} קבצים מצורפים)</> : null}. הפעולה תתבצע ברקע ו<b>אינה ניתנת לביטול</b> לאחר האישור.</p>
+                  </div>
+                </div>
+              )
+              : <p>לשלוח את ההודעה <b>״{compose.subject}״</b> למשתמש הנבחר{compose.attachments.length ? <> (עם {compose.attachments.length} קבצים מצורפים)</> : null}?</p>}
             <ErrorNote error={error} />
             <div className="flex gap-2">
               <Button disabled={busy} onClick={doSend}>

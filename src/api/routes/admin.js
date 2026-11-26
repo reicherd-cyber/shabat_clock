@@ -46,6 +46,7 @@ import { readVoicemail, fetchVoicemail } from '../../services/voicemail.js';
 import { fetchCallRecording, readCallRecording, archiveCallRecordingInBackground } from '../../services/callRecording.js';
 import { sendEmail, sendBroadcast, broadcastRecipientCount, htmlToText, buildEmailHtml } from '../../services/email.js';
 import { saveEmailImage } from '../../services/emailImages.js';
+import { saveEmailAttachment, resolveAttachments } from '../../services/emailAttachments.js';
 import { brokerConnected } from '../../mqtt/client.js';
 import { healthSnapshot } from '../../monitor/health.js';
 import { generateSecret, otpauthUri } from '../../services/totp.js';
@@ -968,16 +969,17 @@ adminRouter.post('/emails/send', requireSuperadmin, async (req, res, next) => {
     // the host that served this request (prod → kosher-teltech.com, dev → dev.…).
     const assetBase = String(await getSetting('email.asset_base', '')).trim() || `${req.protocol}://${req.get('host')}`;
     const html = buildEmailHtml(bodyHtml, { assetBase });
+    const attachments = resolveAttachments(req.body?.attachments); // stored ids → {filename, content}
     const adminId = req.auth?.adminId ?? null;
     if (to === 'all') {
       const count = await broadcastRecipientCount();
-      audit(req, 'email_broadcast', 'email', null, { subject, count });
-      sendBroadcast({ subject, text, html, from, adminId }).catch((e) => console.error('broadcast:', e.message));
+      audit(req, 'email_broadcast', 'email', null, { subject, count, attachments: attachments.length });
+      sendBroadcast({ subject, text, html, from, adminId, attachments }).catch((e) => console.error('broadcast:', e.message));
       return res.status(202).json({ started: true, total: count });
     }
     const [u] = await query('SELECT id, email FROM users WHERE id = ?', [Number(to)]);
     if (!u?.email) throw errors.validation('למשתמש זה אין כתובת אימייל');
-    await sendEmail({ to: u.email, subject, text, html, kind: 'broadcast', userId: u.id, adminId, from });
+    await sendEmail({ to: u.email, subject, text, html, kind: 'broadcast', userId: u.id, adminId, from, attachments });
     audit(req, 'email_user', 'email', u.id, { subject, email: u.email });
     res.status(201).json({ sent: 1, to: u.email });
   } catch (e) { next(e); }
@@ -989,6 +991,16 @@ adminRouter.post('/emails/image', requireSuperadmin, raw({ type: () => true, lim
     const name = saveEmailImage(req.body);
     const base = String(await getSetting('email.asset_base', '')).trim() || `${req.protocol}://${req.get('host')}`;
     res.status(201).json({ url: `${base}/email-images/${name}` });
+  } catch (e) { next(e); }
+});
+
+// Attach a FILE to a composed email (any type). The raw bytes are the body; the
+// original name rides in ?name=. Returns a stored id the send form holds and sends
+// back — the file itself is never served publicly, only re-read at send time.
+adminRouter.post('/emails/attachment', requireSuperadmin, raw({ type: () => true, limit: '10mb' }), async (req, res, next) => {
+  try {
+    const att = saveEmailAttachment(req.body, req.query?.name);
+    res.status(201).json(att); // { id, filename, size }
   } catch (e) { next(e); }
 });
 
