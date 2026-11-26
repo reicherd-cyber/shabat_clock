@@ -8,6 +8,13 @@ import { FuelDial } from './Gauges.jsx';
 // live spend subtracted). Lives on the admin home (moved from voice-costs,
 // 2026-08-30) so a low balance is the first thing an admin sees.
 const C_EXPENSE = '#e11d48'; // money-color convention: costs are red
+// Neither Yemot units nor the Anthropic credit has a hard ceiling, so the gauge
+// needs a reference "full" to show depletion against (otherwise frac self-
+// normalises to ~1 and the needle never moves). These are comfortable-balance
+// references, not limits; the authoritative low-balance signal is the warn flag.
+const YEMOT_FULL_UNITS = 500;
+const ANTHROPIC_FULL_USD = 100;
+const gaugeFrac = (val, full) => Math.max(0, Math.min(val / full, 1));
 
 export function ProviderBalances({ rate: rateProp = null }) {
   const [live, setLive] = useState(null);
@@ -51,7 +58,7 @@ export function ProviderBalances({ rate: rateProp = null }) {
         <Card className="text-center">
           {live.yemot?.ok ? (
             <>
-              <FuelDial frac={Math.min(live.yemot.units / Math.max(live.yemot.units, 100), 1)}
+              <FuelDial frac={gaugeFrac(live.yemot.units, YEMOT_FULL_UNITS)}
                 center={live.yemot.units.toFixed(0)} warn={live.yemot.units < 10} />
               <div className="text-muted text-sm">
                 יתרת יחידות בימות המשיח
@@ -72,7 +79,7 @@ export function ProviderBalances({ rate: rateProp = null }) {
           {live.anthropic?.ok ? (
             <>
               {live.anthropic.balance_usd != null ? (
-                <FuelDial frac={Math.min(live.anthropic.balance_usd / Math.max(live.anthropic.balance_usd, 50), 1)}
+                <FuelDial frac={gaugeFrac(live.anthropic.balance_usd, ANTHROPIC_FULL_USD)}
                   center={`$${live.anthropic.balance_usd.toFixed(0)}`} warn={live.anthropic.balance_usd < 5} />
               ) : (
                 <div className="text-3xl font-bold text-muted">—</div>

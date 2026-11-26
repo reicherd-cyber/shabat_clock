@@ -50,6 +50,12 @@ test('window wrapping past midnight covers both sides', () => {
   assert.equal(resolveOnCallAdminId(cfg, at(SUN, '12:00')), 10, 'midday → default');
 });
 
+test('a window whose end equals its start is empty, not a 24-hour wrap', () => {
+  const cfg = { defaultAdminId: 10, windows: [{ admin_id: 20, start: '08:00', end: '08:00', type: 'weekly', dow: SUN }] };
+  assert.equal(resolveOnCallAdminId(cfg, at(SUN, '08:00')), 10, 'at the start minute → default, not the window admin');
+  assert.equal(resolveOnCallAdminId(cfg, at(SUN, '15:00')), 10, 'any other time → default');
+});
+
 test('malformed windows are ignored, not fatal', () => {
   const windows = [
     { admin_id: 20, start: '25:00', end: '13:00', type: 'weekly', dow: SUN }, // bad hour

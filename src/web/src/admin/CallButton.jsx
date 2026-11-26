@@ -14,7 +14,8 @@ import { PhoneOutgoing } from 'lucide-react';
 //
 // Props: `phones` (one or a list — first preselected), optional `lead`/`user` ids
 // (bridge modes only), `onDone(result)`, and passthrough `variant`/`className`/`label`.
-let configCache = null; // { mode, softphone_url } — fetched once per page load
+let configCache = null; // { mode, softphone_url } — last good config
+let configCacheAt = 0;   // short TTL so a server-side call-mode change reaches open tabs
 
 export function CallButton({ phones, lead = null, user = null, onDone, variant, className, label = 'התקשר מהמערכת' }) {
   const list = (Array.isArray(phones) ? phones : [phones]).map((p) => String(p || '').trim()).filter(Boolean);
@@ -25,8 +26,14 @@ export function CallButton({ phones, lead = null, user = null, onDone, variant, 
   if (!list.length) return null;
 
   const loadConfig = async () => {
-    if (configCache == null) {
-      try { configCache = await adminApi.get('/contact/call-config'); } catch { configCache = { mode: 'phone' }; }
+    if (configCache && Date.now() - configCacheAt < 60_000) return configCache;
+    try {
+      configCache = await adminApi.get('/contact/call-config');
+      configCacheAt = Date.now();
+    } catch {
+      // Transient failure: keep the last good config, never poison the cache with
+      // a 'phone' fallback (that would strand the tab on the mobile-bridge flow).
+      return configCache || { mode: 'phone' };
     }
     return configCache;
   };
@@ -36,10 +43,16 @@ export function CallButton({ phones, lead = null, user = null, onDone, variant, 
   // No backend call, no ring.
   const openDialer = (num) => {
     const digits = String(num).replace(/\D/g, '');
-    try { navigator.clipboard?.writeText(digits); } catch { /* clipboard may be blocked — the number is still shown */ }
     setForm(null);
-    setCopied(digits);
-    setTimeout(() => setCopied((c) => (c === digits ? null : c)), 8000);
+    const show = (ok) => {
+      setCopied({ num: digits, ok });
+      setTimeout(() => setCopied((c) => (c && c.num === digits ? null : c)), 8000);
+    };
+    // clipboard.writeText is async — a sync try/catch can't catch its rejection,
+    // and we must only claim "copied" when it actually succeeded.
+    const p = navigator.clipboard?.writeText(digits);
+    if (p && typeof p.then === 'function') p.then(() => show(true)).catch(() => show(false));
+    else show(false); // clipboard API unavailable — show the number for manual copy
     onDone?.({ status: 'dialer', phone: digits });
   };
 
@@ -74,8 +87,10 @@ export function CallButton({ phones, lead = null, user = null, onDone, variant, 
         <span className="inline-flex items-center gap-1.5"><PhoneOutgoing size={15} />{label}</span>
       </Button>
       {copied && (
-        <span className="text-xs" style={{ color: '#006e00' }}>
-          ✓ המספר <span dir="ltr">{copied}</span> הועתק — הדביקו בחייגן והתקשרו
+        <span className="text-xs" style={{ color: copied.ok ? '#006e00' : '#b45309' }}>
+          {copied.ok
+            ? <>✓ המספר <span dir="ltr">{copied.num}</span> הועתק — הדביקו בחייגן והתקשרו</>
+            : <>העתיקו ידנית את המספר <span dir="ltr">{copied.num}</span> והדביקו בחייגן</>}
           {configCache?.softphone_url && (
             <> · <a className="underline" href={configCache.softphone_url} target="zimna-softphone" rel="noreferrer">פתח חייגן</a></>
           )}

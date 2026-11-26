@@ -45,8 +45,9 @@ export function nowParts(date = new Date()) {
 
 // Pure: which admin id is on call at `now`. Windows are scanned in order and a
 // later match wins over an earlier one, so the admin can order them by priority;
-// with no active window the default admin stands. A window whose end is at or
-// before its start wraps past midnight ([start,24h) ∪ [0,end)).
+// with no active window the default admin stands. A window whose end is BEFORE
+// its start wraps past midnight ([start,24h) ∪ [0,end)); end == start is an empty
+// window (ignored), never a 24-hour one.
 // now = { dow:1-7, date:'YYYY-MM-DD', mins:0-1439 }.
 export function resolveOnCallAdminId({ defaultAdminId = null, windows = [] }, now) {
   let chosen = defaultAdminId ? Number(defaultAdminId) : null;
@@ -57,7 +58,9 @@ export function resolveOnCallAdminId({ defaultAdminId = null, windows = [] }, no
     if (start == null || end == null || !adminId) continue;
     const dayMatch = w.type === 'once' ? w.date === now.date : Number(w.dow) === now.dow;
     if (!dayMatch) continue;
-    const inRange = end > start ? (now.mins >= start && now.mins < end) : (now.mins >= start || now.mins < end);
+    const inRange = end === start ? false
+      : end > start ? (now.mins >= start && now.mins < end)
+        : (now.mins >= start || now.mins < end);
     if (inRange) chosen = adminId;
   }
   return chosen;

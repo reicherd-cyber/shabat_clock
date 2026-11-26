@@ -86,25 +86,40 @@ async function downloadWav(recordPath) {
   return buf;
 }
 
-// { month, callLocalMs } for a call placed at `at`, or null (bad input / no token).
+// { digits, months, callLocalMs } for a call placed at `at`, or null (bad input /
+// no token). The log line carries the CONNECT time (seconds after placement), so a
+// call placed in the final seconds of a month can be logged just past midnight into
+// the NEXT month's file — for a late-in-month call we check that file too.
 function callKey({ phone, at }) {
   if (!token()) return null;
   const digits = String(phone || '').replace(/\D/g, '');
   const when = new Date(at);
   if (!digits || Number.isNaN(when.getTime())) return null;
   const p = localParts(when, TZ);
+  const m0 = `${p.y}-${String(p.mo).padStart(2, '0')}`;
+  const next = p.mo === 12 ? `${p.y + 1}-01` : `${p.y}-${String(p.mo + 1).padStart(2, '0')}`;
   return {
     digits,
-    month: `${p.y}-${String(p.mo).padStart(2, '0')}`,
+    months: p.d >= 28 ? [m0, next] : [m0],
     callLocalMs: Date.UTC(p.y, p.mo - 1, p.d, p.hh, p.mm, when.getUTCSeconds()),
   };
+}
+
+// The best matching log entry across the call's candidate month file(s).
+async function findEntry(k, recordedOnly) {
+  for (const month of k.months) {
+    const all = parseBridgeLog(await getText(`ivr2:/Log/BridgeCall/LogBridgeCall.${month}.ymgr`));
+    const e = pickEntry(recordedOnly ? all.filter((x) => x.RecordPath) : all, k.digits, k.callLocalMs);
+    if (e) return e;
+  }
+  return null;
 }
 
 export async function recordPathFor({ phone, at }) {
   const k = callKey({ phone, at });
   if (!k) return null;
-  const entries = parseBridgeLog(await getText(`ivr2:/Log/BridgeCall/LogBridgeCall.${k.month}.ymgr`));
-  return pickRecordPath(entries, k.digits, k.callLocalMs);
+  const e = await findEntry(k, true);
+  return e ? e.RecordPath : null;
 }
 
 // Live WAV bytes (no disk), or null. Used as the playback fallback before archiving.
@@ -132,7 +147,7 @@ export async function archiveCallRecording({ id, phone, at }) {
   try {
     const k = callKey({ phone, at });
     if (!k) return 'pending';
-    const entry = pickEntry(parseBridgeLog(await getText(`ivr2:/Log/BridgeCall/LogBridgeCall.${k.month}.ymgr`)), k.digits, k.callLocalMs);
+    const entry = await findEntry(k, false);
     if (!entry) return 'pending'; // call not finished / not logged yet
     if (!entry.RecordPath) {
       await query("UPDATE callbacks SET recording_path = 'none' WHERE id = ? AND recording_path IS NULL", [key]);

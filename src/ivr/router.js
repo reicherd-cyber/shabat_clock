@@ -995,7 +995,7 @@ ivrRouter.get(['/ivr', '/ivr/:token'], async (req, res, next) => {
         }
         let a;
         try {
-          a = await answerSupportQuestion({ userId: session.userId, text: spoken, source: 'web', phone: session.phone });
+          a = await answerSupportQuestion({ userId: session.userId, text: spoken, source: 'phone', phone: session.phone });
         } catch (e) {
           console.error('IVR service assist error:', e.message);
           a = null;
