@@ -131,8 +131,16 @@ export function createApp() {
     res.set('Cache-Control', 'public, max-age=31536000, immutable');
     return res.type(img.contentType).send(img.buf);
   });
-  app.use(express.static(dist));
+  // Hashed assets (index-<hash>.js/.css) are immutable and cache forever; but the
+  // HTML shell must NEVER be cached, or a browser keeps serving an old index.html
+  // that points at a stale bundle and never picks up a deploy (even on refresh).
+  app.use(express.static(dist, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.html')) res.set('Cache-Control', 'no-store, must-revalidate');
+    },
+  }));
   app.get(/^\/(?!api|ivr|whatsapp).*/, (req, res) => {
+    res.set('Cache-Control', 'no-store, must-revalidate');
     res.sendFile(path.join(dist, 'index.html'), (err) => {
       if (err) res.status(404).send('web panel not built — run npm run build:web');
     });
