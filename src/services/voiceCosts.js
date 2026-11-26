@@ -119,6 +119,28 @@ async function fetchYemotSttTransactions() {
 // source ('phone' | 'web' | 'whatsapp' | 'unknown'), kind ('command' | 'support').
 export const USAGE_SOURCES = ['phone', 'web', 'whatsapp', 'unknown'];
 export const USAGE_KINDS = ['command', 'support', 'router', 'admin', 'secretary', 'tts'];
+
+// Pure: fold priced usage rows into the totals tiles. TTS (voice synthesis,
+// ElevenLabs) spend is kept apart from the Anthropic (Claude) spend so each shows
+// as its own total; every other kind accrues to anthropic_*. Yemot units/₪ accrue
+// for all rows; by_source / by_kind are row counts. Each row is expected to carry
+// numeric yemot_units, yemot_ils, anthropic_usd, anthropic_ils (0 when absent).
+export function sumTotals(rows) {
+  return (rows || []).reduce(
+    (acc, r) => {
+      acc.orders += 1;
+      acc.yemot_units += r.yemot_units || 0;
+      acc.yemot_ils += r.yemot_ils || 0;
+      if (r.kind === 'tts') { acc.tts_usd += r.anthropic_usd || 0; acc.tts_ils += r.anthropic_ils || 0; }
+      else { acc.anthropic_usd += r.anthropic_usd || 0; acc.anthropic_ils += r.anthropic_ils || 0; }
+      acc.by_source[r.source] = (acc.by_source[r.source] || 0) + 1;
+      acc.by_kind[r.kind] = (acc.by_kind[r.kind] || 0) + 1;
+      return acc;
+    },
+    { orders: 0, yemot_units: 0, yemot_ils: 0, anthropic_usd: 0, anthropic_ils: 0, tts_usd: 0, tts_ils: 0, by_source: {}, by_kind: {} },
+  );
+}
+
 export async function getVoiceCosts({ from, to, userId, phone, q, source, kind } = {}) {
   const rates = await loadRates();
   // The usage rows must cover the whole requested period (plus the matching
@@ -224,21 +246,7 @@ export async function getVoiceCosts({ from, to, userId, phone, q, source, kind }
     r.yemot_ils = (r.yemot_units * ry.ils) / ry.units;
     r.anthropic_ils = (r.anthropic_usd * ru.ils) / ru.units;
   }
-  const totals = filtered.reduce(
-    (acc, r) => {
-      acc.orders += 1;
-      acc.yemot_units += r.yemot_units;
-      acc.yemot_ils += r.yemot_ils;
-      // TTS (voice synthesis, ElevenLabs) is kept apart from the Anthropic (Claude)
-      // spend so each shows as its own total.
-      if (r.kind === 'tts') { acc.tts_usd += r.anthropic_usd; acc.tts_ils += r.anthropic_ils; }
-      else { acc.anthropic_usd += r.anthropic_usd; acc.anthropic_ils += r.anthropic_ils; }
-      acc.by_source[r.source] = (acc.by_source[r.source] || 0) + 1;
-      acc.by_kind[r.kind] = (acc.by_kind[r.kind] || 0) + 1;
-      return acc;
-    },
-    { orders: 0, yemot_units: 0, yemot_ils: 0, anthropic_usd: 0, anthropic_ils: 0, tts_usd: 0, tts_ils: 0, by_source: {}, by_kind: {} },
-  );
+  const totals = sumTotals(filtered);
   const curY = rates.yemot_units[rates.yemot_units.length - 1];
   const curU = rates.usd[rates.usd.length - 1];
   return {
