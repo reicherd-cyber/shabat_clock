@@ -985,6 +985,19 @@ adminRouter.post('/emails/send', requireSuperadmin, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Render a composed email exactly as it will be sent (shell + signature) — for the
+// "תצוגה מקדימה" new-tab preview. Returns the full email HTML + the sender/subject.
+adminRouter.post('/emails/preview', requireSuperadmin, async (req, res, next) => {
+  try {
+    const subject = String(req.body?.subject || '').trim();
+    const bodyHtml = String(req.body?.html || '').trim();
+    const from = String(await getSetting('email.broadcast_from', 'זימנא <noreply@zimna.co.il>')).trim();
+    const assetBase = String(await getSetting('email.asset_base', '')).trim() || `${req.protocol}://${req.get('host')}`;
+    const attachments = (Array.isArray(req.body?.attachments) ? req.body.attachments : []).map((s) => String(s).slice(0, 200));
+    res.json({ html: buildEmailHtml(bodyHtml, { assetBase }), from, subject, attachments });
+  } catch (e) { next(e); }
+});
+
 // Upload a picture to embed in a composed email → returns its public URL.
 adminRouter.post('/emails/image', requireSuperadmin, raw({ type: () => true, limit: '5mb' }), async (req, res, next) => {
   try {

@@ -5,7 +5,7 @@
 // chart at the bottom.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Mail, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, Bold, Italic, Underline, List, ListOrdered, Link2, Image as ImageIcon, Heading, Paperclip, X, FileText } from 'lucide-react';
+import { Mail, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, Bold, Italic, Underline, List, ListOrdered, Link2, Image as ImageIcon, Heading, Paperclip, X, FileText, Eye } from 'lucide-react';
 import { adminApi, tokens } from '../api.js';
 import { Card, Button, Input, SearchSelect, ErrorNote, useAsync, RangeFilter, rangeStamps, RANGE_LOG, FilterSelect, Stat, Badge, StackedDayChart, Modal } from '../ui.jsx';
 
@@ -220,6 +220,32 @@ export function Emails() {
     } catch (err) { setError(err); } finally { setAttaching(false); }
   };
   const removeAttachment = (id) => setCompose((c) => (c ? { ...c, attachments: c.attachments.filter((a) => a.id !== id) } : c));
+  // Open the composed email, rendered exactly as it will be sent, in a new tab.
+  const previewEmail = async () => {
+    setError(null);
+    const w = window.open('', '_blank'); // open synchronously so the popup blocker lets it through
+    try {
+      const r = await adminApi.post('/emails/preview', { subject: compose.subject, html: compose.html, attachments: compose.attachments.map((a) => a.filename) });
+      const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+      const atts = r.attachments.length ? `<div class="row">📎 קבצים מצורפים: ${r.attachments.map(esc).join(' · ')}</div>` : '';
+      const page = `<!doctype html><html dir="rtl" lang="he"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>תצוגה מקדימה${r.subject ? ` — ${esc(r.subject)}` : ''}</title>
+<style>body{margin:0;background:#eceef1;font-family:Arial,Helvetica,sans-serif;color:#1f2937}
+.hdr{background:#2d4a52;color:#fff;padding:12px 18px;font-weight:700;font-size:14px}
+.meta{background:#fff;border-bottom:1px solid #e5e7eb;padding:12px 18px;font-size:14px;line-height:1.9}
+.meta b{color:#111}.row{color:#475569}
+iframe{display:block;border:0;width:100%;height:calc(100vh - 150px);background:#f5f6f8}</style></head>
+<body>
+<div class="hdr">תצוגה מקדימה — כך ייראה האימייל אצל הנמען</div>
+<div class="meta">
+<div class="row">נושא: <b>${esc(r.subject || '(ללא נושא)')}</b></div>
+<div class="row">מאת: <span dir="ltr">${esc(r.from)}</span></div>
+${atts}
+</div>
+<iframe srcdoc="${esc(r.html)}"></iframe>
+</body></html>`;
+      if (w) { w.document.write(page); w.document.close(); }
+    } catch (err) { if (w) w.close(); setError(err); }
+  };
   const bodyHasText = compose && compose.html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim().length > 0;
   const canSend = compose && compose.subject.trim() && bodyHasText && (compose.mode === 'all' || compose.userId) && !attaching;
   const doSend = () => run(async () => {
@@ -450,6 +476,9 @@ export function Emails() {
             <div className="flex gap-2">
               <Button disabled={!canSend || busy} onClick={() => setConfirmSend(true)}>
                 <span className="inline-flex items-center gap-1.5"><Mail size={15} />שלח</span>
+              </Button>
+              <Button variant="ghost" disabled={!bodyHasText} onClick={previewEmail}>
+                <span className="inline-flex items-center gap-1.5"><Eye size={15} />תצוגה מקדימה</span>
               </Button>
               <Button variant="ghost" onClick={() => setCompose(null)}>ביטול</Button>
             </div>
