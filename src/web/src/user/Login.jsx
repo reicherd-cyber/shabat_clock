@@ -20,7 +20,13 @@ export default function Login() {
   const nav = useNavigate();
 
   useEffect(() => {
-    publicApi.get('/auth/config').then((c) => setReviewLogin(Boolean(c.review_login))).catch(() => {});
+    // The access-code login (Google Play reviewers) has no visible link any more —
+    // it opens only from /login?review, and only when the server has it configured.
+    publicApi.get('/auth/config').then((c) => {
+      const on = Boolean(c.review_login);
+      setReviewLogin(on);
+      if (on && new URLSearchParams(window.location.search).has('review')) setStage('review');
+    }).catch(() => {});
   }, []);
 
   const finishLogin = (r) => {
@@ -72,11 +78,6 @@ export default function Login() {
             <div className={`w-full flex justify-center ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
               <GoogleButton onCredential={onGoogle} onError={setError} hint={false} />
             </div>
-            {reviewLogin && (
-              <button className="text-white/55 text-xs cursor-pointer hover:text-white/90 transition-colors" onClick={() => setStage('review')}>
-                כניסה עם קוד גישה
-              </button>
-            )}
           </div>
         ) : (
           <Card className="w-full text-start shadow-card">
