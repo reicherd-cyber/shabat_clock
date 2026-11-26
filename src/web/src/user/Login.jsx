@@ -71,13 +71,12 @@ export default function Login() {
             <span aria-hidden className="flex items-center gap-1.5 text-white/55">
               <i className="w-1.5 h-1.5 rounded-full bg-current" /><i className="w-1.5 h-1.5 rounded-full bg-current" /><i className="w-1.5 h-1.5 rounded-full bg-current" />
             </span>
-            <p className="text-white/85 text-sm leading-relaxed max-w-xs">
-              הכניסה לאזור האישי היא עם חשבון Google.<br />הכניסה הראשונה פותחת חשבון חדש.
-            </p>
             {error && <div className="w-full bg-white/90 text-off rounded-xl px-3 py-2 text-sm">{String(error.message || error)}</div>}
-            <div className={`w-full flex justify-center ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
-              <GoogleButton onCredential={onGoogle} onError={setError} hint={false} />
+            <div className={`w-full flex flex-col gap-3 ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+              <GoogleButton onCredential={onGoogle} onError={setError} pill="solid" label="כניסה" />
+              <GoogleButton onCredential={onGoogle} onError={setError} pill="outline" label="הרשמה" />
             </div>
+            <p className="text-white/70 text-xs">הכניסה וההרשמה עם חשבון Google</p>
           </div>
         ) : (
           <Card className="w-full text-start shadow-card">
